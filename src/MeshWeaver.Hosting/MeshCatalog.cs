@@ -27,33 +27,13 @@ internal sealed class MeshCatalog(
     IMeshStorage persistenceService,
     IEnumerable<IMeshQueryProvider> queryProviders,
     IEnumerable<IStaticNodeProvider> staticNodeProviders,
-    IDataChangeNotifier? changeNotifier = null,
     ILogger<MeshCatalog>? logger = null)
     : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; } = configuration;
     internal IMeshStorage Persistence { get; } = persistenceService;
     internal Address MeshAddress => hub.Address;
-    private readonly IMemoryCache cache = CreateCacheWithChangeSubscription(changeNotifier, logger);
-
-    private static IMemoryCache CreateCacheWithChangeSubscription(
-        IDataChangeNotifier? notifier, ILogger? logger)
-    {
-        var memoryCache = new MemoryCache(new MemoryCacheOptions());
-        notifier?.Subscribe(notification =>
-        {
-            if (notification.Kind is DataChangeKind.Created or DataChangeKind.Deleted)
-            {
-                var path = notification.Path.TrimStart('/');
-                logger?.LogDebug("Path cache invalidation: {Op} {Path}", notification.Kind, path);
-                memoryCache.Remove($"resolve:{path}");
-                var segments = path.Split('/');
-                for (var i = segments.Length - 1; i >= 1; i--)
-                    memoryCache.Remove($"resolve:{string.Join("/", segments.Take(i))}");
-            }
-        });
-        return memoryCache;
-    }
+    private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
     private readonly Lazy<IMessageHub> _persistenceHub = new(() => hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!);
     private IMessageHub PersistenceHub => _persistenceHub.Value;
@@ -287,35 +267,21 @@ internal sealed class MeshCatalog(
     }
 
     /// <inheritdoc />
+    /// <summary>
+    /// Resolves a path. Prefer using IPathResolver (PathResolutionService) which adds caching.
+    /// This method is a direct passthrough to ResolvePathCoreAsync.
+    /// </summary>
     public async Task<AddressResolution?> ResolvePathAsync(string path)
     {
         if (string.IsNullOrEmpty(path))
             return null;
-
-        // Normalize path - remove leading slash if present
         path = path.TrimStart('/');
         if (string.IsNullOrEmpty(path))
             return null;
-
-        // Check resolution cache first
-        var cacheKey = $"resolve:{path}";
-        if (cache.TryGetValue(cacheKey, out var cachedResolution) && cachedResolution is AddressResolution cached)
-            return cached;
-
-        var resolution = await ResolvePathCoreAsync(path);
-
-        // Only cache exact matches (no remainder). Partial matches are inherently
-        // unstable — they resolve to a parent when a child doesn't exist YET.
-        // CreateNodeRequest triggers path resolution before the node is persisted,
-        // so partial matches would cache stale results. NotifyChange invalidation
-        // provides a safety net for exact matches.
-        if (resolution is { Remainder: null or "" })
-            cache.Set(cacheKey, resolution, ResolveCacheOptions);
-
-        return resolution;
+        return await ResolvePathCoreAsync(path);
     }
 
-    private async Task<AddressResolution?> ResolvePathCoreAsync(string path)
+    internal async Task<AddressResolution?> ResolvePathCoreAsync(string path)
     {
         var segments = path.Split('/');
 

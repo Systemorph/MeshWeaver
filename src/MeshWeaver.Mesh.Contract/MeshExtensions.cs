@@ -236,8 +236,8 @@ public static class MeshExtensions
             }
 
             // 6a. Notify infrastructure of the new node (cache invalidation, query updates)
-            hub.ServiceProvider.GetService<IDataChangeNotifier>()
-                ?.NotifyChange(DataChangeNotification.Created(newNode.Path, newNode));
+            hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                ?.Publish(MeshChangeEvent.Created(newNode));
 
 
             // 7. Write version history snapshot (non-critical, skip satellite types like threads/comments)
@@ -342,8 +342,8 @@ public static class MeshExtensions
             {
                 // Leaf node — delete immediately
                 await catalog.DeleteNodeAsync(path, recursive: false, ct);
-                hub.ServiceProvider.GetService<IDataChangeNotifier>()
-                    ?.NotifyChange(DataChangeNotification.Deleted(path, null));
+                hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                    ?.Publish(MeshChangeEvent.Deleted(path));
                 hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
                 logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
                 return request.Processed();
@@ -660,8 +660,8 @@ public static class MeshExtensions
             // 5. Persist the validated node
             var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
             var savedNode = await persistence.SaveNodeAsync(nodeToSave, ct);
-            hub.ServiceProvider.GetService<IDataChangeNotifier>()
-                ?.NotifyChange(DataChangeNotification.Updated(savedNode.Path, savedNode));
+            hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                ?.Publish(MeshChangeEvent.Updated(savedNode));
 
             // 5b. Write version history snapshot (non-critical, skip satellite types like threads/comments)
             if (!catalog.Configuration.IsSatelliteNodeType(savedNode.NodeType))
@@ -815,9 +815,9 @@ public static class MeshExtensions
 
             // 4. Move the node
             var movedNode = await persistence.MoveNodeAsync(moveRequest.SourcePath, moveRequest.TargetPath, ct);
-            var changeNotifier = hub.ServiceProvider.GetService<IDataChangeNotifier>();
-            changeNotifier?.NotifyChange(DataChangeNotification.Deleted(moveRequest.SourcePath, null));
-            changeNotifier?.NotifyChange(DataChangeNotification.Created(moveRequest.TargetPath, movedNode));
+            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+            changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
+            changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
 
             // 5. Return success
             hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
