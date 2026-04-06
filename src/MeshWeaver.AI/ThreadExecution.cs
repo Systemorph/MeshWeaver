@@ -582,13 +582,34 @@ public static class ThreadExecution
             if (threadContent?.Messages.Count > 0)
             {
                 var history = ImmutableList<ThreadMessage>.Empty;
+
+                // Try loading from IMeshService query first (reliable — reads from persistence),
+                // fall back to workspace streams (works in monolith).
+                var meshService = workspace.Hub.ServiceProvider.GetService<IMeshService>();
                 foreach (var msgId in threadContent.Messages)
                 {
                     if (msgId == responseMsgId) continue;
-                    var msgStream = workspace.GetRemoteStream<MeshNode>(
-                        new Address($"{threadPath}/{msgId}"), new MeshNodeReference());
-                    var msgNode = msgStream.Current?.Value;
-                    if (msgNode?.Content is ThreadMessage tmsg && tmsg.Type != ThreadMessageType.EditingPrompt)
+                    ThreadMessage? tmsg = null;
+
+                    if (meshService != null)
+                    {
+                        // Direct query — doesn't depend on workspace stream propagation
+                        var msgPath = $"{threadPath}/{msgId}";
+                        var msgNode = meshService.QueryAsync<MeshNode>($"path:{msgPath}")
+                            .FirstOrDefaultAsync().GetAwaiter().GetResult();
+                        tmsg = msgNode?.Content as ThreadMessage;
+                    }
+
+                    if (tmsg == null)
+                    {
+                        // Fallback: workspace remote stream (monolith or if persistence fails)
+                        var msgStream = workspace.GetRemoteStream<MeshNode>(
+                            new Address($"{threadPath}/{msgId}"), new MeshNodeReference());
+                        var msgNode = msgStream.Current?.Value;
+                        tmsg = msgNode?.Content as ThreadMessage;
+                    }
+
+                    if (tmsg != null && tmsg.Type != ThreadMessageType.EditingPrompt)
                         history = history.Add(tmsg);
                 }
                 if (history.Count > 0)
@@ -596,6 +617,11 @@ public static class ThreadExecution
                     client.SetConversationHistory(history);
                     logger.LogInformation("[ThreadExec] Loaded {Count} history messages for {ThreadPath}",
                         history.Count, threadPath);
+                }
+                else
+                {
+                    logger.LogWarning("[ThreadExec] No history found for {ThreadPath} with {MsgCount} message IDs",
+                        threadPath, threadContent.Messages.Count);
                 }
             }
         }
