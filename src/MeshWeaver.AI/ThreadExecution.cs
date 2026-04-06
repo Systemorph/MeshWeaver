@@ -379,6 +379,10 @@ public static class ThreadExecution
                 // After await Task.Run(...), execution returns to the grain scheduler.
                 var executionCts = new CancellationTokenSource();
                 ExecutionCancellations[threadPath] = executionCts;
+                // Cancel Task.Run when the hub disposes (grain deactivation).
+                // Without this, OnDeactivateAsync waits up to 120s for the Task.Run
+                // that's stuck on an AI API call with no cancellation signal.
+                hub.RegisterForDisposal(_ => executionCts.Cancel());
                 _ = Task.Run(async () =>
                 {
                     var ct = executionCts.Token;
@@ -491,16 +495,6 @@ public static class ThreadExecution
 
                     PushToResponseMessage(responseText.ToString(), toolCallLog, nodeChangeLog,
                         request.AgentName, request.ModelName);
-
-                    // Update Thread node with streaming state — drives the execution
-                    // status bar in ThreadChatView (StreamingText, StreamingToolCalls, ExecutionStatus).
-                    UpdateThreadExecution(t => t with
-                    {
-                        StreamingText = responseText.ToString(),
-                        StreamingToolCalls = toolCallLog,
-                        ExecutionStatus = currentStatus
-                    });
-
                     lastUpdate = DateTimeOffset.UtcNow;
                 }
             }
