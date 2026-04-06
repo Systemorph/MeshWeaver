@@ -139,14 +139,16 @@ public static class ThreadExecution
         var mainEntity = request.ContextPath ?? threadPath;
 
         // 1) Update Thread state immediately on the grain scheduler (safe).
+        ImmutableList<string>? updatedMessages = null;
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
+            updatedMessages = thread.Messages.AddRange([userMsgId, responseMsgId]);
             return node with
             {
                 Content = thread with
                 {
-                    Messages = thread.Messages.AddRange([userMsgId, responseMsgId]),
+                    Messages = updatedMessages,
                     IsExecuting = true,
                     ActiveMessageId = responseMsgId,
                     ExecutionStatus = null,
@@ -210,8 +212,9 @@ public static class ThreadExecution
                 executionHub!.Post(request with { ResponsePath = responsePath },
                     o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
 
-                // Response — cells created
-                hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+                // Response — cells created, include Messages so client can render immediately
+                hub.Post(new SubmitMessageResponse { Success = true, Messages = updatedMessages },
+                    o => o.ResponseFor(delivery));
             },
             error =>
             {

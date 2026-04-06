@@ -58,6 +58,12 @@ public record SubmitMessageResponse
     /// Propagated upward so parent threads can aggregate changes from delegations.
     /// </summary>
     public System.Collections.Immutable.ImmutableList<MeshWeaver.Layout.NodeChangeEntry>? UpdatedNodes { get; init; }
+
+    /// <summary>
+    /// Full Messages list after cells are created. Sent with CellsCreated so the client
+    /// can render LayoutAreaViews immediately without waiting for the workspace stream.
+    /// </summary>
+    public IReadOnlyList<string>? Messages { get; init; }
 }
 
 public enum SubmitMessageStatus

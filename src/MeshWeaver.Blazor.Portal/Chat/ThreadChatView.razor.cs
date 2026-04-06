@@ -492,8 +492,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 _ = Hub.RegisterCallback((IMessageDelivery)submitDelivery, response =>
                 {
                     string? error = null;
-                    if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
-                        error = sr.Message.Error;
+                    IReadOnlyList<string>? serverMessages = null;
+                    if (response is IMessageDelivery<SubmitMessageResponse> smr)
+                    {
+                        if (!smr.Message.Success)
+                            error = smr.Message.Error;
+                        else
+                            serverMessages = smr.Message.Messages;
+                    }
                     else if (response is IMessageDelivery<DeliveryFailure> df)
                         error = $"Delivery failed: {df.Message.Message}";
 
@@ -501,12 +507,31 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     {
                         Logger.LogError("[ThreadChat:{InstanceId}] SubmitMessageRequest FAILED: {Error}",
                             _instanceId, error);
-                        // Restore text so user can retry, release spinner
                         InvokeAsync(() =>
                         {
                             MessageText = userMessageText;
                             submissionHandler.ForceRelease();
                             StateHasChanged();
+                        });
+                    }
+                    else if (serverMessages is { Count: > 0 })
+                    {
+                        // Server sent the authoritative Messages list — use it directly.
+                        // The workspace stream may not propagate in Orleans distributed mode,
+                        // so this ensures the client renders new cells immediately.
+                        Logger.LogInformation("[ThreadChat:{InstanceId}] Received Messages from server: [{Ids}]",
+                            _instanceId, string.Join(",", serverMessages));
+                        InvokeAsync(() =>
+                        {
+                            if (ThreadViewModel == null || !ThreadViewModel.Messages.SequenceEqual(serverMessages))
+                            {
+                                ThreadViewModel = (ThreadViewModel ?? new AI.ThreadViewModel()) with
+                                {
+                                    Messages = serverMessages,
+                                    ThreadPath = threadPath,
+                                    IsExecuting = true
+                                };
+                            }
                         });
                     }
                     return response;
