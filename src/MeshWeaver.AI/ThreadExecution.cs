@@ -325,10 +325,6 @@ public static class ThreadExecution
                 if (request.Attachments is { Count: > 0 })
                     client.SetAttachments(request.Attachments);
 
-                // Load history from workspace stream
-                LoadHistoryFromStream(client, threadWorkspace, workspace, threadPath, responseMsgId, logger);
-
-                // Set execution context
                 var userAccessContext = delivery.AccessContext;
                 client.SetExecutionContext(new ThreadExecutionContext
                 {
@@ -337,6 +333,16 @@ public static class ThreadExecution
                     ContextPath = request.ContextPath,
                     UserAccessContext = userAccessContext
                 });
+
+                // Load history reactively — CombineLatest on all remote message streams.
+                // Subscribes to each child message grain; when all emit, history is assembled.
+                // Cached for re-submissions (same grain, history already loaded).
+                LoadHistory(threadWorkspace, workspace, threadPath, responseMsgId, logger)
+                    .Take(1)
+                    .Subscribe(history =>
+                {
+                    if (history.Count > 0)
+                        client.SetConversationHistory(history);
 
                 var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
@@ -561,6 +567,7 @@ public static class ThreadExecution
                         executionCts.Dispose();
                     }
                 });
+                }); // end of LoadHistory().Subscribe
             }, // end of Initialize().Subscribe onNext
             ex => logger.LogError(ex, "[ThreadExec] Initialize failed for {ThreadPath}", threadPath));
 
@@ -570,65 +577,72 @@ public static class ThreadExecution
         return delivery.Processed();
     }
 
-    private static void LoadHistoryFromStream(
-        AgentChatClient client, IWorkspace threadWorkspace, IWorkspace workspace,
+    /// <summary>
+    /// Cached history per thread path — survives across re-submissions on the same grain.
+    /// When a user re-submits, the history from the previous execution is already here.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, ImmutableList<ThreadMessage>> HistoryCache = new();
+
+    /// <summary>
+    /// Loads conversation history reactively via CombineLatest on remote streams.
+    /// Returns an Observable that emits when all message streams have their first value.
+    /// Falls back to cached history if available (for re-submissions).
+    /// </summary>
+    private static IObservable<ImmutableList<ThreadMessage>> LoadHistory(
+        IWorkspace threadWorkspace, IWorkspace workspace,
         string threadPath, string responseMsgId, ILogger logger)
     {
-        try
+        var threadStream = threadWorkspace.GetStream(new MeshNodeReference());
+        var threadNode = threadStream?.Current?.Value;
+        var threadContent = threadNode?.Content as MeshThread;
+
+        var msgIds = threadContent?.Messages
+            .Where(id => id != responseMsgId)
+            .ToImmutableList() ?? ImmutableList<string>.Empty;
+
+        if (msgIds.Count == 0)
         {
-            var threadStream = threadWorkspace.GetStream(new MeshNodeReference());
-            var threadNode = threadStream?.Current?.Value;
-            var threadContent = threadNode?.Content as AI.Thread;
-            if (threadContent?.Messages.Count > 0)
+            // Check cache for re-submission case
+            if (HistoryCache.TryGetValue(threadPath, out var cached) && cached.Count > 0)
             {
-                var history = ImmutableList<ThreadMessage>.Empty;
-
-                // Try loading from IMeshService query first (reliable — reads from persistence),
-                // fall back to workspace streams (works in monolith).
-                var meshService = workspace.Hub.ServiceProvider.GetService<IMeshService>();
-                foreach (var msgId in threadContent.Messages)
-                {
-                    if (msgId == responseMsgId) continue;
-                    ThreadMessage? tmsg = null;
-
-                    if (meshService != null)
-                    {
-                        // Direct query — doesn't depend on workspace stream propagation
-                        var msgPath = $"{threadPath}/{msgId}";
-                        var msgNode = meshService.QueryAsync<MeshNode>($"path:{msgPath}")
-                            .FirstOrDefaultAsync().GetAwaiter().GetResult();
-                        tmsg = msgNode?.Content as ThreadMessage;
-                    }
-
-                    if (tmsg == null)
-                    {
-                        // Fallback: workspace remote stream (monolith or if persistence fails)
-                        var msgStream = workspace.GetRemoteStream<MeshNode>(
-                            new Address($"{threadPath}/{msgId}"), new MeshNodeReference());
-                        var msgNode = msgStream.Current?.Value;
-                        tmsg = msgNode?.Content as ThreadMessage;
-                    }
-
-                    if (tmsg != null && tmsg.Type != ThreadMessageType.EditingPrompt)
-                        history = history.Add(tmsg);
-                }
-                if (history.Count > 0)
-                {
-                    client.SetConversationHistory(history);
-                    logger.LogInformation("[ThreadExec] Loaded {Count} history messages for {ThreadPath}",
-                        history.Count, threadPath);
-                }
-                else
-                {
-                    logger.LogWarning("[ThreadExec] No history found for {ThreadPath} with {MsgCount} message IDs",
-                        threadPath, threadContent.Messages.Count);
-                }
+                logger.LogInformation("[ThreadExec] Using cached history ({Count} msgs) for {ThreadPath}",
+                    cached.Count, threadPath);
+                return Observable.Return(cached);
             }
+            return Observable.Return(ImmutableList<ThreadMessage>.Empty);
         }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to load conversation history for {ThreadPath}", threadPath);
-        }
+
+        // Create a remote stream for each message, take first non-null emission
+        var messageStreams = msgIds.Select(msgId =>
+            workspace.GetRemoteStream<MeshNode>(
+                    new Address($"{threadPath}/{msgId}"), new MeshNodeReference())
+                .Where(change => change.Value?.Content is ThreadMessage)
+                .Select(change => change.Value!.Content as ThreadMessage)
+                .Take(1)
+        ).ToList();
+
+        // CombineLatest fires when ALL streams have emitted at least once.
+        // Timeout after 10s — use cached or partial history if streams don't connect.
+        return Observable.CombineLatest(messageStreams)
+            .Take(1)
+            .Select(messages =>
+            {
+                var history = messages
+                    .Where(m => m != null && m.Type != ThreadMessageType.EditingPrompt)
+                    .ToImmutableList()!;
+                logger.LogInformation("[ThreadExec] Loaded {Count} history messages via CombineLatest for {ThreadPath}",
+                    history.Count, threadPath);
+                // Cache for re-submissions
+                HistoryCache[threadPath] = history;
+                return history;
+            })
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<ImmutableList<ThreadMessage>, TimeoutException>(_ =>
+            {
+                logger.LogWarning("[ThreadExec] History load timed out for {ThreadPath}, using cache", threadPath);
+                return Observable.Return(
+                    HistoryCache.GetValueOrDefault(threadPath) ?? ImmutableList<ThreadMessage>.Empty);
+            });
     }
 
     /// <summary>
