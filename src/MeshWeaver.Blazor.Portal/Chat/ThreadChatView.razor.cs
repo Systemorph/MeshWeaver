@@ -1034,10 +1034,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// Creates a LayoutAreaControl pointing to a ThreadMessage node's Overview layout area.
     /// </summary>
     private LayoutAreaControl GetMessageCell(string msgId)
-        => new LayoutAreaControl(
+    {
+        Logger.LogDebug("[ThreadChat:{InstanceId}] GetMessageCell: msgId={MsgId}, threadPath={ThreadPath}, stream={HasStream}",
+            _instanceId, msgId, threadPath, Stream != null);
+        return new LayoutAreaControl(
             $"{threadPath}/{msgId}",
             new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
             .WithSpinnerType(SpinnerType.Skeleton);
+    }
 
     private static string TruncateText(string text, int maxLength)
     {
