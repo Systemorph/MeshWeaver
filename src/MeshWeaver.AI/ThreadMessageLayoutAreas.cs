@@ -177,7 +177,21 @@ public static class ThreadMessageLayoutAreas
             }));
 
         // Emit control once — role/author are static, text/toolCalls are data-bound.
-        return syncStream!
+        // Try current value first (synchronous) — the stream may have already replayed
+        // before this subscription started. Fall back to observable for lazy activation.
+        var currentMsg = syncStream!.Current?.Value?.Content as ThreadMessage;
+        if (currentMsg != null)
+        {
+            msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_SYNC: hub={Hub}, role={Role}, textLen={TextLen}",
+                hubPath, currentMsg.Role, currentMsg.Text?.Length ?? 0);
+            var control = currentMsg.Type == ThreadMessageType.EditingPrompt
+                ? BuildEditingOverview(host, currentMsg, threadPath, messageId)
+                : BuildMessageOverview(host, currentMsg, threadPath, messageId);
+            return Observable.Return((UiControl?)control);
+        }
+
+        msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_ASYNC: hub={Hub}, waiting for first emission", hubPath);
+        return syncStream
             .Select(change => change.Value?.Content as ThreadMessage)
             .Where(m => m != null)
             .Take(1)
