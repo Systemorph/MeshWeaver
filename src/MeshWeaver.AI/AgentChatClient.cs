@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -164,25 +165,23 @@ public class AgentChatClient : IAgentChat
     {
         try
         {
-            var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{threadNodePath}")
-                .FirstOrDefaultAsync();
-            if (node?.Content is not Thread threadContent)
-                return;
-
-            // Only update if not already set
-            if (!string.IsNullOrEmpty(threadContent.PersistentThreadId))
-                return;
-
             var factory = GetFactoryForModel(currentModelName);
-            var updatedContent = threadContent with
+            var workspace = hub.ServiceProvider.GetRequiredService<Data.IWorkspace>();
+            workspace.UpdateMeshNode(node =>
             {
-                PersistentThreadId = persistentThreadId,
-                ProviderType = factory?.Name
-            };
-
-            var updatedNode = node with { Content = updatedContent };
-            hub.Post(new Data.DataChangeRequest { Updates = [updatedNode] }, o => o.WithTarget(new Messaging.Address(threadNodePath)));
+                if (node.Content is not Thread threadContent)
+                    return node;
+                if (!string.IsNullOrEmpty(threadContent.PersistentThreadId))
+                    return node; // Already set
+                return node with
+                {
+                    Content = threadContent with
+                    {
+                        PersistentThreadId = persistentThreadId,
+                        ProviderType = factory?.Name
+                    }
+                };
+            }, address: new Messaging.Address(threadNodePath));
 
             logger.LogInformation("Updated thread {Path} with PersistentThreadId={PersistentThreadId}",
                 threadNodePath, persistentThreadId);

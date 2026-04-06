@@ -153,15 +153,28 @@ public static class ThreadMessageLayoutAreas
         // and push to data section. The bubble binds to the view model via JsonPointerReference.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
+        var msgLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.MsgLayout");
         host.SubscribeToDataStream(MessageDataKey, syncStream!
-            .Select(change => change.Value?.Content as ThreadMessage)
+            .Select(change =>
+            {
+                var msg = change.Value?.Content as ThreadMessage;
+                msgLogger?.LogDebug("[MsgLayout] STREAM_EMIT: hub={Hub}, hasContent={HasContent}, textLen={TextLen}",
+                    host.Hub.Address, msg != null, msg?.Text?.Length ?? -1);
+                return msg;
+            })
             .Where(m => m != null)
             .Select(m => (ThreadMessageViewModel.FromMessage(m!) with
             {
                 Text = ConvertReferencesToLinks(m!.Text ?? "")
             }))
             .DistinctUntilChanged()
-            .Select(vm => (object)vm));
+            .Select(vm =>
+            {
+                msgLogger?.LogDebug("[MsgLayout] DATA_PUSH: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
+                    host.Hub.Address, ((ThreadMessageViewModel)vm).Text.Length, ((ThreadMessageViewModel)vm).ToolCalls.Count);
+                return (object)vm;
+            }));
 
         // Emit control once — role/author are static, text/toolCalls are data-bound.
         return syncStream!

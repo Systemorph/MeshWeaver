@@ -15,7 +15,7 @@ namespace MeshWeaver.AI.AzureFoundry;
 public class AzureClaudeChatClient : IChatClient
 {
     private const string AnthropicVersion = "2023-06-01";
-    private const int DefaultMaxTokens = 4096;
+    private const int DefaultMaxTokens = 16384;
 
     private readonly HttpClient httpClient;
     private readonly string endpoint;

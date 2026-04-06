@@ -41,6 +41,7 @@ public static class ThreadLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
+                .WithView(MeshNodeLayoutAreas.OverviewArea, ThreadProgressView)
                 .WithView(ThreadNodeType.ThreadChatArea, ThreadChatView)
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
@@ -238,6 +239,43 @@ public static class ThreadLayoutAreas
 
         return new ThreadChatControl()
             .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)));
+    }
+
+    /// <summary>
+    /// Overview area for Thread nodes — overrides the default property editor.
+    /// Shows the active/last message as a LayoutAreaControl (bubble with tool calls).
+    /// If executing: shows the active message cell (streaming + tool calls).
+    /// If finished: shows the last response message cell.
+    /// Never shows the Thread record's properties as an editor.
+    /// </summary>
+    public static IObservable<UiControl?> ThreadProgressView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var stream = host.Workspace.GetStream<MeshNode>();
+
+        return stream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var thread = node?.Content as MeshThread;
+                if (thread == null) return (UiControl?)null;
+
+                // Find which message to show
+                string? messageId = null;
+                if (thread.IsExecuting && !string.IsNullOrEmpty(thread.ActiveMessageId))
+                    messageId = thread.ActiveMessageId;
+                else if (thread.Messages.Count > 0)
+                    messageId = thread.Messages[^1]; // last message
+
+                if (string.IsNullOrEmpty(messageId))
+                    return (UiControl?)Controls.Html(
+                        "<p style=\"color: var(--neutral-foreground-hint); padding: 24px;\">No messages yet.</p>");
+
+                var messagePath = $"{hubPath}/{messageId}";
+                return (UiControl?)new LayoutAreaControl(messagePath,
+                    new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
+                    .WithSpinnerType(SpinnerType.Skeleton);
+            });
     }
 
     /// <summary>

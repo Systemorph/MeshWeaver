@@ -60,7 +60,8 @@ public record ThreadViewModel
                && StreamingText == other.StreamingText
                && TokensUsed == other.TokensUsed
                && ExecutionStartedAt == other.ExecutionStartedAt
-               && Messages.SequenceEqual(other.Messages);
+               && Messages.SequenceEqual(other.Messages)
+               && (StreamingToolCalls ?? []).SequenceEqual(other.StreamingToolCalls ?? []);
     }
 
     public override int GetHashCode()
@@ -78,6 +79,9 @@ public record ThreadViewModel
         hash.Add(ExecutionStartedAt);
         foreach (var msg in Messages)
             hash.Add(msg);
+        if (StreamingToolCalls != null)
+            foreach (var tc in StreamingToolCalls)
+                hash.Add(tc);
         return hash.ToHashCode();
     }
 }

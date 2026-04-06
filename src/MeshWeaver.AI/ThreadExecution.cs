@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
+using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -33,6 +34,7 @@ public static class ThreadExecution
     /// Safe: thread hub + _Exec hub always run on the same grain/process.
     /// </summary>
     private static readonly ConcurrentDictionary<string, Action<SubmitMessageResponse>> CompletionCallbacks = new();
+    private static readonly ConcurrentDictionary<string, CancellationTokenSource> ExecutionCancellations = new();
 
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
@@ -250,9 +252,9 @@ public static class ThreadExecution
             ImmutableList<NodeChangeEntry> updatedNodes,
             string? agentName, string? modelName)
         {
-            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}",
-                responsePath, text.Length, toolCalls.Count, updatedNodes.Count);
-            parentHub.Post(new UpdateThreadMessageContent
+            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, parentHub={ParentHub}, thread={Thread}",
+                responsePath, text.Length, toolCalls.Count, updatedNodes.Count, parentHub.Address, Environment.CurrentManagedThreadId);
+            var pushDelivery = parentHub.Post(new UpdateThreadMessageContent
             {
                 Text = text,
                 ToolCalls = toolCalls,
@@ -260,6 +262,8 @@ public static class ThreadExecution
                 AgentName = agentName,
                 ModelName = modelName
             }, o => o.WithTarget(new Address(responsePath)));
+            logger.LogInformation("[ThreadExec] PUSH_TO_MSG_SENT: delivery={Delivered}, responsePath={ResponsePath}",
+                pushDelivery != null, responsePath);
         }
 
         // Helper: update Thread execution state via parentHub workspace.
@@ -365,19 +369,24 @@ public static class ThreadExecution
 
                 logger.LogInformation("[ThreadExec] STREAMING_START: threadPath={ThreadPath}, responsePath={ResponsePath}",
                     threadPath, responsePath);
-                // Streaming runs via InvokeAsync on the grain's scheduler.
-                // The grain MUST be reentrant ([Reentrant] on the Orleans grain class)
-                // so that while the streaming loop awaits (AI API, delegation TCS),
-                // other messages (callbacks, workspace sync, Posts) can interleave.
-                // Without reentrancy, delegation deadlocks: the callback can't fire
-                // because the scheduler is occupied by the streaming await.
-                hub.InvokeAsync(async ct =>
+                // Run streaming on thread pool via Task.Run — the grain scheduler
+                // stays FREE to process tool call responses, delegation callbacks, and
+                // workspace updates. Without this, tool calls deadlock: they await a
+                // response that needs the grain scheduler which is blocked by InvokeAsync.
+                //
+                // DelayDeactivation keeps the grain alive while the thread pool task runs.
+                // BeginAsyncOperation signals the grain keep-alive timer.
+                // After await Task.Run(...), execution returns to the grain scheduler.
+                var executionCts = new CancellationTokenSource();
+                ExecutionCancellations[threadPath] = executionCts;
+                _ = Task.Run(async () =>
                 {
+                    var ct = executionCts.Token;
                     var responseText = new StringBuilder();
                     capturedResponseText = responseText;
                     try
                     {
-                    logger.LogInformation("[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
+                    logger.LogInformation("[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath} (on thread pool)", DateTime.UtcNow, threadPath);
                     // Keep the grain alive during the entire execution — including tool calls
                     // and delegations where the streaming loop is blocked.
                     using var heartbeatSubscription = parentHub.BeginAsyncOperation();
@@ -430,13 +439,16 @@ public static class ThreadExecution
                         if (originalCall != null)
                         {
                             string? delegationPath = null;
+                            string? resultText = null;
+                            bool isSuccess;
+
+                            // Extract typed result fields when available (DelegationResult, etc.)
+                            var (extractedText, extractedPath, extractedSuccess) = ExtractToolResult(functionResult.Result);
+                            resultText = extractedText;
+                            isSuccess = extractedSuccess;
+
                             if (originalCall.Name.StartsWith("delegate_to"))
-                            {
-                                // Extract delegation path from the DelegationResult in the tool output.
-                                // This is safe for parallel delegations (unlike the old LastDelegationPath
-                                // shared state which got overwritten by the last concurrent delegation).
-                                delegationPath = ExtractDelegationPath(functionResult.Result?.ToString());
-                            }
+                                delegationPath = extractedPath;
 
                             // Replace pending entry with final (has Result + DelegationPath).
                             // Preserve DelegationPath if already stamped by UpdateDelegationStatus.
@@ -447,8 +459,8 @@ public static class ThreadExecution
                                 Name = originalCall.Name,
                                 DisplayName = ToolStatusFormatter.Format(originalCall),
                                 Arguments = SerializeArgs(originalCall.Arguments),
-                                Result = Truncate(functionResult.Result?.ToString()),
-                                IsSuccess = functionResult.Result?.ToString()?.StartsWith("Error") != true,
+                                Result = Truncate(resultText),
+                                IsSuccess = isSuccess,
                                 DelegationPath = delegationPath ?? existingDelegationPath,
                                 Timestamp = DateTime.UtcNow
                             };
@@ -479,6 +491,16 @@ public static class ThreadExecution
 
                     PushToResponseMessage(responseText.ToString(), toolCallLog, nodeChangeLog,
                         request.AgentName, request.ModelName);
+
+                    // Update Thread node with streaming state — drives the execution
+                    // status bar in ThreadChatView (StreamingText, StreamingToolCalls, ExecutionStatus).
+                    UpdateThreadExecution(t => t with
+                    {
+                        StreamingText = responseText.ToString(),
+                        StreamingToolCalls = toolCallLog,
+                        ExecutionStatus = currentStatus
+                    });
+
                     lastUpdate = DateTimeOffset.UtcNow;
                 }
             }
@@ -499,7 +521,7 @@ public static class ThreadExecution
                     // Notify parent via SubmitMessageResponse so delegation callback resolves.
                     // Must post on the _Exec hub (hub) — the SubmitMessageResponse handler
                     // is registered there and forwards to the thread hub via ResponseFor.
-                    NotifyParentCompletion(hub, threadPath, finalText, true, delivery, aggregatedChanges);
+                    NotifyParentCompletion(parentHub, threadPath, finalText, true, delivery, aggregatedChanges);
                     }
                     catch (OperationCanceledException)
                     {
@@ -511,7 +533,7 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(hub, threadPath, cancelText, false, delivery, nodeChangeLog);
+                        NotifyParentCompletion(parentHub, threadPath, cancelText, false, delivery, nodeChangeLog);
                     }
                     catch (Exception ex)
                     {
@@ -523,12 +545,13 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(hub, threadPath, errorText, false, delivery, nodeChangeLog);
+                        NotifyParentCompletion(parentHub, threadPath, errorText, false, delivery, nodeChangeLog);
                     }
-                }, ex =>
-                {
-                    logger.LogError(ex, "[ThreadExec] InvokeAsync error: {ThreadPath}", threadPath);
-                    return Task.CompletedTask;
+                    finally
+                    {
+                        ExecutionCancellations.TryRemove(threadPath, out _);
+                        executionCts.Dispose();
+                    }
                 });
             }, // end of Initialize().Subscribe onNext
             ex => logger.LogError(ex, "[ThreadExec] Initialize failed for {ThreadPath}", threadPath));
@@ -674,27 +697,52 @@ public static class ThreadExecution
     }
 
     /// <summary>
-    /// Extracts the delegation path (ThreadId) from a serialized DelegationResult in tool output.
-    /// This is parallel-safe — each tool result carries its own thread path.
+    /// Extracts result text, delegation path, and success from a tool result.
+    /// Handles DelegationResult objects directly (no ToString → JSON round-trip).
+    /// Falls back to JSON parsing for serialized results, then plain toString.
     /// </summary>
-    private static string? ExtractDelegationPath(string? toolResult)
+    private static (string? ResultText, string? DelegationPath, bool IsSuccess) ExtractToolResult(object? result)
     {
-        if (string.IsNullOrEmpty(toolResult))
-            return null;
+        if (result is null)
+            return (null, null, true);
+
+        // Typed DelegationResult — direct property access, no parsing
+        if (result is DelegationResult dr)
+            return (dr.Result, dr.ThreadId, dr.Success);
+
+        var text = result.ToString();
+        if (string.IsNullOrEmpty(text))
+            return (null, null, true);
+
+        // Try JSON parsing for serialized results (e.g., from remote execution)
         try
         {
-            using var doc = JsonDocument.Parse(toolResult);
-            if (doc.RootElement.TryGetProperty("threadId", out var threadIdProp) ||
-                doc.RootElement.TryGetProperty("ThreadId", out threadIdProp))
-            {
-                return threadIdProp.GetString();
-            }
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            string? threadId = null;
+            if (root.TryGetProperty("threadId", out var tidProp) ||
+                root.TryGetProperty("ThreadId", out tidProp))
+                threadId = tidProp.GetString();
+
+            string? resultText = null;
+            if (root.TryGetProperty("result", out var resProp) ||
+                root.TryGetProperty("Result", out resProp))
+                resultText = resProp.GetString();
+
+            var success = true;
+            if (root.TryGetProperty("success", out var sucProp) ||
+                root.TryGetProperty("Success", out sucProp))
+                success = sucProp.GetBoolean();
+
+            return (resultText ?? text, threadId, success);
         }
         catch
         {
-            // Not JSON or no ThreadId — fall back to null
+            // Not JSON — use raw text
         }
-        return null;
+
+        var isSuccess = !text.StartsWith("Error", StringComparison.Ordinal);
+        return (text, null, isSuccess);
     }
 
     private static IMessageDelivery HandleCancelStream(
@@ -721,12 +769,11 @@ public static class ThreadExecution
             return node; // No state change needed
         });
 
-        // Cancel own execution
-        var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
-        if (execHub != null)
+        // Cancel own execution via CancellationTokenSource (streaming runs on thread pool)
+        if (ExecutionCancellations.TryGetValue(threadPath, out var cts))
         {
             logger?.LogInformation("[ThreadExec] Cancelling own execution for {ThreadPath}", threadPath);
-            execHub.CancelCurrentExecution();
+            cts.Cancel();
         }
 
         // Post response so parent can await confirmation

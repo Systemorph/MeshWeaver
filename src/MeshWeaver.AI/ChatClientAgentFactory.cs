@@ -153,7 +153,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
         var functionInvoker = agent.ChatClient.GetService<Microsoft.Extensions.AI.FunctionInvokingChatClient>();
         if (functionInvoker != null)
+        {
             functionInvoker.AllowConcurrentInvocation = true;
+            // Log the maximum iterations — if the model tries more tool calls than this, it stops
+            Logger.LogInformation("[AgentFactory] FunctionInvoker for {Agent}: MaximumIterationsPerRequest={Max}",
+                name, functionInvoker.MaximumIterationsPerRequest);
+        }
 
         // Wrap with function calling middleware — gives the streaming loop
         // real-time visibility into tool calls. FunctionInvokingChatClient
