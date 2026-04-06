@@ -159,7 +159,7 @@ public static class ThreadMessageLayoutAreas
             .Select(change =>
             {
                 var msg = change.Value?.Content as ThreadMessage;
-                msgLogger?.LogDebug("[MsgLayout] STREAM_EMIT: hub={Hub}, hasContent={HasContent}, textLen={TextLen}",
+                msgLogger?.LogInformation("[MsgLayout] STREAM_EMIT: hub={Hub}, hasContent={HasContent}, textLen={TextLen}",
                     host.Hub.Address, msg != null, msg?.Text?.Length ?? -1);
                 return msg;
             })
@@ -171,7 +171,7 @@ public static class ThreadMessageLayoutAreas
             .DistinctUntilChanged()
             .Select(vm =>
             {
-                msgLogger?.LogDebug("[MsgLayout] DATA_PUSH: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
+                msgLogger?.LogInformation("[MsgLayout] DATA_PUSH: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
                     host.Hub.Address, ((ThreadMessageViewModel)vm).Text.Length, ((ThreadMessageViewModel)vm).ToolCalls.Count);
                 return (object)vm;
             }));
