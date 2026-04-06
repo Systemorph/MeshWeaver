@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -119,15 +120,17 @@ public record Thread
     public DateTime? ExecutionStartedAt { get; init; }
 
     /// <summary>
-    /// Streaming text buffer — updated at 2/sec during execution on the Thread node (local workspace).
-    /// Cleared when execution completes (final text is persisted on the response message).
+    /// Streaming text buffer — transient, never persisted.
+    /// Used only in-memory during active execution for the status bar preview.
     /// </summary>
+    [JsonIgnore]
     public string? StreamingText { get; init; }
 
     /// <summary>
-    /// Streaming tool calls — updated at 2/sec during execution.
-    /// Cleared when execution completes.
+    /// Streaming tool calls — transient, never persisted.
+    /// Used only in-memory during active execution for the status bar.
     /// </summary>
+    [JsonIgnore]
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 
 }
