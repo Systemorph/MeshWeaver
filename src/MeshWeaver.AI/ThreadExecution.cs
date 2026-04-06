@@ -212,8 +212,19 @@ public static class ThreadExecution
                 executionHub!.Post(request with { ResponsePath = responsePath },
                     o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
 
-                // Response — cells created, include Messages so client can render immediately
-                hub.Post(new SubmitMessageResponse { Success = true, Messages = updatedMessages },
+                // Response — cells created, include Messages so client can render immediately.
+                // updatedMessages may be null if UpdateMeshNode hasn't processed yet (race).
+                // Fall back to constructing from the known IDs.
+                var msgsToSend = updatedMessages;
+                if (msgsToSend == null)
+                {
+                    logger?.LogWarning("HandleSubmitMessage: updatedMessages was null (race), reconstructing");
+                    // We know the new IDs — construct a minimal list
+                    msgsToSend = ImmutableList.Create(userMsgId, responseMsgId);
+                }
+                logger?.LogInformation("HandleSubmitMessage: sending Messages=[{Ids}] to client for {ThreadPath}",
+                    string.Join(",", msgsToSend), threadPath);
+                hub.Post(new SubmitMessageResponse { Success = true, Messages = msgsToSend },
                     o => o.ResponseFor(delivery));
             },
             error =>
