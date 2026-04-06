@@ -708,7 +708,9 @@ public static class ThreadExecution
         if (string.IsNullOrEmpty(text))
             return (null, null, true);
 
-        // Try JSON parsing for serialized results (e.g., from remote execution)
+        // Try JSON parsing only if text looks like JSON (starts with { or [)
+        var trimmed = text.AsSpan().TrimStart();
+        if (trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '['))
         try
         {
             using var doc = JsonDocument.Parse(text);
