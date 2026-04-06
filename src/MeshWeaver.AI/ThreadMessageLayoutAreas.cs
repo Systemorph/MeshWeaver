@@ -105,20 +105,8 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
-    /// Direct content Subjects keyed by hub address.
-    /// HandleUpdateContent pushes to the Subject; Overview subscribes to it.
-    /// Bypasses the workspace → reducer → reduced-stream pipeline which
-    /// silently drops updates in Orleans distributed mode.
-    /// </summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Reactive.Subjects.ReplaySubject<ThreadMessage>>
-        ContentSubjects = new();
-
-    private static System.Reactive.Subjects.ReplaySubject<ThreadMessage> GetOrCreateContentSubject(string hubAddress)
-        => ContentSubjects.GetOrAdd(hubAddress, _ => new System.Reactive.Subjects.ReplaySubject<ThreadMessage>(1));
-
-    /// <summary>
     /// Handles content updates from thread execution.
-    /// Updates workspace (for persistence) AND pushes to direct Subject (for live UI).
+    /// Runs ON the response message grain — updates local workspace → sync stream → clients.
     /// </summary>
     private static IMessageDelivery HandleUpdateContent(
         IMessageHub hub, IMessageDelivery<UpdateThreadMessageContent> delivery)
@@ -128,24 +116,20 @@ public static class ThreadMessageLayoutAreas
             ?.CreateLogger("MeshWeaver.AI.MsgLayout");
         logger?.LogInformation("[MsgLayout] HANDLE_UPDATE: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
             hub.Address, msg.Text?.Length ?? -1, msg.ToolCalls?.Count ?? -1);
-
-        // 1) Update workspace (persistence + initial state for new subscribers)
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
             var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
-            var updated = current with
+            return node with
             {
-                Text = msg.Text ?? current.Text,
-                ToolCalls = msg.ToolCalls ?? current.ToolCalls,
-                UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
-                AgentName = msg.AgentName ?? current.AgentName,
-                ModelName = msg.ModelName ?? current.ModelName
+                Content = current with
+                {
+                    Text = msg.Text ?? current.Text,
+                    ToolCalls = msg.ToolCalls ?? current.ToolCalls,
+                    UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
+                    AgentName = msg.AgentName ?? current.AgentName,
+                    ModelName = msg.ModelName ?? current.ModelName
+                }
             };
-
-            // 2) Push to direct Subject — bypasses workspace stream pipeline
-            GetOrCreateContentSubject(hub.Address.ToString()).OnNext(updated);
-
-            return node with { Content = updated };
         });
         return delivery.Processed();
     }
@@ -164,35 +148,33 @@ public static class ThreadMessageLayoutAreas
         var threadPath = lastSlash > 0 ? hubPath[..lastSlash] : hubPath;
         var messageId = lastSlash > 0 ? hubPath[(lastSlash + 1)..] : hubPath;
 
-        // Subscribe to the direct content Subject for live streaming updates.
-        // Also subscribe to workspace stream for initial state (persistence load).
-        // The Subject bypasses the workspace → reducer → reduced-stream pipeline
-        // which silently drops updates in Orleans distributed mode.
+        // Subscribe to the MeshNodeReference sync stream — receives updates from
+        // responseStream.Update() / PatchDataChangeRequest. Map to ThreadMessageViewModel
+        // and push to data section. The bubble binds to the view model via JsonPointerReference.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-        var contentSubject = GetOrCreateContentSubject(hubPath);
 
         var msgLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.MsgLayout");
-
-        // Merge: workspace stream (initial + persistence) + direct subject (live streaming)
-        var contentStream = syncStream!
-            .Select(change => change.Value?.Content as ThreadMessage)
+        host.SubscribeToDataStream(MessageDataKey, syncStream!
+            .Select(change =>
+            {
+                var msg = change.Value?.Content as ThreadMessage;
+                msgLogger?.LogInformation("[MsgLayout] STREAM_EMIT: hub={Hub}, hasContent={HasContent}, textLen={TextLen}",
+                    host.Hub.Address, msg != null, msg?.Text?.Length ?? -1);
+                return msg;
+            })
             .Where(m => m != null)
-            .Select(m => m!)
-            .Merge(contentSubject.AsObservable());
-
-        host.SubscribeToDataStream(MessageDataKey, contentStream
-            .Select(m =>
+            .Select(m => (ThreadMessageViewModel.FromMessage(m!) with
+            {
+                Text = ConvertReferencesToLinks(m!.Text ?? "")
+            }))
+            .DistinctUntilChanged()
+            .Select(vm =>
             {
                 msgLogger?.LogInformation("[MsgLayout] DATA_PUSH: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
-                    host.Hub.Address, m.Text?.Length ?? 0, m.ToolCalls.Count);
-                return (ThreadMessageViewModel.FromMessage(m) with
-                {
-                    Text = ConvertReferencesToLinks(m.Text ?? "")
-                });
-            })
-            .DistinctUntilChanged()
-            .Select(vm => (object)vm));
+                    host.Hub.Address, ((ThreadMessageViewModel)vm).Text.Length, ((ThreadMessageViewModel)vm).ToolCalls.Count);
+                return (object)vm;
+            }));
 
         // Emit control once — role/author are static, text/toolCalls are data-bound.
         return syncStream!
