@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("MeshWeaver.Messaging.Hub")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
+[assembly: InternalsVisibleTo("MeshWeaver.AI")]
 
 namespace MeshWeaver.Messaging;
 

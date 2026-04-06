@@ -7,6 +7,7 @@ using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -260,15 +261,15 @@ public static class ThreadExecution
         var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         // Helper: push content to response message hub.
-        // Posts UpdateThreadMessageContent which is handled ON the grain —
+        // Posts UpdateThreadMessageContent which is handled ON the response grain —
         // calls workspace.UpdateMeshNode() locally → sync stream → clients.
         void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
             ImmutableList<NodeChangeEntry> updatedNodes,
             string? agentName, string? modelName)
         {
-            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, parentHub={ParentHub}, thread={Thread}",
-                responsePath, text.Length, toolCalls.Count, updatedNodes.Count, parentHub.Address, Environment.CurrentManagedThreadId);
-            var pushDelivery = parentHub.Post(new UpdateThreadMessageContent
+            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}",
+                responsePath, text.Length, toolCalls.Count, updatedNodes.Count);
+            parentHub.Post(new UpdateThreadMessageContent
             {
                 Text = text,
                 ToolCalls = toolCalls,
@@ -276,8 +277,6 @@ public static class ThreadExecution
                 AgentName = agentName,
                 ModelName = modelName
             }, o => o.WithTarget(new Address(responsePath)));
-            logger.LogInformation("[ThreadExec] PUSH_TO_MSG_SENT: delivery={Delivered}, responsePath={ResponsePath}",
-                pushDelivery != null, responsePath);
         }
 
         // Helper: update Thread execution state via parentHub workspace.
@@ -494,8 +493,9 @@ public static class ThreadExecution
                 if (!string.IsNullOrEmpty(update.Text))
                     responseText.Append(update.Text);
 
-                // Push streaming content at ~1/sec via responseStream.Update
-                if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(1000))
+                // Push streaming content at ~1/3sec — reduced frequency to avoid
+                // overloading the grain scheduler (messages expire if queue backs up).
+                if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(3000))
                 {
                     // Stamp delegation paths on any unmatched delegation tool calls
                     var pathValues = chatClient.DelegationPaths.Values.ToList();
