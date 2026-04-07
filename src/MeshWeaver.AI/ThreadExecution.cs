@@ -337,7 +337,8 @@ public static class ThreadExecution
                 // Load history reactively — CombineLatest on all remote message streams.
                 // Subscribes to each child message grain; when all emit, history is assembled.
                 // Cached for re-submissions (same grain, history already loaded).
-                LoadHistory(threadWorkspace, workspace, threadPath, responseMsgId, logger)
+                var meshService = parentHub.ServiceProvider.GetService<IMeshService>();
+                LoadHistory(threadWorkspace, meshService, threadPath, responseMsgId, logger)
                     .Take(1)
                     .Subscribe(history =>
                 {
@@ -579,67 +580,67 @@ public static class ThreadExecution
 
     /// <summary>
     /// Cached history per thread path — survives across re-submissions on the same grain.
-    /// When a user re-submits, the history from the previous execution is already here.
     /// </summary>
     private static readonly ConcurrentDictionary<string, ImmutableList<ThreadMessage>> HistoryCache = new();
 
     /// <summary>
-    /// Loads conversation history reactively via CombineLatest on remote streams.
-    /// Returns an Observable that emits when all message streams have their first value.
-    /// Falls back to cached history if available (for re-submissions).
+    /// Loads conversation history via IMeshService query (single DB query for all messages).
+    /// Returns an Observable that emits the ordered message list.
+    /// Cached for re-submissions on the same grain.
     /// </summary>
     private static IObservable<ImmutableList<ThreadMessage>> LoadHistory(
-        IWorkspace threadWorkspace, IWorkspace workspace,
+        IWorkspace threadWorkspace, IMeshService? meshService,
         string threadPath, string responseMsgId, ILogger logger)
     {
+        // Check cache first (re-submission case — history already loaded)
+        if (HistoryCache.TryGetValue(threadPath, out var cached) && cached.Count > 0)
+        {
+            logger.LogInformation("[ThreadExec] Using cached history ({Count} msgs) for {ThreadPath}",
+                cached.Count, threadPath);
+            return Observable.Return(cached);
+        }
+
+        // Read message order from the Thread node (local workspace — always available)
         var threadStream = threadWorkspace.GetStream(new MeshNodeReference());
         var threadNode = threadStream?.Current?.Value;
         var threadContent = threadNode?.Content as MeshThread;
+        var messageOrder = threadContent?.Messages ?? ImmutableList<string>.Empty;
 
-        var msgIds = threadContent?.Messages
-            .Where(id => id != responseMsgId)
-            .ToImmutableList() ?? ImmutableList<string>.Empty;
-
-        if (msgIds.Count == 0)
-        {
-            // Check cache for re-submission case
-            if (HistoryCache.TryGetValue(threadPath, out var cached) && cached.Count > 0)
-            {
-                logger.LogInformation("[ThreadExec] Using cached history ({Count} msgs) for {ThreadPath}",
-                    cached.Count, threadPath);
-                return Observable.Return(cached);
-            }
+        if (messageOrder.Count == 0 || meshService == null)
             return Observable.Return(ImmutableList<ThreadMessage>.Empty);
-        }
 
-        // Create a remote stream for each message, take first non-null emission
-        var messageStreams = msgIds.Select(msgId =>
-            workspace.GetRemoteStream<MeshNode>(
-                    new Address($"{threadPath}/{msgId}"), new MeshNodeReference())
-                .Where(change => change.Value?.Content is ThreadMessage)
-                .Select(change => change.Value!.Content as ThreadMessage)
-                .Take(1)
-        ).ToList();
+        // Single query: get all ThreadMessage nodes under this thread's namespace
+        var query = MeshQueryRequest.FromQuery(
+            $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}");
 
-        // CombineLatest fires when ALL streams have emitted at least once.
-        // Timeout after 10s — use cached or partial history if streams don't connect.
-        return Observable.CombineLatest(messageStreams)
+        return meshService.ObserveQuery<MeshNode>(query)
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Select(messages =>
+            .Select(change =>
             {
-                var history = messages
-                    .Where(m => m != null && m.Type != ThreadMessageType.EditingPrompt)
-                    .ToImmutableList()!;
-                logger.LogInformation("[ThreadExec] Loaded {Count} history messages via CombineLatest for {ThreadPath}",
-                    history.Count, threadPath);
+                // Build lookup from query results
+                var lookup = change.Items
+                    .Where(n => n.Content is ThreadMessage)
+                    .ToDictionary(n => n.Id, n => (ThreadMessage)n.Content!);
+
+                // Assemble in thread's message order, skip the current response cell
+                var history = messageOrder
+                    .Where(id => id != responseMsgId && lookup.ContainsKey(id))
+                    .Select(id => lookup[id])
+                    .Where(m => m.Type != ThreadMessageType.EditingPrompt)
+                    .ToImmutableList();
+
+                logger.LogInformation("[ThreadExec] Loaded {Count}/{Total} history messages for {ThreadPath}",
+                    history.Count, messageOrder.Count, threadPath);
+
                 // Cache for re-submissions
                 HistoryCache[threadPath] = history;
                 return history;
             })
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Catch<ImmutableList<ThreadMessage>, TimeoutException>(_ =>
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Catch<ImmutableList<ThreadMessage>, Exception>(ex =>
             {
-                logger.LogWarning("[ThreadExec] History load timed out for {ThreadPath}, using cache", threadPath);
+                logger.LogWarning(ex, "[ThreadExec] History load failed for {ThreadPath}", threadPath);
                 return Observable.Return(
                     HistoryCache.GetValueOrDefault(threadPath) ?? ImmutableList<ThreadMessage>.Empty);
             });
