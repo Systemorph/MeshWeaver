@@ -96,6 +96,29 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private CancellationTokenSource? _submissionCts;
     private readonly ChatSubmissionHandler submissionHandler = new();
 
+    // Pending (optimistic) cells — rendered directly as bubbles, not via LayoutAreaView.
+    // Output cells are cleared after 3s so LayoutAreaView takes over (grain should be active by then).
+    // Input cells stay pending (they're static, LayoutAreaView adds nothing).
+    private readonly Dictionary<string, (string Role, string Text, string AuthorName)> pendingCells = new();
+    private bool showSubmissionProgress;
+
+    /// <summary>
+    /// Schedule output pending cell to swap to LayoutAreaView after delay.
+    /// By then the grain is active and can serve streaming data.
+    /// </summary>
+    private void SchedulePendingCellSwap(string responseMsgId, int delayMs = 3000)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(delayMs);
+            await InvokeAsync(() =>
+            {
+                if (pendingCells.Remove(responseMsgId))
+                    StateHasChanged();
+            });
+        });
+    }
+
     // Unified attachments (context + @references)
     private readonly List<AttachmentInfo> attachments = new();
     private const string placeholderText = "Type a message... Use @ to reference nodes";
@@ -404,146 +427,134 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             await UpdateExtractedReferencesAsync();
 
-            // Auto-create thread on first message via CreateNodeRequest
+            var accessService = Hub.ServiceProvider.GetService<AccessService>();
+            var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+            var authorName = accessService?.Context?.Name ?? "You";
+
+            // Generate IDs for both cells
+            var userMsgId = Guid.NewGuid().ToString("N")[..8];
+            var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+            // Pending cells — rendered immediately as real bubbles
+            pendingCells[userMsgId] = ("user", userMessageText!, authorName);
+            pendingCells[responseMsgId] = ("assistant", "Submitting message...",
+                selectedAgentInfo?.Name ?? "Assistant");
+
+            // Pending cells stay forever — no swap to LayoutAreaView (workspace stream unreliable)
+
             if (string.IsNullOrEmpty(threadPath))
             {
-                isCreatingThread = true;
-                StateHasChanged();
-                try
+                // NEW THREAD: build with pre-populated messages, auto-executes on grain activation
+                var ns = NavigationService.CurrentNamespace ?? initialContext;
+                if (string.IsNullOrEmpty(ns))
+                    ns = !string.IsNullOrEmpty(createdBy) ? $"User/{createdBy}" : "User";
+
+                var (threadNode, _, _) = ThreadNodeType.BuildThreadWithMessages(
+                    ns, userMessageText!, createdBy: createdBy,
+                    agentName: selectedAgentInfo?.Name,
+                    modelName: selectedModelInfo?.Name,
+                    attachments: attachments.Select(a => a.Path).ToList());
+                // Override the generated IDs with our client-generated ones
+                var threadContent = (AI.Thread)threadNode.Content!;
+                threadNode = threadNode with
                 {
-                    var ns = NavigationService.CurrentNamespace ?? initialContext;
-                    var accessService = Hub.ServiceProvider.GetService<AccessService>();
-                    var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-                    if (string.IsNullOrEmpty(ns))
+                    Content = threadContent with
                     {
-                        // No context available — use the logged-in user's namespace as default
-                        ns = !string.IsNullOrEmpty(createdBy) ? $"User/{createdBy}" : "User";
+                        Messages = System.Collections.Immutable.ImmutableList.Create(userMsgId, responseMsgId)
                     }
-                    Logger.LogDebug("[ThreadChat:{InstanceId}] Creating thread: namespace={Namespace}, text='{Text}'",
-                        _instanceId, ns, userMessageText?[..Math.Min(30, userMessageText?.Length ?? 0)]);
-                    var threadNode = ThreadNodeType.BuildThreadNode(ns, userMessageText!, createdBy: createdBy);
-                    Logger.LogDebug("[ThreadChat:{InstanceId}] CreateNodeRequest: nodeId={NodeId}, nodePath={NodePath}, target={Target}",
-                        _instanceId, threadNode.Id, threadNode.Path, ns);
+                };
+                threadPath = threadNode.Path;
+                threadName = threadNode.Name;
 
-                    // Use Post + RegisterCallback to avoid blocking the UI thread
-                    var tcs = new TaskCompletionSource<CreateNodeResponse>();
-                    var delivery = Hub.Post(new CreateNodeRequest(threadNode),
-                        o => o.WithTarget(new Address(ns)));
-                    if (delivery != null)
-                    {
-                        _ = Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-                        {
-                            if (response is IMessageDelivery<CreateNodeResponse> cnr)
-                                tcs.TrySetResult(cnr.Message);
-                            else if (response is IMessageDelivery<DeliveryFailure> df)
-                                tcs.TrySetResult(new CreateNodeResponse(null) { Error = $"Delivery failed: {df.Message.Message}" });
-                            else
-                                tcs.TrySetResult(new CreateNodeResponse(null) { Error = $"Unexpected response: {response.Message?.GetType().Name}" });
-                            return response;
-                        });
-                    }
-                    else
-                    {
-                        tcs.SetResult(new CreateNodeResponse(null) { Error = "Failed to post CreateNodeRequest" });
-                    }
-
-                    var createResult = await tcs.Task;
-                    Logger.LogDebug("[ThreadChat:{InstanceId}] CreateNodeResponse: success={Success}, error={Error}, path={Path}",
-                        _instanceId, createResult.Success, createResult.Error ?? "(none)",
-                        createResult.Node?.Path ?? "(null)");
-
-                    if (!createResult.Success)
-                    {
-                        Logger.LogError("[ThreadChat:{InstanceId}] Failed to create thread: {Error}",
-                            _instanceId, createResult.Error);
-                        submissionHandler.ForceRelease();
-                        return;
-                    }
-
-                    threadName = createResult.Node?.Name;
-                    threadPath = createResult.Node?.Path;
-                    // Tell side panel to switch to the new thread — it will re-render with LayoutAreaView
-                    SidePanelState.SetContentPath(threadPath);
-                    UpdateSidePanelTitle();
-                }
-                finally
+                ThreadViewModel = new AI.ThreadViewModel
                 {
-                    isCreatingThread = false;
-                }
-            }
+                    Messages = [userMsgId, responseMsgId],
+                    ThreadPath = threadPath,
+                    IsExecuting = true
+                };
 
-            // Post execution request to thread hub — hub creates both user and response nodes.
-            // Use Post + RegisterCallback (non-blocking) instead of AwaitResponse to avoid
-            // blocking the hub execution pipeline.
-            Logger.LogInformation("[ThreadChat:{InstanceId}] Posting SubmitMessageRequest to {ThreadPath}, agent={Agent}, model={Model}, context={Context}",
-                _instanceId, threadPath, selectedAgentInfo?.Name ?? "(default)", selectedModelInfo?.Name ?? "(default)", initialContext);
-            var submitDelivery = Hub.Post(new SubmitMessageRequest
-            {
-                ThreadPath = threadPath!,
-                UserMessageText = userMessageText!,
-                AgentName = selectedAgentInfo?.Name,
-                ModelName = selectedModelInfo?.Name,
-                ContextPath = initialContext,
-                Attachments = attachments.Select(a => a.Path).ToList()
-            }, o => o.WithTarget(new Address(threadPath!)));
+                showSubmissionProgress = ViewModel.HideEmptyState;
+                UpdateSidePanelTitle();
 
-            if (submitDelivery != null)
-            {
-                _ = Hub.RegisterCallback((IMessageDelivery)submitDelivery, response =>
+                // Cells are created by AutoExecutePendingMessage on the grain
+                var isCompact = ViewModel.HideEmptyState;
+                var createDelivery = Hub.Post(new CreateNodeRequest(threadNode),
+                    o => o.WithTarget(new Address(ns)));
+                if (createDelivery != null)
                 {
-                    string? error = null;
-                    IReadOnlyList<string>? serverMessages = null;
-                    if (response is IMessageDelivery<SubmitMessageResponse> smr)
+                    _ = Hub.RegisterCallback((IMessageDelivery)createDelivery, response =>
                     {
-                        if (!smr.Message.Success)
-                            error = smr.Message.Error;
-                        else
-                            serverMessages = smr.Message.Messages;
-                    }
-                    else if (response is IMessageDelivery<DeliveryFailure> df)
-                        error = $"Delivery failed: {df.Message.Message}";
-
-                    if (error != null)
-                    {
-                        Logger.LogError("[ThreadChat:{InstanceId}] SubmitMessageRequest FAILED: {Error}",
-                            _instanceId, error);
-                        InvokeAsync(() =>
+                        if (response is IMessageDelivery<CreateNodeResponse> { Message.Success: true } cnr)
                         {
-                            MessageText = userMessageText;
-                            submissionHandler.ForceRelease();
-                            StateHasChanged();
-                        });
-                    }
-                    else if (serverMessages is { Count: > 0 })
-                    {
-                        // Server sent the authoritative Messages list — use it directly.
-                        // The workspace stream may not propagate in Orleans distributed mode,
-                        // so this ensures the client renders new cells immediately.
-                        Logger.LogInformation("[ThreadChat:{InstanceId}] Received Messages from server: [{Ids}]",
-                            _instanceId, string.Join(",", serverMessages));
-                        InvokeAsync(() =>
-                        {
-                            if (ThreadViewModel == null || !ThreadViewModel.Messages.SequenceEqual(serverMessages))
+                            var createdPath = cnr.Message.Node?.Path ?? threadPath;
+                            InvokeAsync(() =>
                             {
-                                ThreadViewModel = (ThreadViewModel ?? new AI.ThreadViewModel()) with
-                                {
-                                    Messages = serverMessages,
-                                    ThreadPath = threadPath,
-                                    IsExecuting = true
-                                };
-                            }
-                        });
-                    }
-                    return response;
-                });
+                                showSubmissionProgress = false;
+                                if (isCompact)
+                                    NavigationManager.NavigateTo($"/{createdPath}");
+                                else
+                                    SidePanelState.SetContentPath(createdPath);
+                                StateHasChanged();
+                            });
+                        }
+                        else
+                        {
+                            var error = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "Unknown";
+                            Logger.LogError("[ThreadChat:{InstanceId}] Thread creation failed: {Error}", _instanceId, error);
+                            InvokeAsync(() => { showSubmissionProgress = false; submissionHandler.ForceRelease(); StateHasChanged(); });
+                        }
+                        return response;
+                    });
+                }
             }
+            else
+            {
+                // EXISTING THREAD: create cells from GUI (thread exists), then submit
+                var mainEntity = initialContext ?? threadPath ?? "";
+                CreateCellNode(userMsgId, threadPath!, mainEntity, new ThreadMessage
+                {
+                    Role = "user", Text = userMessageText!, Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.ExecutedInput, CreatedBy = createdBy
+                });
+                CreateCellNode(responseMsgId, threadPath!, mainEntity, new ThreadMessage
+                {
+                    Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.AgentResponse,
+                    AgentName = selectedAgentInfo?.Name, ModelName = selectedModelInfo?.Name
+                });
+
+                ThreadViewModel = (ThreadViewModel ?? new AI.ThreadViewModel()) with
+                {
+                    Messages = (ThreadViewModel?.Messages ?? (IReadOnlyList<string>)[])
+                        .Concat([userMsgId, responseMsgId]).ToList(),
+                    ThreadPath = threadPath,
+                    IsExecuting = true
+                };
+
+                var submitDelivery = Hub.Post(new SubmitMessageRequest
+                {
+                    ThreadPath = threadPath!,
+                    UserMessageText = userMessageText!,
+                    UserMessageId = userMsgId,
+                    ResponseMessageId = responseMsgId,
+                    AgentName = selectedAgentInfo?.Name,
+                    ModelName = selectedModelInfo?.Name,
+                    ContextPath = initialContext,
+                    Attachments = attachments.Select(a => a.Path).ToList()
+                }, o => o.WithTarget(new Address(threadPath!)));
+
+                RegisterSubmitCallback(submitDelivery, userMessageText!);
+            }
+
+            // (submit callback is registered inside PostSubmit → RegisterSubmitCallback)
 
             // Transition to WaitingForResponse — spinner stays until new cells appear
             submissionHandler.OnMessagePosted();
 
-            // In compact/dashboard mode: navigate to full-screen thread chat
-            if (ViewModel.HideEmptyState)
+            // In compact/dashboard mode: navigate after a brief delay so user sees progress
+            if (ViewModel.HideEmptyState && !string.IsNullOrEmpty(threadPath))
             {
+                showSubmissionProgress = false;
                 NavigationManager.NavigateTo($"/{threadPath}");
             }
         }
@@ -585,6 +596,44 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         submissionHandler.ForceRelease();
         isCancelling = false;
         StateHasChanged();
+    }
+
+    /// <summary>
+    /// Creates a ThreadMessage cell node directly from the GUI (fire-and-forget).
+    /// The node exists in persistence before the grain activates — no skeleton.
+    /// </summary>
+    private void CreateCellNode(string msgId, string threadPath, string mainEntity, ThreadMessage content)
+    {
+        if (string.IsNullOrEmpty(threadPath) || threadPath == "_pending") return;
+        Hub.Post(new CreateNodeRequest(new MeshNode(msgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = mainEntity,
+            Content = content
+        }), o => o.WithTarget(new Address(threadPath)));
+    }
+
+    private void RegisterSubmitCallback(IMessageDelivery<SubmitMessageRequest>? submitDelivery, string userMessageText)
+    {
+        if (submitDelivery == null) return;
+
+        _ = Hub.RegisterCallback((IMessageDelivery)submitDelivery, response =>
+        {
+            if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
+            {
+                Logger.LogError("[ThreadChat:{InstanceId}] Submit FAILED: {Error}", _instanceId, sr.Message.Error);
+                InvokeAsync(() =>
+                {
+                    MessageText = userMessageText;
+                    submissionHandler.ForceRelease();
+                    StateHasChanged();
+                });
+            }
+            // Don't clear pending cells — they stay rendered as real bubbles.
+            // The server's streaming updates will flow to the output cell's grain
+            // and the pending cell stays until the page is refreshed.
+            return response;
+        });
     }
 
     private void CancelExecution()
@@ -1033,10 +1082,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <summary>
     /// Creates a LayoutAreaControl pointing to a ThreadMessage node's Overview layout area.
     /// </summary>
-    private LayoutAreaControl GetMessageCell(string msgId)
+    private LayoutAreaControl? GetMessageCell(string msgId)
     {
-        Logger.LogDebug("[ThreadChat:{InstanceId}] GetMessageCell: msgId={MsgId}, threadPath={ThreadPath}, stream={HasStream}",
-            _instanceId, msgId, threadPath, Stream != null);
+        if (string.IsNullOrEmpty(threadPath))
+            return null;
         return new LayoutAreaControl(
             $"{threadPath}/{msgId}",
             new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))

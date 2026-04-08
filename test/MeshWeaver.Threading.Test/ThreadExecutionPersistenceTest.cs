@@ -117,10 +117,16 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         msgIds.Should().HaveCount(2);
         Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
-        // Verify nodes exist in persistence (created by meshService.CreateNodeAsync)
+        // Verify nodes exist in persistence — cells are created in background,
+        // so retry briefly until they appear.
         var userMsgPath = $"{threadPath}/{msgIds[0]}";
-        var userNode = await MeshQuery.QueryAsync<MeshNode>($"path:{userMsgPath}")
-            .FirstOrDefaultAsync(ct);
+        MeshNode? userNode = null;
+        for (var i = 0; i < 20 && userNode == null; i++)
+        {
+            userNode = await MeshQuery.QueryAsync<MeshNode>($"path:{userMsgPath}")
+                .FirstOrDefaultAsync(ct);
+            if (userNode == null) await Task.Delay(200, ct);
+        }
         userNode.Should().NotBeNull("user message node must exist in persistence");
         var userContent = userNode!.Content.Should().BeOfType<ThreadMessage>().Subject;
         userContent.Role.Should().Be("user");
@@ -128,8 +134,13 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         Output.WriteLine($"User message OK: '{userContent.Text}'");
 
         var responseMsgPath = $"{threadPath}/{msgIds[1]}";
-        var responseNode = await MeshQuery.QueryAsync<MeshNode>($"path:{responseMsgPath}")
-            .FirstOrDefaultAsync(ct);
+        MeshNode? responseNode = null;
+        for (var i = 0; i < 20 && responseNode == null; i++)
+        {
+            responseNode = await MeshQuery.QueryAsync<MeshNode>($"path:{responseMsgPath}")
+                .FirstOrDefaultAsync(ct);
+            if (responseNode == null) await Task.Delay(200, ct);
+        }
         responseNode.Should().NotBeNull("response message node must exist in persistence");
         responseNode!.NodeType.Should().Be(ThreadMessageNodeType.NodeType);
         Output.WriteLine($"Response message node exists in persistence: {responseNode.Path}");

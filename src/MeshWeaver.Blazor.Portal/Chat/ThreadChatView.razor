@@ -36,8 +36,34 @@ else
             {
                 @foreach (var msgId in ThreadMessages)
                 {
-                    var cell = GetMessageCell(msgId);
-                    <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
+                    @if (pendingCells.TryGetValue(msgId, out var pending))
+                    {
+                        var isUser = pending.Role == "user";
+                        <div @key="@msgId" class="thread-msg-container" style="@(isUser ? "align-items: flex-end;" : "")">
+                            <div class="@(isUser ? "thread-msg-bubble thread-msg-user" : "thread-msg-bubble thread-msg-assistant")">
+                                <div class="thread-msg-author @(isUser ? "thread-msg-author-user" : "")">@pending.AuthorName</div>
+                                @if (isUser)
+                                {
+                                    <div style="background: transparent;">@((MarkupString)Markdig.Markdown.ToHtml(pending.Text))</div>
+                                }
+                                else
+                                {
+                                    <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 0.9rem;">
+                                        <span class="thread-exec-star" style="font-size: 1.2rem;">&#10041;</span>
+                                        <span style="color: var(--neutral-foreground-hint); animation: thread-pending-pulse 2s ease-in-out infinite;">@pending.Text</span>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        var cell = GetMessageCell(msgId);
+                        @if (cell != null)
+                        {
+                            <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
+                        }
+                    }
                 }
             }
             else if (isCreatingThread)
@@ -170,9 +196,44 @@ else
     </div>
     </div>
 }
+
+@if (showSubmissionProgress)
+{
+    <div class="thread-submission-overlay">
+        <div class="thread-submission-dialog">
+            <span class="thread-exec-star" style="font-size: 1.5rem;">&#10041;</span>
+            <span>Creating conversation...</span>
+        </div>
+    </div>
+}
 </div>
 
 <style>
+    .thread-submission-overlay {
+        position: absolute; inset: 0; z-index: 100;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.15); backdrop-filter: blur(2px);
+        border-radius: inherit;
+    }
+    .thread-submission-dialog {
+        display: flex; align-items: center; gap: 12px;
+        padding: 16px 28px; border-radius: 12px;
+        background: var(--neutral-layer-1); box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+        font-size: 0.95rem; font-weight: 500;
+    }
+    @@keyframes thread-pending-pulse {
+        0%, 100% { opacity: 0.6; }
+        50% { opacity: 1; }
+    }
+    .thread-msg-dot {
+        width: 5px; height: 5px; border-radius: 50%;
+        background: var(--neutral-foreground-hint);
+        animation: thread-dots-blink 1.4s infinite both;
+    }
+    @@keyframes thread-dots-blink {
+        0%, 80%, 100% { opacity: 0.3; }
+        40% { opacity: 1; }
+    }
     .thread-exec-star {
         animation: thread-exec-star-pulse 1.5s ease-in-out infinite;
     }

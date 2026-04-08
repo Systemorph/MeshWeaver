@@ -16,7 +16,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.TestingHost;
+using MeshWeaver.Fixture;
 using Xunit;
+using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -74,8 +76,17 @@ public class SharedOrleansFixture : IAsyncLifetime
             Name = userId,
             Email = $"{userId.ToLowerInvariant()}@test.com"
         });
+        // Register on BOTH client and silo routing services so responses can route back
         await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
             .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        // Also register on the silo's routing service via the mesh hub.
+        // In prod, portal and silo share one IRoutingService. In TestCluster they're separate.
+        // The silo's IMessageHub is the mesh hub — its IRoutingService handles grain→client responses.
+        var siloMeshHub = Cluster.ServiceProvider.GetService<IMessageHub>();
+        var siloRouting = siloMeshHub?.ServiceProvider.GetService<IRoutingService>();
+        if (siloRouting != null)
+            await siloRouting.RegisterStreamAsync(client.Address,
+                (d, _) => Task.FromResult(client.DeliverMessage(d)));
         return client;
     }
 }
@@ -129,7 +140,8 @@ public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
     public void Configure(ISiloBuilder siloBuilder)
     {
         siloBuilder.ConfigureMeshWeaverServer()
-            .AddMemoryGrainStorageAsDefault();
+            .AddMemoryGrainStorageAsDefault()
+            .ConfigureLogging(logging => logging.AddXUnitLogger());
     }
 
     public void Configure(IHostBuilder hostBuilder)
@@ -141,10 +153,53 @@ public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .AddRowLevelSecurity()
             .AddMeshNodes(
                 new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
+            .AddMeshNodes(ChatHistoryTestData())
             .AddMeshNodes(PublicEditorAccess())
             .ConfigureServices(services =>
                 services.AddSingleton<IChatClientFactory>(SharedOrleansFixture.SwappableFactory))
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+    }
+
+    /// <summary>
+    /// Pre-seeded thread with 4 messages for OrleansChatHistoryTest cold-start scenario.
+    /// </summary>
+    private static MeshNode[] ChatHistoryTestData()
+    {
+        const string tp = "User/Roland/_Thread/history-cold-start";
+        return
+        [
+            new("history-cold-start", "User/Roland/_Thread")
+            {
+                Name = "History cold start test", NodeType = ThreadNodeType.NodeType,
+                MainNode = "User/Roland",
+                Content = new MeshThread
+                {
+                    CreatedBy = "Roland",
+                    Messages = System.Collections.Immutable.ImmutableList.Create(
+                        "msg1-user", "msg1-assistant", "msg2-user", "msg2-assistant")
+                }
+            },
+            new("msg1-user", tp)
+            {
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
+                Content = new ThreadMessage { Role = "user", Text = "First question", Type = ThreadMessageType.ExecutedInput }
+            },
+            new("msg1-assistant", tp)
+            {
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
+                Content = new ThreadMessage { Role = "assistant", Text = "First answer.", Type = ThreadMessageType.AgentResponse }
+            },
+            new("msg2-user", tp)
+            {
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
+                Content = new ThreadMessage { Role = "user", Text = "Second question", Type = ThreadMessageType.ExecutedInput }
+            },
+            new("msg2-assistant", tp)
+            {
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
+                Content = new ThreadMessage { Role = "assistant", Text = "Second answer.", Type = ThreadMessageType.AgentResponse }
+            }
+        ];
     }
 
     private static MeshNode[] PublicEditorAccess()

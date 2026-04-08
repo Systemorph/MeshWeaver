@@ -5,6 +5,7 @@ using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
@@ -321,110 +322,69 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
                     // Access context is restored by WrapToolWithAccessContext — no need to set it here.
 
-                    var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
                     var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
-                    var subThreadPath = $"{parentMsgPath}/{subThreadId}";
-
-                    // 1. Create sub-thread node (Observable — no await)
                     var mainEntityPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath;
-                    var subThreadNode = new MeshNode(subThreadId, parentMsgPath)
-                    {
-                        Name = task.Length > 60 ? task[..57] + "..." : task,
-                        NodeType = ThreadNodeType.NodeType,
-                        MainNode = mainEntityPath,
-                        Content = new MeshThread()
-                    };
+
+                    // Build sub-thread with pre-populated messages — auto-executes on grain activation
+                    var (subThreadNode, _, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
+                        parentMsgPath, task, createdBy: execCtx.UserAccessContext?.ObjectId,
+                        agentName: targetId);
+                    subThreadNode = subThreadNode with { MainNode = mainEntityPath };
+                    var subThreadPath = subThreadNode.Path!;
 
                     // Store delegation path keyed by display name for parallel-safe lookup.
-                    // The streaming callback matches pending tool call entries by name.
                     var delegationDisplayName = $"Delegating to {targetId}...";
                     chat.DelegationPaths[delegationDisplayName] = subThreadPath;
-                    chat.LastDelegationPath = subThreadPath; // backward compat
+                    chat.LastDelegationPath = subThreadPath;
                     chat.UpdateDelegationStatus?.Invoke(delegationDisplayName);
 
-                    Logger.LogInformation("[Delegation] Creating sub-thread at {Path}, Hub={Hub}", subThreadPath, Hub.Address);
+                    Logger.LogInformation("[Delegation] Creating sub-thread at {Path} with auto-execute", subThreadPath);
                     meshService.CreateNode(subThreadNode).Subscribe(
                         _ =>
                         {
-                            Logger.LogInformation("[Delegation] Created sub-thread at {Path}, posting SubmitMessage via Hub={Hub}", subThreadPath, Hub.Address);
+                            Logger.LogInformation("[Delegation] Sub-thread created at {Path}, watching for completion", subThreadPath);
 
-                            // 2. Completion is notified via a second SubmitMessageResponse
-                            // with Status=ExecutionCompleted, posted by ThreadExecution when done.
-
-                            // 3. Submit message (Post + RegisterCallback — no AwaitResponse)
-                            var delivery = Hub.Post(new SubmitMessageRequest
+                            // Watch the sub-thread's state via ObserveQuery — when IsExecuting becomes false, delegation is done.
+                            var meshSvc = Hub.ServiceProvider.GetService<IMeshService>();
+                            bool IsComplete(QueryResultChange<MeshNode> c)
                             {
-                                ThreadPath = subThreadPath,
-                                UserMessageText = task,
-                                AgentName = targetId,
-                                ContextPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath
-                            }, o =>
-                            {
-                                o = o.WithTarget(new Address(subThreadPath));
-                                if (execCtx.UserAccessContext != null)
-                                    o = o.WithAccessContext(execCtx.UserAccessContext);
-                                return o;
-                            });
-
-                            if (delivery == null)
-                            {
-                                Logger.LogWarning("[Delegation] SubmitMessageRequest post returned null for {Path}", subThreadPath);
-                                tcs.TrySetResult(new DelegationResult
-                                {
-                                    AgentName = targetId, Task = task,
-                                    Result = $"Failed to submit message to sub-thread {subThreadPath}", Success = false
-                                });
-                                return;
+                                foreach (var n in c.Items)
+                                    if (n.Content is MeshThread { IsExecuting: false, PendingUserMessage: null })
+                                        return true;
+                                return false;
                             }
-
-                            // Register callback for the first response (CellsCreated).
-                            // RegisterCallback removes the callback after first invocation,
-                            // so we re-register for the completion response.
-                            void RegisterCompletionCallback(IMessageDelivery del)
-                            {
-                                Hub.RegisterCallback(del, completionResponse =>
-                                {
-                                    if (completionResponse is IMessageDelivery<SubmitMessageResponse> sr)
+                            var filtered = System.Reactive.Linq.Observable.Where(
+                                meshSvc!.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{subThreadPath}")),
+                                IsComplete);
+                            System.Reactive.Linq.Observable.Timeout(
+                                System.Reactive.Linq.Observable.Take(filtered, 1),
+                                TimeSpan.FromSeconds(30))
+                                .Subscribe(
+                                    change =>
                                     {
-                                        var msg = sr.Message;
-                                        Logger.LogInformation("[Delegation] Response: {Path}, status={Status}, success={Success}",
-                                            subThreadPath, msg.Status, msg.Success);
-                                        if (!msg.Success)
+                                        var node = change.Items.FirstOrDefault();
+                                        var thread = node?.Content as MeshThread;
+                                        // Read the response from the response message cell
+                                        var responseText = $"Delegation to {targetId} completed.";
+                                        Logger.LogInformation("[Delegation] Completed: {Path}", subThreadPath);
+                                        tcs.TrySetResult(new DelegationResult
                                         {
-                                            tcs.TrySetResult(new DelegationResult
-                                            {
-                                                AgentName = targetId, Task = task,
-                                                Result = $"Submit failed: {msg.Error}", Success = false
-                                            });
-                                        }
-                                        else if (msg.Status == SubmitMessageStatus.CellsCreated)
+                                            AgentName = targetId, Task = task,
+                                            Result = responseText,
+                                            Success = true,
+                                            ThreadId = subThreadPath
+                                        });
+                                    },
+                                    ex =>
+                                    {
+                                        Logger.LogWarning(ex, "[Delegation] Watch failed for {Path}", subThreadPath);
+                                        tcs.TrySetResult(new DelegationResult
                                         {
-                                            // First response — cells created, execution starting.
-                                            // Re-register callback for the completion response.
-                                            RegisterCompletionCallback(del);
-                                        }
-                                        else
-                                        {
-                                            // ExecutionCompleted/Failed/Cancelled — resolve delegation.
-                                            // Forward sub-thread's node changes to parent for aggregation.
-                                            if (msg.UpdatedNodes is { Count: > 0 })
-                                            {
-                                                foreach (var entry in msg.UpdatedNodes)
-                                                    chat.ForwardNodeChange?.Invoke(entry);
-                                            }
-                                            tcs.TrySetResult(new DelegationResult
-                                            {
-                                                AgentName = targetId, Task = task,
-                                                Result = msg.ResponseText ?? $"Delegation to {targetId} completed.",
-                                                Success = msg.Status == SubmitMessageStatus.ExecutionCompleted,
-                                                ThreadId = subThreadPath
-                                            });
-                                        }
-                                    }
-                                    return completionResponse;
-                                });
-                            }
-                            RegisterCompletionCallback((IMessageDelivery)delivery);
+                                            AgentName = targetId, Task = task,
+                                            Result = $"Delegation timed out: {ex.Message}",
+                                            Success = false, ThreadId = subThreadPath
+                                        });
+                                    });
                         },
                         error =>
                         {

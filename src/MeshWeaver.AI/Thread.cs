@@ -7,6 +7,7 @@ using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.AI;
 
+
 /// <summary>
 /// Tracks execution context for delegation sub-thread creation.
 /// Set by ThreadExecution, consumed by delegation tools.
@@ -123,13 +124,28 @@ public record Thread
     /// Streaming text buffer — transient, never persisted.
     /// Used only in-memory during active execution for the status bar preview.
     /// </summary>
+    /// <summary>
+    /// Pending user message text — set at thread creation to auto-start execution.
+    /// When the thread grain activates and sees this, it immediately starts streaming.
+    /// Cleared after execution starts.
+    /// </summary>
+    public string? PendingUserMessage { get; init; }
+
+    /// <summary>Agent name for pending execution.</summary>
+    public string? PendingAgentName { get; init; }
+
+    /// <summary>Model name for pending execution.</summary>
+    public string? PendingModelName { get; init; }
+
+    /// <summary>Context path for pending execution.</summary>
+    public string? PendingContextPath { get; init; }
+
+    /// <summary>Attachments for pending execution.</summary>
+    public IReadOnlyList<string>? PendingAttachments { get; init; }
+
     [JsonIgnore]
     public string? StreamingText { get; init; }
 
-    /// <summary>
-    /// Streaming tool calls — transient, never persisted.
-    /// Used only in-memory during active execution for the status bar.
-    /// </summary>
     [JsonIgnore]
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 

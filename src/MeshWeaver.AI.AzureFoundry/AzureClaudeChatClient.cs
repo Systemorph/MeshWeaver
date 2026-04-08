@@ -91,14 +91,36 @@ public class AzureClaudeChatClient : IChatClient
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var request = BuildRequest(messages, options, stream: true);
-        var httpRequest = CreateHttpRequest(request);
 
-        using var response = await httpClient.SendAsync(
-            httpRequest,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
+        // Retry on transient failures (500, 502, 503, 429)
+        HttpResponseMessage? response = null;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var httpRequest = CreateHttpRequest(request);
+            response = await httpClient.SendAsync(
+                httpRequest,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
 
-        response.EnsureSuccessStatusCode();
+            if (response.IsSuccessStatusCode)
+                break;
+
+            var status = (int)response.StatusCode;
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            logger?.LogWarning("Azure AI API {Status} on attempt {Attempt}: {Body}",
+                status, attempt + 1, errorBody?.Length > 500 ? errorBody[..500] : errorBody);
+
+            if (status is 500 or 502 or 503 or 429 && attempt < 2)
+            {
+                var delay = status == 429 ? 5000 : 1000 * (attempt + 1);
+                response.Dispose();
+                await Task.Delay(delay, cancellationToken);
+                continue;
+            }
+            response.EnsureSuccessStatusCode(); // throws
+        }
+
+        response!.EnsureSuccessStatusCode();
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);

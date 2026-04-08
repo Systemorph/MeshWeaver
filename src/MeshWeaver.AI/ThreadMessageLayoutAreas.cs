@@ -245,11 +245,18 @@ public static class ThreadMessageLayoutAreas
                         {
                             actx.Host.Stream.GetDataStream<string>(textDataId).Take(1).Subscribe(editedText =>
                             {
+                                var outId = Guid.NewGuid().ToString("N")[..8];
+                                actx.Hub.Post(new CreateNodeRequest(new MeshNode(outId, threadPath)
+                                {
+                                    NodeType = ThreadMessageNodeType.NodeType, MainNode = threadPath,
+                                    Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+                                }), o => o.WithTarget(new Address(threadPath)));
                                 actx.Hub.Post(new ResubmitMessageRequest
                                 {
                                     ThreadPath = threadPath,
                                     MessageId = messageId,
-                                    UserMessageText = editedText ?? msg.Text ?? ""
+                                    UserMessageText = editedText ?? msg.Text ?? "",
+                                    OutputMessageId = outId
                                 }, o => o.WithTarget(new Address(threadPath)));
                             });
                         }));
@@ -302,11 +309,26 @@ public static class ThreadMessageLayoutAreas
                     .WithLabel("Resubmit")
                     .WithClickAction(_ =>
                     {
+                        var outId = Guid.NewGuid().ToString("N")[..8];
+                        // Create output cell (same pattern as GUI submit)
+                        host.Hub.Post(new CreateNodeRequest(new MeshNode(outId, threadPath)
+                        {
+                            NodeType = ThreadMessageNodeType.NodeType,
+                            MainNode = threadPath,
+                            Content = new ThreadMessage
+                            {
+                                Role = "assistant", Text = "",
+                                Timestamp = DateTime.UtcNow,
+                                Type = ThreadMessageType.AgentResponse
+                            }
+                        }), o => o.WithTarget(new Address(threadPath)));
+
                         host.Hub.Post(new ResubmitMessageRequest
                         {
                             ThreadPath = threadPath,
                             MessageId = messageId,
-                            UserMessageText = msg.Text
+                            UserMessageText = msg.Text,
+                            OutputMessageId = outId
                         }, o => o.WithTarget(new Address(threadPath)));
                     }));
         }
@@ -446,11 +468,18 @@ public static class ThreadMessageLayoutAreas
                 {
                     actx.Host.Stream.GetDataStream<string>(textDataId).Take(1).Subscribe(editedText =>
                     {
+                        var outId = Guid.NewGuid().ToString("N")[..8];
+                        actx.Hub.Post(new CreateNodeRequest(new MeshNode(outId, threadPath)
+                        {
+                            NodeType = ThreadMessageNodeType.NodeType, MainNode = threadPath,
+                            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+                        }), o => o.WithTarget(new Address(threadPath)));
                         actx.Hub.Post(new ResubmitMessageRequest
                         {
                             ThreadPath = threadPath,
                             MessageId = messageId,
-                            UserMessageText = editedText ?? msg.Text ?? ""
+                            UserMessageText = editedText ?? msg.Text ?? "",
+                            OutputMessageId = outId
                         }, o => o.WithTarget(new Address(threadPath)));
                     });
                 }));

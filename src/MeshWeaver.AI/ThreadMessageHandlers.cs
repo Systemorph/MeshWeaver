@@ -50,81 +50,56 @@ public static class ThreadMessageHandlers
     {
         var request = delivery.Message;
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = request.OutputMessageId ?? Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{request.ThreadPath}/{responseMsgId}";
 
-        // Immediate visual feedback — UI shows spinner before CreateNode completes
-        hub.GetWorkspace().UpdateMeshNode(node => node with
+        // Update Thread: truncate Messages + append new output ID, set executing.
+        string? contextPath = null;
+        hub.GetWorkspace().UpdateMeshNode(node =>
         {
-            Content = (node.Content as MeshThread ?? new MeshThread()) with
+            contextPath = node.MainNode != node.Path ? node.MainNode : null;
+            var thread = node.Content as MeshThread ?? new MeshThread();
+            var msgIndex = thread.Messages.IndexOf(request.MessageId);
+            if (msgIndex < 0) return node;
+
+            return node with
             {
-                IsExecuting = true, ExecutionStatus = "Preparing..."
-            }
+                Content = thread with
+                {
+                    Messages = thread.Messages.Take(msgIndex + 1).ToImmutableList().Add(responseMsgId),
+                    IsExecuting = true,
+                    ActiveMessageId = responseMsgId,
+                    ExecutionStatus = null,
+                    TokensUsed = 0,
+                    ExecutionStartedAt = DateTime.UtcNow,
+                    StreamingText = null,
+                    StreamingToolCalls = null
+                }
+            };
         });
 
-        // 1) Create new output cell
-        meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
+        // Output cell is created by the click handler (same as GUI creates cells for submit)
+
+        // Push progress to output cell
+        hub.Post(new UpdateThreadMessageContent { Text = "Allocating agent..." },
+            o => o.WithTarget(new Address(responsePath)));
+
+        // Start execution directly — no waiting for cell creation
+        var executionHub = hub.GetHostedHub(
+            new Address($"{hub.Address}/_Exec"),
+            config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
+            HostedHubCreation.Always);
+
+        executionHub!.Post(new SubmitMessageRequest
         {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Role = "assistant",
-                Text = "",
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse
-            }
-        }).Subscribe(
-            _ =>
-            {
-                // 2) Cell exists — ONE UpdateMeshNode does everything:
-                //    read context, delete old cells, link new cell, start execution
-                string? contextPath = null;
-                hub.GetWorkspace().UpdateMeshNode(node =>
-                {
-                    contextPath = node.MainNode != node.Path ? node.MainNode : null;
-                    var thread = node.Content as MeshThread ?? new MeshThread();
-                    var msgIndex = thread.Messages.IndexOf(request.MessageId);
-                    if (msgIndex < 0) return node;
-
-                    // Delete old cells after the user message (fire-and-forget)
-                    foreach (var oldId in thread.Messages.Skip(msgIndex + 1))
-                        hub.Post(new DeleteNodeRequest($"{request.ThreadPath}/{oldId}"),
-                            o => o.WithTarget(new Address(request.ThreadPath)));
-
-                    return node with
-                    {
-                        Content = thread with
-                        {
-                            // Truncate + append new cell in one shot
-                            Messages = thread.Messages.Take(msgIndex + 1).ToImmutableList().Add(responseMsgId),
-                            IsExecuting = true,
-                            ActiveMessageId = responseMsgId,
-                            ExecutionStatus = null,
-                            TokensUsed = 0,
-                            ExecutionStartedAt = DateTime.UtcNow,
-                            StreamingText = null,
-                            StreamingToolCalls = null
-                        }
-                    };
-                });
-
-                // 3) Start execution
-                var executionHub = hub.GetHostedHub(
-                    new Address($"{hub.Address}/_Exec"),
-                    config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
-                    HostedHubCreation.Always);
-
-                executionHub!.Post(new SubmitMessageRequest
-                {
-                    ThreadPath = request.ThreadPath,
-                    UserMessageText = request.UserMessageText,
-                    ResponsePath = responsePath,
-                    ContextPath = contextPath
-                }, o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
-            },
-            ex => logger.LogError(ex, "HandleResubmitMessage: CreateNode failed for {ThreadPath}", request.ThreadPath));
+            ThreadPath = request.ThreadPath,
+            UserMessageText = request.UserMessageText,
+            UserMessageId = request.MessageId,
+            ResponseMessageId = responseMsgId,
+            ResponsePath = responsePath,
+            ContextPath = contextPath
+        }, o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
 
         return delivery.Processed();
     }

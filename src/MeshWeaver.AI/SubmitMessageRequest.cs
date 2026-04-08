@@ -22,6 +22,13 @@ public record SubmitMessageRequest : IRequest<SubmitMessageResponse>
     public IReadOnlyList<string>? Attachments { get; init; }
 
     /// <summary>
+    /// Client-generated IDs for optimistic rendering.
+    /// If set, the server uses these instead of generating its own.
+    /// </summary>
+    public string? UserMessageId { get; init; }
+    public string? ResponseMessageId { get; init; }
+
+    /// <summary>
     /// Set by HandleSubmitMessage after creating the response node.
     /// The execution hub uses this to post streaming progress updates.
     /// </summary>
