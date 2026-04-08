@@ -39,8 +39,9 @@ else
                     @if (pendingCells.TryGetValue(msgId, out var pending))
                     {
                         var isUser = pending.Role == "user";
-                        <div @key="@msgId" class="thread-msg-container" style="@(isUser ? "align-items: flex-end;" : "")">
-                            <div class="@(isUser ? "thread-msg-bubble thread-msg-user" : "thread-msg-bubble thread-msg-assistant")">
+                        <div @key="@msgId" class="thread-msg-container" style="@(isUser ? "align-items: flex-end;" : "") width: 100%;">
+                            <div class="@(isUser ? "thread-msg-bubble thread-msg-user" : "thread-msg-bubble thread-msg-assistant")"
+                                 style="max-width: 80%;">
                                 <div class="thread-msg-author @(isUser ? "thread-msg-author-user" : "")">@pending.AuthorName</div>
                                 @if (isUser)
                                 {
