@@ -38,8 +38,10 @@ public partial class LayoutAreaView
         }
 
         // Only bind stream when already in interactive mode (not during prerender)
+        // try/catch: during navigation, old circuit's hub may already be disposing
+        // while Blazor still re-renders components before their DisposeAsync runs
         if (IsNotPreRender)
-            BindStream();
+            try { BindStream(); } catch (ObjectDisposedException) { }
     }
     private bool showProgress;
     private string? progressMessage;
@@ -111,6 +113,7 @@ public partial class LayoutAreaView
     {
         if (AreaStream is null)
         {
+
             Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address!, ViewModel.Reference);
             AreaStream = Address!.Equals(Workspace.Hub.Address)
                 ? Workspace.GetStream(ViewModel.Reference)!.Reduce(new JsonPointerReference("/"))
