@@ -131,28 +131,25 @@ public static class ThreadExecution
         var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
         string? lastStartedMessageId = null;
-        var isFirstEmission = true;
 
         workspace.GetStream(new MeshNodeReference())?.Subscribe(node =>
         {
             if (node.Value?.Content is not MeshThread { IsExecuting: true, ActiveMessageId: not null } thread)
-            {
-                isFirstEmission = false;
                 return;
-            }
-
-            // Skip the first emission — RecoverStaleExecutingThread handles stale state.
-            // Only react to CHANGES (new SubmitMessageRequest setting IsExecuting=true).
-            if (isFirstEmission)
-            {
-                isFirstEmission = false;
-                logger?.LogInformation("[ThreadExec] WatchForExecution: skipping initial state for {ThreadPath} (recovery handles stale)", threadPath);
-                return;
-            }
 
             // Only trigger once per ActiveMessageId (not on every stream emission)
             if (thread.ActiveMessageId == lastStartedMessageId)
                 return;
+
+            // Stale execution? RecoverStaleExecutingThread handles it — don't re-execute.
+            // Fresh = started within last 2 minutes (new delegation or HandleSubmitMessage).
+            if (thread.ExecutionStartedAt is { } startedAt &&
+                (DateTime.UtcNow - startedAt).TotalMinutes > 2)
+            {
+                logger?.LogInformation("[ThreadExec] WatchForExecution: skipping stale execution for {ThreadPath} (started {StartedAt})", threadPath, startedAt);
+                return;
+            }
+
             lastStartedMessageId = thread.ActiveMessageId;
             var responseMsgId = thread.ActiveMessageId;
             var responsePath = $"{threadPath}/{responseMsgId}";
