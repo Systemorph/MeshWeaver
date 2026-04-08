@@ -63,6 +63,15 @@ public static class ThreadExecution
             if (threadNode?.Content is not Thread { IsExecuting: true } thread)
                 return;
 
+            // Don't recover fresh executions — WatchForExecution handles them.
+            // Only recover truly stale ones (started > 2 minutes ago or no timestamp).
+            if (thread.ExecutionStartedAt is { } startedAt &&
+                (DateTime.UtcNow - startedAt).TotalMinutes < 2)
+            {
+                logger?.LogInformation("[ThreadExec] Recovery: skipping fresh execution on {ThreadPath} (started {StartedAt})", threadPath, startedAt);
+                return;
+            }
+
             logger?.LogInformation("[ThreadExec] Recovery: stale execution on {ThreadPath}, activeMsg={ActiveMsg}",
                 threadPath, thread.ActiveMessageId);
 
