@@ -76,9 +76,13 @@ public static class ThreadNodeType
     public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null)
     {
         var speakingId = GenerateSpeakingId(messageText);
+        // Add _Thread partition for top-level threads. Sub-threads (delegations)
+        // live directly under the parent response message — no nested _Thread.
         var ns = string.IsNullOrEmpty(contextPath)
             ? ThreadPartition
-            : $"{contextPath}/{ThreadPartition}";
+            : contextPath.Contains($"/{ThreadPartition}/")
+                ? contextPath
+                : $"{contextPath}/{ThreadPartition}";
         var name = messageText.Length > 60
             ? messageText[..57] + "..."
             : messageText;
@@ -102,9 +106,13 @@ public static class ThreadNodeType
         string? modelName = null, IReadOnlyList<string>? attachments = null)
     {
         var speakingId = GenerateSpeakingId(messageText);
+        // Add _Thread partition for top-level threads. Sub-threads (delegations)
+        // live directly under the parent response message — no nested _Thread.
         var ns = string.IsNullOrEmpty(contextPath)
             ? ThreadPartition
-            : $"{contextPath}/{ThreadPartition}";
+            : contextPath.Contains($"/{ThreadPartition}/")
+                ? contextPath
+                : $"{contextPath}/{ThreadPartition}";
         var name = messageText.Length > 60
             ? messageText[..57] + "..."
             : messageText;
