@@ -397,7 +397,10 @@ public static class ThreadExecution
                     .Take(1)
                     .Subscribe(allMsgIds =>
                 {
-                    var historyMsgIds = allMsgIds.Where(id => id != responseMsgId).ToImmutableList();
+                    // History = all messages EXCEPT the last 2 (current input + output cells)
+                    var historyMsgIds = allMsgIds.Count > 2
+                        ? allMsgIds.Take(allMsgIds.Count - 2).ToImmutableList()
+                        : ImmutableList<string>.Empty;
                     logger.LogInformation("[ThreadExec] Loading {Count} history messages via GetDataRequest for {ThreadPath}",
                         historyMsgIds.Count, threadPath);
 
@@ -537,19 +540,8 @@ public static class ThreadExecution
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
 
-                    // Call the agent's IChatClient directly with ALL messages as separate turns.
-                    // This bypasses AgentChatClient.BuildMessageWithContextAsync which flattens
-                    // everything into 1 message. The ChatClientAgent has system prompt in its
-                    // instructions; the FunctionInvokingChatClient handles tool calls.
-                    var agent = client.GetAgent(request.AgentName);
-                    if (agent == null)
-                    {
-                        logger.LogError("[ThreadExec] No agent found for {AgentName}", request.AgentName);
-                        PushToResponseMessage("*Error: No agent available*", toolCallLog, nodeChangeLog, request.AgentName, request.ModelName);
-                        UpdateThreadExecution(t => t with { IsExecuting = false });
-                        return;
-                    }
-                    await foreach (var update in agent.ChatClient.GetStreamingResponseAsync(allMessages, null, ct))
+                    // Pass ALL messages through the official AgentChatClient path
+                    await foreach (var update in client.GetStreamingResponseAsync(allMessages, ct))
             {
                 // Capture function call / delegation activity for execution status
                 foreach (var content in update.Contents)

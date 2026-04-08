@@ -604,15 +604,17 @@ public class AgentChatClient : IAgentChat
         // Get or create thread for this agent
         var thread = await GetOrCreateThreadAsync(agent);
 
-        // Build the user message with context and agent instructions
-        var (userText, binaryParts) = await BuildMessageWithContextAsync(messages, currentAgentName);
-        currentAttachments = null; // Clear after use
+        // Pass all messages as separate turns with system prompt prepended.
+        // The agent's ChatClient includes FunctionInvokingChatClient for tool calls.
+        var turnMessages = new List<ChatMessage>();
+        if (!string.IsNullOrEmpty(agent.Instructions))
+            turnMessages.Add(new ChatMessage(ChatRole.System, agent.Instructions));
+        turnMessages.AddRange(messages);
+        logger.LogInformation("[AgentChat] Sending {Count} messages (+ system) to {Agent}",
+            messages.Count, agent.Name);
+        currentAttachments = null;
 
-        // Build ChatMessage with mixed content (text + binary attachments)
-        var chatMessage = BuildChatMessage(userText, binaryParts);
-
-        // Get streaming response from the agent with thread
-        await foreach (var update in agent.RunStreamingAsync(chatMessage, thread, cancellationToken: cancellationToken))
+        await foreach (var update in agent.ChatClient.GetStreamingResponseAsync(turnMessages, null, cancellationToken))
         {
             // Forward the complete update with all contents (including FunctionCallContent)
             if (update.Contents.Count > 0)
