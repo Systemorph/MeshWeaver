@@ -444,9 +444,25 @@ public static class ThreadExecution
                                 var lookup = results.Where(r => r.Msg != null).ToDictionary(r => r.Id, r => r.Msg!);
                                 return historyMsgIds
                                     .Where(id => lookup.ContainsKey(id))
-                                    .Select(id => new ChatMessage(
-                                        lookup[id].Role == "user" ? ChatRole.User : ChatRole.Assistant,
-                                        lookup[id].Text ?? ""))
+                                    .Select(id =>
+                                    {
+                                        var msg = lookup[id];
+                                        var role = msg.Role == "user" ? ChatRole.User : ChatRole.Assistant;
+                                        var text = msg.Text ?? "";
+
+                                        // For assistant messages: prepend tool call summaries so the
+                                        // agent knows what it did (tools called, data read, results)
+                                        if (role == ChatRole.Assistant && msg.ToolCalls is { Count: > 0 })
+                                        {
+                                            var toolSummary = string.Join("\n", msg.ToolCalls.Select(tc =>
+                                                $"[Tool: {tc.Name}({tc.Arguments ?? ""})" +
+                                                (tc.Result != null ? $" → {tc.Result[..Math.Min(500, tc.Result.Length)]}" : "") +
+                                                "]"));
+                                            text = $"{toolSummary}\n\n{text}";
+                                        }
+
+                                        return new ChatMessage(role, text);
+                                    })
                                     .ToImmutableList();
                             })
                             .Timeout(TimeSpan.FromSeconds(10))
