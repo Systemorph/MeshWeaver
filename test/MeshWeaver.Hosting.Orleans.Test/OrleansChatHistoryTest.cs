@@ -85,10 +85,10 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
             Output.WriteLine($"Execution completed: success={completion.Success}, text={completion.ResponseText}");
 
             completion.Success.Should().BeTrue("execution should succeed");
-            // The history loaded successfully (5/5 assembled, 6 sent to agent).
-            // The ChatClientAgent framework may combine messages into fewer entries.
-            // Verify the response is not empty — the agent executed with history.
-            completion.ResponseText.Should().NotBeNullOrEmpty("agent should produce a response");
+            // The agent MUST see 6 separate messages (4 pre-seeded history + 1 new input cell + 1 new user).
+            // If this fails, the ChatClientAgent is flattening conversation turns into a single prompt.
+            completion.ResponseText.Should().Contain("6 messages",
+                "agent must receive 6 separate ChatMessage objects, not a flattened prompt");
         }
         finally
         {
