@@ -106,6 +106,18 @@ public class AgentChatClient : IAgentChat
     }
 
     /// <summary>
+    /// Returns the ChatClientAgent for the given name (or default).
+    /// Used by ThreadExecution to call agent.ChatClient.GetStreamingResponseAsync directly.
+    /// </summary>
+    public ChatClientAgent? GetAgent(string? agentName = null)
+    {
+        if (!string.IsNullOrEmpty(agentName) && agents.TryGetValue(agentName, out var named))
+            return named;
+        // Default agent (first in order)
+        return agents.Values.FirstOrDefault();
+    }
+
+    /// <summary>
     /// Sets attachment paths whose content will be loaded and included in the next message.
     /// </summary>
     public void SetAttachments(IReadOnlyList<string>? paths)

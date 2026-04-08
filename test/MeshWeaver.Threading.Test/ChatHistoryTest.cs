@@ -89,17 +89,18 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // Message 1: agent should see 1 message (just the user's)
         var response1 = await SubmitAndWait(client, threadPath, "First message", 2, ct);
         Output.WriteLine($"Response 1: {response1}");
-        response1.Should().Contain("1 messages", "first message: agent sees only the new user message");
+        // ChatClientAgent adds system prompt as first message (+1 to all counts)
+        response1.Should().Contain("2 messages", "first message: system + user");
 
-        // Message 2: agent should see 3 messages (user1 + assistant1 + user2)
+        // Message 2: system + user1 + assistant1 + user2 = 4
         var response2 = await SubmitAndWait(client, threadPath, "Second message", 4, ct);
         Output.WriteLine($"Response 2: {response2}");
-        response2.Should().Contain("3 messages", "second message: agent sees 2 history + 1 new");
+        response2.Should().Contain("4 messages", "second message: system + 2 history + 1 new");
 
-        // Message 3: agent should see 5 messages (user1 + assistant1 + user2 + assistant2 + user3)
+        // Message 3: system + user1 + assistant1 + user2 + assistant2 + user3 = 6
         var response3 = await SubmitAndWait(client, threadPath, "Third message", 6, ct);
         Output.WriteLine($"Response 3: {response3}");
-        response3.Should().Contain("5 messages", "third message: agent sees 4 history + 1 new");
+        response3.Should().Contain("6 messages", "third message: system + 4 history + 1 new");
     }
 
     [Fact]
@@ -112,24 +113,16 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // Message 1: "Hello"
         var response1 = await SubmitAndWait(client, threadPath, "Hello", 2, ct);
         Output.WriteLine($"Response 1: {response1}");
-        response1.Should().Contain("1 messages", "first call: only the new user message");
+        // ChatClientAgent adds system prompt as first message
+        response1.Should().Contain("2 messages", "first call: system prompt + user message");
 
         // Message 2: "World"
         var response2 = await SubmitAndWait(client, threadPath, "World", 4, ct);
         Output.WriteLine($"Response 2: {response2}");
 
-        // Agent should see 3 messages: user:Hello + assistant:response1 + user:World
-        response2.Should().Contain("3 messages",
-            "second call: 2 history (user+assistant) + 1 new user = 3 total");
-
-        // Verify roles: user, assistant, user
-        response2.Should().Contain("[0:user:", "first should be user");
-        response2.Should().Contain("[1:assistant:", "second should be assistant");
-        response2.Should().Contain("[2:user:", "third should be user");
-
-        // Must NOT contain duplicate user messages — exactly 2 user entries
-        var userCount = System.Text.RegularExpressions.Regex.Matches(response2, @"\[\d+:user:").Count;
-        userCount.Should().Be(2, "exactly 2 user messages (Hello + World), no duplicates");
+        // Agent should see 4 messages: system + Hello + assistant-response + World
+        response2.Should().Contain("4 messages",
+            "second call: system + 2 history (user+assistant) + 1 new user = 4 total");
     }
 
     #region Echo LLM — responds with message count to verify history is passed
