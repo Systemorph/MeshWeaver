@@ -259,7 +259,9 @@ public static class ThreadExecution
                     ExecutionStatus = null,
                     TokensUsed = 0,
                     ExecutionStartedAt = DateTime.UtcNow,
-                    PendingUserMessage = request.UserMessageText,
+                    // Don't set PendingUserMessage — reserved for delegations.
+                    // WatchForExecution uses it to decide cell creation vs direct execution.
+                    // User text is read from the user cell via GetDataRequest in history.
                     PendingAgentName = request.AgentName,
                     PendingModelName = request.ModelName,
                     PendingContextPath = request.ContextPath,
@@ -389,9 +391,10 @@ public static class ThreadExecution
                     .Take(1)
                     .Subscribe(allMsgIds =>
                 {
-                    // History = all messages EXCEPT the last 2 (current input + output cells)
-                    var historyMsgIds = allMsgIds.Count > 2
-                        ? allMsgIds.Take(allMsgIds.Count - 2).ToImmutableList()
+                    // History = all messages EXCEPT the last one (response cell).
+                    // The current user cell IS included — its text comes from the cell itself.
+                    var historyMsgIds = allMsgIds.Count > 1
+                        ? allMsgIds.Take(allMsgIds.Count - 1).ToImmutableList()
                         : ImmutableList<string>.Empty;
                     logger.LogInformation("[ThreadExec] Loading {Count} history messages via GetDataRequest for {ThreadPath}",
                         historyMsgIds.Count, threadPath);
@@ -509,7 +512,11 @@ public static class ThreadExecution
                 var agentDisplayName = request.AgentName ?? "Agent";
 
                 // Build full message list: history (from GetDataRequest) + current message
-                var allMessages = chatHistory.Add(new ChatMessage(ChatRole.User, request.UserMessageText));
+                // chatHistory already includes the current user message (loaded from the cell).
+                // Only add it if history is empty (delegation sub-thread, text from PendingUserMessage).
+                var allMessages = chatHistory.Count > 0
+                    ? chatHistory
+                    : chatHistory.Add(new ChatMessage(ChatRole.User, request.UserMessageText));
                 logger.LogInformation("[ThreadExec] Sending {Count} messages to agent ({HistoryCount} history + 1 new): threadPath={ThreadPath}, agent={Agent}",
                     allMessages.Count, chatHistory.Count, threadPath, request.AgentName ?? "(default)");
 
