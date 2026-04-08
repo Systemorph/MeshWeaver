@@ -131,11 +131,24 @@ public static class ThreadExecution
         var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
         string? lastStartedMessageId = null;
+        var isFirstEmission = true;
 
         workspace.GetStream(new MeshNodeReference())?.Subscribe(node =>
         {
             if (node.Value?.Content is not MeshThread { IsExecuting: true, ActiveMessageId: not null } thread)
+            {
+                isFirstEmission = false;
                 return;
+            }
+
+            // Skip the first emission — RecoverStaleExecutingThread handles stale state.
+            // Only react to CHANGES (new SubmitMessageRequest setting IsExecuting=true).
+            if (isFirstEmission)
+            {
+                isFirstEmission = false;
+                logger?.LogInformation("[ThreadExec] WatchForExecution: skipping initial state for {ThreadPath} (recovery handles stale)", threadPath);
+                return;
+            }
 
             // Only trigger once per ActiveMessageId (not on every stream emission)
             if (thread.ActiveMessageId == lastStartedMessageId)
@@ -185,40 +198,46 @@ public static class ThreadExecution
                 }, o => userCtx != null ? o.WithAccessContext(userCtx) : o);
             }
 
-            // Ensure response cell exists, then start execution.
-            // GUI threads: cell already exists → CreateNode returns quickly (idempotent).
-            // Delegation sub-threads: cell doesn't exist → creates it.
-            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
+            if (thread.PendingUserMessage == null)
             {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
-                Content = new ThreadMessage
-                {
-                    Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.AgentResponse,
-                    AgentName = thread.PendingAgentName, ModelName = thread.PendingModelName
-                }
-            }).Subscribe(_ => StartExecution(),
-                error =>
-                {
-                    // Cell already exists (GUI created it) — start execution anyway
-                    logger?.LogDebug("[ThreadExec] Response cell creation returned error (likely exists): {Error}", error.Message);
-                    StartExecution();
-                });
-
-            // Ensure user cell exists (fire-and-forget)
-            if (userMsgId != null && thread.PendingUserMessage != null)
+                // GUI flow — cells already exist, start execution directly.
+                // No meshService.CreateNode round-trip needed.
+                StartExecution();
+            }
+            else
             {
-                meshService.CreateNode(new MeshNode(userMsgId, threadPath)
+                // Delegation / auto-execute flow — cells don't exist yet, create them first.
+                var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+                meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
                 {
                     NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
                     Content = new ThreadMessage
                     {
-                        Role = "user", Text = thread.PendingUserMessage, Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.ExecutedInput, CreatedBy = thread.CreatedBy
+                        Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
+                        Type = ThreadMessageType.AgentResponse,
+                        AgentName = thread.PendingAgentName, ModelName = thread.PendingModelName
                     }
-                }).Subscribe(_ => { },
-                    error => logger?.LogDebug("[ThreadExec] User cell creation returned error (likely exists): {Error}", error.Message));
+                }).Subscribe(_ => StartExecution(),
+                    error =>
+                    {
+                        logger?.LogDebug("[ThreadExec] Response cell creation returned error (likely exists): {Error}", error.Message);
+                        StartExecution();
+                    });
+
+                // Ensure user cell exists (fire-and-forget)
+                if (userMsgId != null)
+                {
+                    meshService.CreateNode(new MeshNode(userMsgId, threadPath)
+                    {
+                        NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
+                        Content = new ThreadMessage
+                        {
+                            Role = "user", Text = thread.PendingUserMessage, Timestamp = DateTime.UtcNow,
+                            Type = ThreadMessageType.ExecutedInput, CreatedBy = thread.CreatedBy
+                        }
+                    }).Subscribe(_ => { },
+                        error => logger?.LogDebug("[ThreadExec] User cell creation returned error (likely exists): {Error}", error.Message));
+                }
             }
         });
 
