@@ -37,6 +37,17 @@ internal class RoutingGrain(
             delivery = delivery.WithTarget(resolvedAddress);
         }
 
+        // Portal/client hubs are not grains — deliver via Orleans memory stream.
+        // The portal subscribes to this stream in OrleansRoutingService.RegisterStreamAsync.
+        if (address.Type == AddressExtensions.PortalType || address.Type == "client")
+        {
+            logger.LogDebug("RouteMessage: delivering to {Address} via memory stream (not a grain)", addressPath);
+            var stream = this.GetStreamProvider(StreamProviders.Memory)
+                .GetStream<IMessageDelivery>(addressPath);
+            await stream.OnNextAsync(delivery);
+            return delivery.Forwarded(address);
+        }
+
         try
         {
             var grain = GrainFactory.GetGrain<IMessageHubGrain>(grainKey);
@@ -46,7 +57,6 @@ internal class RoutingGrain(
         {
             logger.LogWarning(ex, "Grain delivery failed for {MessageType} to {Address} (key={Key})",
                 delivery.Message.GetType().Name, address, grainKey);
-            // Return failure so the client can detect it and retry
             return delivery.Failed($"Grain activation failed for {grainKey}: {ex.Message}");
         }
     }
