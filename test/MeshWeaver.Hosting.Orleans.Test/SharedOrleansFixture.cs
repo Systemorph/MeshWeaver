@@ -83,9 +83,11 @@ public class SharedOrleansFixture : IAsyncLifetime
         // In prod, portal and silo share one IRoutingService. In TestCluster they're separate.
         // Without this, response routing tries to activate a grain for the client address → fails.
         // Access silo's IRoutingService via reflection (InProcessSiloHandle.SiloHost.Services)
+        // Try multiple paths to find the silo's IRoutingService
         var primarySilo = Cluster.Primary;
         var siloHost = primarySilo.GetType().GetProperty("SiloHost")?.GetValue(primarySilo) as IHost;
-        var siloRouting = siloHost?.Services.GetService<IMessageHub>()?.ServiceProvider.GetService<IRoutingService>();
+        var siloRouting = siloHost?.Services.GetService<IRoutingService>()
+            ?? siloHost?.Services.GetService<IMessageHub>()?.ServiceProvider.GetService<IRoutingService>();
         if (siloRouting != null)
             await siloRouting.RegisterStreamAsync(client.Address,
                 (d, _) => Task.FromResult(client.DeliverMessage(d)));
