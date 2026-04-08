@@ -74,7 +74,22 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         var threadPath = await CreateThreadAsync(client, "Delegation execution test", ct);
         Output.WriteLine($"Parent thread: {threadPath}");
 
-        // 2. Submit a message to the parent thread (creates user + response messages)
+        // 2. Create cells and submit a message to the parent thread
+        var parentUserMsgId = Guid.NewGuid().ToString("N")[..8];
+        var parentResponseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(parentUserMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "user", Text = "Research reinsurance pricing", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(parentResponseMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
         var parentMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes => GetMessages(nodes, threadPath))
@@ -85,7 +100,9 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Research reinsurance pricing",
-                ContextPath = ContextPath
+                ContextPath = ContextPath,
+                UserMessageId = parentUserMsgId,
+                ResponseMessageId = parentResponseMsgId
             },
             o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
@@ -111,8 +128,23 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         }, ct);
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
-        // 5. Submit message to the sub-thread via SubmitMessageRequest
+        // 5. Create cells and submit message to the sub-thread via SubmitMessageRequest
         //    This goes through the full ThreadExecution pipeline.
+        var subUserMsgId = Guid.NewGuid().ToString("N")[..8];
+        var subResponseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(subUserMsgId, subThreadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "user", Text = "Find documents about reinsurance pricing models", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
+        }), o => o.WithTarget(new Address(subThreadPath)), ct);
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(subResponseMsgId, subThreadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+        }), o => o.WithTarget(new Address(subThreadPath)), ct);
+
         var subMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(subThreadPath))!
             .Select(nodes => GetMessages(nodes, subThreadPath))
@@ -123,7 +155,9 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 ThreadPath = subThreadPath,
                 UserMessageText = "Find documents about reinsurance pricing models",
-                ContextPath = ContextPath
+                ContextPath = ContextPath,
+                UserMessageId = subUserMsgId,
+                ResponseMessageId = subResponseMsgId
             },
             o => o.WithTarget(new Address(subThreadPath)), ct);
         subSubmitResponse.Message.Success.Should().BeTrue(subSubmitResponse.Message.Error);

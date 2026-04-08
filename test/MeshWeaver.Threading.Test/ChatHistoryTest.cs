@@ -55,9 +55,26 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     private async Task<string> SubmitAndWait(IMessageHub client, string threadPath, string text, int expectedMsgCount, CancellationToken ct)
     {
+        // GUI flow: create cells first, then submit
+        var userMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "user", Text = text, Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
         await client.AwaitResponse(new SubmitMessageRequest
         {
-            ThreadPath = threadPath, UserMessageText = text, ContextPath = ContextPath
+            ThreadPath = threadPath, UserMessageText = text, ContextPath = ContextPath,
+            UserMessageId = userMsgId, ResponseMessageId = responseMsgId
         }, o => o.WithTarget(new Address(threadPath)), ct);
 
         // Wait for execution to complete (Messages count reaches expected)

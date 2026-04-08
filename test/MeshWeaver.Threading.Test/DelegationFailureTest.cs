@@ -75,9 +75,29 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var threadPath = await CreateThreadAsync(client, "Cancellation test", ct);
 
+        // Create cells before submitting (GUI flow)
+        var userMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "user", Text = "Do something that delegates", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
         // Submit a message — the fake agent will try to delegate
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Do something that delegates" },
+            new SubmitMessageRequest
+            {
+                ThreadPath = threadPath, UserMessageText = "Do something that delegates",
+                UserMessageId = userMsgId, ResponseMessageId = responseMsgId
+            },
             o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 

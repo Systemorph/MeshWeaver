@@ -36,34 +36,10 @@ else
             {
                 @foreach (var msgId in ThreadMessages)
                 {
-                    @if (pendingCells.TryGetValue(msgId, out var pending))
+                    var cell = GetMessageCell(msgId);
+                    @if (cell != null)
                     {
-                        var isUser = pending.Role == "user";
-                        <div @key="@msgId" class="thread-msg-container" style="@(isUser ? "align-items: flex-end;" : "") width: 100%;">
-                            <div class="@(isUser ? "thread-msg-bubble thread-msg-user" : "thread-msg-bubble thread-msg-assistant")"
-                                 style="max-width: 80%;">
-                                <div class="thread-msg-author @(isUser ? "thread-msg-author-user" : "")">@pending.AuthorName</div>
-                                @if (isUser)
-                                {
-                                    <div style="background: transparent;">@((MarkupString)Markdig.Markdown.ToHtml(pending.Text))</div>
-                                }
-                                else
-                                {
-                                    <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 0.9rem;">
-                                        <span class="thread-exec-star" style="font-size: 1.2rem;">&#10041;</span>
-                                        <span style="color: var(--neutral-foreground-hint); animation: thread-pending-pulse 2s ease-in-out infinite;">@pending.Text</span>
-                                    </div>
-                                }
-                            </div>
-                        </div>
-                    }
-                    else
-                    {
-                        var cell = GetMessageCell(msgId);
-                        @if (cell != null)
-                        {
-                            <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
-                        }
+                        <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
                     }
                 }
             }

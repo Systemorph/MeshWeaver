@@ -270,13 +270,13 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         Output.WriteLine($"Created sub-thread at: {subThreadPath}");
 
         subThreadPath.Should().StartWith($"{threadPath}/");
-        subThreadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
+        // Sub-threads under a parent that's already inside _Thread don't get
+        // another _Thread partition — BuildThreadNode skips nested _Thread.
 
-        // 4. Verify the sub-thread is queryable with the same query ThreadsCatalog uses
-        //    ThreadsCatalog queries: namespace:{hubPath}/_Thread nodeType:Thread
+        // 4. Verify the sub-thread is queryable — lives directly under the parent thread namespace
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var threads = await meshQuery.QueryAsync<MeshNode>(
-            $"namespace:{threadPath}/{ThreadNodeType.ThreadPartition} nodeType:{ThreadNodeType.NodeType}").ToListAsync(ct);
+            $"namespace:{threadPath} nodeType:{ThreadNodeType.NodeType}").ToListAsync(ct);
 
         threads.Should().ContainSingle("should find the created sub-thread");
         threads[0].Path.Should().Be(subThreadPath);

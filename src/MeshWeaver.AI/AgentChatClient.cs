@@ -614,7 +614,16 @@ public class AgentChatClient : IAgentChat
             messages.Count, agent.Name);
         currentAttachments = null;
 
-        await foreach (var update in agent.ChatClient.GetStreamingResponseAsync(turnMessages, null, cancellationToken))
+        // ChatOptions MUST include the agent's tools. Without them, the inner
+        // client (AzureClaudeChatClient) never sends tool definitions to Claude,
+        // and FunctionInvokingChatClient has nothing to match against.
+        // Get tools from FunctionInvokingChatClient.AdditionalTools (where the
+        // ChatClientAgent constructor places them).
+        var functionInvoker = agent.ChatClient.GetService<FunctionInvokingChatClient>();
+        var chatOptions = new ChatOptions();
+        if (functionInvoker?.AdditionalTools is { Count: > 0 } additionalTools)
+            chatOptions.Tools = additionalTools.ToList();
+        await foreach (var update in agent.ChatClient.GetStreamingResponseAsync(turnMessages, chatOptions, cancellationToken))
         {
             // Forward the complete update with all contents (including FunctionCallContent)
             if (update.Contents.Count > 0)
