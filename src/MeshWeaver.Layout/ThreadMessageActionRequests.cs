@@ -10,6 +10,8 @@ public record ResubmitMessageRequest
     public required string ThreadPath { get; init; }
     public required string MessageId { get; init; }
     public required string UserMessageText { get; init; }
+    /// <summary>Client-generated output cell ID. If set, server skips cell creation.</summary>
+    public string? OutputMessageId { get; init; }
 }
 
 /// <summary>

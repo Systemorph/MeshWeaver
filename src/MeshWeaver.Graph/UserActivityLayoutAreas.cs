@@ -37,13 +37,11 @@ public static class UserActivityLayoutAreas
         // Extract the owner ID from the hub address (e.g., "User/Alice" → "Alice")
         var nodeOwnerId = nodePath.StartsWith("User/") ? nodePath[5..] : nodePath;
 
-        // Get the node from the workspace stream to derive the owner's display name
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
-        return nodeStream.SelectMany(async nodes =>
+        return syncStream!.Select(change =>
         {
-            var ownerNode = nodes.FirstOrDefault(n => n.Path == nodePath);
+            var ownerNode = change.Value;
             var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
             // Determine if the viewer is the node owner
