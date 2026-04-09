@@ -126,7 +126,9 @@ public class XUnitLogger(
         Func<TState, Exception?, string> formatter
     )
     {
-        if (testOutputHelperAccessor.OutputHelper == null)
+        var outputHelper = testOutputHelperAccessor.OutputHelper
+            ?? XUnitFileOutputRegistry.GetAnyActiveOutputHelper();
+        if (outputHelper == null)
             return;
         if (!IsEnabled(logLevel))
             return;
@@ -150,7 +152,7 @@ public class XUnitLogger(
 #pragma warning disable RCS1075 // Avoid empty catch clause that catches System.Exception
         try
         {
-            testOutputHelperAccessor.OutputHelper.WriteLine(sb.ToString());
+            outputHelper.WriteLine(sb.ToString());
         }
         catch (Exception) { }
 #pragma warning restore RCS1075 // Avoid empty catch clause that catches System.Exception

@@ -6,6 +6,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -93,6 +94,36 @@ public static class ContentLayoutArea
         ".svg" => true,
         _ => false
     };
+
+    private static bool IsDocumentFile(string extension) => extension is ".docx";
+
+    private static async Task<IObservable<UiControl?>> RenderDocumentContent(
+        ContentCollection collection,
+        IMessageHub hub,
+        string filePath,
+        CancellationToken ct)
+    {
+        try
+        {
+            var ext = Path.GetExtension(filePath).ToLowerInvariant();
+            var transformer = hub.ServiceProvider.GetServices<IContentTransformer>()
+                .FirstOrDefault(t => t.SupportedExtensions.Contains(ext));
+
+            if (transformer == null)
+                return Observable.Return<UiControl?>(new MarkdownControl($"No converter available for {ext} files"));
+
+            await using var stream = await collection.GetContentAsync(filePath, ct);
+            if (stream == null)
+                return Observable.Return<UiControl?>(new MarkdownControl($"Document not found: {filePath}"));
+
+            var markdown = await transformer.TransformToMarkdownAsync(stream, ct);
+            return Observable.Return<UiControl?>(new MarkdownControl(markdown));
+        }
+        catch (Exception ex)
+        {
+            return Observable.Return<UiControl?>(new MarkdownControl($"Error converting document {filePath}: {ex.Message}"));
+        }
+    }
 
     private static async Task<IObservable<UiControl?>> RenderImageContent(
         ContentCollection collection,
@@ -259,6 +290,12 @@ public static class ContentLayoutArea
             if (IsImageFile(extension))
             {
                 return await RenderImageContent(collection, filePath, extension, ct);
+            }
+
+            // For binary document formats, convert to markdown via IContentTransformer
+            if (IsDocumentFile(extension))
+            {
+                return await RenderDocumentContent(collection, host.Hub, filePath, ct);
             }
 
             // For other content types, use the existing GetMarkdown pipeline

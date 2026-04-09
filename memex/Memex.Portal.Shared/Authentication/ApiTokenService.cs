@@ -76,6 +76,14 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         return (rawToken, created);
     }
 
+    /// <summary>
+    /// Queries nodes using the system identity to bypass access control.
+    /// ApiTokenService is infrastructure code that needs unrestricted read access.
+    /// </summary>
+    private IAsyncEnumerable<MeshNode> QueryAsSystemAsync(string query, CancellationToken ct = default)
+        => meshQuery.QueryAsync<MeshNode>(
+            MeshQueryRequest.FromQuery(query, WellKnownUsers.System), ct: ct);
+
     public async Task<ApiToken?> ValidateTokenAsync(string rawToken)
     {
         if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(TokenPrefix))
@@ -85,7 +93,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var hashPrefix = hash[..12];
         var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
 
-        var indexNode = await meshQuery.QueryAsync<MeshNode>($"path:{indexPath}").FirstOrDefaultAsync();
+        var indexNode = await QueryAsSystemAsync($"path:{indexPath}").FirstOrDefaultAsync();
         if (indexNode == null)
             return null;
 
@@ -98,7 +106,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             // New format: index pointer -> follow to user namespace
             if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
                 return null;
-            tokenNode = await meshQuery.QueryAsync<MeshNode>($"path:{index.TokenPath}").FirstOrDefaultAsync();
+            tokenNode = await QueryAsSystemAsync($"path:{index.TokenPath}").FirstOrDefaultAsync();
             apiToken = tokenNode?.Content as ApiToken ?? ExtractApiToken(tokenNode);
         }
         else
@@ -143,7 +151,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
 
     public async Task<bool> RevokeTokenAsync(string tokenNodePath)
     {
-        var node = await meshQuery.QueryAsync<MeshNode>($"path:{tokenNodePath}").FirstOrDefaultAsync();
+        var node = await QueryAsSystemAsync($"path:{tokenNodePath}").FirstOrDefaultAsync();
         if (node == null)
             return false;
 
@@ -162,7 +170,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
             if (tokenNodePath != indexPath)
             {
-                var indexNode = await meshQuery.QueryAsync<MeshNode>($"path:{indexPath}").FirstOrDefaultAsync();
+                var indexNode = await QueryAsSystemAsync($"path:{indexPath}").FirstOrDefaultAsync();
                 if (indexNode != null)
                 {
                     hub.Post(new DeleteNodeRequest(indexPath));
@@ -179,8 +187,10 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var tokens = new List<ApiTokenInfo>();
 
         // Query user-scoped tokens (new format)
+        // ApiToken is a satellite type (MainNode != Path), so we need nodeType: condition
+        // to trigger GetAllChildrenAsync which includes satellites in the results.
         var userTokenNamespace = $"User/{userId}/{ApiTokenNamespace}";
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"namespace:{userTokenNamespace}"))
+        await foreach (var node in QueryAsSystemAsync($"namespace:{userTokenNamespace} nodeType:{NodeTypeApiToken}"))
         {
             var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
             if (apiToken == null)
@@ -199,7 +209,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         }
 
         // Fallback: also check legacy tokens at top-level ApiToken namespace
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"namespace:{ApiTokenNamespace}"))
+        await foreach (var node in QueryAsSystemAsync($"namespace:{ApiTokenNamespace} nodeType:{NodeTypeApiToken}"))
         {
             var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
             if (apiToken == null || apiToken.UserId != userId)

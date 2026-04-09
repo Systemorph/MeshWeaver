@@ -1,3 +1,10 @@
+---
+Name: Satellite Node Patterns
+Category: Architecture
+Description: Architecture patterns for parent-child node hierarchies with hub ownership and persistence
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="5" rx="1"/><rect x="1" y="17" width="8" height="5" rx="1"/><rect x="15" y="17" width="8" height="5" rx="1"/><path d="M12 7v4M5 17v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/></svg>
+---
+
 # Satellite Node Patterns
 
 Satellite nodes are nodes whose `MainNode` points to a parent node. They form hierarchical structures like Threads with Messages, or Documents with Comments. This document describes the architecture patterns for implementing satellite nodes with children.

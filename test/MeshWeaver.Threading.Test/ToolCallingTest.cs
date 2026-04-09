@@ -110,11 +110,27 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var threadPath = await CreateThreadAsync(client, "Tool calling test", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
-        // 3. Subscribe to Messages
+        // 3. Create cells before submitting (GUI flow)
+        var userMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "user", Text = "Search for test documents", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
+        // 4. Subscribe to Messages
         var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
-        // 4. Submit message — the ToolCallingFakeChatClient will:
+        // 5. Submit message — the ToolCallingFakeChatClient will:
         //    a) Return a Search tool call on first invocation
         //    b) The ChatClientAgent framework will execute the Search tool
         //    c) On second invocation (with tool result), return a text response
@@ -123,7 +139,9 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Search for test documents",
-                ContextPath = ContextPath
+                ContextPath = ContextPath,
+                UserMessageId = userMsgId,
+                ResponseMessageId = responseMsgId
             },
             o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);

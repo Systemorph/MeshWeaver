@@ -35,11 +35,6 @@ public static class OrleansTestMeshExtensions
             })
             .AddGraph()
             .AddAI()
-            .ConfigureServices(services =>
-            {
-                services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
-                return services;
-            })
             .AddKernel();
     }
 

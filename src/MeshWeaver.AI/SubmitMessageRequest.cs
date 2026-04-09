@@ -22,10 +22,18 @@ public record SubmitMessageRequest : IRequest<SubmitMessageResponse>
     public IReadOnlyList<string>? Attachments { get; init; }
 
     /// <summary>
+    /// Client-generated IDs for optimistic rendering.
+    /// If set, the server uses these instead of generating its own.
+    /// </summary>
+    public string? UserMessageId { get; init; }
+    public string? ResponseMessageId { get; init; }
+
+    /// <summary>
     /// Set by HandleSubmitMessage after creating the response node.
     /// The execution hub uses this to post streaming progress updates.
     /// </summary>
     public string? ResponsePath { get; init; }
+
 }
 
 /// <summary>
@@ -51,6 +59,18 @@ public record SubmitMessageResponse
     public string? Error { get; init; }
     public SubmitMessageStatus Status { get; init; } = SubmitMessageStatus.CellsCreated;
     public string? ResponseText { get; init; }
+
+    /// <summary>
+    /// Node changes made during this thread's execution.
+    /// Propagated upward so parent threads can aggregate changes from delegations.
+    /// </summary>
+    public System.Collections.Immutable.ImmutableList<MeshWeaver.Layout.NodeChangeEntry>? UpdatedNodes { get; init; }
+
+    /// <summary>
+    /// Full Messages list after cells are created. Sent with CellsCreated so the client
+    /// can render LayoutAreaViews immediately without waiting for the workspace stream.
+    /// </summary>
+    public IReadOnlyList<string>? Messages { get; init; }
 }
 
 public enum SubmitMessageStatus
