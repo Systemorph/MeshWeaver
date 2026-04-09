@@ -51,6 +51,35 @@ public class ContentCollection : IDisposable
     public Task<Stream?> GetContentAsync(string path, CancellationToken ct = default)
         => provider.GetStreamAsync(path, ct);
 
+    /// <summary>
+    /// Returns content as text/markdown. For supported binary formats (.docx, .pptx, .xlsx),
+    /// converts to markdown via registered IContentTransformer. For text files, reads as-is.
+    /// </summary>
+    public async Task<string?> GetContentAsTextAsync(string path, IEnumerable<IContentTransformer>? transformers = null, CancellationToken ct = default)
+    {
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+
+        // Try registered transformers first
+        var transformer = transformers?.FirstOrDefault(t =>
+            t.SupportedExtensions.Contains(ext));
+        if (transformer != null)
+        {
+            var stream = await GetContentAsync(path, ct);
+            if (stream == null) return null;
+            using (stream)
+                return await transformer.TransformToMarkdownAsync(stream, ct);
+        }
+
+        // Fallback: read as text
+        var textStream = await GetContentAsync(path, ct);
+        if (textStream == null) return null;
+        using (textStream)
+        {
+            using var reader = new StreamReader(textStream);
+            return await reader.ReadToEndAsync(ct);
+        }
+    }
+
 
 
     public virtual void Dispose()
@@ -173,6 +202,9 @@ public class ContentCollection : IDisposable
         { ".json", "application/json" },
         { ".csv", "text/csv" },
         { ".pdf", "application/pdf" },
+        { ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+        { ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+        { ".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
         { ".woff", "font/woff" },
         { ".woff2", "font/woff2" },
         { ".ttf", "font/ttf" },

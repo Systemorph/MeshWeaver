@@ -149,7 +149,11 @@ public static class MeshDataSourceExtensions
 
         var change = current.Updates.FirstOrDefault();
         if (change == null)
-            return null!;
+        {
+            // Patch with no matching Updates — fall back to full value instead of
+            // returning null (which silently drops the emission and blocks live updates).
+            return new(node, current.StreamId, current.Version);
+        }
         return new(change.Value as MeshNode, current.ChangedBy, current.StreamId,
             ChangeType.Patch, current.Version, [change]);
     }

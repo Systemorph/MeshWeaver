@@ -198,7 +198,6 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             Order = 1,
             Content = new ThreadMessage
             {
-                Id = "msg1",
                 Role = "user",
                 Text = "Hello",
                 Timestamp = System.DateTime.UtcNow,
@@ -241,7 +240,6 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             Order = 1,
             Content = new ThreadMessage
             {
-                Id = "m1",
                 Role = "assistant",
                 Text = "Response",
                 Timestamp = System.DateTime.UtcNow,

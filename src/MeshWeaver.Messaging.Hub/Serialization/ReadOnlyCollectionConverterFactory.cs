@@ -134,28 +134,21 @@ public class ReadOnlyListConverter<T> : JsonConverter<IReadOnlyList<T>>
 {
     public override IReadOnlyList<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        // For abstract types, interfaces, or types with polymorphic attributes, we need to deserialize each element individually
-        // using the polymorphic resolver to handle the actual concrete types
-        if (typeof(T).IsAbstract || typeof(T).IsInterface || HasPolymorphicAttributes(typeof(T)))
-        {
-            using var jsonDoc = JsonDocument.ParseValue(ref reader);
-            if (jsonDoc.RootElement.ValueKind != JsonValueKind.Array)
-                return new ReadOnlyCollection<T>(Array.Empty<T>());
+        // Always parse each element individually via JsonDocument to handle
+        // $type metadata in any position (old data in PostgreSQL may have
+        // $type not as first property, which breaks Deserialize<T[]>).
+        using var jsonDoc = JsonDocument.ParseValue(ref reader);
+        if (jsonDoc.RootElement.ValueKind != JsonValueKind.Array)
+            return new ReadOnlyCollection<T>(Array.Empty<T>());
 
-            var list = new List<T>();
-            foreach (var element in jsonDoc.RootElement.EnumerateArray())
-            {
-                var item = JsonSerializer.Deserialize<T>(element.GetRawText(), options);
-                if (item != null)
-                    list.Add(item);
-            }
-            return new ReadOnlyCollection<T>(list);
-        }
-        else
+        var list = new List<T>();
+        foreach (var element in jsonDoc.RootElement.EnumerateArray())
         {
-            var array = JsonSerializer.Deserialize<T[]>(ref reader, options);
-            return array == null ? new ReadOnlyCollection<T>(Array.Empty<T>()) : new ReadOnlyCollection<T>(array);
+            var item = JsonSerializer.Deserialize<T>(element.GetRawText(), options);
+            if (item != null)
+                list.Add(item);
         }
+        return new ReadOnlyCollection<T>(list);
     }
     public override void Write(Utf8JsonWriter writer, IReadOnlyList<T> value, JsonSerializerOptions options)
     {

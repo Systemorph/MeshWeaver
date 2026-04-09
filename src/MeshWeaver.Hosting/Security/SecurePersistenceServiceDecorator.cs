@@ -79,7 +79,7 @@ internal class SecurePersistenceServiceDecorator : IStorageService
         if (await HasReadAccessAsync(node, userId, ct))
             return node;
 
-        _logger.LogDebug("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
+        _logger.LogWarning("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
         return null;
     }
 

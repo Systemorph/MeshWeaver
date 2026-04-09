@@ -2,6 +2,10 @@
 
 This file provides guidance to AI agents when working with code in this repository.
 
+## Git Workflow
+
+**NEVER commit or push automatically.** Always wait for the user to explicitly ask for a commit or push. Present changes for review first.
+
 ## Documentation
 
 Documentation is embedded in `src/MeshWeaver.Documentation/` and served under the `Doc/` namespace at runtime.

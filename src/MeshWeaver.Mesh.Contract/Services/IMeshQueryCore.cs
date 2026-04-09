@@ -1,14 +1,16 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
-/// Internal core query interface without access control.
-/// Follows the same pattern as IStorageService (core) vs IMeshStorage (wrapper).
-/// Used by infrastructure code (NodeTypeService, MeshCatalog, compilation) that needs
-/// raw queries without user context.
+/// Infrastructure query interface without access control.
+/// Used by infrastructure code (login, NodeTypeService, compilation) that needs
+/// raw queries without user context. Must not be exposed to application code.
 /// </summary>
-public interface IMeshQueryCore
+internal interface IMeshQueryCore
 {
     /// <summary>
     /// Query nodes without access control filtering.

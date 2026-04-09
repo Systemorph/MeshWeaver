@@ -3,7 +3,9 @@ using System.Reflection;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
+using MeshWeaver.ContentCollections.Completion;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Completion;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
@@ -330,6 +332,8 @@ public static class ContentCollectionsExtensions
             services
                 .AddScoped<IContentService, ContentService>()
                 .AddScoped<Data.IFileContentProvider, FileContentProvider>()
+                .AddSingleton<IContentTransformer, DocSharpContentTransformer>()
+                .AddScoped<IAutocompleteProvider, ContentAutocompleteProvider>()
                 .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);

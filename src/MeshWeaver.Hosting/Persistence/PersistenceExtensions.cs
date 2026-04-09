@@ -495,9 +495,12 @@ public static class PersistenceExtensions
     /// </summary>
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {
+        services.TryAddSingleton<IMeshChangeFeed, InProcessMeshChangeFeed>();
         services.TryAddSingleton<MeshCatalog>();
         services.TryAddSingleton<IMeshCatalog>(sp => sp.GetRequiredService<MeshCatalog>());
-        services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<MeshCatalog>());
+        // PathResolutionService owns the cache + subscribes to IMeshChangeFeed internally
+        services.TryAddSingleton<PathResolutionService>();
+        services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<PathResolutionService>());
         return services;
     }
 }

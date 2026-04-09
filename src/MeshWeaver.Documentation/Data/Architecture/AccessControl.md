@@ -249,6 +249,54 @@ The Access Control layout area (`AccessControlArea`) provides:
 
 3. **Add Assignment** (admin-only): Dialog with autocompleting comboboxes for Subject (User/Group search via IMeshService) and Role selection.
 
+# Partition Access Control
+
+In multi-tenant PostgreSQL deployments, each organization has its own schema (partition). Access to partitions is controlled by the `partition_access` table:
+
+```sql
+CREATE TABLE public.partition_access (
+    user_id    TEXT NOT NULL,
+    partition  TEXT NOT NULL,
+    PRIMARY KEY (user_id, partition)
+);
+```
+
+Populated automatically by `rebuild_user_effective_permissions()` in each partition's schema. When a user has any role in a partition, they get a `partition_access` entry.
+
+## Partition Access in Search
+
+Cross-schema search (`search_across_schemas`) enforces partition access at the SQL level. The access control clause requires:
+
+1. **Partition access** — user must have `partition_access` entry for the schema (always required)
+2. **Node-level permission** — user must have Read permission on the node's `main_node` path
+
+`public_read` node types (e.g., User, Markdown) skip the node-level check but still require partition access. This prevents cross-partition data leakage — a user can't see another organization's nodes just because the node type is publicly readable.
+
+```sql
+-- Access control: partition_access is ALWAYS required.
+-- public_read only skips node-level permission checks.
+WHERE partition_access_exists AND (
+    public_read_node_type OR node_level_permission
+)
+```
+
+## AI Tool Call Identity
+
+When AI agents execute tool calls (Get, Update, Create, etc.) during thread streaming, the user's `AsyncLocal` access context doesn't flow through the AI framework's async tool invocation chain. All tools are wrapped with `AccessContextAIFunction` (a `DelegatingAIFunction`) that restores the user's identity from `ThreadExecutionContext.UserAccessContext` before each invocation.
+
+This ensures tool calls run with the correct user identity for permission checks.
+
+## Satellite Node Permissions
+
+Satellite node types (Thread, Comment, ApiToken) use `GetPermissionForNodeType` to map to their required permission:
+
+| Node Type | Required Permission |
+|-----------|-------------------|
+| Thread, ThreadMessage | `Permission.Thread` |
+| Comment | `Permission.Comment` |
+| ApiToken | `Permission.Api` |
+| All others | `Permission.Create` |
+
 # PostgreSQL Integration
 
 For PostgreSQL deployments, a denormalized `user_effective_permissions` table enables fast query-time permission checks. A trigger on `mesh_nodes` automatically rebuilds this table when AccessAssignment or GroupMembership nodes change.

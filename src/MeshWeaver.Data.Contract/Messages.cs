@@ -104,7 +104,14 @@ public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);
 /// </summary>
 /// <param name="Reference">The workspace reference to retrieve data for</param>
 [RequiresPermission(Permission.Read)]
-public record GetDataRequest(WorkspaceReference Reference) : IRequest<GetDataResponse>;
+public record GetDataRequest(WorkspaceReference Reference) : IRequest<GetDataResponse>
+{
+    /// <summary>
+    /// Optional MIME type to request content conversion.
+    /// When set to "text/markdown", binary documents (.docx, .pptx, .xlsx) are converted to markdown.
+    /// </summary>
+    public string? AcceptMimeType { get; init; }
+}
 
 /// <summary>
 /// Response containing the requested data

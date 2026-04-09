@@ -36,7 +36,8 @@ public static class UserNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IStaticNodeProvider, UserNodeProvider>();
-            services.AddSingleton<INodeTypeAccessRule, UserAccessRule>();
+            services.AddSingleton<INodeTypeAccessRule>(sp =>
+                new UserAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new UserScopeGrantHandler(
                     sp.GetService<ISecurityService>() ?? new NullSecurityService()));
@@ -119,29 +120,39 @@ public static class UserNodeType
     /// DI-registered access rule for User nodes — reliable fallback when hub-config
     /// rules haven't been cached yet (e.g. during first onboarding).
     /// </summary>
-    private class UserAccessRule : INodeTypeAccessRule
+    private class UserAccessRule(ISecurityService securityService) : INodeTypeAccessRule
     {
         public string NodeType => UserNodeType.NodeType;
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             [NodeOperation.Create, NodeOperation.Read, NodeOperation.Update];
 
-        public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            // Read: only the User node itself is publicly readable (path == "User/{id}").
-            // Children (threads, activities, etc.) require explicit access.
+            // Read:
+            // - NodeType definition ("User"): always readable
+            // - Direct user nodes ("User/{id}"): publicly readable (any authenticated caller)
+            // - Children (threads, activities, etc.): delegate to ISecurityService
             if (context.Operation == NodeOperation.Read)
             {
                 var nodePath = context.Node.Path;
-                if (!string.IsNullOrEmpty(nodePath)
-                    && nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
+                if (string.IsNullOrEmpty(nodePath))
+                    return false;
+                // NodeType definition
+                if (nodePath.Equals("User", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                // Direct user nodes are publicly readable
+                if (nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
                     && !nodePath["User/".Length..].Contains('/'))
-                    return Task.FromResult(true);
-                return Task.FromResult(false);
+                    return !string.IsNullOrEmpty(userId);
+                // Children: delegate to standard permission checks
+                if (string.IsNullOrEmpty(userId))
+                    return false;
+                return await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, ct);
             }
 
             if (string.IsNullOrEmpty(userId))
-                return Task.FromResult(false);
+                return false;
 
             // Update: user can edit their own node
             if (context.Operation == NodeOperation.Update)
@@ -152,12 +163,12 @@ public static class UserNodeType
                     var userScopePath = $"User/{userId}";
                     if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
                         || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
-                        return Task.FromResult(true);
+                        return true;
                 }
             }
 
             // Create/Update: portal namespace identities (onboarding flow)
-            return Task.FromResult(IsPortalIdentity(userId));
+            return IsPortalIdentity(userId);
         }
     }
 
