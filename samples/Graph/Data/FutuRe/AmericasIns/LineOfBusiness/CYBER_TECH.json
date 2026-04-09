@@ -2,7 +2,7 @@
   "id": "CYBER_TECH",
   "namespace": "FutuRe/AmericasIns/LineOfBusiness",
   "name": "Cyber & Technology",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/AmericasIns/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Standalone cyber liability and technology errors & omissions insurance for US and Americas markets",
   "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",

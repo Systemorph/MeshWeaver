@@ -2,7 +2,7 @@
   "id": "AGRICULTURE",
   "namespace": "FutuRe/AmericasIns/LineOfBusiness",
   "name": "Agriculture",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/AmericasIns/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Crop insurance, livestock coverage, and agricultural risk management for North and South American farming operations",
   "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",

@@ -2,7 +2,7 @@
   "id": "SPECIALTY_AVTN_US",
   "namespace": "FutuRe/AmericasIns/LineOfBusiness",
   "name": "Specialty & Aviation",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/AmericasIns/LineOfBusiness",
   "category": "Lines of Business",
   "description": "US specialty lines including aviation, space, political risk, and surety for Americas operations",
   "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",

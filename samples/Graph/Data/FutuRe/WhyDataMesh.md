@@ -81,7 +81,7 @@ graph LR
 
 ## Data is Addressed, Not Copied
 
-Data stays where it lives. Consumers reference it by address — `@FutuRe/EuropeRe/Analysis` — zero copies, zero staleness, zero reconciliation.
+Data stays where it lives. Each BU's datacube is embedded in its own Analysis MeshNode — the same node that defines the hub, its layout areas, and its configuration. Consumers reference it by address — `@FutuRe/EuropeRe/Analysis` — zero copies, zero staleness, zero reconciliation. This works identically across all deployment modes (filesystem, PostgreSQL, Azure).
 
 <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
 <div style="display: flex; flex-direction: column; justify-content: center;">

@@ -12,6 +12,8 @@ This guide explains how to configure data in message hubs, including data source
 MeshWeaver provides flexible data configuration patterns:
 - **AddSource**: Configure local data sources with optional initialization
 - **AddHubSource**: Synchronize data from parent or related hubs
+- **AddPartitionedHubSource**: Aggregate data from multiple child hubs by partition
+- **WithVirtualDataSource**: Load data from reactive streams (mesh queries, node content, etc.)
 - **WithInitialData**: Seed data sources with predefined records
 
 # Data Model Relationships
@@ -208,3 +210,91 @@ When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to sto
 ```
 
 This configuration enables the Todo hub to access Status reference data from its parent Project hub, ensuring consistent status options across the hierarchy.
+
+# Partitioned Hub Data Source
+
+## AddPartitionedHubSource
+
+Use `AddPartitionedHubSource` to aggregate data from multiple child hubs into a parent hub. Each child hub owns its own data; the parent reads from them as live streams. This is the data mesh pattern for cross-domain data composition.
+
+### When to Use
+
+- A group/parent hub needs to consolidate data from multiple domain hubs
+- Each domain hub independently owns and manages its data
+- The consolidated view should update reactively when any domain's data changes
+
+### Configuration Example
+
+```csharp
+config => config
+    .AddData(data => data
+        .AddPartitionedHubSource<Address>(
+            c => c.WithType<DataCube>(
+                    row => (Address)("Namespace/" + row.Partition + "/Analysis"))
+                .InitializingPartitions(
+                    (Address)"Namespace/PartitionA/Analysis",
+                    (Address)"Namespace/PartitionB/Analysis")))
+```
+
+The `WithType<T>` lambda maps each data row to the hub address that owns it. `InitializingPartitions` lists the addresses to subscribe to on startup.
+
+### Data Flow
+
+```mermaid
+graph LR
+    A[Hub A<br/>owns data] -->|stream| P[Parent Hub<br/>PartitionedHubDataSource]
+    B[Hub B<br/>owns data] -->|stream| P
+    C[Hub C<br/>owns data] -->|stream| P
+    P --> V[Consolidated View]
+
+    classDef domain fill:#e8f0fe,stroke:#4285f4,color:#333
+    classDef parent fill:#e6f4ea,stroke:#34a853,color:#333
+    class A,B,C domain
+    class P,V parent
+```
+
+Adding a new partition is a single address — no new ETL pipeline, no data copying.
+
+# Virtual Data Sources
+
+## WithVirtualDataSource
+
+Use `WithVirtualDataSource` to load data from reactive `IObservable` streams — e.g., mesh node queries, computed data, or embedded node content.
+
+### Loading from Mesh Node Queries
+
+```csharp
+config => config
+    .AddData(data => data
+        .WithVirtualDataSource("ReferenceData", vs => vs
+            .WithVirtualType<ExchangeRate>(workspace =>
+            {
+                var meshQuery = workspace.Hub.ServiceProvider
+                    .GetRequiredService<IMeshService>();
+                return meshQuery.ObserveQuery<MeshNode>(
+                    MeshQueryRequest.FromQuery("nodeType:ExchangeRate"));
+            })))
+```
+
+### Loading from Embedded Node Content
+
+When data is stored as structured arrays inside a MeshNode's `Content` field, load it by querying the node and extracting the embedded data:
+
+```csharp
+config => config
+    .WithContentType<AnalysisContent>()
+    .AddData(data => data
+        .WithVirtualDataSource("LocalData", vs => vs
+            .WithVirtualType<DataCube>(workspace =>
+                LoadDataFromContent(workspace))))
+```
+
+This pattern is deployment-mode independent — the same code works whether the MeshNode is stored on the filesystem, in PostgreSQL, or in Cosmos DB.
+
+### When to Use Which Pattern
+
+| Pattern | Use When |
+|---------|----------|
+| **Individual MeshNodes** | Each row is an independently editable entity (users, products, orders) |
+| **Embedded content array** | Data is loaded as a unit, read-heavy, updated as a batch (datacubes, time series) |
+| **External files (CSV, etc.)** | Legacy integration only — not recommended for new development (filesystem-dependent) |

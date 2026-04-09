@@ -255,7 +255,9 @@ The group profitability dashboard assembles data from all business units in real
 
 # Data Where It Belongs
 
-No ETL pipelines. No nightly batch jobs. No stale copies. Each BU owns its data. The group view is assembled virtually through reactive stream composition. When EuropeRe updates a number, the group dashboard updates instantly.
+No ETL pipelines. No nightly batch jobs. No stale copies. Each BU owns its data — embedded directly in its Analysis MeshNode. The group view is assembled virtually through reactive stream composition. When EuropeRe updates a number, the group dashboard updates instantly.
+
+This architecture is deployment-mode independent: the same data flows work whether running as a standalone monolith on the filesystem, with PostgreSQL in local development, or distributed across Azure Container Apps. BU data ownership is preserved at every level.
 
 - [How virtual data distribution works →](@FutuRe/DataDistribution)
 

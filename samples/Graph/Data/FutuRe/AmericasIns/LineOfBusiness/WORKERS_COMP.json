@@ -2,7 +2,7 @@
   "id": "WORKERS_COMP",
   "namespace": "FutuRe/AmericasIns/LineOfBusiness",
   "name": "Workers Compensation",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/AmericasIns/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Statutory workers compensation and employers liability insurance across US states and territories",
   "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",

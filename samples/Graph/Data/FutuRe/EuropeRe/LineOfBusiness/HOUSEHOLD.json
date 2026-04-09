@@ -2,7 +2,7 @@
   "id": "HOUSEHOLD",
   "namespace": "FutuRe/EuropeRe/LineOfBusiness",
   "name": "Household",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/EuropeRe/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Residential property, home contents, and personal liability coverage bundled for European households",
   "icon": "/static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg",

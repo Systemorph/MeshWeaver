@@ -4,11 +4,8 @@
 // </meshweaver>
 
 using System.Collections.Immutable;
-using System.Globalization;
-using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
-using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -16,23 +13,22 @@ using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// Loads profitability data for the FutuRe sample.
-/// Local hubs read CSV via IContentService; the group hub aggregates
-/// from local hubs applying transaction mapping rules.
+/// Local hubs read datacube from their Analysis node's embedded content;
+/// the group hub aggregates from local hubs applying transaction mapping rules.
 /// </summary>
 public static class FutuReDataLoader
 {
     // ---------------------------------------------------------------
-    // Local Data Cube: CSV + Local LoB Enrichment
+    // Local Data Cube: MeshNode Content + Local LoB Enrichment
     // ---------------------------------------------------------------
 
     /// <summary>
     /// Loads the local data cube for a business unit hub.
-    /// Reads datacube.csv from "attachments" and enriches with
-    /// local LoB display names from mesh queries.
+    /// Reads datacube from the Analysis node's embedded content and enriches
+    /// with local LoB display names from mesh queries.
     /// </summary>
     public static IObservable<IEnumerable<FutuReDataCube>> LoadLocalDataCube(IWorkspace workspace)
     {
-        var contentService = workspace.Hub.ServiceProvider.GetRequiredService<IContentService>();
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var address = workspace.Hub.Address.ToString();
         var segments = address.Split('/');
@@ -51,75 +47,80 @@ public static class FutuReDataLoader
                      && val.ValueKind == JsonValueKind.String)
                 buCurrency = val.GetString() ?? "CHF";
 
-            // GetContentAsync throws if the "attachments" collection isn't configured;
-            // treat that the same as a missing file — return an empty data cube.
-            Stream? stream;
-            try
-            {
-                stream = await contentService.GetContentAsync("attachments", "datacube.csv", ct);
-            }
-            catch
-            {
-                stream = null;
-            }
-            if (stream == null)
-                return (new List<FutuReDataCube>(), buCurrency);
-            using var reader = new StreamReader(stream);
-            var content = await reader.ReadToEndAsync(ct);
-            return (ParseLocalCsvContent(content, businessUnit), buCurrency);
+            // Read datacube from the Analysis node's embedded content
+            var analysisNode = await meshQuery.QueryAsync<MeshNode>($"path:{address}", ct: ct).FirstOrDefaultAsync(ct);
+            var rows = ParseDatacubeFromContent(analysisNode, businessUnit);
+
+            return (rows, buCurrency);
         }).CombineLatest(
             LoadLocalLinesOfBusiness(workspace),
-            (csvResult, lobs) =>
+            (result, lobs) =>
             {
                 var lobLookup = lobs.ToDictionary(l => l.SystemName, l => l.DisplayName);
-                return csvResult.Rows.Select(row => row with
+                return result.Rows.Select(row => row with
                 {
                     LineOfBusinessName = lobLookup.GetValueOrDefault(row.LineOfBusiness, row.LineOfBusiness),
                     LocalLineOfBusinessName = lobLookup.GetValueOrDefault(row.LocalLineOfBusiness, row.LocalLineOfBusiness),
-                    Currency = csvResult.Currency
+                    Currency = result.Currency
                 }).AsEnumerable();
             }
         ).DistinctUntilChanged();
     }
 
     /// <summary>
-    /// Parses local CSV content into FutuReDataCube rows.
-    /// Local CSV columns: Month,Quarter,Year,LineOfBusiness,AmountType,Estimate,Actual
+    /// Parses datacube rows from a MeshNode's embedded content.
+    /// Handles both typed AnalysisContent and raw JsonElement content.
     /// </summary>
-    private static List<FutuReDataCube> ParseLocalCsvContent(string content, string businessUnit)
+    internal static List<FutuReDataCube> ParseDatacubeFromContent(MeshNode? node, string businessUnit)
     {
-        var rows = new List<FutuReDataCube>();
-        var lines = content.Split('\n');
-
-        foreach (var rawLine in lines.Skip(1))
+        if (node?.Content is AnalysisContent content && content.Datacube != null)
         {
-            var line = rawLine.TrimEnd('\r');
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            var parts = SplitCsvLine(line);
-            if (parts.Length < 6) continue;
-
-            var month = parts[0];
-            var lineOfBusiness = parts[3];
-            var amountType = parts[4];
-
-            rows.Add(new FutuReDataCube
+            return content.Datacube.Select(row => new FutuReDataCube
             {
-                Id = $"{month}-{lineOfBusiness}-{amountType}-{businessUnit}",
-                Month = month,
-                Quarter = parts[1],
-                Year = int.Parse(parts[2], CultureInfo.InvariantCulture),
-                LineOfBusiness = lineOfBusiness,
-                LocalLineOfBusiness = lineOfBusiness,
-                AmountType = amountType,
+                Id = $"{row.Month}-{row.LineOfBusiness}-{row.AmountType}-{businessUnit}",
+                Month = row.Month,
+                Quarter = row.Quarter,
+                Year = row.Year,
+                LineOfBusiness = row.LineOfBusiness,
+                LocalLineOfBusiness = row.LineOfBusiness,
+                AmountType = row.AmountType,
                 BusinessUnit = businessUnit,
-                Estimate = double.Parse(parts[5], CultureInfo.InvariantCulture),
-                Actual = parts.Length > 6 && !string.IsNullOrWhiteSpace(parts[6])
-                    ? double.Parse(parts[6], CultureInfo.InvariantCulture)
-                    : null
-            });
+                Estimate = row.Estimate,
+                Actual = row.Actual
+            }).ToList();
         }
 
-        return rows;
+        if (node?.Content is JsonElement json
+            && json.TryGetProperty("datacube", out var datacubeJson)
+            && datacubeJson.ValueKind == JsonValueKind.Array)
+        {
+            var rows = new List<FutuReDataCube>();
+            foreach (var item in datacubeJson.EnumerateArray())
+            {
+                var month = GetString(item, "month") ?? "";
+                var lob = GetString(item, "lineOfBusiness") ?? "";
+                var amountType = GetString(item, "amountType") ?? "";
+                rows.Add(new FutuReDataCube
+                {
+                    Id = $"{month}-{lob}-{amountType}-{businessUnit}",
+                    Month = month,
+                    Quarter = GetString(item, "quarter") ?? "",
+                    Year = GetInt(item, "year"),
+                    LineOfBusiness = lob,
+                    LocalLineOfBusiness = lob,
+                    AmountType = amountType,
+                    BusinessUnit = businessUnit,
+                    Estimate = GetDouble(item, "estimate"),
+                    Actual = item.TryGetProperty("actual", out var actualVal)
+                             && actualVal.ValueKind == JsonValueKind.Number
+                        ? actualVal.GetDouble()
+                        : null
+                });
+            }
+            return rows;
+        }
+
+        return new List<FutuReDataCube>();
     }
 
     // ---------------------------------------------------------------
@@ -201,28 +202,6 @@ public static class FutuReDataLoader
                     : null
             });
         });
-    }
-
-    private static string[] SplitCsvLine(string line)
-    {
-        var parts = new List<string>();
-        var current = new System.Text.StringBuilder();
-        bool inQuotes = false;
-
-        foreach (char c in line)
-        {
-            if (c == '"')
-                inQuotes = !inQuotes;
-            else if (c == ',' && !inQuotes)
-            {
-                parts.Add(current.ToString());
-                current.Clear();
-            }
-            else
-                current.Append(c);
-        }
-        parts.Add(current.ToString());
-        return parts.ToArray();
     }
 
     // ---------------------------------------------------------------

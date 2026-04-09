@@ -19,23 +19,16 @@ Each business unit owns its data. The group hub doesn't store copies — it read
 ```mermaid
 graph LR
     subgraph EuropeRe Domain
-        EU_CSV[Datacube EUR amounts]
-        EU_SVC[IContentService]
+        EU_NODE[Analysis Node<br/>EUR datacube]
     end
 
     subgraph AmericasIns Domain
-        AM_CSV[Datacube USD amounts]
-        AM_SVC[IContentService]
+        AM_NODE[Analysis Node<br/>USD datacube]
     end
 
     subgraph AsiaRe Domain
-        AS_CSV[Datacube JPY amounts]
-        AS_SVC[IContentService]
+        AS_NODE[Analysis Node<br/>JPY datacube]
     end
-
-    EU_CSV --> EU_SVC
-    AM_CSV --> AM_SVC
-    AS_CSV --> AS_SVC
 
     subgraph Group Hub
         PART[PartitionedHubDataSource]
@@ -43,18 +36,18 @@ graph LR
         AGG[Consolidated View]
     end
 
-    EU_SVC --> PART
-    AM_SVC --> PART
-    AS_SVC --> PART
+    EU_NODE --> PART
+    AM_NODE --> PART
+    AS_NODE --> PART
     PART --> MAP --> AGG
 
     classDef eu fill:#e8f0fe,stroke:#4285f4,color:#333
     classDef am fill:#fce8e6,stroke:#ea4335,color:#333
     classDef asia fill:#fef7e0,stroke:#fbbc04,color:#333
     classDef hub fill:#e6f4ea,stroke:#34a853,color:#333
-    class EU_CSV,EU_SVC eu
-    class AM_CSV,AM_SVC am
-    class AS_CSV,AS_SVC asia
+    class EU_NODE eu
+    class AM_NODE am
+    class AS_NODE asia
     class PART,MAP,AGG hub
 ```
 
@@ -99,12 +92,11 @@ Here's what actually happens when the group dashboard loads. No manual orchestra
 
 ```mermaid
 graph TD
-    CSV[BU Data]
-    CONTENT[IContentService reads raw bytes]
-    PARSE[LoadLocalDataCube parses data]
+    NODE[BU Analysis Node<br/>embedded datacube]
+    PARSE[LoadLocalDataCube reads from node content]
     ENRICH[CombineLatest enriches with LoB names]
 
-    CSV --> CONTENT --> PARSE --> ENRICH
+    NODE --> PARSE --> ENRICH
 
     ENRICH --> PHDS[PartitionedHubDataSource merges BU streams]
 
@@ -124,7 +116,7 @@ graph TD
     classDef process fill:#fff3e0,stroke:#f57c00,color:#333
     classDef ref fill:#f3e8fd,stroke:#9c27b0,color:#333
     classDef output fill:#e6f4ea,stroke:#34a853,color:#333
-    class CSV,CONTENT data
+    class NODE data
     class PARSE,ENRICH,PHDS,COMBINE,AGG process
     class MAPPINGS,FX,LOBS ref
     class CHARTS output
@@ -134,7 +126,7 @@ graph TD
 
 ## Key Design Decisions
 
-**Domain ownership** — each BU manages its own data. EuropeRe's actuary updates their data directly; the group never touches it.
+**BU data ownership** — each BU's Analysis node embeds its own datacube as structured content within the MeshNode. EuropeRe's actuary updates their data directly; the group hub never touches it. This works identically across deployment modes — filesystem, PostgreSQL, or Cosmos DB — because MeshNodes are the universal storage unit.
 
 **Stream composition over data copying** — `PartitionedHubDataSource` reads from BU hubs as live `IObservable` streams. When EuropeRe's data changes, the group view updates automatically — no rebuild, no re-import.
 
@@ -148,7 +140,9 @@ graph TD
 )
 ```
 
-**No intermediate state** — there are no staging tables, no materialized views, no cache invalidation problems. The only persistent storage is the BU's own data and the mapping rule definitions.
+**No intermediate state** — there are no staging tables, no materialized views, no cache invalidation problems. The only persistent storage is the BU's own data (embedded in its Analysis node) and the mapping rule definitions.
+
+**Deployment-mode independence** — datacube data is embedded in MeshNode content, not in external files. This means the same FutuRe configuration works in monolith mode (filesystem), distributed mode (PostgreSQL/Azure), and test mode — no special file system setup required.
 
 ---
 

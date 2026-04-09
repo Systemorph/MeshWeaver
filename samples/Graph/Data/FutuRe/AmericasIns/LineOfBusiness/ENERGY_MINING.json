@@ -2,7 +2,7 @@
   "id": "ENERGY_MINING",
   "namespace": "FutuRe/AmericasIns/LineOfBusiness",
   "name": "Energy & Mining",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/AmericasIns/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Upstream and downstream energy, mining operations, and renewable energy project insurance",
   "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",

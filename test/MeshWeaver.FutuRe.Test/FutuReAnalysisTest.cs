@@ -44,6 +44,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var graphPath = TestPaths.SamplesGraph;
         var dataDirectory = TestPaths.SamplesGraphData;
+        if (Directory.Exists(SharedCacheDirectory))
+            Directory.Delete(SharedCacheDirectory, recursive: true);
         Directory.CreateDirectory(SharedCacheDirectory);
 
         var configuration = new ConfigurationBuilder()
@@ -1166,7 +1168,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Pre-initializes child BU analysis hubs (EuropeRe, AmericasIns) so their data
     /// is loaded before the group hub's PartitionedHubDataSource tries to aggregate.
     /// Without this, the remote streams may receive empty data if child hubs haven't
-    /// finished loading their CSV data when the group hub subscribes.
+    /// finished loading their datacube from node content when the group hub subscribes.
     /// </summary>
     private async Task InitializeChildAnalysisHubs()
     {
