@@ -55,9 +55,12 @@ internal class RoutingGrain(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Grain delivery failed for {MessageType} to {Address} (key={Key})",
+            logger.LogWarning(ex, "Grain delivery failed for {MessageType} to {Address} (key={Key}), falling back to stream",
                 delivery.Message.GetType().Name, address, grainKey);
-            return delivery.Failed($"Grain activation failed for {grainKey}: {ex.Message}");
+            var stream = this.GetStreamProvider(StreamProviders.Memory)
+                .GetStream<IMessageDelivery>(addressPath);
+            await stream.OnNextAsync(delivery);
+            return delivery.Forwarded(address);
         }
     }
 
