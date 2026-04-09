@@ -35,6 +35,13 @@ public record SectionConfig
     public int? ItemLimit { get; init; }
 
     /// <summary>
+    /// Maximum number of visible grid rows per section.
+    /// Items beyond this are hidden via CSS overflow; a "Show all" toggle reveals them.
+    /// Null means no row limit (all loaded items are visible).
+    /// </summary>
+    public int? MaxRows { get; init; }
+
+    /// <summary>
     /// Whether sections can be collapsed/expanded (default true).
     /// </summary>
     public bool Collapsible { get; init; } = true;
