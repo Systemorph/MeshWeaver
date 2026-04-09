@@ -323,7 +323,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     // Access context is restored by WrapToolWithAccessContext — no need to set it here.
 
                     var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
-                    var mainEntityPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath;
+                    // MainNode for sub-thread = parent thread's MainNode (content node).
+                    // ContextPath comes from the thread execution context which is set from
+                    // the thread node's MainNode (e.g., "PartnerRe/AIConsulting").
+                    var mainEntityPath = execCtx.ContextPath ?? context ?? execCtx.ThreadPath;
 
                     // Build sub-thread with pre-populated messages
                     var (subThreadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(

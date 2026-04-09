@@ -41,8 +41,27 @@ public static class ThreadExecution
         => configuration
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
             .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
+            .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
             .WithInitialization(WatchForExecution);
+
+    /// <summary>
+    /// Sets the thread hub's access context to the thread creator's identity.
+    /// Without this, the hub's default identity is its own address path,
+    /// causing "Access denied" when reading child message nodes.
+    /// </summary>
+    private static Task SetThreadHubIdentity(IMessageHub hub, CancellationToken ct)
+    {
+        hub.GetWorkspace().GetStream(new MeshNodeReference())?.Take(1).Subscribe(node =>
+        {
+            if (node.Value?.Content is MeshThread { CreatedBy: { Length: > 0 } createdBy })
+            {
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                accessService?.SetContext(new AccessContext { ObjectId = createdBy, Name = createdBy });
+            }
+        });
+        return Task.CompletedTask;
+    }
 
     /// <summary>
     /// On hub startup, check if this Thread was left in IsExecuting=true state (crashed/restarted).
@@ -160,7 +179,8 @@ public static class ThreadExecution
             var responsePath = $"{threadPath}/{responseMsgId}";
             var activeIdx = thread.Messages.IndexOf(responseMsgId);
             var userMsgId = activeIdx > 0 ? thread.Messages[activeIdx - 1] : null;
-            var mainEntity = thread.PendingContextPath ?? threadPath;
+            // MainNode for child cells = the thread's own MainNode (content node).
+            var mainEntity = node.Value?.MainNode ?? thread.PendingContextPath ?? threadPath;
 
             logger?.LogInformation("[ThreadExec] Auto-execute: {ThreadPath}, activeMsg={ActiveMsg}",
                 threadPath, responseMsgId);
@@ -285,7 +305,11 @@ public static class ThreadExecution
             threadPath, responseMsgId, clientProvidedCells);
 
         var userCtx = delivery.AccessContext;
-        var mainEntity = request.ContextPath ?? threadPath;
+        // MainNode for child cells = the thread's own MainNode (content node, e.g. "PartnerRe/AIConsulting").
+        // Fall back to request.ContextPath, then threadPath. Read from the workspace to get the
+        // thread node's actual MainNode — this is authoritative, not the client's ContextPath.
+        var threadNode = hub.GetWorkspace().GetStream(new MeshNodeReference())?.Current?.Value;
+        var mainEntity = threadNode?.MainNode ?? request.ContextPath ?? threadPath;
 
         void RespondAndStartExecution()
         {

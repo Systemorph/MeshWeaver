@@ -527,7 +527,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             else
             {
                 // EXISTING THREAD: same chain — create cells with verification, then submit
-                var mainEntity = initialContext ?? threadPath ?? "";
+                // MainNode must be the thread's content node (e.g. "PartnerRe/AIConsulting"),
+                // NOT the thread path. initialContext is resolved from the thread's MainNode.
+                var mainEntity = initialContext ?? "";
                 var existingThreadPath = threadPath!;
                 var existingAgent = selectedAgentInfo?.Name;
                 var existingModel = selectedModelInfo?.Name;
