@@ -725,7 +725,8 @@ public static class MeshNodeLayoutAreas
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             // No explicit grouping - defaults to NodeType which gives meaningful labels
             .WithSectionCounts(true)
-            .WithItemLimit(10)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
             .WithCollapsibleSections(true)
             .WithCreateHref($"/{hubPath}/{CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(hubPath)}");
     }

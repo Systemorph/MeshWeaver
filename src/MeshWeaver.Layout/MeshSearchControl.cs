@@ -192,6 +192,9 @@ public record MeshSearchControl()
     public MeshSearchControl WithItemLimit(int limit) =>
         this with { Sections = (Sections ?? new SectionConfig()) with { ItemLimit = limit } };
 
+    public MeshSearchControl WithMaxRows(int rows) =>
+        this with { Sections = (Sections ?? new SectionConfig()) with { MaxRows = rows } };
+
     public MeshSearchControl WithCollapsibleSections(bool collapsible) =>
         this with { Sections = (Sections ?? new SectionConfig()) with { Collapsible = collapsible } };
 
