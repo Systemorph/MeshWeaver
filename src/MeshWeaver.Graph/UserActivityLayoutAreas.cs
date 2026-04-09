@@ -153,7 +153,8 @@ public static class UserActivityLayoutAreas
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithMaxColumns(4)
-            .WithItemLimit(8));
+            .WithItemLimit(50)
+            .WithMaxRows(2));
 
         // Visible child nodes — security service automatically filters to viewer-visible nodes
         content = content.WithView(Controls.MeshSearch
@@ -162,7 +163,8 @@ public static class UserActivityLayoutAreas
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             .WithSectionCounts(true)
-            .WithItemLimit(20)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
             .WithMaxColumns(4)
             .WithCollapsibleSections(true));
 
@@ -209,7 +211,8 @@ public static class UserActivityLayoutAreas
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithMaxColumns(2)
-            .WithItemLimit(8));
+            .WithItemLimit(50)
+            .WithMaxRows(4));
 
         return section;
     }
@@ -266,7 +269,8 @@ public static class UserActivityLayoutAreas
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithMaxColumns(1)
-            .WithItemLimit(4);
+            .WithItemLimit(20)
+            .WithMaxRows(4);
     }
 
     /// <summary>
@@ -281,7 +285,8 @@ public static class UserActivityLayoutAreas
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
-            .WithItemLimit(8)
+            .WithItemLimit(50)
+            .WithMaxRows(2)
             .WithMaxColumns(4)
             .WithCreateNodeType("Thread")
             .WithCreateNamespace(nodePath);
@@ -299,7 +304,8 @@ public static class UserActivityLayoutAreas
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             .WithSortBy("LastModified", ascending: false)
             .WithSectionCounts(true)
-            .WithItemLimit(10)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
             .WithMaxColumns(4)
             .WithCollapsibleSections(true)
             .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodePath)}");
