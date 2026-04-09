@@ -684,17 +684,22 @@ public static class ThreadExecution
                             : formatted;
 
                         var callKey = functionCall.CallId ?? $"{functionCall.Name}_{pendingCalls.Count}";
+                        var isDuplicate = pendingCalls.ContainsKey(callKey);
                         pendingCalls = pendingCalls.SetItem(callKey, functionCall);
                         lastCallKey = callKey;
 
                         // Add pending tool call to local log — will be pushed on next throttled update
-                        toolCallLog = toolCallLog.Add(new ToolCallEntry
+                        // Skip if we already have an entry for this callKey (re-emitted content)
+                        if (!isDuplicate)
                         {
-                            Name = functionCall.Name,
-                            DisplayName = formatted,
-                            Arguments = argsDetail,
-                            Timestamp = DateTime.UtcNow
-                        });
+                            toolCallLog = toolCallLog.Add(new ToolCallEntry
+                            {
+                                Name = functionCall.Name,
+                                DisplayName = formatted,
+                                Arguments = argsDetail,
+                                Timestamp = DateTime.UtcNow
+                            });
+                        }
                     }
                     else if (content is FunctionResultContent functionResult)
                     {

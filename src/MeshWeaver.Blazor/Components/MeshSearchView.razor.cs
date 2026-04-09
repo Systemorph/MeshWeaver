@@ -30,6 +30,7 @@ public partial class MeshSearchView : IDisposable
     private GroupedSearchResult? _computedGroups;
     private IDisposable? _reactiveSubscription;
     private HashSet<string> _collapsedGroups = new();
+    private HashSet<string> _expandedRowGroups = new();
     private string _lastBoundVisibleQuery = "";
     private string _lastBoundHiddenQuery = "";
     private bool _showSearchOptions;
@@ -157,6 +158,30 @@ public partial class MeshSearchView : IDisposable
 
             return null;
         }
+    }
+
+    private int? BoundMaxRows => BoundSections?.MaxRows;
+
+    /// <summary>
+    /// Maximum visible items per group based on MaxRows * MaxColumns.
+    /// Returns null if no row limit is set or the group is expanded.
+    /// </summary>
+    private int? GetMaxVisibleItems(string groupKey)
+    {
+        var maxRows = BoundMaxRows;
+        if (!maxRows.HasValue || maxRows.Value <= 0 || _expandedRowGroups.Contains(groupKey))
+            return null;
+        var cols = BoundMaxColumns ?? 3;
+        return maxRows.Value * cols;
+    }
+
+    private void ToggleGroupExpanded(string groupKey)
+    {
+        if (_expandedRowGroups.Contains(groupKey))
+            _expandedRowGroups.Remove(groupKey);
+        else
+            _expandedRowGroups.Add(groupKey);
+        StateHasChanged();
     }
 
     // Pre-computed groups (from ViewModel)
