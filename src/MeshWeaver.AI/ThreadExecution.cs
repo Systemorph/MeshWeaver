@@ -134,39 +134,37 @@ public static class ThreadExecution
     /// This is the ONLY trigger for execution — state-driven, not command-driven.
     /// GUI sets IsExecuting=true via SubmitMessageRequest → execution starts automatically.
     /// </summary>
+    /// <summary>
+    /// Watches for auto-execute threads (created with BuildThreadWithMessages).
+    /// These threads have PendingUserMessage set at creation time (not via HandleSubmitMessage).
+    /// Creates message cells and starts execution on hub startup.
+    /// HandleSubmitMessage handles all client-initiated execution directly.
+    /// </summary>
     private static Task WatchForExecution(IMessageHub hub, CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
-        string? lastStartedMessageId = null;
 
-        workspace.GetStream(new MeshNodeReference())?.Subscribe(node =>
+        // Only check on startup (Take(1)) — HandleSubmitMessage handles runtime execution.
+        workspace.GetStream(new MeshNodeReference())?.Take(1).Subscribe(node =>
         {
-            if (node.Value?.Content is not MeshThread { IsExecuting: true, ActiveMessageId: not null } thread)
+            if (node.Value?.Content is not MeshThread { PendingUserMessage: not null } thread)
                 return;
 
-            // Only trigger once per ActiveMessageId (not on every stream emission)
-            if (thread.ActiveMessageId == lastStartedMessageId)
+            // Only auto-execute threads created with BuildThreadWithMessages
+            if (!thread.IsExecuting || thread.ActiveMessageId == null)
                 return;
 
-            // Stale execution? RecoverStaleExecutingThread handles it — don't re-execute.
-            // Fresh = started within last 2 minutes (new delegation or HandleSubmitMessage).
-            if (thread.ExecutionStartedAt is { } startedAt &&
-                (DateTime.UtcNow - startedAt).TotalMinutes > 2)
-            {
-                logger?.LogInformation("[ThreadExec] WatchForExecution: skipping stale execution for {ThreadPath} (started {StartedAt})", threadPath, startedAt);
-                return;
-            }
-
-            lastStartedMessageId = thread.ActiveMessageId;
             var responseMsgId = thread.ActiveMessageId;
             var responsePath = $"{threadPath}/{responseMsgId}";
+            var activeIdx = thread.Messages.IndexOf(responseMsgId);
+            var userMsgId = activeIdx > 0 ? thread.Messages[activeIdx - 1] : null;
+            var mainEntity = thread.PendingContextPath ?? threadPath;
 
-            logger?.LogInformation("[ThreadExec] Execution triggered: {ThreadPath}, activeMsg={ActiveMsg}",
+            logger?.LogInformation("[ThreadExec] Auto-execute: {ThreadPath}, activeMsg={ActiveMsg}",
                 threadPath, responseMsgId);
 
-            // Set user identity
             var accessService = hub.ServiceProvider.GetService<AccessService>();
             if (!string.IsNullOrEmpty(thread.CreatedBy))
                 accessService?.SetContext(new AccessContext { ObjectId = thread.CreatedBy, Name = thread.CreatedBy });
@@ -174,11 +172,6 @@ public static class ThreadExecution
             var userCtx = !string.IsNullOrEmpty(thread.CreatedBy)
                 ? new AccessContext { ObjectId = thread.CreatedBy, Name = thread.CreatedBy }
                 : null;
-
-            // Find user message text from Messages (the one before ActiveMessageId)
-            var activeIdx = thread.Messages.IndexOf(responseMsgId);
-            var userMsgId = activeIdx > 0 ? thread.Messages[activeIdx - 1] : null;
-            var mainEntity = thread.PendingContextPath ?? threadPath;
 
             void StartExecution()
             {
@@ -204,46 +197,36 @@ public static class ThreadExecution
                 }, o => userCtx != null ? o.WithAccessContext(userCtx) : o);
             }
 
-            if (thread.PendingUserMessage == null)
+            // Create cells, then start execution
+            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+            meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
             {
-                // GUI flow — cells already exist, start execution directly.
-                // No meshService.CreateNode round-trip needed.
-                StartExecution();
-            }
-            else
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
+                Content = new ThreadMessage
+                {
+                    Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.AgentResponse,
+                    AgentName = thread.PendingAgentName, ModelName = thread.PendingModelName
+                }
+            }).Subscribe(_ => StartExecution(),
+                error =>
+                {
+                    logger?.LogDebug("[ThreadExec] Response cell creation error: {Error}", error.Message);
+                    StartExecution();
+                });
+
+            if (userMsgId != null)
             {
-                // Delegation / auto-execute flow — cells don't exist yet, create them first.
-                var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-                meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
+                meshService.CreateNode(new MeshNode(userMsgId, threadPath)
                 {
                     NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
                     Content = new ThreadMessage
                     {
-                        Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.AgentResponse,
-                        AgentName = thread.PendingAgentName, ModelName = thread.PendingModelName
+                        Role = "user", Text = thread.PendingUserMessage, Timestamp = DateTime.UtcNow,
+                        Type = ThreadMessageType.ExecutedInput, CreatedBy = thread.CreatedBy
                     }
-                }).Subscribe(_ => StartExecution(),
-                    error =>
-                    {
-                        logger?.LogDebug("[ThreadExec] Response cell creation returned error (likely exists): {Error}", error.Message);
-                        StartExecution();
-                    });
-
-                // Ensure user cell exists (fire-and-forget)
-                if (userMsgId != null)
-                {
-                    meshService.CreateNode(new MeshNode(userMsgId, threadPath)
-                    {
-                        NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
-                        Content = new ThreadMessage
-                        {
-                            Role = "user", Text = thread.PendingUserMessage, Timestamp = DateTime.UtcNow,
-                            Type = ThreadMessageType.ExecutedInput, CreatedBy = thread.CreatedBy
-                        }
-                    }).Subscribe(_ => { },
-                        error => logger?.LogDebug("[ThreadExec] User cell creation returned error (likely exists): {Error}", error.Message));
-                }
+                }).Subscribe(_ => { },
+                    error => logger?.LogDebug("[ThreadExec] User cell creation error: {Error}", error.Message));
             }
         });
 
@@ -251,10 +234,12 @@ public static class ThreadExecution
     }
 
     /// <summary>
-    /// Handles SubmitMessageRequest: updates thread state only.
-    /// Adds message IDs to Messages, sets IsExecuting=true, ActiveMessageId.
-    /// Execution is triggered by WatchForExecution detecting the state change.
-    /// Responds immediately so GUI can navigate.
+    /// Handles SubmitMessageRequest: updates thread state, responds immediately,
+    /// then starts execution.
+    /// - GUI flow (client provides UserMessageId + ResponseMessageId): cells already exist,
+    ///   start execution directly.
+    /// - Server flow (no IDs provided): set PendingUserMessage so WatchForExecution
+    ///   creates cells and starts execution.
     /// </summary>
     internal static IMessageDelivery HandleSubmitMessage(
         IMessageHub hub,
@@ -264,10 +249,13 @@ public static class ThreadExecution
         var threadPath = request.ThreadPath;
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
 
+        var clientProvidedCells = request.UserMessageId != null && request.ResponseMessageId != null;
         var userMsgId = request.UserMessageId ?? Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = request.ResponseMessageId ?? Guid.NewGuid().ToString("N")[..8];
+        var responsePath = $"{threadPath}/{responseMsgId}";
 
-        // Update Thread state — this triggers WatchForExecution
+        // Update Thread state. Set PendingUserMessage so WatchForExecution
+        // creates cells when they don't exist (server flow, delegation flow).
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
@@ -284,9 +272,7 @@ public static class ThreadExecution
                     ExecutionStatus = null,
                     TokensUsed = 0,
                     ExecutionStartedAt = DateTime.UtcNow,
-                    // Don't set PendingUserMessage — reserved for delegations.
-                    // WatchForExecution uses it to decide cell creation vs direct execution.
-                    // User text is read from the user cell via GetDataRequest in history.
+                    PendingUserMessage = request.UserMessageText,
                     PendingAgentName = request.AgentName,
                     PendingModelName = request.ModelName,
                     PendingContextPath = request.ContextPath,
@@ -295,12 +281,88 @@ public static class ThreadExecution
             };
         });
 
-        logger?.LogInformation("[ThreadExec] HandleSubmitMessage: state updated for {ThreadPath}, activeMsg={ActiveMsg}",
-            threadPath, responseMsgId);
+        logger?.LogInformation("[ThreadExec] HandleSubmitMessage: state updated for {ThreadPath}, activeMsg={ActiveMsg}, clientCells={ClientCells}",
+            threadPath, responseMsgId, clientProvidedCells);
 
-        // Respond immediately — GUI can navigate now
-        hub.Post(new SubmitMessageResponse { Success = true, Messages = ImmutableList.Create(userMsgId, responseMsgId) },
-            o => o.ResponseFor(delivery));
+        var userCtx = delivery.AccessContext;
+        var mainEntity = request.ContextPath ?? threadPath;
+
+        void RespondAndStartExecution()
+        {
+            hub.Post(new SubmitMessageResponse { Success = true, Messages = ImmutableList.Create(userMsgId, responseMsgId) },
+                o => o.ResponseFor(delivery));
+
+            hub.Post(new UpdateThreadMessageContent { Text = "Allocating agent..." },
+                o => o.WithTarget(new Address(responsePath)));
+
+            var executionHub = hub.GetHostedHub(
+                new Address($"{hub.Address}/_Exec"),
+                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                HostedHubCreation.Always);
+
+            executionHub!.Post(new SubmitMessageRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = request.UserMessageText,
+                UserMessageId = userMsgId,
+                ResponseMessageId = responseMsgId,
+                ResponsePath = responsePath,
+                AgentName = request.AgentName,
+                ModelName = request.ModelName,
+                ContextPath = request.ContextPath,
+                Attachments = request.Attachments
+            }, o => userCtx != null ? o.WithAccessContext(userCtx) : o);
+        }
+
+        void RespondWithError(string error)
+        {
+            logger?.LogWarning("[ThreadExec] Cell creation failed for {ThreadPath}: {Error}", threadPath, error);
+            // Clear execution state since we're not starting
+            hub.GetWorkspace().UpdateMeshNode(node =>
+            {
+                var t = node.Content as MeshThread ?? new MeshThread();
+                return node with { Content = t with { IsExecuting = false, ActiveMessageId = null, ExecutionStartedAt = null } };
+            });
+            hub.Post(new SubmitMessageResponse { Success = false, Error = error },
+                o => o.ResponseFor(delivery));
+        }
+
+        if (clientProvidedCells)
+        {
+            // GUI flow — cells already exist, respond and start immediately.
+            RespondAndStartExecution();
+        }
+        else
+        {
+            // Server flow — create cells first, then respond and start execution.
+            // Response cell creation gates execution; user cell is fire-and-forget.
+            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+            meshService.CreateNode(new MeshNode(userMsgId, threadPath)
+            {
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
+                Content = new ThreadMessage
+                {
+                    Role = "user", Text = request.UserMessageText, Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.ExecutedInput, CreatedBy = delivery.AccessContext?.ObjectId
+                }
+            }).Subscribe(
+                _ => logger?.LogDebug("[ThreadExec] User cell created: {Path}", $"{threadPath}/{userMsgId}"),
+                ex => logger?.LogDebug("[ThreadExec] User cell creation error (may already exist): {Error}", ex.Message));
+
+            meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
+            {
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
+                Content = new ThreadMessage
+                {
+                    Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.AgentResponse,
+                    AgentName = request.AgentName, ModelName = request.ModelName
+                }
+            }).Subscribe(
+                _ => RespondAndStartExecution(),
+                ex => RespondWithError($"Failed to create response cell: {ex.Message}"));
+        }
 
         return delivery.Processed();
     }
