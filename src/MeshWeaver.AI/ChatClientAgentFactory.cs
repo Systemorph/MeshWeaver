@@ -325,8 +325,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
                     var mainEntityPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath;
 
-                    // Build sub-thread with pre-populated messages — auto-executes on grain activation
-                    var (subThreadNode, _, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
+                    // Build sub-thread with pre-populated messages
+                    var (subThreadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
                         parentMsgPath, task, createdBy: execCtx.UserAccessContext?.ObjectId,
                         agentName: targetId);
                     subThreadNode = subThreadNode with { MainNode = mainEntityPath };
@@ -338,7 +338,30 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     chat.LastDelegationPath = subThreadPath;
                     chat.UpdateDelegationStatus?.Invoke(delegationDisplayName);
 
-                    Logger.LogInformation("[Delegation] Creating sub-thread at {Path} with auto-execute", subThreadPath);
+                    // Create cells FIRST, then thread. WatchForExecution starts execution
+                    // when it sees IsExecuting=true on the thread.
+                    Logger.LogInformation("[Delegation] Creating cells for sub-thread {Path}: user={UserMsgId}, response={ResponseMsgId}", subThreadPath, userMsgId, responseMsgId);
+                    meshService.CreateNode(new MeshNode(userMsgId, subThreadPath)
+                    {
+                        NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntityPath,
+                        Content = new ThreadMessage
+                        {
+                            Role = "user", Text = task, Timestamp = DateTime.UtcNow,
+                            Type = ThreadMessageType.ExecutedInput, CreatedBy = execCtx.UserAccessContext?.ObjectId
+                        }
+                    }).Subscribe(_ => { }, error => Logger.LogError(error, "[Delegation] User cell creation failed for {Path}", subThreadPath));
+
+                    meshService.CreateNode(new MeshNode(responseMsgId, subThreadPath)
+                    {
+                        NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntityPath,
+                        Content = new ThreadMessage
+                        {
+                            Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
+                            Type = ThreadMessageType.AgentResponse, AgentName = targetId
+                        }
+                    }).Subscribe(_ => { }, error => Logger.LogError(error, "[Delegation] Response cell creation failed for {Path}", subThreadPath));
+
+                    Logger.LogInformation("[Delegation] Creating sub-thread at {Path}", subThreadPath);
                     meshService.CreateNode(subThreadNode).Subscribe(
                         _ =>
                         {
