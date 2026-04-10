@@ -21,6 +21,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private ElementReference _textFieldElement;
     private List<MeshNode> _results = new();
     private List<MeshNode>? _cachedResults;
+    private CancellationTokenSource? _loadCts;
 
     private MeshNode[]? BoundItems { get; set; }
     private bool HasItems => BoundItems is { Length: > 0 };
@@ -113,6 +114,10 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
             return;
         }
 
+        // Cancel any in-flight query so only the latest keystroke wins
+        _loadCts?.Cancel();
+        var cts = _loadCts = new CancellationTokenSource();
+
         _isLoading = true;
         await InvokeAsync(StateHasChanged);
 
@@ -133,7 +138,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                         : $"{baseQuery} {userText}";
                     try
                     {
-                        return await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
+                        return await MeshQuery.QueryAsync<MeshNode>(fullQuery, ct: cts.Token).ToListAsync(cts.Token);
                     }
                     catch
                     {
@@ -142,6 +147,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                 });
 
                 var allResults = await Task.WhenAll(tasks);
+                cts.Token.ThrowIfCancellationRequested();
                 queryResults = allResults.SelectMany(batch => batch).ToList();
             }
 
@@ -163,6 +169,11 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
             {
                 _results = merged;
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer search — don't touch _results
+            return;
         }
         catch
         {

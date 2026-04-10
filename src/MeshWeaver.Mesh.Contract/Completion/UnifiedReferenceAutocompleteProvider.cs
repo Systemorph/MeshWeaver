@@ -164,6 +164,14 @@ internal class UnifiedReferenceAutocompleteProvider(
                 );
             }
         }
+
+        // Node delegation: ask the node at searchBase for its own completions
+        // (layout areas, data collections, content files)
+        if (endsWithSlash && !string.IsNullOrEmpty(searchBase))
+        {
+            await foreach (var item in GetNodeDelegatedCompletions(searchBase, relativePrefix, currentSegment, ct))
+                yield return item;
+        }
     }
 
     private IEnumerable<AutocompleteItem> GetRelativeKeywords(string relativePrefix, string prefix)
@@ -293,6 +301,13 @@ internal class UnifiedReferenceAutocompleteProvider(
                     );
                 }
             }
+        }
+
+        // Node delegation for absolute paths
+        if (endsWithSlash && completedSegments.Length >= 1)
+        {
+            await foreach (var item in GetNodeDelegatedCompletions(address, $"/{address}/", currentSegment, ct))
+                yield return item;
         }
     }
 
@@ -431,4 +446,40 @@ internal class UnifiedReferenceAutocompleteProvider(
         "content" => AutocompleteKind.File,
         _ => AutocompleteKind.Other
     };
+
+    /// <summary>
+    /// Asks the node at the given path for its own completions (layout areas, data collections, content files)
+    /// by sending an AutocompleteRequest to that node's hub.
+    /// </summary>
+    private async IAsyncEnumerable<AutocompleteItem> GetNodeDelegatedCompletions(
+        string nodePath,
+        string insertPrefix,
+        string currentSegment,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        AutocompleteResponse? response = null;
+        try
+        {
+            // Send AutocompleteRequest to the hub — the handler aggregates all local IAutocompleteProvider instances
+            var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
+            var delivery = await hub.AwaitResponse<AutocompleteResponse>(request, o => o, ct);
+            response = delivery.Message;
+        }
+        catch
+        {
+            // Hub may not have an AutocompleteRequest handler, or node may not exist
+        }
+
+        if (response?.Items == null)
+            yield break;
+
+        foreach (var item in response.Items)
+        {
+            // Re-map insert text to use the relative prefix if needed
+            yield return item with
+            {
+                Priority = item.Priority > 0 ? item.Priority : ItemPriority
+            };
+        }
+    }
 }
