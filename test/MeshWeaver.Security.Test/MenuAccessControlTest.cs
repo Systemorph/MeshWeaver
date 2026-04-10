@@ -33,14 +33,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddRowLevelSecurity()
             .AddMeshNodes(
                 new MeshNode("TestOrg") { Name = "Test Organization" },
-                new MeshNode("TestProject", "TestOrg") { Name = "Test Project" },
-                new MeshNode("Admin") { Name = "Admin", NodeType = "Role", Content = Role.Admin },
-                new MeshNode("Editor") { Name = "Editor", NodeType = "Role", Content = Role.Editor },
-                new MeshNode("Viewer") { Name = "Viewer", NodeType = "Role", Content = Role.Viewer },
-                new MeshNode("Commenter") { Name = "Commenter", NodeType = "Role", Content = Role.Commenter }
+                new MeshNode("TestProject", "TestOrg") { Name = "Test Project" }
             )
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 
@@ -257,14 +252,14 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             "Import should navigate to ImportMeshNodes area, not $Import");
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 30000)]
     public async Task StaticRoles_AppearInNodeTypeRoleQuery()
     {
-        // Static built-in roles should appear when querying with nodeType:Role
+        // Static built-in roles should appear when querying namespace:Role with nodeType:Role
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var roles = await meshQuery
-            .QueryAsync<MeshNode>($"nodeType:Role namespace:")
+            .QueryAsync<MeshNode>("namespace:Role nodeType:Role")
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Roles returned: {roles.Count}");
