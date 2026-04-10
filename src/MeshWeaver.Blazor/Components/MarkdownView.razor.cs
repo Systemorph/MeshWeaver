@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
 using Markdig;
@@ -75,6 +76,32 @@ public partial class MarkdownView
             }
 
             Html = document.ToHtml(pipeline);
+        }
+
+        // Handle CodeSubmissions arriving as JsonElement after layout stream serialization round-trip
+        if (CodeSubmissions == null && CodeSubmissionsRaw is JsonElement { ValueKind: JsonValueKind.Array } jsonArray)
+        {
+            try
+            {
+                CodeSubmissionsRaw = JsonSerializer.Deserialize<IReadOnlyList<SubmitCodeRequest>>(jsonArray.GetRawText(), Hub.JsonSerializerOptions);
+            }
+            catch { /* ignore deserialization errors */ }
+        }
+
+        // If Html has executable code placeholders but CodeSubmissions is still null, re-parse markdown
+        if (CodeSubmissions == null && Html != null && !string.IsNullOrEmpty(Markdown)
+            && Html.ToString()?.Contains(ExecutableCodeBlockRenderer.KernelAddressPlaceholder) == true)
+        {
+            var currentNodePath = Stream?.Owner?.ToString();
+            var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream?.Owner, currentNodePath);
+            var document = Markdig.Markdown.Parse(Markdown, pipeline);
+            var submissions = document.Descendants<ExecutableCodeBlock>()
+                .Select(b => { b.Initialize(); return b.SubmitCode; })
+                .Where(s => s != null)
+                .Cast<SubmitCodeRequest>()
+                .ToList();
+            if (submissions.Count > 0)
+                CodeSubmissionsRaw = submissions;
         }
 
         // Replace kernel address placeholder in HTML with actual kernel address

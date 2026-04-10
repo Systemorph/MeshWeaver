@@ -606,20 +606,46 @@ public partial class MeshSearchView : IDisposable
 
         try
         {
-            var searchQuery = string.IsNullOrEmpty(BoundNamespace)
-                ? $"*{query}* scope:descendants"
-                : $"namespace:{BoundNamespace} *{query}* scope:descendants";
+            // Parse the query to split into basePath and prefix for AutocompleteAsync
+            var text = query.TrimStart('@');
+            string basePath;
+            string namePrefix;
 
-            var request = new MeshQueryRequest { Query = searchQuery, Limit = 10 };
-            var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
-
-            return results.Select(node => new CompletionItem
+            if (text.EndsWith("/"))
             {
-                Label = node.Name ?? node.Id,
-                InsertText = node.Name ?? node.Id,
-                Description = node.NodeType ?? "",
-                Path = node.Path,
-                Category = node.Category ?? ""
+                // User typed @path/ — get children of that path
+                basePath = text.TrimEnd('/');
+                namePrefix = "";
+            }
+            else
+            {
+                // Split into path and name parts: "ACME/Mark" → basePath="ACME", namePrefix="Mark"
+                var lastSlash = text.LastIndexOf('/');
+                if (lastSlash >= 0)
+                {
+                    basePath = text[..lastSlash];
+                    namePrefix = text[(lastSlash + 1)..];
+                }
+                else
+                {
+                    basePath = BoundNamespace ?? "";
+                    namePrefix = text;
+                }
+            }
+
+            var suggestions = await MeshQuery
+                .AutocompleteAsync(basePath, namePrefix, AutocompleteMode.RelevanceFirst, 20, BoundNamespace)
+                .ToArrayAsync();
+
+            return suggestions.Select((s, i) => new CompletionItem
+            {
+                Label = s.Name,
+                InsertText = $"@{s.Path}/",
+                Description = s.NodeType ?? "",
+                Path = s.Path,
+                Category = s.NodeType ?? "Nodes",
+                IconUrl = s.Icon,
+                SortKey = (99999 - (int)s.Score).ToString("D5")
             }).ToArray();
         }
         catch
