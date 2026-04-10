@@ -576,7 +576,11 @@ public static class LayoutExtensions
                 .Where(x => x.Value != null)
                 .DistinctUntilChanged()
                 .Synchronize()
-                .Subscribe(stream)
+                .Subscribe(
+                    stream.OnNext,
+                    stream.OnError,
+                    () => { }
+                )
         );
 
         return stream;
