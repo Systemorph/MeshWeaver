@@ -50,14 +50,22 @@ var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: fals
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
 var microsoftTenantId = builder.AddParameter("microsoft-tenant-id", secret: false);
 
-// Embedding, Google auth, and custom domain
-var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
-var embeddingKey = builder.AddParameter("embedding-key", secret: true);
-var embeddingModel = builder.AddParameter("embedding-model", secret: false);
-var googleClientId = builder.AddParameter("google-client-id", secret: false);
-var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
-var customDomain = builder.AddParameter("custom-domain", secret: false);
-var certificateName = builder.AddParameter("certificate-name", secret: false);
+// Embedding, Google auth, and custom domain (non-secret optional — ACA accepts empty env vars)
+var embeddingEndpoint = builder.AddParameter("embedding-endpoint", value: "", secret: false);
+var embeddingModel = builder.AddParameter("embedding-model", value: "", secret: false);
+var googleClientId = builder.AddParameter("google-client-id", value: "", secret: false);
+var customDomain = builder.AddParameter("custom-domain", value: "", secret: false);
+var certificateName = builder.AddParameter("certificate-name", value: "", secret: false);
+
+// Optional secrets/params: ACA rejects secrets with empty values; ConfigureCustomDomain
+// rejects empty hostnames. Read actual config values to guard optional registrations.
+var embeddingKeyValue = builder.Configuration["Parameters:embedding-key"] ?? "";
+var googleClientSecretValue = builder.Configuration["Parameters:google-client-secret"] ?? "";
+var customDomainValue = builder.Configuration["Parameters:custom-domain"] ?? "";
+IResourceBuilder<ParameterResource>? embeddingKey = string.IsNullOrEmpty(embeddingKeyValue)
+    ? null : builder.AddParameter("embedding-key", secret: true);
+IResourceBuilder<ParameterResource>? googleClientSecret = string.IsNullOrEmpty(googleClientSecretValue)
+    ? null : builder.AddParameter("google-client-secret", secret: true);
 
 // --- Infrastructure axes ---
 var isDeployed = mode is "test" or "prod";
@@ -124,7 +132,6 @@ var portal = builder
     .WithEnvironment("ASPNETCORE_ENVIRONMENT", isDeployed ? "Production" : "Development")
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
-    .WithEnvironment("Embedding__ApiKey", embeddingKey)
     .WithEnvironment("Embedding__Model", embeddingModel)
     // LLM: Anthropic (Azure Foundry Claude)
     .WithEnvironment("Anthropic__Endpoint", "https://s-meshweaver.services.ai.azure.com/anthropic/")
@@ -155,7 +162,6 @@ var portal = builder
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
     .WithEnvironment("Authentication__Microsoft__TenantId", microsoftTenantId)
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
-    .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
     // Wait for dependencies
     .WaitFor(orleansTables)
     .WaitForCompletion(dbMigration)
@@ -163,13 +169,20 @@ var portal = builder
     .PublishAsAzureContainerApp((module, app) =>
     {
         app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
-        app.ConfigureCustomDomain(customDomain, certificateName);
+        if (!string.IsNullOrEmpty(customDomainValue))
+            app.ConfigureCustomDomain(customDomain, certificateName);
 
         // Scale: min 2 replicas (Orleans needs ≥2 for resilience), max 6 under load.
         // Each replica: 2 vCPU / 4Gi (50% of Consumption tier max 4 vCPU / 8Gi).
         app.Template.Scale.MinReplicas = 2;
         app.Template.Scale.MaxReplicas = 6;
     });
+
+// Optional secrets: only add as env vars when configured (ACA rejects empty secrets)
+if (embeddingKey is not null)
+    portal.WithEnvironment("Embedding__ApiKey", embeddingKey);
+if (googleClientSecret is not null)
+    portal.WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret);
 
 // --- Azure Blob Storage ---
 if (useLocalDb)
