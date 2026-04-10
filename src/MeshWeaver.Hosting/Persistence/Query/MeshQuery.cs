@@ -92,8 +92,8 @@ public class MeshQuery(
         }));
 
         foreach (var suggestion in all
-            .OrderBy(s => s.Path.Length)
-            .ThenByDescending(s => s.Score)
+            .OrderByDescending(s => s.Score)
+            .ThenBy(s => s.Path.Length)
             .ThenBy(s => s.Name)
             .Take(limit))
         {
@@ -121,7 +121,11 @@ public class MeshQuery(
                 if (IsSatellitePath(suggestion.Path))
                     continue;
                 if (seen.TryAdd(suggestion.Path, 0))
-                    all.Add(suggestion);
+                {
+                    // Apply proximity boost based on contextPath
+                    var boosted = ApplyProximityBoost(suggestion, contextPath, prefix);
+                    all.Add(boosted);
+                }
             }
         }));
 
@@ -132,8 +136,8 @@ public class MeshQuery(
                 .ThenBy(s => s.Path.Length)
                 .ThenBy(s => s.Name),
             _ => all
-                .OrderBy(s => s.Path.Length)
-                .ThenByDescending(s => s.Score)
+                .OrderByDescending(s => s.Score)
+                .ThenBy(s => s.Path.Length)
                 .ThenBy(s => s.Name)
         };
 
@@ -141,6 +145,73 @@ public class MeshQuery(
         {
             yield return suggestion;
         }
+    }
+
+    /// <summary>
+    /// Applies proximity-based scoring boost to a suggestion based on its distance from contextPath.
+    /// Closer items get higher scores. Shorter paths win when scores are tied.
+    /// </summary>
+    private static QuerySuggestion ApplyProximityBoost(QuerySuggestion suggestion, string? contextPath, string? prefix)
+    {
+        if (string.IsNullOrEmpty(contextPath))
+            return suggestion;
+
+        var boost = 0.0;
+        var path = suggestion.Path;
+
+        // Direct child of context: highest boost
+        if (path.StartsWith(contextPath + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            var relative = path[(contextPath.Length + 1)..];
+            if (!relative.Contains('/'))
+                boost = 2000; // direct child
+            else
+                boost = 1500; // deeper descendant
+        }
+        // Sibling: shares parent
+        else if (!string.IsNullOrEmpty(contextPath))
+        {
+            var contextParent = contextPath.LastIndexOf('/');
+            if (contextParent > 0)
+            {
+                var parent = contextPath[..contextParent];
+                if (path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase))
+                    boost = 1000; // sibling or cousin
+            }
+        }
+
+        // Shared prefix segments bonus
+        if (boost == 0)
+        {
+            var contextSegments = contextPath.Split('/');
+            var pathSegments = path.Split('/');
+            var shared = 0;
+            for (var i = 0; i < Math.Min(contextSegments.Length, pathSegments.Length); i++)
+            {
+                if (contextSegments[i].Equals(pathSegments[i], StringComparison.OrdinalIgnoreCase))
+                    shared++;
+                else
+                    break;
+            }
+            if (shared >= 2)
+                boost = 500;
+        }
+
+        // Path length penalty: prefer shorter paths (fewer segments)
+        var segmentCount = path.Count(c => c == '/') + 1;
+        boost -= segmentCount * 50;
+
+        // Exact name match bonus
+        if (!string.IsNullOrEmpty(prefix))
+        {
+            var name = suggestion.Name;
+            if (name.Equals(prefix, StringComparison.OrdinalIgnoreCase))
+                boost += 1000;
+            else if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                boost += 500;
+        }
+
+        return suggestion with { Score = suggestion.Score + boost };
     }
 
     /// <summary>

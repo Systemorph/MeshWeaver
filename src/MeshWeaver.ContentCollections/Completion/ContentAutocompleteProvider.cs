@@ -58,7 +58,7 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
                     continue; // Skip non-matching files when there's a query
 
                 var pathWithoutLeadingSlash = file.Path.TrimStart('/');
-                // For the default "content" collection, omit the collection name to avoid content:content/file
+                // For the default "content" collection, omit the collection name to avoid content/content/file
                 var contentPath = collection.Collection == "content"
                     ? pathWithoutLeadingSlash
                     : $"{collection.Collection}/{pathWithoutLeadingSlash}";
@@ -67,8 +67,18 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
                     ? $"{contentPath} (converts to markdown)"
                     : contentPath;
 
-                // Build insert text: use relative content: path when in context
+                // Build insert text: use relative content/ path when in context
                 var insertText = FormatInsertText(contentPath, collection.Address, contextPath);
+
+                // Proximity boost: content in same address as context gets a bonus
+                var addressStr = collection.Address?.ToString();
+                if (!string.IsNullOrEmpty(contextPath) &&
+                    !string.IsNullOrEmpty(addressStr) &&
+                    (contextPath.Equals(addressStr, StringComparison.OrdinalIgnoreCase) ||
+                     contextPath.StartsWith(addressStr + "/", StringComparison.OrdinalIgnoreCase)))
+                {
+                    score += 1000; // local content
+                }
 
                 yield return new AutocompleteItem(
                     Label: file.Name,
@@ -129,7 +139,7 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
 
     /// <summary>
     /// Formats the insert text for autocomplete.
-    /// Uses relative content: path when contextPath matches the collection address.
+    /// Uses relative content/ path when contextPath matches the collection address.
     /// Wraps in quotes if the path contains spaces.
     /// </summary>
     private static string FormatInsertText(string contentPath, Address? collectionAddress, string? contextPath)
@@ -143,15 +153,15 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
             (contextPath.Equals(addressStr, StringComparison.OrdinalIgnoreCase) ||
              contextPath.StartsWith(addressStr + "/", StringComparison.OrdinalIgnoreCase)))
         {
-            reference = $"@content:{contentPath}";
+            reference = $"@content/{contentPath}";
         }
         else if (!string.IsNullOrEmpty(addressStr))
         {
-            reference = $"@{addressStr}/content:{contentPath}";
+            reference = $"@{addressStr}/content/{contentPath}";
         }
         else
         {
-            reference = $"@content:{contentPath}";
+            reference = $"@content/{contentPath}";
         }
 
         // Wrap in quotes if path contains spaces
@@ -163,7 +173,7 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
 
     /// <summary>
     /// Extracts the search text from the raw query.
-    /// Strips @ prefix and any content: tag prefix, keeping just the filename portion.
+    /// Strips @ prefix and any content: or content/ tag prefix, keeping just the filename portion.
     /// </summary>
     private static string ExtractSearchText(string query)
     {
@@ -173,11 +183,31 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
         // Strip @ prefix
         var text = query.TrimStart('@');
 
-        // If it contains content: tag, extract the part after it
-        var contentIndex = text.IndexOf("content:", StringComparison.OrdinalIgnoreCase);
+        // Check for content: (legacy) or content/ (preferred) tag
+        var contentColonIndex = text.IndexOf("content:", StringComparison.OrdinalIgnoreCase);
+        var contentSlashIndex = text.IndexOf("content/", StringComparison.OrdinalIgnoreCase);
+
+        int contentIndex;
+        int skipLength;
+        if (contentColonIndex >= 0)
+        {
+            contentIndex = contentColonIndex;
+            skipLength = "content:".Length;
+        }
+        else if (contentSlashIndex >= 0)
+        {
+            contentIndex = contentSlashIndex;
+            skipLength = "content/".Length;
+        }
+        else
+        {
+            contentIndex = -1;
+            skipLength = 0;
+        }
+
         if (contentIndex >= 0)
         {
-            text = text[(contentIndex + "content:".Length)..];
+            text = text[(contentIndex + skipLength)..];
             // Strip collection prefix if present (e.g., "collection/filename")
             var lastSlash = text.LastIndexOf('/');
             if (lastSlash >= 0)

@@ -25,7 +25,7 @@ This applies to both `@`/`@@` references and standard markdown links `[text](pat
 # Pattern
 
 ```
-{address}/{prefix}:{path}
+{address}/{prefix}/{path}
 ```
 
 | Component | Description |
@@ -34,28 +34,30 @@ This applies to both `@`/`@@` references and standard markdown links `[text](pat
 | `prefix` | Either a **reserved keyword** or a **content collection name** |
 | `path` | Resource within the address |
 
+> **Note:** The legacy `{prefix}:{path}` format (with colon) is still supported for backward compatibility, but `/` is preferred.
+
 ## Reserved Keywords
 
 These prefixes have special meaning and map to specific layout areas:
 
 | Prefix | Description |
 |--------|-------------|
-| `data:` | Access the node's Content data as JSON |
-| `schema:` | Access the ContentType schema |
-| `model:` | Access the data model |
-| `area:` | Access a specific layout area |
-| `layoutAreas:` | List available layout areas (reports, views, charts) |
+| `data/` | Access the node's Content data as JSON |
+| `schema/` | Access the ContentType schema |
+| `model/` | Access the data model |
+| `area/` | Access a specific layout area |
+| `content/` | Access files from the "content" collection |
+| `menu/` | Access the menu structure |
 
 ## Content Collection Prefixes
 
-**Any other prefix** is treated as a **content collection name**. The collection is configured in the hub setup:
+Content collections store files (images, documents, markdown, etc.) associated with mesh nodes:
 
 | Example | Description |
 |---------|-------------|
-| `content:` | Files from the "content" collection |
-| `assets:` | Files from the "assets" collection |
-| `files:` | Files from the "files" collection |
-| `docs:` | Files from the "docs" collection |
+| `content/` | Files from the "content" collection |
+| `assets/` | Files from the "assets" collection |
+| `files/` | Files from the "files" collection |
 
 # @ vs @@
 
@@ -82,14 +84,13 @@ When you use `@path` or `@@path` **without a prefix**, it refers to a **layout a
 
 ## With Prefix = Specific Resource Type
 
-Reserved keywords (`data:`, `schema:`, `area:`) access specific resource types.
-Any other prefix (like `content:`, `assets:`, `files:`) accesses files from a content collection:
+Reserved keywords (`data/`, `schema/`, `area/`, `content/`) access specific resource types:
 
 ```
-@@node/content:file.md    --> embeds file from "content" collection
-@@node/assets:logo.svg    --> embeds file from "assets" collection
-@@node/data:              --> embeds the node's Content data as JSON
-@@node/schema:            --> embeds the ContentType schema
+@@node/content/file.md    --> embeds file from "content" collection
+@@node/data/              --> embeds the node's Content data as JSON
+@@node/schema/            --> embeds the ContentType schema
+@@node/area/Details       --> embeds a specific layout area
 ```
 
 ## Content Collections

@@ -5,14 +5,16 @@ Description: Embed type schemas and data models
 Icon: /static/DocContent/DataMesh/UnifiedPath/SchemaPrefix/icon.svg
 ---
 
-The `schema:` prefix embeds type schema definitions from a node as JSON schema.
+The `schema/` prefix embeds type schema definitions from a node as JSON schema.
 
 # Syntax
 
 ```
-@@{address}/schema:{typeName}
-@@{address}/schema:         (current node's schema)
+@@{address}/schema/{typeName}
+@@{address}/schema/         (current node's schema)
 ```
+
+> **Note:** The legacy colon syntax (`schema:TypeName`) is still supported for backward compatibility.
 
 # Use Cases
 
