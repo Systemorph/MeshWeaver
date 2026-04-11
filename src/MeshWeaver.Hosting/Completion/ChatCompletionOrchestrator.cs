@@ -629,9 +629,9 @@ internal sealed class ChatCompletionOrchestrator(
 
     private static readonly (string Tag, string Description)[] TagKeywords =
     [
-        ("content:", "Content files"),
-        ("data:", "Data collections"),
-        ("schema:", "JSON schemas"),
+        ("content/", "Content files"),
+        ("data/", "Data collections"),
+        ("schema/", "JSON schemas"),
     ];
 
     private static List<AutocompleteItem> GetTagKeywords(string address, string filter)

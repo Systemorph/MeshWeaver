@@ -126,9 +126,12 @@
       "Bash(git ls-remote:*)",
       "Bash(git push:*)",
       "Bash(exit 0)",
-      "WebFetch(domain:gist.github.com)"
+      "WebFetch(domain:gist.github.com)",
+      "Bash(az containerapp:*)",
+      "Skill(update-config)"
     ],
-    "deny": []
+    "deny": [],
+    "additionalDirectories": ["/tmp/claude"]
   },
   "enableAllProjectMcpServers": true
 }

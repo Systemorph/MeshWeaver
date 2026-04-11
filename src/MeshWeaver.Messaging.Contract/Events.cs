@@ -52,8 +52,6 @@ public enum ErrorType
 }
 
 
-public record HeartbeatEvent;
-
 public record DisposeRequest;
 public record PingRequest : IRequest<PingResponse>;
 

@@ -174,10 +174,11 @@ public class SchemaValidationTest : MonolithMeshTestBase
     public async Task Create_WithSlashInId_SanitizesAndCreates()
     {
         var plugin = CreatePlugin();
+        var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
 
         var nodeJson = JsonSerializer.Serialize(new
         {
-            id = "ACME/Product/PricingTool",
+            id = $"ACME/Product/PricingTool{uniqueSuffix}",
             @namespace = "",
             name = "Pricing Tool",
             nodeType = "Markdown"
@@ -186,7 +187,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
         var result = await plugin.Create(nodeJson);
 
         result.Should().StartWith("Created:", because: "slashes in id should be sanitized into namespace + id");
-        result.Should().Contain("PricingTool");
+        result.Should().Contain($"PricingTool{uniqueSuffix}");
     }
 
     #endregion

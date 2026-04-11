@@ -426,7 +426,7 @@ public class MeshOperations
         return json; // Return original if repair fails
     }
 
-    public async Task<string> Delete(string paths)
+    public Task<string> Delete(string paths)
     {
         logger.LogInformation("Delete called");
 
@@ -434,29 +434,27 @@ public class MeshOperations
         {
             var pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
             if (pathList == null || pathList.Count == 0)
-                return "No paths provided.";
+                return Task.FromResult("No paths provided.");
 
             var results = ImmutableList<string>.Empty;
             foreach (var path in pathList)
             {
                 var resolvedPath = ResolvePath(path);
-                var deleteTcs = new TaskCompletionSource<string>();
-                mesh.DeleteNode(resolvedPath).Subscribe(
-                    _ => deleteTcs.TrySetResult($"Deleted: {resolvedPath}"),
-                    ex => deleteTcs.TrySetResult($"Error deleting {resolvedPath}: {ex.Message}"));
-                results = results.Add(await deleteTcs.Task);
+                // Fire-and-forget: post delete request, don't await (avoids deadlock)
+                mesh.DeleteNode(resolvedPath).Subscribe();
+                results = results.Add($"Delete requested: {resolvedPath}");
             }
 
-            return string.Join("\n", results);
+            return Task.FromResult(string.Join("\n", results));
         }
         catch (JsonException ex)
         {
-            return $"Invalid JSON: {ex.Message}";
+            return Task.FromResult($"Invalid JSON: {ex.Message}");
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Error deleting nodes");
-            return $"Error: {ex.Message}";
+            return Task.FromResult($"Error: {ex.Message}");
         }
     }
 
