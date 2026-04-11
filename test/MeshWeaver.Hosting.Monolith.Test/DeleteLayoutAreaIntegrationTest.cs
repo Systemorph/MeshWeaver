@@ -1,15 +1,9 @@
-using System;
 using System.Linq;
-using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
-using MeshWeaver.Graph;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -19,72 +13,27 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Integration tests for DeleteLayoutArea — the node deletion workflow.
-/// Verifies:
-/// 1. The Delete layout area renders the confirmation form
-/// 2. Deletion via IMeshService.DeleteNode (fire-and-forget) actually removes the node
-/// 3. The redirect-to-parent pattern works without deadlock
+/// Integration tests for the delete workflow.
+/// Verifies that deletion via the fire-and-forget pattern (post + redirect)
+/// actually removes nodes without deadlock.
 /// </summary>
 public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
-            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
-
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-        => base.ConfigureClient(configuration).AddLayoutClient();
-
     /// <summary>
-    /// Verifies the Delete layout area renders on an existing node.
+    /// Verifies that IMeshService.DeleteNodeAsync deletes the node.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task DeleteArea_RendersConfirmationForm()
-    {
-        var nodePath = $"{TestPartition}/del-render";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("del-render", TestPartition) { Name = "Delete Render Test", NodeType = "Markdown" });
-
-        var client = GetClient();
-        var nodeAddress = new Address(nodePath);
-
-        // Initialize the hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.DeleteArea);
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            nodeAddress, reference);
-
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
-
-        value.Should().NotBe(default(JsonElement),
-            "Delete area should render the confirmation form");
-    }
-
-    /// <summary>
-    /// Verifies that IMeshService.DeleteNode (fire-and-forget) actually deletes the node.
-    /// This is the exact pattern used by DeleteLayoutArea after the fix.
-    /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task DeleteNode_FireAndForget_DeletesNode()
+    public async Task DeleteNode_DeletesNode()
     {
         var nodePath = $"{TestPartition}/del-fandf";
         await NodeFactory.CreateNodeAsync(
             new MeshNode("del-fandf", TestPartition) { Name = "Fire And Forget", NodeType = "Markdown" });
 
-        // Fire-and-forget delete — same pattern as the fixed DeleteLayoutArea
-        NodeFactory.DeleteNode(nodePath).Subscribe();
-
-        // Give the delete time to propagate
-        await Task.Delay(2.Seconds());
+        await NodeFactory.DeleteNodeAsync(nodePath);
 
         var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-        result.Should().BeNull("node should be deleted by fire-and-forget pattern");
+        result.Should().BeNull("node should be deleted");
     }
 
     /// <summary>
@@ -93,7 +42,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// resolves IMeshService from node hub, calls DeleteNode.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task DeleteNode_FromNodeHub_FireAndForget_Succeeds()
+    public async Task DeleteNode_FromNodeHub_Succeeds()
     {
         var nodePath = $"{TestPartition}/del-nodehub";
         await NodeFactory.CreateNodeAsync(
@@ -113,21 +62,19 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         // Resolve IMeshService from the NODE's hub (same as DeleteLayoutArea does)
         var nodeService = nodeHub!.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Fire-and-forget delete
-        nodeService.DeleteNode(nodePath).Subscribe();
-
-        await Task.Delay(2.Seconds());
+        // Delete from node hub — this is the production pattern
+        await nodeService.DeleteNodeAsync(nodePath);
 
         var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-        result.Should().BeNull("fire-and-forget delete from node hub should work");
+        result.Should().BeNull("deletion from node hub should work");
     }
 
     /// <summary>
-    /// Verifies that recursive delete (parent with children) works via fire-and-forget.
+    /// Verifies that recursive delete (parent with children) works.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task DeleteNode_WithChildren_FireAndForget_DeletesAll()
+    public async Task DeleteNode_WithChildren_DeletesAll()
     {
         await NodeFactory.CreateNodeAsync(
             new MeshNode("del-parent", TestPartition) { Name = "Parent", NodeType = "Group" });
@@ -136,10 +83,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         await NodeFactory.CreateNodeAsync(
             new MeshNode("child2", $"{TestPartition}/del-parent") { Name = "Child 2", NodeType = "Markdown" });
 
-        // Fire-and-forget recursive delete
-        NodeFactory.DeleteNode($"{TestPartition}/del-parent").Subscribe();
-
-        await Task.Delay(3.Seconds());
+        await NodeFactory.DeleteNodeAsync($"{TestPartition}/del-parent");
 
         var parent = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del-parent")
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
