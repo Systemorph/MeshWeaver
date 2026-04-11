@@ -132,6 +132,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Subscribe to side panel menu actions
         SidePanelState.OnActionRequested += OnSidePanelAction;
 
+        // Track navigation changes proactively so context is always fresh on submit
+        NavigationManager.LocationChanged += OnLocationChanged;
+
         // Set initial title
         UpdateSidePanelTitle();
 
@@ -405,10 +408,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
-            // Check for context change before sending
-            await CheckAndUpdateContextAsync();
-
-            await UpdateExtractedReferencesAsync();
+            // Context is tracked proactively via LocationChanged — no blocking await here.
+            // References are already extracted during OnMessageTextChanged — no redundant call.
 
             var accessService = Hub.ServiceProvider.GetService<AccessService>();
             var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
@@ -736,24 +737,30 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Checks if the navigation context has changed since the last message and updates the context attachment if needed.
+    /// Handles navigation changes proactively — resolves context in the background
+    /// so it's already available when the user submits a message (no blocking await on submit).
     /// </summary>
-    private async Task CheckAndUpdateContextAsync()
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
-        var currentUrl = NavigationManager.Uri;
+        if (_isDisposed)
+            return;
 
-        // Check if URL has changed
-        if (lastContextUrl != currentUrl)
+        var currentUrl = e.Location;
+        if (lastContextUrl == currentUrl)
+            return;
+
+        lastContextUrl = currentUrl;
+        var newPath = NavigationManager.ToBaseRelativePath(currentUrl);
+
+        if (string.IsNullOrEmpty(newPath) || newPath == "chat")
+            return;
+
+        // Fire-and-forget: resolve context in the background, update UI when ready
+        _ = InvokeAsync(async () =>
         {
-            var newPath = NavigationManager.ToBaseRelativePath(currentUrl);
-
-            // Only update if we have a meaningful path (not root or chat)
-            if (!string.IsNullOrEmpty(newPath) && newPath != "chat")
+            try
             {
-                // Resolve satellite content to its primary node path
                 newPath = await ResolvePrimaryContextPathAsync(newPath);
-
-                // Only update if path is actually different from current context
                 if (newPath != initialContext)
                 {
                     Logger.LogDebug("[ThreadChat:{InstanceId}] Context changed from {OldContext} to {NewContext}",
@@ -762,15 +769,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     initialContext = newPath;
                     var displayName = await ResolveContextDisplayNameAsync(newPath);
 
-                    // Replace or add context attachment
                     attachments.RemoveAll(a => a.IsContext);
                     attachments.Insert(0, new AttachmentInfo(newPath, displayName, IsContext: true));
                     StateHasChanged();
                 }
             }
-
-            lastContextUrl = currentUrl;
-        }
+            catch (Exception ex) when (!_isDisposed)
+            {
+                Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Error resolving context on navigation", _instanceId);
+            }
+        });
     }
 
     private async Task OnMessageTextChanged(string value)
@@ -1176,6 +1184,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
+            NavigationManager.LocationChanged -= OnLocationChanged;
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
             SidePanelState.OnActionRequested -= OnSidePanelAction;
