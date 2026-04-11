@@ -152,28 +152,16 @@ public static class DeleteLayoutArea
                         return;
                     }
 
-                    ShowDialog(ctx, "Deleting...", "Deletion in progress. Please wait...");
+                    // Fire-and-forget: post delete request, don't await (avoids deadlock)
+                    host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+                        .DeleteNode(nodePath).Subscribe();
 
-                    try
-                    {
-                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        await nodeFactory.DeleteNodeAsync(nodePath);
-
-                        // Navigate to parent on success
-                        var parentPath = GetParentPath(nodePath);
-                        var parentHref = !string.IsNullOrEmpty(parentPath)
-                            ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
-                            : "/";
-
-                        ShowDialog(ctx, "Deleted",
-                            $"Successfully deleted node **{nodePath}** and its descendants.\n\nRedirecting...");
-
-                        ctx.NavigateTo(parentHref);
-                    }
-                    catch (Exception ex)
-                    {
-                        ShowDialog(ctx, "Delete Failed", ex.Message);
-                    }
+                    // Redirect to parent immediately
+                    var parentPath = GetParentPath(nodePath);
+                    var parentHref = !string.IsNullOrEmpty(parentPath)
+                        ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
+                        : "/";
+                    ctx.NavigateTo(parentHref);
                 })));
 
         return stack;
