@@ -1,12 +1,15 @@
 using Markdig;
+using Markdig.Syntax;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,6 +55,13 @@ public partial class CollaborativeMarkdownView
     private string _pendingCommentText = "";
     private bool _showPageCommentInput;
     private string _pageCommentText = "";
+
+    // Interactive markdown (kernel execution)
+    private readonly string _kernelId = Guid.NewGuid().AsString();
+    private Address? _kernelAddress;
+    private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(_kernelId);
+    private bool _codeSubmitted;
+    private IReadOnlyCollection<SubmitCodeRequest>? _codeSubmissions;
 
     // Parsed data
     private string? _processedHtml;
@@ -213,6 +223,13 @@ public partial class CollaborativeMarkdownView
             dotNetRef = DotNetObjectReference.Create(this);
             await jsModule.InvokeVoidAsync("enableCommentSelection", containerRef, dotNetRef);
         }
+
+        // Submit code to kernel — the mesh routing rule creates the hub on demand.
+        if (!_codeSubmitted && _codeSubmissions != null && _codeSubmissions.Count > 0)
+        {
+            _codeSubmitted = true;
+            InteractiveMarkdownHelper.SubmitCode(Hub, KernelAddress, _codeSubmissions);
+        }
     }
 
     private void ProcessContent()
@@ -237,6 +254,10 @@ public partial class CollaborativeMarkdownView
 
         // Render markdown to HTML with annotation spans
         _processedHtml = RenderMarkdown(content);
+
+        // Replace kernel address placeholder with actual kernel address
+        if (_processedHtml != null && _codeSubmissions != null && _codeSubmissions.Count > 0)
+            _processedHtml = InteractiveMarkdownHelper.ReplaceKernelPlaceholder(_processedHtml, KernelAddress);
     }
 
     /// <summary>
@@ -265,7 +286,20 @@ public partial class CollaborativeMarkdownView
         // Render with source position data attributes (data-start/data-end)
         // so JS can map text selections back to markdown source positions.
         var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null, BoundNodePath);
-        return SourceMapHtmlRenderer.RenderWithSourceMap(transformed, pipeline);
+        var document = Markdig.Markdown.Parse(transformed, pipeline);
+
+        // Extract code submissions from executable code blocks
+        var executableBlocks = document.Descendants<ExecutableCodeBlock>().ToList();
+        foreach (var block in executableBlocks)
+            block.Initialize();
+        var submissions = executableBlocks
+            .Select(b => b.SubmitCode)
+            .Where(s => s != null)
+            .Cast<SubmitCodeRequest>()
+            .ToList();
+        _codeSubmissions = submissions.Count > 0 ? submissions : null;
+
+        return SourceMapHtmlRenderer.RenderWithSourceMap(document, pipeline);
     }
 
     // View mode

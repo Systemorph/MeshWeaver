@@ -112,24 +112,27 @@
                                   Collapsible="false"
                                   Resizable="@IsSidePanelVisible"
                                   Style="@(IsSidePanelVisible ? "" : "display:none")">
-            <div class="side-panel-wrapper">
-                <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
-                    <ChildContent>
-                        @if (sidePanelViewModel != null)
-                        {
-                            @* Resolved content — render via LayoutAreaView (same as main page) *@
-                            <LayoutAreaView @key="@SidePanelState.ContentPath"
-                                            ViewModel="@sidePanelViewModel"
-                                            Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
-                        }
-                        else
-                        {
-                            @* New chat — no thread yet *@
-                            <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
-                        }
-                    </ChildContent>
-                </SidePanel>
-            </div>
+            @if (IsSidePanelVisible)
+            {
+                <div class="side-panel-wrapper">
+                    <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
+                        <ChildContent>
+                            @if (sidePanelViewModel != null)
+                            {
+                                @* Resolved content — render via LayoutAreaView (same as main page) *@
+                                <LayoutAreaView @key="@SidePanelState.ContentPath"
+                                                ViewModel="@sidePanelViewModel"
+                                                Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
+                            }
+                            else
+                            {
+                                @* New chat — no thread yet *@
+                                <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
+                            }
+                        </ChildContent>
+                    </SidePanel>
+                </div>
+            }
         </FluentMultiSplitterPane>
     </FluentMultiSplitter>
 

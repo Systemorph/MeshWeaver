@@ -1,15 +1,9 @@
-﻿using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
-using HtmlAgilityPack;
+﻿using System.Text.Json;
 using Markdig;
 using Markdig.Syntax;
-using MeshWeaver.Data;
-using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components.Rendering;
@@ -108,10 +102,8 @@ public partial class MarkdownView
         if (Html != null && CodeSubmissions != null && CodeSubmissions.Count > 0)
         {
             var htmlString = Html.ToString();
-            if (htmlString != null && htmlString.Contains(ExecutableCodeBlockRenderer.KernelAddressPlaceholder))
-            {
-                Html = htmlString.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString());
-            }
+            if (htmlString != null)
+                Html = InteractiveMarkdownHelper.ReplaceKernelPlaceholder(htmlString, KernelAddress);
         }
     }
 
@@ -119,29 +111,11 @@ public partial class MarkdownView
     {
         await base.OnAfterRenderAsync(firstRender);
 
-        // Submit code to kernel on first render.
-        // Create the kernel node first so Orleans can activate the grain.
+        // Submit code to kernel — the mesh routing rule creates the hub on demand.
         if (firstRender && !_codeSubmitted && CodeSubmissions != null && CodeSubmissions.Count > 0)
         {
             _codeSubmitted = true;
-            var ownerPath = Stream?.Owner?.ToString();
-            var kernelNode = new MeshNode(KernelAddress.Id!, KernelAddress.Type)
-            {
-                NodeType = "kernel",
-                MainNode = ownerPath,
-                Name = $"Kernel ({_kernelId[..8]})"
-            };
-            var delivery = Hub.Post(new CreateNodeRequest(kernelNode),
-                o => o.WithTarget(Hub.Address));
-            if (delivery != null)
-            {
-                Hub.RegisterCallback((IMessageDelivery)delivery, _ =>
-                {
-                    foreach (var submission in CodeSubmissions)
-                        Hub.Post(submission, o => o.WithTarget(KernelAddress));
-                    return _;
-                });
-            }
+            InteractiveMarkdownHelper.SubmitCode(Hub, KernelAddress, CodeSubmissions);
         }
     }
 

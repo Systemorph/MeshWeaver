@@ -79,7 +79,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         await base.OnInitializedAsync();
         await NavigationService.InitializeAsync();
-        await ResolveSidePanelContentAsync();
+        // Only resolve side panel content if already visible — defer until opened otherwise
+        if (SidePanelState.IsVisible)
+            await ResolveSidePanelContentAsync();
     }
 
     private void ToggleNodeMenu()
@@ -350,6 +352,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     /// <summary>
     /// Resolves ContentPath via IPathResolver (same as AreaPage) and builds LayoutAreaControl.
+    /// If the content path points to a node that no longer exists (e.g. deleted thread),
+    /// the path resolves to a parent with satellite segments as remainder — detect and clear.
     /// </summary>
     private async Task ResolveSidePanelContentAsync()
     {
@@ -368,7 +372,22 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         var resolution = await PathResolver.ResolvePathAsync(contentPath);
         if (resolution == null)
         {
+            // Node doesn't exist at all — clear stale content path
             sidePanelViewModel = null;
+            SidePanelState.SetContentPath(null);
+            resolvedSidePanelPath = null;
+            return;
+        }
+
+        // If the resolved prefix doesn't match the content path, it means the node
+        // no longer exists and resolution fell back to a parent (e.g. _Thread/id became
+        // remainder on the parent hub → invalid area). Clear the stale path.
+        if (!string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(resolution.Remainder))
+        {
+            sidePanelViewModel = null;
+            SidePanelState.SetContentPath(null);
+            resolvedSidePanelPath = null;
             return;
         }
 
