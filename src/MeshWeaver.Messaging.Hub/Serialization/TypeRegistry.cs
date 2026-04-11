@@ -32,7 +32,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         typeof(Nullable<>),
         typeof(MessageDelivery<>),
         typeof(Address),
-        typeof(HeartbeatEvent),
+        typeof(HeartBeatEvent),
         typeof(DeliveryFailure),
         typeof(DisposeRequest)
     ];

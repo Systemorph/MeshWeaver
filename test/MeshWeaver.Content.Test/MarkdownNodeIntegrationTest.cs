@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Linq;
 
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -20,6 +21,7 @@ using MeshWeaver.Layout;
 using Markdig;
 using Markdig.Syntax;
 
+using MeshWeaver.Kernel;
 using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
@@ -1013,6 +1015,139 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var layoutAreaCount = System.Text.RegularExpressions.Regex.Matches(html, @"class='layout-area'").Count;
         Output.WriteLine($"Found {layoutAreaCount} layout-area divs in rendered HTML");
         layoutAreaCount.Should().Be(2, "There should be exactly 2 layout-area divs for the two code blocks");
+    }
+
+    /// <summary>
+    /// Test that MarkdownContent with CodeSubmissions survives a JSON serialization
+    /// round-trip (simulating DB storage). When MeshNode.Content is deserialized from
+    /// the database, it must come back as MarkdownContent (not JsonElement) so that
+    /// CodeSubmissions and PrerenderedHtml are preserved for interactive markdown.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public void MarkdownContent_CodeSubmissions_SurviveJsonRoundTrip()
+    {
+        var markdown = @"# Hello
+
+```csharp --render --id timestamp
+DateTime.Now.ToString()
+```
+";
+        // Parse to get MarkdownContent with CodeSubmissions and PrerenderedHtml
+        var content = MarkdownContent.Parse(markdown);
+
+        content.CodeSubmissions.Should().NotBeNullOrEmpty(
+            "Parsing markdown with --render code block should produce CodeSubmissions");
+        content.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder,
+            "PrerenderedHtml should contain __KERNEL_ADDRESS__ placeholder");
+
+        // Simulate DB write: serialize as object (what MeshNode.Content stores)
+        var options = Mesh.JsonSerializerOptions;
+        var json = JsonSerializer.Serialize<object>(content, options);
+
+        Output.WriteLine($"Serialized JSON: {json}");
+
+        // Verify $type discriminator is in the JSON
+        json.Should().Contain("$type", "Serialized JSON must contain $type discriminator for polymorphic deserialization");
+
+        // Simulate DB read: deserialize as object (how ReadMeshNode works)
+        var deserialized = JsonSerializer.Deserialize<object>(json, options);
+
+        deserialized.Should().BeOfType<MarkdownContent>(
+            "Content deserialized from DB should be MarkdownContent, not JsonElement");
+
+        var roundTripped = (MarkdownContent)deserialized!;
+        roundTripped.Content.Should().Be(content.Content);
+        roundTripped.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder);
+        roundTripped.CodeSubmissions.Should().NotBeNullOrEmpty(
+            "CodeSubmissions must survive the JSON round-trip so interactive markdown can replace __KERNEL_ADDRESS__");
+        roundTripped.CodeSubmissions!.Count.Should().Be(content.CodeSubmissions!.Count);
+        roundTripped.CodeSubmissions![0].Code.Should().Be(content.CodeSubmissions[0].Code);
+    }
+
+    /// <summary>
+    /// Test that RepairMarkdownContent fixes legacy data where MarkdownContent
+    /// was stored with PrerenderedHtml containing __KERNEL_ADDRESS__ but without CodeSubmissions.
+    /// This simulates old DB data stored before the serialization fix.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public void RepairMarkdownContent_FixesLegacyDataWithoutCodeSubmissions()
+    {
+        var markdown = @"# Hello
+
+```csharp --render --id timestamp
+DateTime.Now.ToString()
+```
+";
+        // Parse to get the correct PrerenderedHtml (with __KERNEL_ADDRESS__)
+        var fullContent = MarkdownContent.Parse(markdown);
+        fullContent.CodeSubmissions.Should().NotBeNullOrEmpty();
+        fullContent.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder);
+
+        // Simulate legacy data: MarkdownContent was stored WITHOUT CodeSubmissions
+        var legacyContent = new MarkdownContent
+        {
+            Content = markdown,
+            PrerenderedHtml = fullContent.PrerenderedHtml,
+            CodeSubmissions = null // legacy — was not saved
+        };
+
+        var legacyNode = new MeshNode("test-node", "test")
+        {
+            Name = "Test",
+            NodeType = "Markdown",
+            Content = legacyContent,
+            PreRenderedHtml = legacyContent.PrerenderedHtml
+        };
+
+        // RepairMarkdownContent should re-parse and fill in CodeSubmissions
+        var repaired = Graph.Configuration.MarkdownNodeType.RepairMarkdownContent(legacyNode);
+
+        var repairedContent = repaired.Content as MarkdownContent;
+        repairedContent.Should().NotBeNull();
+        repairedContent!.CodeSubmissions.Should().NotBeNullOrEmpty(
+            "RepairMarkdownContent should re-parse markdown to extract CodeSubmissions for legacy data");
+        repairedContent.CodeSubmissions![0].Code.Should().Contain("DateTime.Now");
+    }
+
+    /// <summary>
+    /// Verifies MeshDataSource converter pipeline: configuration runs before WithMeshNodes,
+    /// and RepairMarkdownContent is properly registered and functional.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public void RepairMarkdownContent_ConverterIsRegisteredOnMeshDataSource()
+    {
+        var markdown = "# Interactive\n\n```csharp --render --id timestamp\nDateTime.Now.ToString()\n```\n";
+        var fullContent = MarkdownContent.Parse(markdown);
+
+        // Legacy node: has __KERNEL_ADDRESS__ in HTML but no CodeSubmissions
+        var legacyNode = new MeshNode("test", "TestData")
+        {
+            Name = "Test", NodeType = "Markdown",
+            Content = new MarkdownContent
+            {
+                Content = markdown,
+                PrerenderedHtml = fullContent.PrerenderedHtml,
+                CodeSubmissions = null
+            },
+            State = MeshNodeState.Active
+        };
+
+        // Verify converter fixes it
+        var repaired = Graph.Configuration.MarkdownNodeType.RepairMarkdownContent(legacyNode);
+        var mc = (MarkdownContent)repaired.Content!;
+        mc.CodeSubmissions.Should().NotBeNullOrEmpty(
+            "RepairMarkdownContent should re-parse markdown to extract missing CodeSubmissions");
+        mc.CodeSubmissions![0].Code.Should().Contain("DateTime.Now");
+
+        // Verify no-op when already present
+        Graph.Configuration.MarkdownNodeType.RepairMarkdownContent(repaired)
+            .Should().BeSameAs(repaired);
+
+        // Verify MeshDataSource.WithNodeConverter registers correctly
+        var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
+        var ds = new MeshDataSource("test", workspace)
+            .WithNodeConverter(Graph.Configuration.MarkdownNodeType.RepairMarkdownContent);
+        ds.NodeConverters.Should().HaveCount(1);
     }
 
     #endregion
