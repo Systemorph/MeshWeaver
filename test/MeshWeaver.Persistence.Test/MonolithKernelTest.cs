@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
@@ -31,24 +30,17 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         base.ConfigureMesh(builder);
 
     /// <summary>
-    /// Creates a kernel session MeshNode and returns the address to send messages to.
+    /// Returns a new kernel address. The mesh routing rule (RouteAddressToHostedHub)
+    /// creates the kernel hub on demand when the first message arrives.
     /// </summary>
-    private async Task<Address> CreateKernelSessionAsync()
-    {
-        var kernelId = $"test-kernel-{Guid.NewGuid().ToString("N")[..8]}";
-        var kernelNode = MeshNode.FromPath($"{KernelNodeType.NodeType}/{kernelId}") with
-        {
-            NodeType = KernelNodeType.NodeType
-        };
-        await CreateNodeAsync(kernelNode);
-        return new Address(KernelNodeType.NodeType, kernelId);
-    }
+    private static Address CreateKernelSession()
+        => AddressExtensions.CreateKernelAddress();
 
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task HelloWorld()
     {
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
 
         var command = new SubmitCode("Console.WriteLine(\"Hello World\");");
         client.Post(
@@ -82,7 +74,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
 ";
         const string Area = nameof(Area);
         var client = GetClient();
-        var kernelAddress = await CreateKernelSessionAsync();
+        var kernelAddress = CreateKernelSession();
 
         client.Post(
             new SubmitCodeRequest(Code) { Id = Area },
@@ -108,6 +100,73 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             .FirstAsync(x => !(x as MarkdownControl)?.Markdown?.ToString()?.Contains("3") == true);
 
         md.Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().Contain("5");
+    }
+
+    /// <summary>
+    /// Tests that SubmitCodeRequest produces a layout area result
+    /// (the same path that Blazor interactive markdown views use).
+    /// </summary>
+    [Fact(Timeout = DefaultTimeoutMs)]
+    public async Task SubmitCodeRequest_ProducesLayoutAreaResult()
+    {
+        var client = GetClient();
+        var kernelAddress = CreateKernelSession();
+        const string viewId = "test-view-1";
+
+        client.Post(
+            new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown(\"Hello from kernel\")") { Id = viewId },
+            o => o.WithTarget(kernelAddress));
+
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference(viewId));
+        var control = await stream.GetControlStream(viewId)
+            .Timeout(15.Seconds())
+            .FirstAsync(x => x is not null);
+
+        control.Should().BeOfType<MarkdownControl>();
+        (control as MarkdownControl)!.Markdown.ToString().Should().Contain("Hello from kernel");
+    }
+
+    /// <summary>
+    /// Tests that multiple SubmitCodeRequests to the same kernel
+    /// share state (like a notebook — variables persist between cells).
+    /// </summary>
+    [Fact(Timeout = DefaultTimeoutMs)]
+    public async Task MultipleSubmissions_ShareKernelState()
+    {
+        var client = GetClient();
+        var kernelAddress = CreateKernelSession();
+
+        // First submission: define a variable
+        client.Post(
+            new SubmitCodeRequest("var myValue = 42;") { Id = "cell-1" },
+            o => o.WithTarget(kernelAddress));
+
+        // Second submission: use the variable and produce a result
+        client.Post(
+            new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"Value is {myValue}\")") { Id = "cell-2" },
+            o => o.WithTarget(kernelAddress));
+
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference("cell-2"));
+        var control = await stream.GetControlStream("cell-2")
+            .Timeout(15.Seconds())
+            .FirstAsync(x => x is not null);
+
+        control.Should().BeOfType<MarkdownControl>();
+        (control as MarkdownControl)!.Markdown.ToString().Should().Contain("Value is 42");
+    }
+
+    /// <summary>
+    /// Tests that each kernel session gets a unique address.
+    /// </summary>
+    [Fact]
+    public void MultipleKernelSessions_HaveUniqueAddresses()
+    {
+        var address1 = CreateKernelSession();
+        var address2 = CreateKernelSession();
+
+        address1.Should().NotBe(address2, "Each kernel session should have a unique address");
     }
 
     private readonly ReplaySubject<KernelEventEnvelope> kernelEventsStream = new();
