@@ -37,10 +37,14 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Resolves @ prefix to full path. Example: @graph/org1 -> graph/org1
+    /// Resolves @ prefix and quotes from path. Example: @graph/org1 -> graph/org1, "@content/My File.md" -> content/My File.md
     /// </summary>
     public static string ResolvePath(string path)
     {
+        // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
+        if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
+            path = path[1..^1];
+
         if (path.StartsWith("@"))
             return path[1..];
         return path;
@@ -95,27 +99,69 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Tries to resolve a path as a Unified Path with prefix (schema:, model:, data:).
-    /// Parses the path to find the colon separator, splits into address and remainder,
+    /// Tries to resolve a path as a Unified Path with prefix (schema/, model/, data/, content/).
+    /// Supports both legacy colon format (address/prefix:path) and new slash format (address/prefix/path).
+    /// Parses the path to find the prefix, splits into address and remainder,
     /// then routes data request to the resolved address.
     /// Returns null if the path is not a Unified Path.
     /// </summary>
     private async Task<string?> TryResolveUnifiedPathAsync(string resolvedPath)
     {
+        string? addressPart = null;
+        string? remainder = null;
+
+        // Try legacy colon format first: address/prefix:path
         var colonIndex = resolvedPath.IndexOf(':');
-        if (colonIndex < 0)
+        if (colonIndex > 0)
+        {
+            var slashBeforeColon = resolvedPath.LastIndexOf('/', colonIndex);
+            if (slashBeforeColon >= 0)
+            {
+                addressPart = resolvedPath[..slashBeforeColon];
+                remainder = resolvedPath[(slashBeforeColon + 1)..];
+            }
+        }
+
+        // Try new slash format: address/prefix/path where prefix is a known UCR keyword
+        if (addressPart == null)
+        {
+            var segments = resolvedPath.Split('/');
+            for (var i = 0; i < segments.Length; i++)
+            {
+                if (UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segments[i]))
+                {
+                    // Found a UCR prefix at segment i — everything before is address, everything from i onwards is remainder
+                    if (i > 0)
+                    {
+                        addressPart = string.Join("/", segments.Take(i));
+                        remainder = string.Join("/", segments.Skip(i));
+                    }
+                    else
+                    {
+                        // Prefix at the start (e.g., "content/file.md") — relative path, no address
+                        addressPart = null;
+                        remainder = resolvedPath;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (remainder == null)
             return null;
 
-        // Find the last '/' before the colon — separates address from prefix:path
-        var slashBeforeColon = resolvedPath.LastIndexOf('/', colonIndex);
-        if (slashBeforeColon < 0)
-            return null; // No address part
-
-        var addressPart = resolvedPath[..slashBeforeColon];
-        var remainder = resolvedPath[(slashBeforeColon + 1)..];
-
         var reference = new UnifiedReference(remainder);
-        var address = new Address(addressPart);
+        Address address;
+        if (!string.IsNullOrEmpty(addressPart))
+        {
+            address = new Address(addressPart);
+        }
+        else
+        {
+            // No address — route to the current hub
+            address = hub.Address;
+        }
+
         logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
             addressPart, remainder);
 

@@ -418,8 +418,8 @@ internal sealed class ChatCompletionOrchestrator(
     #region TagQuery
 
     /// <summary>
-    /// Handles tag queries (e.g., @path/content:readme) by sending AutocompleteRequest
-    /// to the resolved node hub address via Post+RegisterCallback.
+    /// Handles tag queries by sending AutocompleteRequest to the resolved node hub.
+    /// Supports both colon format (@path/content:readme) and slash format (@path/content/readme, @content/file).
     /// </summary>
     private async Task ProduceTagCompletionsAsync(
         string reference,
@@ -432,16 +432,34 @@ internal sealed class ChatCompletionOrchestrator(
         {
             var items = new List<AutocompleteItem>();
 
-            // Resolve the node hub for the address portion before the colon tag
+            // Find the node address by locating the UCR prefix segment
+            string? nodeAddress = null;
+
+            // Try colon format first: "Org/Sub/content:readme" → nodeAddress="Org/Sub"
             var colonIndex = reference.IndexOf(':');
-            if (colonIndex < 0)
-                return;
+            if (colonIndex > 0)
+            {
+                var addressPart = reference[..colonIndex];
+                var lastSlash = addressPart.LastIndexOf('/');
+                nodeAddress = lastSlash >= 0 ? addressPart[..lastSlash] : currentNamespace;
+            }
+            else
+            {
+                // Slash format: find the UCR prefix segment
+                // "Org/Sub/content/readme" → nodeAddress="Org/Sub"
+                // "content/readme" → nodeAddress=currentNamespace
+                var segments = reference.TrimStart('/').Split('/');
+                for (var i = 0; i < segments.Length; i++)
+                {
+                    if (Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segments[i]))
+                    {
+                        nodeAddress = i > 0 ? string.Join("/", segments.Take(i)) : currentNamespace;
+                        break;
+                    }
+                }
+            }
 
-            var addressPart = reference[..colonIndex];
-
-            // The address may be nested: "Org/Sub/content" → nodeAddress="Org/Sub", tag="content"
-            var lastSlash = addressPart.LastIndexOf('/');
-            var nodeAddress = lastSlash >= 0 ? addressPart[..lastSlash] : currentNamespace ?? "";
+            nodeAddress ??= currentNamespace;
 
             if (!string.IsNullOrEmpty(nodeAddress))
             {
@@ -542,6 +560,11 @@ internal sealed class ChatCompletionOrchestrator(
         if (reference.Contains(':'))
             return new ParsedMode(CompletionMode.TagQuery, null, reference);
 
+        // Tag query with / format: starts with or contains a known UCR prefix segment
+        // e.g., "content/file.md" or "Org/content/file.md"
+        if (IsUcrPrefixPath(reference))
+            return new ParsedMode(CompletionMode.TagQuery, null, reference);
+
         // Absolute reference: starts with /
         if (reference.StartsWith("/"))
         {
@@ -552,6 +575,10 @@ internal sealed class ChatCompletionOrchestrator(
                 // Just "@/" → partition list
                 return new ParsedMode(CompletionMode.PartitionList, null, "");
             }
+
+            // Check if absolute path contains a UCR prefix (e.g., "/Org/content/file")
+            if (IsUcrPrefixPath(absolutePath))
+                return new ParsedMode(CompletionMode.TagQuery, null, reference);
 
             // Check if we have a completed partition segment: "Partition/" or "Partition/sub"
             var slashIndex = absolutePath.IndexOf('/');
@@ -568,6 +595,15 @@ internal sealed class ChatCompletionOrchestrator(
 
         // Regular: @text → current node + global
         return new ParsedMode(CompletionMode.CurrentNodeAndGlobal, null, reference);
+    }
+
+    /// <summary>
+    /// Checks if a path contains a known UCR prefix segment (content, data, schema, model, menu).
+    /// </summary>
+    private static bool IsUcrPrefixPath(string path)
+    {
+        var segments = path.Split('/');
+        return segments.Any(s => Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(s));
     }
 
     private static AutocompleteItem SuggestionToItem(

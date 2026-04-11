@@ -56,7 +56,7 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
             var result = ((IMessageDelivery<SaveContentResponse>)response).Message;
 
             return result.Success
-                ? $"Uploaded `{filePath}` to @{resolvedPath}/{collectionName}:{filePath}"
+                ? $"Uploaded `{filePath}` to @{resolvedPath}/{collectionName}/{filePath}"
                 : $"Error: {result.Error}";
         }
         catch (Exception ex)

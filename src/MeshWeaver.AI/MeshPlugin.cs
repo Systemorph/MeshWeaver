@@ -17,9 +17,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     private readonly MeshOperations ops = new(hub) { OnNodeChange = change => chat.ForwardNodeChange?.Invoke(change) };
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
 
-    [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes (schema:, model:, data:, content:, collection:, area:, layoutAreas:).")]
+    [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes: content/, data/, schema/, model/, collection/, area/.")]
     public Task<string> Get(
-        [Description("Path to data. Relative: @content:file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content:file.docx")] string path)
+        [Description("Path to data. Relative: @content/file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content/file.docx. For spaces: \"@content/My File.docx\"")] string path)
         => ops.Get(ResolveContextPath(path));
 
     [Description("Searches the mesh using GitHub-style query syntax.")]
@@ -73,6 +73,10 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         if (string.IsNullOrEmpty(path))
             return path;
 
+        // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
+        if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
+            path = path[1..^1];
+
         var raw = path.StartsWith("@") ? path[1..] : path;
 
         // Absolute path — starts with /
@@ -80,33 +84,45 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             return "@" + raw[1..]; // strip the leading / and re-add @
 
         // Already looks absolute (contains a colon with address before it, like OrgA/content:file)
-        // Check if this is a unified path with address prefix
         var colonIndex = raw.IndexOf(':');
         if (colonIndex > 0)
         {
             var beforeColon = raw[..colonIndex];
-            // If there's a slash before the colon, it has an address prefix already
             if (beforeColon.Contains('/'))
                 return path; // already absolute
         }
         else if (raw.Contains('/'))
         {
-            // No colon, has slashes — could be a multi-segment path like "OrgA/Doc"
-            // If it has 2+ segments, likely absolute already
+            // No colon, has slashes — check if it starts with a UCR prefix (content/file.md)
+            var firstSlash = raw.IndexOf('/');
+            if (firstSlash > 0)
+            {
+                var firstSegment = raw[..firstSlash];
+                if (Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(firstSegment))
+                {
+                    // Relative unified path like "content/My Report.md" — prepend context
+                    var contextPath = chat.Context?.Context;
+                    if (!string.IsNullOrEmpty(contextPath))
+                        return $"@{contextPath}/{raw}";
+                    return path;
+                }
+            }
+
+            // Multi-segment path like "OrgA/Doc" — likely absolute already
             return path;
         }
 
         // Relative path — prepend context
-        var contextPath = chat.Context?.Context;
-        if (string.IsNullOrEmpty(contextPath))
+        var contextPath2 = chat.Context?.Context;
+        if (string.IsNullOrEmpty(contextPath2))
             return path; // no context, return as-is
 
         // For unified refs like "content:file.docx", prepend context as address
         if (colonIndex > 0)
-            return $"@{contextPath}/{raw}";
+            return $"@{contextPath2}/{raw}";
 
         // For simple names like "MyChild", prepend context
-        return $"@{contextPath}/{raw}";
+        return $"@{contextPath2}/{raw}";
     }
 
     /// <summary>
