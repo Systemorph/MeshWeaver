@@ -94,6 +94,88 @@ hub.GetWorkspace().UpdateMeshNode(n => ...);  // handler body = hub scheduler
 
 The principle: **I/O is fire-and-forget, state changes happen where you control the thread.** This is true for any actor-based or message-passing system.
 
+## UI Click Actions — Same Rules Apply
+
+Blazor button clicks configured via `WithClickAction` flow through the layout area host, which is backed by a message hub. **The same rule applies: no `await` on mesh-backed operations inside the click handler.** The hub pump is shared with all the layout's other reactive updates — blocking it freezes the UI.
+
+### The canonical reactive click handler
+
+```csharp
+.WithClickAction(ctx =>
+{
+    // 1. Immediate optimistic feedback so the user sees the click registered.
+    ctx.Host.UpdateData(resultId, "<p>Working…</p>");
+
+    // 2. Read form data via Subscribe (NOT await FirstAsync).
+    //    The data stream emits its current value synchronously on subscribe.
+    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+        .Take(1)
+        .Subscribe(data =>
+        {
+            var label = data?.GetValueOrDefault("label")?.ToString() ?? "";
+            if (string.IsNullOrEmpty(label))
+            {
+                ctx.Host.UpdateData(resultId, "<p>Please enter a label.</p>");
+                return;
+            }
+
+            // 3. Call reactive services — IObservable<T>, not Task<T>.
+            //    These compose hub.Post + RegisterCallback under the hood.
+            myService.DoWork(label).Subscribe(
+                result => ctx.Host.UpdateData(resultId, $"<p>Done: {result}</p>"),
+                ex     => ctx.Host.UpdateData(resultId, $"<p>Error: {ex.Message}</p>"));
+        });
+
+    return Task.CompletedTask;  // click handler itself is synchronous
+})
+```
+
+### Writing reactive services
+
+Expose `IObservable<T>` (not `Task<T>`) from any service that will be called from a click handler or hub handler. Compose with `SelectMany`, `Select`, `FirstOrDefaultAsync` (the Rx operator, not the `IAsyncEnumerable` extension — do not `await` it).
+
+```csharp
+public IObservable<TokenResult> CreateToken(string label)
+{
+    var userNode = new MeshNode(...);
+    return nodeFactory.CreateNode(userNode)                  // IObservable<MeshNode>
+        .SelectMany(created =>
+        {
+            var indexNode = new MeshNode(...);
+            return nodeFactory.CreateNode(indexNode)         // second reactive write
+                .Select(_ => new TokenResult(rawToken, created));
+        });
+    // No await. Consumer calls .Subscribe(onNext, onError).
+}
+
+// Wrap IAsyncEnumerable queries into observables when composing chains:
+public IObservable<bool> DeleteToken(string path) =>
+    Observable.FromAsync(() =>
+            meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
+                     .FirstOrDefaultAsync().AsTask())
+        .SelectMany(node => nodeFactory.DeleteNode(path));   // IObservable<bool>
+```
+
+### Anti-patterns in click handlers
+
+```csharp
+// ❌ async click handler with await — deadlocks under load.
+.WithClickAction(async ctx =>
+{
+    var data = await ctx.Host.Stream.GetDataStream<T>(id).FirstAsync();
+    var result = await myService.DoWorkAsync(data);  // hub-backed service
+    ctx.Host.UpdateData(resultId, result);
+})
+
+// ❌ Task.Run as a "fix" — hides the problem: AccessContext doesn't flow,
+// exceptions vanish into the thread pool, and you can't compose with other streams.
+.WithClickAction(ctx =>
+{
+    _ = Task.Run(async () => { await myService.DoWorkAsync(); });
+    return Task.CompletedTask;
+})
+```
+
 ## Post + RegisterCallback Pattern
 
 For request-response flows where you need the result but can't block:

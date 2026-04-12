@@ -97,6 +97,113 @@ dotnet run --project memex/aspire/Memex.AppHost
 # Requires Docker for dependencies
 ```
 
+## Reactive Pattern — NO AWAIT IN UI / HUB FLOWS
+
+**Rule: `await` inside hub handlers, button click actions, and service layers that are called from those paths is FORBIDDEN. It deadlocks.** Every write/read to the mesh must be composed as an `IObservable<T>` chain.
+
+This is the single most important pattern in MeshWeaver. Violating it is the cause of most "button does nothing", "popup doesn't show", and "freezes under load" bugs.
+
+### The three building blocks
+
+1. **`IMeshService.CreateNode / UpdateNode / DeleteNode` return `IObservable<T>`** (NOT `Task<T>`). They internally `hub.Post` + `hub.RegisterCallback`. Subscribe to drive them — never call `.ToTask()` / `.FirstAsync()` / `await` on them from a click action or hub handler.
+2. **Click actions must be synchronous**: `WithClickAction(ctx => { ...; return Task.CompletedTask; })`. Never `async ctx => await ...`.
+3. **Read form data via `Subscribe(...)` with `Take(1)`**, not `await FirstAsync()`. The data stream emits its current value synchronously on subscribe.
+
+### The canonical reactive click handler
+
+```csharp
+.WithClickAction(ctx =>
+{
+    // Immediate optimistic UI feedback — the click registered.
+    ctx.Host.UpdateData(resultId, "<p>Working…</p>");
+
+    // Read form data via Subscribe (sync emission for BehaviorSubject-style streams).
+    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+        .Take(1)
+        .Subscribe(data =>
+        {
+            var label = data?.GetValueOrDefault("label")?.ToString() ?? "";
+            if (string.IsNullOrEmpty(label))
+            {
+                ctx.Host.UpdateData(resultId, "<p>Please enter a label.</p>");
+                return;
+            }
+
+            // Reactive service call — returns IObservable<T>, no await.
+            // Service internally composes meshService.CreateNode/UpdateNode/DeleteNode chains.
+            myService.DoWork(label).Subscribe(
+                result => ctx.Host.UpdateData(resultId, $"<p>Done: {result}</p>"),
+                ex     => ctx.Host.UpdateData(resultId, $"<p>Error: {ex.Message}</p>"));
+        });
+
+    return Task.CompletedTask;  // ← click action itself is sync
+})
+```
+
+### Writing reactive services
+
+Compose `IObservable` chains with `SelectMany`, `Select`, `FirstOrDefaultAsync`. Return `IObservable<T>` (not `Task<T>`) from any method that will be called from a hub handler or click action.
+
+```csharp
+public IObservable<TokenCreationResult> CreateToken(...)
+{
+    var userNode = new MeshNode(...);
+    return nodeFactory.CreateNode(userNode)                  // IObservable<MeshNode>
+        .SelectMany(created =>
+        {
+            var indexNode = new MeshNode(...) { ... };
+            return nodeFactory.CreateNode(indexNode)         // chain the second write
+                .Select(_ => new TokenCreationResult(raw, created));
+        });
+    // No await anywhere. The consumer calls .Subscribe(onNext, onError).
+}
+
+// Wrap IAsyncEnumerable queries into observables:
+public IObservable<bool> DeleteToken(string path) =>
+    Observable.FromAsync(() =>
+            meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
+                     .FirstOrDefaultAsync().AsTask())
+        .SelectMany(node =>
+        {
+            /* ... */
+            return nodeFactory.DeleteNode(path);             // IObservable<bool>
+        });
+```
+
+### What NOT to do
+
+```csharp
+// ❌ DEADLOCKS the hub under load.
+.WithClickAction(async ctx =>
+{
+    var data = await ctx.Host.Stream.GetDataStream<T>(id).FirstAsync();
+    var result = await myService.DoWorkAsync(data);  // never awaiting hub-backed services
+    ctx.Host.UpdateData(resultId, result);
+})
+
+// ❌ Task.Run is a crutch, not a fix — identity doesn't flow, failures are invisible.
+.WithClickAction(ctx =>
+{
+    _ = Task.Run(async () => { await myService.DoWorkAsync(); });
+    return Task.CompletedTask;
+})
+
+// ❌ Hub handlers must NOT await mesh writes either.
+public async Task<IMessageDelivery> HandleFoo(IMessageDelivery<FooRequest> req)
+{
+    await meshService.CreateNodeAsync(...);   // deadlock risk
+    return req.Processed();
+}
+```
+
+### When `await` IS acceptable
+
+- Top-level app startup code (`Main`, `ConfigureServices`, `InitializeAsync` of test base classes).
+- Pure CPU / file-I/O work that does NOT flow through the hub (e.g., `File.ReadAllTextAsync`).
+- Test code that explicitly wants to block until a stream emits (use `.FirstAsync().ToTask()` then await, but only in tests).
+
+**Everywhere else, the shape is `Subscribe(onNext, onError)`.** If a service you need only exposes `…Async` / `Task<T>`, add a reactive overload that returns `IObservable<T>` and refactor.
+
 ## Collections Policy
 
 **NEVER use mutable collections.** Always use `System.Collections.Immutable`:
