@@ -21,6 +21,7 @@ using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
@@ -299,6 +300,7 @@ public static class MemexConfiguration
                 .AddAI()
                 .AddSelfRegistry()
                 .AddDocumentation()
+                .AddMarkdownExport()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
                 // Register the mesh catalog and its public interfaces
