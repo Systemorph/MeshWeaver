@@ -37,7 +37,10 @@ else
                 @foreach (var msgId in ThreadMessages)
                 {
                     var cell = GetMessageCell(msgId);
-                    <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
+                    @if (cell != null)
+                    {
+                        <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
+                    }
                 }
             }
             else if (isCreatingThread)
@@ -170,9 +173,44 @@ else
     </div>
     </div>
 }
+
+@if (showSubmissionProgress)
+{
+    <div class="thread-submission-overlay">
+        <div class="thread-submission-dialog">
+            <span class="thread-exec-star" style="font-size: 1.5rem;">&#10041;</span>
+            <span>Creating conversation...</span>
+        </div>
+    </div>
+}
 </div>
 
 <style>
+    .thread-submission-overlay {
+        position: absolute; inset: 0; z-index: 100;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.15); backdrop-filter: blur(2px);
+        border-radius: inherit;
+    }
+    .thread-submission-dialog {
+        display: flex; align-items: center; gap: 12px;
+        padding: 16px 28px; border-radius: 12px;
+        background: var(--neutral-layer-1); box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+        font-size: 0.95rem; font-weight: 500;
+    }
+    @@keyframes thread-pending-pulse {
+        0%, 100% { opacity: 0.6; }
+        50% { opacity: 1; }
+    }
+    .thread-msg-dot {
+        width: 5px; height: 5px; border-radius: 50%;
+        background: var(--neutral-foreground-hint);
+        animation: thread-dots-blink 1.4s infinite both;
+    }
+    @@keyframes thread-dots-blink {
+        0%, 80%, 100% { opacity: 0.3; }
+        40% { opacity: 1; }
+    }
     .thread-exec-star {
         animation: thread-exec-star-pulse 1.5s ease-in-out infinite;
     }

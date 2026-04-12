@@ -15,7 +15,7 @@ namespace MeshWeaver.AI.AzureFoundry;
 public class AzureClaudeChatClient : IChatClient
 {
     private const string AnthropicVersion = "2023-06-01";
-    private const int DefaultMaxTokens = 4096;
+    private const int DefaultMaxTokens = 16384;
 
     private readonly HttpClient httpClient;
     private readonly string endpoint;
@@ -91,14 +91,36 @@ public class AzureClaudeChatClient : IChatClient
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var request = BuildRequest(messages, options, stream: true);
-        var httpRequest = CreateHttpRequest(request);
 
-        using var response = await httpClient.SendAsync(
-            httpRequest,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
+        // Retry on transient failures (500, 502, 503, 429)
+        HttpResponseMessage? response = null;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var httpRequest = CreateHttpRequest(request);
+            response = await httpClient.SendAsync(
+                httpRequest,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
 
-        response.EnsureSuccessStatusCode();
+            if (response.IsSuccessStatusCode)
+                break;
+
+            var status = (int)response.StatusCode;
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            logger?.LogWarning("Azure AI API {Status} on attempt {Attempt}: {Body}",
+                status, attempt + 1, errorBody?.Length > 500 ? errorBody[..500] : errorBody);
+
+            if (status is 500 or 502 or 503 or 429 && attempt < 2)
+            {
+                var delay = status == 429 ? 5000 : 1000 * (attempt + 1);
+                response.Dispose();
+                await Task.Delay(delay, cancellationToken);
+                continue;
+            }
+            response.EnsureSuccessStatusCode(); // throws
+        }
+
+        response!.EnsureSuccessStatusCode();
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
@@ -275,6 +297,21 @@ public class AzureClaudeChatClient : IChatClient
                             Type = "tool_result",
                             ToolUseId = functionResult.CallId,
                             ResultContent = functionResult.Result?.ToString() ?? string.Empty
+                        });
+                        break;
+
+                    case DataContent dataContent when dataContent.Data.Length > 0:
+                        // Binary content (PDF, images) — sent as base64
+                        var mediaType = dataContent.MediaType ?? "application/octet-stream";
+                        contentBlocks.Add(new ClaudeContentBlock
+                        {
+                            Type = mediaType.StartsWith("image/") ? "image" : "document",
+                            Source = new
+                            {
+                                type = "base64",
+                                media_type = mediaType,
+                                data = Convert.ToBase64String(dataContent.Data.ToArray())
+                            }
                         });
                         break;
                 }
@@ -498,6 +535,7 @@ public class AzureClaudeChatClient : IChatClient
         public string? ToolUseId { get; set; }
         [JsonPropertyName("content")]
         public string? ResultContent { get; set; }
+        public object? Source { get; set; }
     }
 
     private class ClaudeTool

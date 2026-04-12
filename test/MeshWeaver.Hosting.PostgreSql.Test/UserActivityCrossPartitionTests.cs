@@ -181,6 +181,66 @@ public class UserActivityCrossPartitionTests
     }
 
     [Fact(Timeout = 60000)]
+    public async Task Threads_FoundViaCrossSchemaUnionOnSatelliteTable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SetupMultiOrgWithThreadsAsync(ct);
+
+        // First verify without access control (no userId) — confirms data is there
+        var schemas = new List<string> { "orga", "orgb" };
+        var generator = new PostgreSqlSqlGenerator();
+        var query = new QueryParser().Parse("nodeType:Thread scope:subtree");
+        var (sqlNoAc, paramsNoAc) = generator.GenerateCrossSchemaSelectQuery(
+            query, schemas, userId: null, tableName: "threads");
+
+        var noAcResults = new List<MeshNode>();
+        await using (var cmd = _fixture.DataSource.CreateCommand(sqlNoAc))
+        {
+            foreach (var (name, value) in paramsNoAc)
+                cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var id = reader.GetString(0);
+                var ns = reader.IsDBNull(1) ? null : reader.GetString(1);
+                noAcResults.Add(new MeshNode(id, string.IsNullOrEmpty(ns) ? null : ns)
+                {
+                    Name = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    NodeType = reader.IsDBNull(3) ? null : reader.GetString(3),
+                });
+            }
+        }
+        noAcResults.Should().HaveCount(2, "data should exist in both schemas (no access control)");
+
+        // Now with access control — testuser should see threads via partition_access + UEP
+        var generator2 = new PostgreSqlSqlGenerator();
+        var (sql, parameters) = generator2.GenerateCrossSchemaSelectQuery(
+            query, schemas, userId: "testuser", tableName: "threads");
+
+        var results = new List<MeshNode>();
+        await using (var cmd = _fixture.DataSource.CreateCommand(sql))
+        {
+            foreach (var (name, value) in parameters)
+                cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var id = reader.GetString(0);
+                var ns = reader.IsDBNull(1) ? null : reader.GetString(1);
+                results.Add(new MeshNode(id, string.IsNullOrEmpty(ns) ? null : ns)
+                {
+                    Name = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    NodeType = reader.IsDBNull(3) ? null : reader.GetString(3),
+                });
+            }
+        }
+
+        results.Should().HaveCount(2, "should find threads from both orgs via UNION ALL on threads table");
+        results.Should().Contain(n => n.Name == "Discussion in OrgA");
+        results.Should().Contain(n => n.Name == "Discussion in OrgB");
+    }
+
+    [Fact(Timeout = 60000)]
     public async Task MainNodes_VisibleInCrossSchemaStoredProc()
     {
         var ct = TestContext.Current.CancellationToken;

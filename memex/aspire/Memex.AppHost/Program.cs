@@ -4,17 +4,15 @@ using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Mode: "local" (default), "local-test", "local-prod", "test", "prod", "monolith"
-// Pass as command line argument: dotnet run -- --mode local-test
+// Mode: "local" (default), "test", "prod", "monolith"
+// Pass as command line argument: dotnet run -- --mode test
 //
 // Mode matrix:
 //   Mode        | PostgreSQL              | Blob Storage | Orleans    | Portal Name
 //   ----------- | ----------------------- | ------------ | ---------- | -----------
-//   local       | Docker pgvector (memex)      | Emulated     | Emulated   | memex-local
-//   local-test  | Azure (memex-test)           | Azure (meshweavermemextest) | Emulated   | memex-local
-//   local-prod  | Azure (memex)                | Azure (meshweavermemex)     | Emulated   | memex-local
-//   test        | Azure (memex-test)           | Azure (meshweavermemextest) | Azure      | memex-test
-//   prod        | Azure (memex)                | Azure (meshweavermemex)     | Azure      | memex-prod
+//   local       | Docker pgvector (memex) | Emulated     | Emulated   | memex-local
+//   test        | Azure (memex-test)      | Azure        | Azure      | memex-test
+//   prod        | Azure (memex)           | Azure        | Azure      | memex-prod
 //   monolith    | FileSystem (standalone) | —            | —          | memex-monolith
 //
 // Secrets: set locally via `dotnet user-secrets`, in CI/CD via GitHub secrets.
@@ -42,6 +40,7 @@ if (mode == "monolith")
     // Standalone portal without Orleans or external infrastructure
     builder
         .AddProject<Projects.Memex_Portal_Monolith>("memex-monolith")
+        .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
         .WithExternalHttpEndpoints();
     builder.Build().Run();
     return;
@@ -127,6 +126,7 @@ var appInsights = builder.AddAzureApplicationInsights("appinsights")
 // --- Database Migration ---
 var dbMigration = builder
     .AddProject<Projects.Memex_Database_Migration>("db-migration")
+    .WithEnvironment("Embedding__Model", embeddingModel)
     .WithReference(appInsights)
     .WaitFor(appInsights);
 if (hasEmbedding)
@@ -217,15 +217,6 @@ if (useLocalDb)
     var storageBlobs = contentStorage.AddBlobs("storage");
     portal.WithReference(storageBlobs).WaitFor(storageBlobs);
 }
-else if (mode is "local-test" or "local-prod")
-{
-    // Connect to existing Azure Blob Storage via Azure Identity (az login, no secrets needed)
-    var storageName = mode is "local-test" ? "meshweavermemextest" : "meshweavermemex";
-    var contentStorage = builder.AddAzureStorage("memexblobs")
-        .RunAsExisting(storageName, null);
-    var storageBlobs = contentStorage.AddBlobs("storage");
-    portal.WithReference(storageBlobs);
-}
 else
 {
     // Deployed modes: provision Azure Blob Storage in Sweden Central
@@ -254,14 +245,6 @@ if (useLocalDb)
 
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
-}
-else if (mode is "local-test" or "local-prod")
-{
-    // Use pre-configured connection string (set via dotnet user-secrets)
-    // to connect to existing Azure PostgreSQL without Aspire provisioning.
-    var db = builder.AddConnectionString("memex");
-    dbMigration.WithReference(db);
-    portal.WithReference(db);
 }
 else
 {

@@ -92,14 +92,28 @@ public partial class MarkdownView
     {
         await base.OnAfterRenderAsync(firstRender);
 
-        // Submit code to kernel on first render
-        // The kernel hub creates local subhosts on demand — no mesh node creation needed
+        // Submit code to kernel on first render.
+        // Create the kernel node first so Orleans can activate the grain.
         if (firstRender && !_codeSubmitted && CodeSubmissions != null && CodeSubmissions.Count > 0)
         {
             _codeSubmitted = true;
-            foreach (var submission in CodeSubmissions)
+            var ownerPath = Stream?.Owner?.ToString();
+            var kernelNode = new MeshNode(KernelAddress.Id!, KernelAddress.Type)
             {
-                Hub.Post(submission, o => o.WithTarget(KernelAddress));
+                NodeType = "kernel",
+                MainNode = ownerPath,
+                Name = $"Kernel ({_kernelId[..8]})"
+            };
+            var delivery = Hub.Post(new CreateNodeRequest(kernelNode),
+                o => o.WithTarget(Hub.Address));
+            if (delivery != null)
+            {
+                Hub.RegisterCallback((IMessageDelivery)delivery, _ =>
+                {
+                    foreach (var submission in CodeSubmissions)
+                        Hub.Post(submission, o => o.WithTarget(KernelAddress));
+                    return _;
+                });
             }
         }
     }

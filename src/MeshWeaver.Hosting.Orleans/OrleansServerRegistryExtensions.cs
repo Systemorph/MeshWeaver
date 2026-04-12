@@ -6,6 +6,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Orleans;
 
@@ -81,6 +82,15 @@ public static class OrleansServerRegistryExtensions
         // Register defaults if not already registered - user can register their own first
         services.AddInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
+
+        // Register Orleans-distributed change feed (wraps local feed + Orleans streams)
+        services.TryAddSingleton<InProcessMeshChangeFeed>();
+        services.TryAddSingleton<IMeshChangeFeed>(sp =>
+            new OrleansMeshChangeFeed(
+                sp.GetRequiredService<InProcessMeshChangeFeed>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<OrleansMeshChangeFeed>()));
+
         services.AddMeshCatalog();
 
         return services;

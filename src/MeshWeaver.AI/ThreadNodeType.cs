@@ -76,9 +76,13 @@ public static class ThreadNodeType
     public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null)
     {
         var speakingId = GenerateSpeakingId(messageText);
+        // Add _Thread partition for top-level threads. Sub-threads (delegations)
+        // live directly under the parent response message — no nested _Thread.
         var ns = string.IsNullOrEmpty(contextPath)
             ? ThreadPartition
-            : $"{contextPath}/{ThreadPartition}";
+            : contextPath.Contains($"/{ThreadPartition}/")
+                ? contextPath
+                : $"{contextPath}/{ThreadPartition}";
         var name = messageText.Length > 60
             ? messageText[..57] + "..."
             : messageText;
@@ -90,6 +94,53 @@ public static class ThreadNodeType
             MainNode = contextPath,
             Content = new Thread { CreatedBy = createdBy }
         };
+    }
+
+    /// <summary>
+    /// Builds a thread node with pre-populated messages and pending execution.
+    /// When the thread grain activates, it auto-starts execution — no separate SubmitMessageRequest needed.
+    /// </summary>
+    public static (MeshNode Thread, string UserMsgId, string ResponseMsgId) BuildThreadWithMessages(
+        string contextPath, string messageText,
+        string? createdBy = null, string? agentName = null,
+        string? modelName = null, IReadOnlyList<string>? attachments = null)
+    {
+        var speakingId = GenerateSpeakingId(messageText);
+        // Add _Thread partition for top-level threads. Sub-threads (delegations)
+        // live directly under the parent response message — no nested _Thread.
+        var ns = string.IsNullOrEmpty(contextPath)
+            ? ThreadPartition
+            : contextPath.Contains($"/{ThreadPartition}/")
+                ? contextPath
+                : $"{contextPath}/{ThreadPartition}";
+        var name = messageText.Length > 60
+            ? messageText[..57] + "..."
+            : messageText;
+
+        var userMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+        var threadNode = new MeshNode(speakingId, ns)
+        {
+            Name = name,
+            NodeType = NodeType,
+            MainNode = contextPath,
+            Content = new Thread
+            {
+                CreatedBy = createdBy,
+                Messages = ImmutableList.Create(userMsgId, responseMsgId),
+                IsExecuting = true,
+                ActiveMessageId = responseMsgId,
+                ExecutionStartedAt = DateTime.UtcNow,
+                PendingUserMessage = messageText,
+                PendingAgentName = agentName,
+                PendingModelName = modelName,
+                PendingContextPath = contextPath,
+                PendingAttachments = attachments
+            }
+        };
+
+        return (threadNode, userMsgId, responseMsgId);
     }
 
     /// <summary>

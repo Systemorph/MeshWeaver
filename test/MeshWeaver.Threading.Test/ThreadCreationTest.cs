@@ -181,7 +181,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var messagePath = $"{threadPath}/{messageId}";
         var messageContent = new ThreadMessage
         {
-            Id = messageId,
             Role = "user",
             Text = "Hello, world!",
             Timestamp = DateTime.UtcNow,
@@ -387,7 +386,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             new ThreadMessage
             {
-                Id = "1",
                 Role = "user",
                 Text = "Hello",
                 AuthorName = "Alice",
@@ -396,7 +394,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             },
             new ThreadMessage
             {
-                Id = "2",
                 Role = "assistant",
                 Text = "Hi there!",
                 AuthorName = "Bot",
@@ -426,7 +423,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             new ThreadMessage
             {
-                Id = "1",
                 Role = "user",
                 Text = "Submitted message",
                 Timestamp = DateTime.UtcNow,
@@ -434,7 +430,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             },
             new ThreadMessage
             {
-                Id = "2",
                 Role = "user",
                 Text = "Currently typing...",
                 Timestamp = DateTime.UtcNow,
@@ -442,7 +437,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             },
             new ThreadMessage
             {
-                Id = "3",
                 Role = "assistant",
                 Text = "Response",
                 Timestamp = DateTime.UtcNow,
@@ -465,7 +459,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange & Act
         var message = new ThreadMessage
         {
-            Id = "1",
             Role = "user",
             Text = "Hello"
         };
@@ -494,16 +487,16 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.CreateNodeAsync(threadNode, longTimeout);
 
         // Create a single message to test type preservation (simplify test)
+        var responseMessageId = Guid.NewGuid().AsString();
         var responseMessage = new ThreadMessage
         {
-            Id = Guid.NewGuid().AsString(),
             Role = "assistant",
             Text = "Response",
             Type = ThreadMessageType.AgentResponse
         };
 
         // Act - Create message node
-        var responseNode = new MeshNode($"{threadPath}/{responseMessage.Id}")
+        var responseNode = new MeshNode($"{threadPath}/{responseMessageId}")
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = responseMessage

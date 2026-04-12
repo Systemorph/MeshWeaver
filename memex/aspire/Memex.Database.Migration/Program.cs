@@ -7,12 +7,10 @@ using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh;
 using Npgsql;
 
-Console.WriteLine("[Migration] Starting...");
 var builder = Host.CreateApplicationBuilder(args);
 builder.AddServiceDefaults();
 
 var connectionString = builder.Configuration.GetConnectionString("memex") ?? "";
-Console.WriteLine($"[Migration] ConnectionString: {(string.IsNullOrEmpty(connectionString) ? "(empty)" : connectionString[..Math.Min(30, connectionString.Length)] + "...")}");
 if (connectionString.Contains("database.azure.com"))
     builder.AddAzureNpgsqlDataSource("memex");
 else
@@ -26,14 +24,10 @@ builder.Services.Configure<PostgreSqlStorageOptions>(o =>
     o.VectorDimensions = embeddingOptions.Dimensions;
 });
 
-Console.WriteLine("[Migration] Building host...");
 var host = builder.Build();
-Console.WriteLine("[Migration] Host built. Resolving services...");
 
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Migration");
-Console.WriteLine("[Migration] Resolving NpgsqlDataSource...");
 var dataSource = host.Services.GetRequiredService<NpgsqlDataSource>();
-Console.WriteLine("[Migration] NpgsqlDataSource resolved.");
 var options = host.Services.GetRequiredService<IOptions<PostgreSqlStorageOptions>>();
 
 logger.LogInformation("Running database migration...");
@@ -124,7 +118,7 @@ await using (var checkSchemas = dataSource.CreateCommand("""
 if (isFreshDb)
 {
     logger.LogInformation("Fresh database detected — skipping data repairs (no existing data to fix).");
-    currentVersion = 1; // Skip all repair migrations
+    currentVersion = 5; // Skip all repair migrations (no existing data to fix)
 }
 
 // ── Data repair v1: Move AccessAssignments to correct table + namespace ──
@@ -399,7 +393,7 @@ if (currentVersion < 5)
                         'User/' || user_rec.id,
                         NOW(),
                         1,
-                        'Active'
+                        2
                     );
                     RAISE NOTICE 'Created self-assignment for user %', user_rec.id;
                 END IF;
@@ -433,6 +427,106 @@ if (currentVersion < 5)
 
     currentVersion = 5;
     logger.LogInformation("Repair v5 completed.");
+}
+
+// ── Data repair v6: Rebuild user_effective_permissions for all schemas ──
+// Ensures self-assignments and permissions are correct after fresh deployments,
+// schema re-initialization, or any silent failure in UserScopeGrantHandler.
+// This runs on fresh DBs (currentVersion=5 is set, not 6) and existing DBs alike.
+if (currentVersion < 6)
+{
+    logger.LogInformation("Running repair v6: Ensure user self-assignments and rebuild all permissions...");
+    await using (var cmd = dataSource.CreateCommand("""
+        DO $$
+        DECLARE
+            user_rec RECORD;
+            schema_rec RECORD;
+            assignment_exists BOOLEAN;
+            user_schema_exists BOOLEAN;
+        BEGIN
+            -- Guard: user schema may not exist on fresh DBs
+            SELECT EXISTS(
+                SELECT 1 FROM information_schema.schemata
+                WHERE schema_name = 'user'
+            ) INTO user_schema_exists;
+
+            IF user_schema_exists THEN
+                -- Ensure every User node has an Admin self-assignment
+                FOR user_rec IN
+                    SELECT id FROM "user".mesh_nodes WHERE node_type = 'User'
+                LOOP
+                    SELECT EXISTS(
+                        SELECT 1 FROM "user".access
+                        WHERE namespace = 'User/' || user_rec.id || '/_Access'
+                          AND content->>'accessObject' = user_rec.id
+                    ) INTO assignment_exists;
+
+                    IF NOT assignment_exists THEN
+                        INSERT INTO "user".access (id, namespace, name, node_type, content, main_node, last_modified, version, state)
+                        VALUES (
+                            user_rec.id || '_SelfAccess',
+                            'User/' || user_rec.id || '/_Access',
+                            user_rec.id || ' Self Access',
+                            'AccessAssignment',
+                            jsonb_build_object(
+                                'accessObject', user_rec.id,
+                                'displayName', user_rec.id,
+                                'roles', jsonb_build_array(jsonb_build_object('role', 'Admin'))
+                            ),
+                            'User/' || user_rec.id,
+                            NOW(), 1, 2
+                        );
+                        RAISE NOTICE 'v6: Created self-assignment for user %', user_rec.id;
+                    END IF;
+                END LOOP;
+
+                -- Rebuild permissions for user schema
+                BEGIN
+                    PERFORM "user".rebuild_user_effective_permissions();
+                    RAISE NOTICE 'v6: Rebuilt permissions for user schema';
+                EXCEPTION WHEN OTHERS THEN
+                    RAISE NOTICE 'v6: user schema rebuild failed: %', SQLERRM;
+                END;
+            ELSE
+                RAISE NOTICE 'v6: user schema does not exist yet — skipping (trigger will handle first login)';
+            END IF;
+
+            -- Rebuild permissions for all other content schemas
+            FOR schema_rec IN
+                SELECT schema_name FROM information_schema.schemata s
+                WHERE EXISTS (SELECT 1 FROM information_schema.tables t
+                              WHERE t.table_schema = s.schema_name AND t.table_name = 'access')
+                AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast', 'user')
+                AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+            LOOP
+                BEGIN
+                    EXECUTE format('SELECT %I.rebuild_user_effective_permissions()', schema_rec.schema_name);
+                    RAISE NOTICE 'v6: Rebuilt permissions for schema %', schema_rec.schema_name;
+                EXCEPTION WHEN OTHERS THEN
+                    RAISE NOTICE 'v6: Schema % rebuild failed: %', schema_rec.schema_name, SQLERRM;
+                END;
+            END LOOP;
+        END $$;
+        """))
+    {
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    currentVersion = 6;
+    logger.LogInformation("Repair v6 completed.");
+}
+
+// ── Always: rebuild user_effective_permissions to catch any new logins since last deploy ──
+try
+{
+    await using var rebuildCmd = dataSource.CreateCommand(
+        "SELECT \"user\".rebuild_user_effective_permissions()");
+    await rebuildCmd.ExecuteNonQueryAsync();
+    logger.LogInformation("Rebuilt user_effective_permissions for user schema.");
+}
+catch (Exception ex)
+{
+    logger.LogWarning(ex, "Could not rebuild user_effective_permissions (user schema may not exist yet).");
 }
 
 // ── Always: populate searchable_schemas from remaining content partitions ──

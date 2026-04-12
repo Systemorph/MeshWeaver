@@ -16,4 +16,11 @@ public static class WellKnownUsers
     /// Every logged-in user inherits "Public" permissions in addition to their own.
     /// </summary>
     public const string Public = "Public";
+
+    /// <summary>
+    /// The "system-security" identity used by SecurityService for internal operations.
+    /// Bypasses RLS validation — security operations (creating/updating AccessAssignment,
+    /// PartitionAccessPolicy nodes) must not be blocked by the permissions they manage.
+    /// </summary>
+    public const string System = "system-security";
 }

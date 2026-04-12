@@ -144,7 +144,7 @@ internal class PersistenceService(
         if (await HasReadAccessAsync(node, userId, ct))
             return node;
 
-        logger?.LogDebug("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
+        logger?.LogWarning("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
         return null;
     }
 

@@ -141,7 +141,7 @@ aspire generate --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --m
 ## Local Development (Docker)
 
 ```bash
-aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj
+aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode local
 ```
 
 This starts in `local` mode by default, using Docker pgvector and emulated Azure services (Azurite).

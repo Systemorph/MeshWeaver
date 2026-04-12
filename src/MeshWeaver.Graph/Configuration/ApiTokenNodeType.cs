@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -10,23 +12,31 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for ApiToken nodes in the graph.
-/// ApiToken nodes are system-managed — excluded from search and create contexts.
-/// Handles ValidateTokenRequest to authenticate API tokens via the message hub.
+/// Tokens are satellites of User nodes, stored at User/{userId}/_Api/{hashPrefix}.
+/// An index at ApiToken/{hashPrefix} enables fast validation routing.
+/// Creation uses standard CreateNodeRequest with nodeType=ApiToken — the RLS validator
+/// maps this to Permission.Api via GetPermissionForNodeType.
 /// </summary>
 public static class ApiTokenNodeType
 {
     public const string NodeType = "ApiToken";
+    private static readonly ConcurrentDictionary<string, (ValidateTokenResponse Response, DateTimeOffset ExpiresAt)> ValidationCache = new();
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
 
     public static TBuilder AddApiTokenType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
+        // Access control: GetPermissionForNodeType maps "ApiToken" → Permission.Api
+        // The RLS validator checks Permission.Api on the MainNode (User path)
+        // Same pattern as Thread → Permission.Thread and Comment → Permission.Comment
         return builder;
     }
 
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "API Token",
+        IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(ApiTokenNodeType).Assembly.Location,
         HubConfiguration = config => config
@@ -38,10 +48,8 @@ public static class ApiTokenNodeType
     };
 
     /// <summary>
-    /// Validates an API token. The handler runs on the token's hosted hub (ApiToken/{hashPrefix}).
-    /// Uses IStorageService to bypass RLS — token validation happens before any user is logged in.
-    /// Supports both new format (ApiTokenIndex pointer -> User/{userId}/ApiToken/{hash})
-    /// and legacy format (full ApiToken at index path).
+    /// Validates an API token. Routes to ApiToken/{hashPrefix}, follows index to User/{userId}/_Api/{hash}.
+    /// Results are cached for 5 minutes.
     /// </summary>
     private static async Task<IMessageDelivery> HandleValidateToken(
         IMessageHub hub,
@@ -56,8 +64,17 @@ public static class ApiTokenNodeType
             return request.Processed();
         }
 
-        // Load the token node directly from persistence (bypasses RLS)
-        var hubPath = hub.Address.ToString();
+        var hash = ValidateTokenRequest.HashToken(rawToken);
+
+        // Check cache first
+        if (ValidationCache.TryGetValue(hash, out var cached) && cached.ExpiresAt > DateTimeOffset.UtcNow)
+        {
+            hub.Post(cached.Response, o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        // Load from persistence (bypasses RLS)
+        var hubPath = hub.Address.Path;
         var persistenceCore = hub.ServiceProvider.GetService<IStorageService>();
         if (persistenceCore == null)
         {
@@ -72,14 +89,12 @@ public static class ApiTokenNodeType
             return request.Processed();
         }
 
-        // Check if this is an index pointer (new format) or a legacy full token
-        var hash = ValidateTokenRequest.HashToken(rawToken);
+        // Check if this is an index pointer or a legacy full token
         var index = node.Content as ApiTokenIndex ?? ExtractApiTokenIndex(node, hub.JsonSerializerOptions);
         ApiToken? apiToken;
 
         if (index != null)
         {
-            // New format: verify hash against index, then follow pointer to full token
             if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
             {
                 hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
@@ -91,7 +106,6 @@ public static class ApiTokenNodeType
         }
         else
         {
-            // Legacy format: full ApiToken at index path
             apiToken = node.Content as ApiToken ?? ExtractApiToken(node, hub.JsonSerializerOptions);
         }
 
@@ -101,7 +115,6 @@ public static class ApiTokenNodeType
             return request.Processed();
         }
 
-        // Verify hash matches
         if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
         {
             hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
@@ -120,43 +133,28 @@ public static class ApiTokenNodeType
             return request.Processed();
         }
 
-        hub.Post(
-            ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail),
-            o => o.ResponseFor(request));
+        var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail);
+        ValidationCache[hash] = (response, DateTimeOffset.UtcNow + CacheDuration);
+
+        hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
 
     private static ApiToken? ExtractApiToken(MeshNode? node, JsonSerializerOptions options)
     {
-        if (node?.Content is JsonElement jsonElement)
-        {
-            try
-            {
-                return JsonSerializer.Deserialize<ApiToken>(jsonElement.GetRawText(), options);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-        return null;
+        if (node?.Content is not JsonElement jsonElement) return null;
+        try { return JsonSerializer.Deserialize<ApiToken>(jsonElement.GetRawText(), options); }
+        catch { return null; }
     }
 
     private static ApiTokenIndex? ExtractApiTokenIndex(MeshNode? node, JsonSerializerOptions options)
     {
-        if (node?.Content is JsonElement jsonElement)
+        if (node?.Content is not JsonElement jsonElement) return null;
+        try
         {
-            try
-            {
-                var index = JsonSerializer.Deserialize<ApiTokenIndex>(jsonElement.GetRawText(), options);
-                // Distinguish from legacy ApiToken: index has TokenPath set
-                return !string.IsNullOrEmpty(index?.TokenPath) ? index : null;
-            }
-            catch
-            {
-                return null;
-            }
+            var index = JsonSerializer.Deserialize<ApiTokenIndex>(jsonElement.GetRawText(), options);
+            return !string.IsNullOrEmpty(index?.TokenPath) ? index : null;
         }
-        return null;
+        catch { return null; }
     }
 }

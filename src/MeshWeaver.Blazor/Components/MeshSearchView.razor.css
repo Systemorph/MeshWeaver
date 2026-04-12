@@ -172,6 +172,20 @@
     font-weight: 500;
 }
 
+.mesh-search-toggle-rows {
+    background: none;
+    border: none;
+    color: var(--accent-foreground-rest);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 0;
+}
+
+.mesh-search-toggle-rows:hover {
+    text-decoration: underline;
+}
+
 .mesh-search-card {
     width: 100%;
     cursor: pointer;

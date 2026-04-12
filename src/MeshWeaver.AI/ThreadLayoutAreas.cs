@@ -33,15 +33,15 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            .WithHandler<ResubmitMessageRequest>(HandleResubmitMessage)
-            .WithHandler<DeleteFromMessageRequest>(HandleDeleteFromMessage)
-            .WithHandler<EditMessageRequest>(HandleEditMessage)
+            .WithHandler<ResubmitMessageRequest>(ThreadMessageHandlers.HandleResubmitMessage)
+            .WithHandler<DeleteFromMessageRequest>(ThreadMessageHandlers.HandleDeleteFromMessage)
             .AddDefaultMeshMenu()
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
             .AddNodeMenuItems(DelegationsMenuProvider)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
+                .WithView(MeshNodeLayoutAreas.OverviewArea, ThreadProgressView)
                 .WithView(ThreadNodeType.ThreadChatArea, ThreadChatView)
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
@@ -242,10 +242,45 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Streaming area: shows the active response message cell and any delegation sub-threads.
-    /// Reactive — emits null when idle, a LayoutAreaControl for the streaming cell when executing.
-    /// Parent threads subscribe to child threads' Streaming area to see cascading progress.
-    /// Returns IObservable so it updates reactively as execution state changes.
+    /// Overview area for Thread nodes — overrides the default property editor.
+    /// Shows the active/last message as a LayoutAreaControl (bubble with tool calls).
+    /// If executing: shows the active message cell (streaming + tool calls).
+    /// If finished: shows the last response message cell.
+    /// Never shows the Thread record's properties as an editor.
+    /// </summary>
+    public static IObservable<UiControl?> ThreadProgressView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var stream = host.Workspace.GetStream<MeshNode>();
+
+        return stream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var thread = node?.Content as MeshThread;
+                if (thread == null) return (UiControl?)null;
+
+                // Find which message to show
+                string? messageId = null;
+                if (thread.IsExecuting && !string.IsNullOrEmpty(thread.ActiveMessageId))
+                    messageId = thread.ActiveMessageId;
+                else if (thread.Messages.Count > 0)
+                    messageId = thread.Messages[^1]; // last message
+
+                if (string.IsNullOrEmpty(messageId))
+                    return (UiControl?)Controls.Html(
+                        "<p style=\"color: var(--neutral-foreground-hint); padding: 24px;\">No messages yet.</p>");
+
+                var messagePath = $"{hubPath}/{messageId}";
+                return (UiControl?)new LayoutAreaControl(messagePath,
+                    new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
+                    .WithSpinnerType(SpinnerType.Skeleton);
+            });
+    }
+
+    /// <summary>
+    /// Streaming area: if thread has an executing cell, returns its default layout area.
+    /// Otherwise null. Simple passthrough — no title, no wrapping.
     /// </summary>
     public static IObservable<UiControl?> StreamingView(LayoutAreaHost host, RenderingContext _)
     {
@@ -267,7 +302,7 @@ public static class ThreadLayoutAreas
 
                 var responsePath = $"{hubPath}/{state.ActiveMessageId}";
                 return (UiControl?)new LayoutAreaControl(responsePath,
-                    new LayoutAreaReference("Streaming"));
+                    new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
             });
     }
 
@@ -460,181 +495,27 @@ public static class ThreadLayoutAreas
         => !string.IsNullOrEmpty(node?.Name) ? node.Name : "Thread";
 
     /// <summary>
-    /// Handles DeleteFromMessageRequest — truncates Messages from the given message onwards.
+    /// Adds the Threads view to the layout — shows node-scoped thread history.
     /// </summary>
-    private static IMessageDelivery HandleDeleteFromMessage(
-        IMessageHub hub,
-        IMessageDelivery<DeleteFromMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        logger.LogInformation("HandleDeleteFromMessage: threadPath={ThreadPath}, messageId={MessageId}",
-            request.ThreadPath, request.MessageId);
-
-        hub.InvokeAsync(() =>
-        {
-            hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
-            {
-                var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
-                var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
-
-                var msgList = currentContent.Messages.ToList();
-                var msgIndex = msgList.IndexOf(request.MessageId);
-                if (msgIndex < 0) return;
-
-                var updatedMsgList = msgList.Take(msgIndex).ToImmutableList();
-                var newContent = currentContent with { Messages = updatedMsgList };
-                var updatedNode = (threadNode ?? new MeshNode(request.ThreadPath)) with { Content = newContent };
-                hub.Post(new DataChangeRequest { Updates = [updatedNode] });
-            });
-        });
-
-        return delivery.Processed();
-    }
+    public static LayoutDefinition AddThreadsLayoutArea(this LayoutDefinition layout)
+        => layout.WithView("Threads", ThreadsView);
 
     /// <summary>
-    /// Handles ResubmitMessageRequest — keeps the user message, removes the response
-    /// (and anything after it), then creates only a new output cell and starts execution.
+    /// Adds the Threads view to the hub's layout configuration.
     /// </summary>
-    private static IMessageDelivery HandleResubmitMessage(
-        IMessageHub hub,
-        IMessageDelivery<ResubmitMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        logger.LogInformation("HandleResubmitMessage: threadPath={ThreadPath}, messageId={MessageId}",
-            request.ThreadPath, request.MessageId);
-
-        var workspace = hub.GetWorkspace();
-        workspace.GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
-        {
-            var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
-            var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
-
-            var msgIndex = currentContent.Messages.IndexOf(request.MessageId);
-            if (msgIndex < 0) return;
-
-            // Keep the user message (msgIndex), remove everything after it
-            var updatedMsgList = currentContent.Messages.Take(msgIndex + 1).ToImmutableList();
-
-            // Create new response cell only
-            var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-            var responsePath = $"{request.ThreadPath}/{responseMsgId}";
-            var mainEntity = threadNode?.MainNode ?? request.ThreadPath;
-            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-            meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
-            {
-                NodeType = ThreadMessageNodeType.NodeType,
-                MainNode = mainEntity,
-                Content = new ThreadMessage
-                {
-                    Id = responseMsgId,
-                    Role = "assistant",
-                    Text = "",
-                    Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.AgentResponse
-                }
-            }).Subscribe(_ =>
-            {
-                // Update thread: keep user msg, add new response, start execution
-                workspace.UpdateMeshNode(node =>
-                {
-                    var thread = node.Content as MeshThread ?? new MeshThread();
-                    return node with
-                    {
-                        Content = thread with
-                        {
-                            Messages = updatedMsgList.Add(responseMsgId),
-                            IsExecuting = true,
-                            ActiveMessageId = responseMsgId,
-                            ExecutionStatus = null,
-                            TokensUsed = 0,
-                            ExecutionStartedAt = DateTime.UtcNow,
-                            StreamingText = null,
-                            StreamingToolCalls = null
-                        }
-                    };
-                });
-
-                // Start execution on hosted hub
-                var executionHub = hub.GetHostedHub(
-                    new Address($"{hub.Address}/_Exec"),
-                    config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
-                    HostedHubCreation.Always);
-
-                executionHub!.Post(new SubmitMessageRequest
-                {
-                    ThreadPath = request.ThreadPath,
-                    UserMessageText = request.UserMessageText,
-                    ResponsePath = responsePath,
-                    ContextPath = mainEntity
-                }, o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
-            },
-            ex => logger.LogError(ex, "HandleResubmitMessage: failed to create response cell for {ThreadPath}", request.ThreadPath));
-        });
-
-        return delivery.Processed();
-    }
+    public static MessageHubConfiguration AddThreadsLayoutArea(this MessageHubConfiguration configuration)
+        => configuration.AddLayout(layout => layout.AddThreadsLayoutArea());
 
     /// <summary>
-    /// Handles EditMessageRequest — truncates Messages from the given message onwards,
-    /// creates a new EditingPrompt message node, and appends it to Messages.
+    /// Renders the Threads area showing node-scoped thread history.
     /// </summary>
-    private static IMessageDelivery HandleEditMessage(
-        IMessageHub hub,
-        IMessageDelivery<EditMessageRequest> delivery)
+    private static UiControl ThreadsView(LayoutAreaHost host, RenderingContext _)
     {
-        var request = delivery.Message;
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        logger.LogInformation("HandleEditMessage: threadPath={ThreadPath}, messageId={MessageId}",
-            request.ThreadPath, request.MessageId);
-
-        var editMsgId = Guid.NewGuid().ToString("N")[..8];
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-        // Create editing prompt node first
-        meshService.CreateNodeAsync(new MeshNode(editMsgId, request.ThreadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Id = editMsgId,
-                Role = "user",
-                Text = request.MessageText,
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.EditingPrompt
-            }
-        }).ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-            {
-                logger.LogError(t.Exception, "HandleEditMessage: node creation FAILED for {ThreadPath}", request.ThreadPath);
-                return;
-            }
-
-            // Update Messages: truncate from the clicked message, append editing prompt
-            hub.InvokeAsync(() =>
-            {
-                hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                    .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
-                {
-                    var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
-                    var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
-
-                    var msgList = currentContent.Messages.ToList();
-                    var msgIndex = msgList.IndexOf(request.MessageId);
-                    if (msgIndex < 0) return;
-
-                    var updatedMsgList = msgList.Take(msgIndex).Concat([editMsgId]).ToImmutableList();
-                    var newContent = currentContent with { Messages = updatedMsgList };
-                    var updatedNode = (threadNode ?? new MeshNode(request.ThreadPath)) with { Content = newContent };
-                    hub.Post(new DataChangeRequest { Updates = [updatedNode] });
-                });
-            });
-        });
-
-        return delivery.Processed();
+        var nodePath = host.Hub.Address.ToString();
+        return Controls.MeshSearch
+            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath}/{ThreadNodeType.ThreadPartition}")
+            .WithNamespace(nodePath)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCreateNodeType("Thread");
     }
 }

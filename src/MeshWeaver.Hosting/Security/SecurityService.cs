@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -136,6 +137,10 @@ internal class SecurityService : ISecurityService
     {
         if (string.IsNullOrEmpty(userId))
             userId = WellKnownUsers.Anonymous;
+
+        // System identity has full access — used by SecurityService for internal operations
+        if (userId == WellKnownUsers.System)
+            return Permission.All;
 
         var cacheKey = $"{userId}:{nodePath}";
         if (_permissionCache.TryGetValue(cacheKey, out Permission cached))
@@ -487,11 +492,11 @@ internal class SecurityService : ISecurityService
         }
         var existingAssignment = existingNode != null ? DeserializeAssignment(existingNode) : null;
 
-        var roles = existingAssignment?.Roles?.ToList() ?? [];
+        var roles = existingAssignment?.Roles?.ToImmutableList() ?? ImmutableList<RoleAssignment>.Empty;
 
         // Add role if not already present
         if (!roles.Any(r => r.Role == roleId))
-            roles.Add(new RoleAssignment { Role = roleId });
+            roles = roles.Add(new RoleAssignment { Role = roleId });
 
         var node = new MeshNode(nodeId, ns)
         {
@@ -539,7 +544,7 @@ internal class SecurityService : ISecurityService
         if (existingAssignment == null)
             return; // Nothing to remove
 
-        var roles = existingAssignment.Roles.Where(r => r.Role != roleId).ToList();
+        var roles = existingAssignment.Roles.Where(r => r.Role != roleId).ToImmutableList();
 
         if (roles.Count == 0)
         {
@@ -609,6 +614,7 @@ internal class SecurityService : ISecurityService
         };
 
         await _persistenceCore.SaveNodeAsync(node, Options, ct);
+
         _policyCache[ns] = policy;
         ClearPermissionCache();
     }

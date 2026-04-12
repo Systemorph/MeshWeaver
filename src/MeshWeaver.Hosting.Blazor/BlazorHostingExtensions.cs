@@ -37,7 +37,6 @@ public static class BlazorHostingExtensions
     public static void MapMeshWeaver(this WebApplication app)
     {
         app.MapStaticContent(app.Services);
-        app.UseMiddleware<UserContextMiddleware>();
 
         // Thumbnail preview stub (returns 501 until implemented)
         app.MapGet("/layout-preview/{area}", (string area) => Results.StatusCode(StatusCodes.Status501NotImplemented));

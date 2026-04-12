@@ -354,6 +354,7 @@ public class CreateNodePermissionAttribute() : RequiresPermissionAttribute(Permi
         {
             "Thread" or "ThreadMessage" => Permission.Thread,
             "Comment" => Permission.Comment,
+            "ApiToken" => Permission.Api,
             _ => Permission.Create
         };
 

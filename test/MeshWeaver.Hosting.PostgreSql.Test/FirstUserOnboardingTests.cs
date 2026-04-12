@@ -180,12 +180,19 @@ public class FirstUserOnboardingTests
         // Populate searchable_schemas
         await PopulateSearchableSchemasAsync(orgNames.Select(o => o.ToLowerInvariant()), ct);
 
+        // Grant partition_access to globaladmin for all org schemas
+        await using (var cmd = _fixture.DataSource.CreateCommand(
+            "DELETE FROM public.partition_access; " +
+            "INSERT INTO public.partition_access (user_id, partition) VALUES " +
+            "('globaladmin', 'orgalpha'), ('globaladmin', 'orgbeta')"))
+            await cmd.ExecuteNonQueryAsync(ct);
+
         // Cross-schema search for Organization nodes as globaladmin
         var results = await CallSearchAcrossSchemasAsync(
             $"LOWER(n.node_type) = '{OrganizationNodeType.NodeType.ToLowerInvariant()}'",
             username, "last_modified DESC", 50, ct);
 
-        results.Should().HaveCount(2, "Global admin should see all organizations");
+        results.Should().HaveCount(2, "Global admin should see all organizations (has partition_access to both)");
         results.Select(n => n.Name).Should().Contain("OrgAlpha Corp");
         results.Select(n => n.Name).Should().Contain("OrgBeta Corp");
     }

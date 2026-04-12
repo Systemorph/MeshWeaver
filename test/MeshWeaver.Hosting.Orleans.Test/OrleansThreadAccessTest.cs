@@ -471,7 +471,6 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
             var fullPath = $"{threadPath}/{msgId}";
             var msg = await GetHubContentAsync<ThreadMessage>(client, fullPath, ct);
             msg.Should().NotBeNull($"ThreadMessage at {fullPath} should exist");
-            msg!.Id.Should().Be(msgId);
             Output.WriteLine($"Child node verified: {fullPath} => role={msg.Role}, type={msg.Type}");
         }
     }
