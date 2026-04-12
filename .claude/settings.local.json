@@ -128,7 +128,15 @@
       "Bash(exit 0)",
       "WebFetch(domain:gist.github.com)",
       "Bash(az containerapp:*)",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "Bash(netstat -ano)",
+      "Bash(wait)",
+      "Bash(netstat:*)",
+      "Bash(docker inspect:*)",
+      "Bash(wait:*)",
+      "Bash(sleep:*)",
+      "Bash(*&&*)",
+      "Bash(*|*)"
     ],
     "deny": [],
     "additionalDirectories": ["/tmp/claude"]
