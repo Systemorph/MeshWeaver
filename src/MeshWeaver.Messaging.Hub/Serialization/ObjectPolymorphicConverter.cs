@@ -64,7 +64,8 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
                 try
                 {
                     // Deserialize to the specific type using cleaned JSON
-                    var json = cleanedElement.GetRawText();
+                    // Normalize to ensure $type is first (required for parameterized constructor types)
+                    var json = JsonElementNormalizer.GetNormalizedRawText(cleanedElement);
                     return JsonSerializer.Deserialize(json, typeInfo!.Type, options)!;
                 }
                 catch (NotSupportedException ex) when (ex.Message.StartsWith("Deserialization of interface or abstract"))

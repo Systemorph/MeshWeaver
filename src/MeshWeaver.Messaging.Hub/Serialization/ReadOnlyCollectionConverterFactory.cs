@@ -1,8 +1,53 @@
-﻿using System.Collections.ObjectModel;
+﻿using System.Buffers;
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace MeshWeaver.Messaging.Serialization;
+
+/// <summary>
+/// Reorders JSON object properties so that $type appears first, which is required
+/// by System.Text.Json for polymorphic types with parameterized constructors.
+/// Returns the original raw text if no reordering is needed.
+/// </summary>
+internal static class JsonElementNormalizer
+{
+    private const string TypeDiscriminator = "$type";
+
+    public static string GetNormalizedRawText(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return element.GetRawText();
+
+        if (!element.TryGetProperty(TypeDiscriminator, out _))
+            return element.GetRawText();
+
+        // Check if $type is already the first property
+        using var enumerator = element.EnumerateObject();
+        if (!enumerator.MoveNext())
+            return element.GetRawText();
+
+        if (enumerator.Current.Name == TypeDiscriminator)
+            return element.GetRawText(); // Already first, no work needed
+
+        // Reorder: write $type first, then all other properties
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName(TypeDiscriminator);
+            element.GetProperty(TypeDiscriminator).WriteTo(writer);
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (prop.Name == TypeDiscriminator)
+                    continue;
+                prop.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+        return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+}
 
 /// <summary>
 /// Generic converter factory for read-only collection interfaces that handles polymorphic deserialization
@@ -72,8 +117,8 @@ public class ReadOnlyCollectionConverter<T> : JsonConverter<IReadOnlyCollection<
                 try
                 {
                     // Deserialize each element using the proper JsonSerializerOptions
-                    // The polymorphic resolver should handle the $type discriminators
-                    var item = JsonSerializer.Deserialize<T>(element.GetRawText(), options);
+                    // Normalize to ensure $type is first (required for parameterized constructor types)
+                    var item = JsonSerializer.Deserialize<T>(JsonElementNormalizer.GetNormalizedRawText(element), options);
                     if (item != null)
                         list.Add(item);
                 }
@@ -144,7 +189,7 @@ public class ReadOnlyListConverter<T> : JsonConverter<IReadOnlyList<T>>
         var list = new List<T>();
         foreach (var element in jsonDoc.RootElement.EnumerateArray())
         {
-            var item = JsonSerializer.Deserialize<T>(element.GetRawText(), options);
+            var item = JsonSerializer.Deserialize<T>(JsonElementNormalizer.GetNormalizedRawText(element), options);
             if (item != null)
                 list.Add(item);
         }
@@ -199,7 +244,7 @@ public class EnumerableConverter<T> : JsonConverter<IEnumerable<T>>
         var list = new List<T>();
         foreach (var element in jsonDoc.RootElement.EnumerateArray())
         {
-            var item = JsonSerializer.Deserialize<T>(element.GetRawText(), options);
+            var item = JsonSerializer.Deserialize<T>(JsonElementNormalizer.GetNormalizedRawText(element), options);
             if (item != null)
                 list.Add(item);
         }
