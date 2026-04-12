@@ -89,6 +89,7 @@
     <Project Path="src/MeshWeaver.Layout/MeshWeaver.Layout.csproj" />
     <Project Path="src/MeshWeaver.Markdown/MeshWeaver.Markdown.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj" />
+    <Project Path="src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
@@ -129,6 +130,7 @@
     <Project Path="test/MeshWeaver.Hub.Fixture/MeshWeaver.Hub.Fixture.csproj" />
     <Project Path="test/MeshWeaver.Kernel.Test/MeshWeaver.Kernel.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Collaboration.Test/MeshWeaver.Markdown.Collaboration.Test.csproj" />
+    <Project Path="test/MeshWeaver.Markdown.Export.Test/MeshWeaver.Markdown.Export.Test.csproj" />
     <Project Path="test/MeshWeaver.StorageImport.Test/MeshWeaver.StorageImport.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Cosmos.Test/MeshWeaver.Hosting.Cosmos.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />

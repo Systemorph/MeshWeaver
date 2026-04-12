@@ -91,6 +91,7 @@ public static class BlazorViewRegistry
                 FileBrowserControl fileBrowser => StandardView<FileBrowserControl, FileBrowserView>(fileBrowser, stream, area),
                 NodeImportControl nodeImport => StandardView<NodeImportControl, NodeImportView>(nodeImport, stream, area),
                 NodeExportControl nodeExport => StandardView<NodeExportControl, NodeExportView>(nodeExport, stream, area),
+                ExportDocumentControl exportDoc => StandardView<ExportDocumentControl, ExportDocumentView>(exportDoc, stream, area),
                 ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
                 CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
                 SwitchControl switchCtrl => StandardView<SwitchControl, Switch>(switchCtrl, stream, area),

@@ -1,0 +1,200 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Markdown.Export.Configuration
+@using MeshWeaver.Markdown.Export.Messaging
+@using MeshWeaver.Messaging
+@using MeshWeaver.Mesh
+@using Microsoft.JSInterop
+@inherits BlazorView<ExportDocumentControl, ExportDocumentView>
+
+<div class="export-document-view" style="max-width: 720px;">
+    <h2 style="margin-top: 0;">Export @(_title)</h2>
+    <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
+        Export <strong>@(NodeName ?? SourcePath)</strong> as a @_formatLabel document.
+    </p>
+
+    @if (!_isExporting && string.IsNullOrEmpty(_error) && !_done)
+    {
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+
+            <div>
+                <label><strong>Document title</strong></label>
+                <FluentTextField @bind-Value="_title" Style="width: 100%;" />
+            </div>
+
+            <div>
+                <label><strong>Corporate identity</strong></label>
+                <FluentTextField @bind-Value="_brandNodePath"
+                                 Placeholder="Brand/Systemorph"
+                                 Style="width: 100%;" />
+                <small style="color: var(--neutral-foreground-hint);">
+                    Path to a <code>CorporateIdentity</code> node. Leave empty for portal default.
+                </small>
+            </div>
+
+            <FluentCheckbox Value="_coverPage" ValueChanged="@((bool v) => _coverPage = v)" Label="Branded cover page" />
+            <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="Table of contents" />
+            <FluentCheckbox Value="_pbH1" ValueChanged="@((bool v) => _pbH1 = v)" Label="Page break before each # Section" />
+            <FluentCheckbox Value="_pbH2" ValueChanged="@((bool v) => _pbH2 = v)" Label="Page break before each ## Subsection" />
+
+            @if (HasDescendants)
+            {
+                <FluentCheckbox Value="_includeChildren"
+                                ValueChanged="@((bool v) => _includeChildren = v)"
+                                Label="Include child nodes as chapters" />
+                @if (_includeChildren)
+                {
+                    <FluentCheckbox Value="_pbChildren"
+                                    ValueChanged="@((bool v) => _pbChildren = v)"
+                                    Label="Page break between child chapters"
+                                    Style="margin-left: 24px;" />
+                }
+            }
+
+            <div>
+                <label><strong>Header text (optional)</strong></label>
+                <FluentTextField @bind-Value="_header" Style="width: 100%;" />
+            </div>
+
+            <div>
+                <label><strong>Footer text (optional)</strong></label>
+                <FluentTextField @bind-Value="_footer" Style="width: 100%;" />
+            </div>
+
+            <div style="margin-top: 16px;">
+                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
+                              IconStart="@(new Icons.Regular.Size16.ArrowExport())"
+                              OnClick="@ExportAsync">
+                    Export &amp; Download
+                </FluentButton>
+            </div>
+        </div>
+    }
+
+    @if (_isExporting)
+    {
+        <FluentProgress Visible="true" />
+        <p style="margin-top: 8px; color: var(--neutral-foreground-hint);">Generating document…</p>
+    }
+
+    @if (_done)
+    {
+        <FluentCard Style="padding: 16px; margin-top: 16px;">
+            <h3 style="color: var(--success); margin: 0 0 12px 0;">Export complete</h3>
+            <p>The file has been downloaded.</p>
+            <div style="margin-top: 16px; display: flex; gap: 8px;">
+                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
+                              OnClick="@Reset">Export again</FluentButton>
+            </div>
+        </FluentCard>
+    }
+
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <FluentCard Style="padding: 16px; margin-top: 16px; border-left: 4px solid var(--error);">
+            <p style="color: var(--error); margin: 0;">@_error</p>
+        </FluentCard>
+        <div style="margin-top: 16px;">
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral"
+                          OnClick="@Reset">Try again</FluentButton>
+        </div>
+    }
+</div>
+
+@code
+{
+    private string? SourcePath;
+    private string? NodeName;
+    private bool HasDescendants;
+
+    private string _title = "";
+    private string _brandNodePath = "";
+    private string _header = "";
+    private string _footer = "";
+
+    private bool _coverPage = true;
+    private bool _toc = true;
+    private bool _pbH1 = true;
+    private bool _pbH2;
+    private bool _includeChildren;
+    private bool _pbChildren = true;
+
+    private bool _isExporting;
+    private bool _done;
+    private string? _error;
+
+    private ExportFormat _format = ExportFormat.Pdf;
+    private string _formatLabel = "PDF";
+
+    protected override void BindData()
+    {
+        base.BindData();
+        SourcePath = ViewModel?.SourcePath;
+        NodeName = ViewModel?.NodeName;
+        HasDescendants = ViewModel?.HasDescendants ?? false;
+        _title = NodeName ?? SourcePath ?? "Document";
+
+        _format = string.Equals(ViewModel?.DefaultFormat, "docx", StringComparison.OrdinalIgnoreCase)
+            ? ExportFormat.Docx : ExportFormat.Pdf;
+        _formatLabel = _format == ExportFormat.Pdf ? "PDF" : "DOCX";
+    }
+
+    private async Task ExportAsync()
+    {
+        if (string.IsNullOrEmpty(SourcePath)) return;
+
+        _isExporting = true;
+        _error = null;
+        _done = false;
+        StateHasChanged();
+
+        try
+        {
+            var options = new DocumentExportOptions
+            {
+                Format = _format,
+                Title = string.IsNullOrWhiteSpace(_title) ? null : _title,
+                BrandNodePath = string.IsNullOrWhiteSpace(_brandNodePath) ? null : _brandNodePath,
+                CoverPage = _coverPage,
+                TableOfContents = _toc,
+                PageBreakBeforeH1 = _pbH1,
+                PageBreakBeforeH2 = _pbH2,
+                IncludeChildren = _includeChildren,
+                PageBreakBetweenChildren = _pbChildren,
+                HeaderOverride = string.IsNullOrWhiteSpace(_header) ? null : _header,
+                FooterOverride = string.IsNullOrWhiteSpace(_footer) ? null : _footer
+            };
+
+            var response = await Hub.AwaitResponse(
+                new ExportDocumentRequest(SourcePath, options),
+                o => o.WithTarget(new MeshWeaver.Messaging.Address(SourcePath)));
+
+            if (response?.Message is { } result && result.Content.Length > 0)
+            {
+                using var ms = new MemoryStream(result.Content);
+                using var streamRef = new DotNetStreamReference(ms);
+                await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", result.FileName, streamRef);
+
+                _done = true;
+            }
+            else
+            {
+                _error = "Empty response from the export handler.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Export failed: {ex.Message}";
+        }
+        finally
+        {
+            _isExporting = false;
+            StateHasChanged();
+        }
+    }
+
+    private void Reset()
+    {
+        _done = false;
+        _error = null;
+    }
+}
