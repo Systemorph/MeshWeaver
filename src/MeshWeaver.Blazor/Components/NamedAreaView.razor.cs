@@ -94,7 +94,6 @@ public partial class NamedAreaView
         try
         {
             await Task.Delay(15_000, ct);
-            // Still no content after 15s — show diagnostic
             await InvokeAsync(() =>
             {
                 if (RootControl == null)

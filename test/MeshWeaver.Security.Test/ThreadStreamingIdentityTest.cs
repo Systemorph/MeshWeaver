@@ -204,6 +204,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             "first streaming update should arrive within 5s — if it takes longer, " +
             "updates are blocked in the _Exec hub's message buffer (the bug we fixed)");
     }
+
 }
 
 /// <summary>

@@ -22,9 +22,9 @@
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageVersion Include="Azure.AI.Inference" Version="1.0.0-beta.5" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.8.0-beta.1" />
-    <PackageVersion Include="Azure.Core" Version="1.51.0" />
+    <PackageVersion Include="Azure.Core" Version="1.51.1" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.11.0" />
-    <PackageVersion Include="Azure.Identity" Version="1.17.1" />
+    <PackageVersion Include="Azure.Identity" Version="1.19.0" />
     <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.4.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.1.2" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.6.0" />
@@ -37,6 +37,7 @@
     <PackageVersion Include="ClaudeAgentSdk" Version="0.2.1" />
     <PackageVersion Include="Radzen.Blazor" Version="8.7.4" />
     <PackageVersion Include="Castle.Core" Version="5.1.1" />
+    <PackageVersion Include="DocSharp.Markdown" Version="0.17.0" />
     <PackageVersion Include="ClosedXML" Version="0.105.0" />
     <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
@@ -69,10 +70,10 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.2" />
     <PackageVersion Include="ModelContextProtocol" Version="0.8.0-preview.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="0.8.0-preview.1" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.3.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.3.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Extensions.AI.AzureAIInference" Version="10.0.0-preview.1.25559.3" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.3.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.13.1" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Hybrid" Version="9.0.0-preview.9.24556.5" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.2" />
@@ -91,10 +92,10 @@
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="9.0.1" />
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.0.0-rc1" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-rc1" />
-    <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="1.0.0-rc1" />
-    <PackageVersion Include="Microsoft.Agents.AI.AzureAI" Version="1.0.0-rc1" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.0.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="1.0.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.AzureAI" Version="1.0.0-rc5" />
     <PackageVersion Include="Microsoft.Agents.AI.AzureAI.Persistent" Version="1.0.0-preview.260219.1" />
     <PackageVersion Include="Azure.AI.Agents.Persistent" Version="1.2.0-beta.8" />
     <PackageVersion Include="OpenTelemetry" Version="1.9.0" />
@@ -118,16 +119,16 @@
     <PackageVersion Include="Microsoft.DotNet.Interactive.Formatting" Version="1.0.0-beta.26071.1" />
     <PackageVersion Include="Microsoft.DotNet.Interactive.PackageManagement" Version="1.0.0-beta.26071.1" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.4" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.2.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.3" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Core" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.0.0" />
@@ -141,7 +142,7 @@
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageVersion Include="Pgvector" Version="0.3.0" />
     <PackageVersion Include="Pgvector.EntityFrameworkCore" Version="0.3.0" />
-    <PackageVersion Include="OpenAI" Version="2.8.0" />
+    <PackageVersion Include="OpenAI" Version="2.9.1" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.0" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.0" />

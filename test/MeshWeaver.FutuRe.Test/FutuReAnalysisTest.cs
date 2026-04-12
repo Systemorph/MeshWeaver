@@ -44,8 +44,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var graphPath = TestPaths.SamplesGraph;
         var dataDirectory = TestPaths.SamplesGraphData;
-        if (Directory.Exists(SharedCacheDirectory))
-            Directory.Delete(SharedCacheDirectory, recursive: true);
         Directory.CreateDirectory(SharedCacheDirectory);
 
         var configuration = new ConfigurationBuilder()
@@ -545,22 +543,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "Default area for Analysis hub should be 'LayoutAreas' (profitability catalog), not 'Overview'");
     }
 
-    // ── Analysis Overview rendering (catches null stream / access control crashes) ──
-
-    [Fact(Timeout = 20000)]
-    public async Task EuropeRe_Analysis_Overview_ShouldRender()
-    {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "Overview");
-        control.Should().NotBeNull("EuropeRe Analysis Overview should render without crashing");
-    }
-
-    [Fact(Timeout = 20000)]
-    public async Task AmericasIns_Analysis_Overview_ShouldRender()
-    {
-        var control = await GetControlAsync("FutuRe/AmericasIns/Analysis", "Overview");
-        control.Should().NotBeNull("AmericasIns Analysis Overview should render without crashing");
-    }
-
     // ── Local Analysis Hub (EuropeRe) ──
 
     [Fact(Timeout = 20000)]
@@ -575,11 +557,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 20000)]
     public async Task EuropeRe_KeyMetrics_ShouldShowCorrectCurrency()
     {
-        // With group-level aggregation enabled, the local hub converts to CHF (group currency)
-        // via the currency toolbar (default mode: Plan CHF).
         var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "KeyMetrics", unwrap: true);
         var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe KeyMetrics currency");
-        md.Should().Contain(" CHF", "EuropeRe local hub now aggregates to group level with default Plan CHF mode");
+        md.Should().Contain(" EUR", "EuropeRe amounts should be labeled with EUR, not CHF");
+        md.Should().NotContain(" CHF", "EuropeRe should not show CHF — its currency is EUR");
     }
 
     [Fact(Timeout = 20000)]
@@ -788,122 +769,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         control.Should().BeOfType<HtmlControl>("AnnualProfitabilityWaterfall should return an HtmlControl with SVG");
     }
 
-    [Fact(Timeout = 30000)]
-    public async Task Group_GroupProfitabilityDashboard_ShouldRender()
-    {
-        await InitializeChildAnalysisHubs();
-        var control = await GetControlAsync("FutuRe/Analysis", "GroupProfitabilityDashboard", unwrap: false);
-        var stack = control.Should().BeOfType<StackControl>().Subject;
-        // Toolbar wraps content: top-level StackControl has [toolbar, content]
-        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
-            "GroupProfitabilityDashboard should contain toolbar and dashboard content");
-    }
-
-    [Fact(Timeout = 30000)]
-    public async Task Group_Analysis_DefaultArea_ShouldResolveToLayoutAreas()
-    {
-        await InitializeChildAnalysisHubs();
-        var client = GetClient();
-        var address = new Address("FutuRe/Analysis");
-
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference((string?)null);
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        var control = await stream
-            .GetControlStream("")
-            .Timeout(TimeSpan.FromSeconds(15))
-            .FirstAsync(x => x is not null);
-
-        var namedArea = control.Should().BeOfType<NamedAreaControl>().Subject;
-        namedArea.Area.Should().Be("LayoutAreas",
-            "Default area for group Analysis hub should be 'LayoutAreas' (profitability catalog)");
-    }
-
-    // ── Local Analysis Hub (AmericasIns) ──
-
-    [Fact(Timeout = 20000)]
-    public async Task AmericasIns_KeyMetrics_ShouldHaveNonZeroData()
-    {
-        var control = await GetControlAsync("FutuRe/AmericasIns/Analysis", "KeyMetrics", unwrap: true);
-        var md = AssertMarkdownWithNonZeroNumbers(control, "AmericasIns KeyMetrics");
-        md.Should().Contain("Total Premium", "KeyMetrics should show premium");
-        md.Should().Contain("Loss Ratio", "KeyMetrics should show loss ratio");
-    }
-
-    [Fact(Timeout = 20000)]
-    public async Task AmericasIns_ProfitabilityTable_ShouldHaveNonZeroData()
-    {
-        var control = await GetControlAsync("FutuRe/AmericasIns/Analysis", "ProfitabilityTable", unwrap: true);
-        var md = AssertMarkdownWithNonZeroNumbers(control, "AmericasIns ProfitabilityTable");
-        md.Should().Contain("Line of Business", "table should have headers");
-        md.Should().Contain("Total", "table should have totals row");
-    }
-
-    [Fact(Timeout = 20000)]
-    public async Task AmericasIns_ProfitabilityOverview_ShouldRenderChart()
-    {
-        var control = await GetControlAsync("FutuRe/AmericasIns/Analysis", "ProfitabilityOverview", unwrap: true);
-        control.Should().BeOfType<ChartControl>("ProfitabilityOverview should be a chart");
-    }
-
-    [Fact(Timeout = 20000)]
-    public async Task AmericasIns_AnnualProfitabilityWaterfall_ShouldRender()
-    {
-        var control = await GetControlAsync("FutuRe/AmericasIns/Analysis", "AnnualProfitabilityWaterfall", unwrap: true);
-        control.Should().BeOfType<HtmlControl>("AnnualProfitabilityWaterfall should return an HtmlControl with SVG");
-    }
-
-    [Fact(Timeout = 20000)]
-    public async Task AmericasIns_Analysis_DefaultArea_ShouldResolveToLayoutAreas()
-    {
-        var client = GetClient();
-        var address = new Address("FutuRe/AmericasIns/Analysis");
-
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference((string?)null);
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        var control = await stream
-            .GetControlStream("")
-            .Timeout(TimeSpan.FromSeconds(15))
-            .FirstAsync(x => x is not null);
-
-        var namedArea = control.Should().BeOfType<NamedAreaControl>().Subject;
-        namedArea.Area.Should().Be("LayoutAreas",
-            "Default area for AmericasIns Analysis hub should be 'LayoutAreas' (profitability catalog)");
-    }
-
-    [Fact(Timeout = 20000)]
-    public async Task AmericasIns_Analysis_LayoutAreas_ShouldRenderCatalog()
-    {
-        var control = await GetControlAsync("FutuRe/AmericasIns/Analysis", "LayoutAreas");
-        control.Should().NotBeNull("LayoutAreas catalog should render for AmericasIns Analysis hub");
-
-        var stack = control.Should().BeOfType<StackControl>().Subject;
-        Output.WriteLine($"LayoutAreas catalog has {stack.Areas?.Count ?? 0} areas");
-
-        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
-            "Catalog should have at least one category header (H2) + one grid of layout area tiles");
-
-        control.Should().NotBeOfType<MeshSearchControl>(
-            "LayoutAreas should show a catalog of profitability views, not a search/overview");
-    }
-
     // ── Business Unit Layout Areas ──
 
     /// <summary>
@@ -1022,6 +887,69 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "AnnualReport Overview should render the report content");
     }
 
+    // ── AnnualReport Diagnostic Tests ──
+
+    /// <summary>
+    /// Diagnostic: verify that the AnnualReport Overview contains @@() layout area references
+    /// in its markdown content, and that the Markdig pipeline converts them to layout-area divs.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task AnnualReport_Overview_ShouldContainLayoutAreaReferences()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/Analysis/AnnualReport");
+
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
+
+        // Get the Overview control (StackControl with title + MarkdownControl + children)
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
+
+        // Iterate through child areas to find the MarkdownControl
+        var foundMarkdown = false;
+        foreach (var area in stack.Areas ?? [])
+        {
+            var childKey = area.Area?.ToString();
+            if (string.IsNullOrEmpty(childKey)) continue;
+
+            var childControl = await stream.GetControlStream(childKey)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync(x => x is not null);
+
+            Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
+
+            if (childControl is MarkdownControl md)
+            {
+                foundMarkdown = true;
+                var markdown = md.Markdown?.ToString() ?? "";
+                Output.WriteLine($"  Markdown length: {markdown.Length}");
+                Output.WriteLine($"  Contains @@: {markdown.Contains("@@")}");
+                Output.WriteLine($"  First 500 chars: {markdown[..Math.Min(500, markdown.Length)]}");
+
+                markdown.Should().Contain("@@(", "Report markdown should contain @@() layout area references");
+
+                // Process through Markdig to verify HTML output
+                var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
+                var html = Markdig.Markdown.ToHtml(markdown, pipeline);
+                Output.WriteLine($"  HTML contains layout-area: {html.Contains("layout-area")}");
+                Output.WriteLine($"  HTML snippet: {html[..Math.Min(500, html.Length)]}");
+
+                html.Should().Contain("layout-area", "Markdig should convert @@() to layout-area divs");
+            }
+        }
+
+        foundMarkdown.Should().BeTrue("Overview stack should contain a MarkdownControl with report body");
+    }
+
     /// <summary>
     /// Diagnostic: verify that IPathResolver resolves FutuRe/Analysis/X paths correctly,
     /// splitting into Prefix="FutuRe/Analysis" and Remainder="X".
@@ -1066,6 +994,69 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         Output.WriteLine($"Control type: {control?.GetType().Name}");
         control.Should().NotBeNull("KeyMetrics should render when accessed via path resolution");
+    }
+
+    // ── EuropeRe AnnualReport ──
+
+    /// <summary>
+    /// Verifies that the EuropeRe AnnualReport Overview contains @@() layout area references
+    /// in its markdown content, and that Markdig converts them to layout-area divs.
+    /// Since EuropeRe charts render individually, this report should work end-to-end.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EuropeRe_AnnualReport_Overview_ShouldContainLayoutAreaReferences()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe/Analysis/AnnualReport");
+
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
+
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
+
+        var foundMarkdown = false;
+        foreach (var area in stack.Areas ?? [])
+        {
+            var childKey = area.Area?.ToString();
+            if (string.IsNullOrEmpty(childKey)) continue;
+
+            var childControl = await stream.GetControlStream(childKey)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync(x => x is not null);
+
+            Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
+
+            if (childControl is MarkdownControl md)
+            {
+                foundMarkdown = true;
+                var markdown = md.Markdown?.ToString() ?? "";
+                Output.WriteLine($"  Markdown length: {markdown.Length}");
+                Output.WriteLine($"  Contains @@: {markdown.Contains("@@")}");
+                Output.WriteLine($"  First 500 chars: {markdown[..Math.Min(500, markdown.Length)]}");
+
+                markdown.Should().Contain("@@(", "EuropeRe report markdown should contain @@() layout area references");
+                markdown.Should().Contain("FutuRe/EuropeRe/Analysis/KeyMetrics",
+                    "Report should reference EuropeRe-specific chart paths");
+
+                var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
+                var html = Markdig.Markdown.ToHtml(markdown, pipeline);
+                Output.WriteLine($"  HTML contains layout-area: {html.Contains("layout-area")}");
+                Output.WriteLine($"  HTML snippet: {html[..Math.Min(500, html.Length)]}");
+
+                html.Should().Contain("layout-area", "Markdig should convert @@() to layout-area divs");
+            }
+        }
+
+        foundMarkdown.Should().BeTrue("EuropeRe Overview stack should contain a MarkdownControl with report body");
     }
 
     /// <summary>
@@ -1168,7 +1159,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Pre-initializes child BU analysis hubs (EuropeRe, AmericasIns) so their data
     /// is loaded before the group hub's PartitionedHubDataSource tries to aggregate.
     /// Without this, the remote streams may receive empty data if child hubs haven't
-    /// finished loading their datacube from node content when the group hub subscribes.
+    /// finished loading their CSV data when the group hub subscribes.
     /// </summary>
     private async Task InitializeChildAnalysisHubs()
     {

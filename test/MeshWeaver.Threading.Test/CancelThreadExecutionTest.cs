@@ -101,8 +101,23 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
+        var userMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "user", Text = "Tell me a long story", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
+        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
+            Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
+        }), o => o.WithTarget(new Address(threadPath)), ct);
+
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Tell me a long story" },
+            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Tell me a long story", UserMessageId = userMsgId, ResponseMessageId = responseMsgId },
             o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 

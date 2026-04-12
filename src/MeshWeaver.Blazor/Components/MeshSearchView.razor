@@ -132,9 +132,15 @@
 
                     @if (!isCollapsed)
                     {
+                        var maxVisible = GetMaxVisibleItems(groupKey);
+                        var visibleItems = maxVisible.HasValue
+                            ? group.Items.Take(maxVisible.Value).ToList()
+                            : group.Items;
+                        var hiddenCount = group.Items.Count - visibleItems.Count;
+
                         <div class="mesh-search-grid-wrapper">
                             <div class="mesh-search-area-grid" style="@CardGridStyle">
-                                @foreach (var item in group.Items)
+                                @foreach (var item in visibleItems)
                                 {
                                     if (item is MeshNode node)
                                     {
@@ -144,9 +150,25 @@
                             </div>
                         </div>
 
-                        @if (group.Items.Count < group.TotalCount)
+                        @if (hiddenCount > 0)
                         {
-                            <div class="mesh-search-show-more" style="display: flex; align-items: center; gap: 12px; padding-top: 4px;">
+                            <div class="mesh-search-show-more">
+                                <button type="button" class="mesh-search-toggle-rows" @onclick="() => ToggleGroupExpanded(groupKey)">
+                                    Show all @group.Items.Count
+                                </button>
+                            </div>
+                        }
+                        else if (maxVisible.HasValue && _expandedRowGroups.Contains(groupKey) && group.Items.Count > (BoundMaxRows!.Value * (BoundMaxColumns ?? 3)))
+                        {
+                            <div class="mesh-search-show-more">
+                                <button type="button" class="mesh-search-toggle-rows" @onclick="() => ToggleGroupExpanded(groupKey)">
+                                    Show less
+                                </button>
+                            </div>
+                        }
+                        else if (group.Items.Count < group.TotalCount)
+                        {
+                            <div class="mesh-search-show-more">
                                 <span style="color: var(--neutral-foreground-hint);">Showing @group.Items.Count of @group.TotalCount</span>
                                 @if (!string.IsNullOrEmpty(BoundShowAllHref))
                                 {

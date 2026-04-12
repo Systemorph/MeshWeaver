@@ -35,7 +35,6 @@ public record ThreadMessageViewModel
                && AuthorName == other.AuthorName
                && ModelName == other.ModelName
                && Text == other.Text
-               && ToolCalls.Count == other.ToolCalls.Count
                && ToolCalls.SequenceEqual(other.ToolCalls);
     }
 

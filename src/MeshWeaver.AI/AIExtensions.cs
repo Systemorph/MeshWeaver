@@ -23,6 +23,12 @@ public static class AIExtensions
                     .AddThreadType()
                     .AddAgentType()
                     .ConfigureServices(services => services.AddAgentChatServices())
+                    // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
+                    .ConfigureHub(config =>
+                    {
+                        config.TypeRegistry.AddAITypes();
+                        return config;
+                    })
                     .ConfigureDefaultNodeHub(config =>
                     {
                         config.TypeRegistry.AddAITypes();
@@ -74,12 +80,12 @@ public static class AIExtensions
 .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
-            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest))
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(UpdateThreadMessageContent), nameof(UpdateThreadMessageContent))
             .WithType(typeof(DelegationCompletedEvent), nameof(DelegationCompletedEvent))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
+            // ChatHistoryEntry removed — ChatHistory uses string[] to avoid $type issues
             .WithType(typeof(SaveContentRequest), nameof(SaveContentRequest))
             .WithType(typeof(SaveContentResponse), nameof(SaveContentResponse));
 

@@ -23,7 +23,6 @@
     <Compile Include="..\..\samples\Graph\Data\FutuRe\AmountType\_Source\AmountType.cs" Link="MeshNodeSources\AmountType.cs" />
     <Compile Include="..\..\samples\Graph\Data\FutuRe\Currency\_Source\Currency.cs" Link="MeshNodeSources\Currency.cs" />
     <Compile Include="..\..\samples\Graph\Data\FutuRe\Country\_Source\Country.cs" Link="MeshNodeSources\Country.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\GroupAnalysis\_Source\AnalysisContent.cs" Link="MeshNodeSources\AnalysisContent.cs" />
     <Compile Include="..\..\samples\Graph\Data\FutuRe\GroupAnalysis\_Source\FutuReDataLoader.cs" Link="MeshNodeSources\FutuReDataLoader.cs" />
   </ItemGroup>
 

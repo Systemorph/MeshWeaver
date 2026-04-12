@@ -1,8 +1,11 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
@@ -137,16 +140,62 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
         tools = tools.Append(PlanStorageTool.Create(Hub, chat));
 
+        // Wrap all tools to restore user access context before invocation.
+        // AsyncLocal doesn't flow through the AI framework's streaming + tool invocation,
+        // so each tool call must explicitly restore the user identity from the
+        // thread's execution context. This is the single injection point for ALL tools.
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        var wrappedTools = tools.Select(tool => WrapToolWithAccessContext(tool, chat, accessService)).ToList();
+
         var agent = new ChatClientAgent(
             chatClient: chatClient, instructions: instructions,
             name: name, description: description,
-            tools: tools.ToList(), loggerFactory: null, services: null);
+            tools: wrappedTools, loggerFactory: null, services: null);
 
         var functionInvoker = agent.ChatClient.GetService<Microsoft.Extensions.AI.FunctionInvokingChatClient>();
         if (functionInvoker != null)
+        {
             functionInvoker.AllowConcurrentInvocation = true;
+            // Log the maximum iterations — if the model tries more tool calls than this, it stops
+            Logger.LogInformation("[AgentFactory] FunctionInvoker for {Agent}: MaximumIterationsPerRequest={Max}",
+                name, functionInvoker.MaximumIterationsPerRequest);
+        }
 
-        return agent;
+        // Wrap with function calling middleware — gives the streaming loop
+        // real-time visibility into tool calls. FunctionInvokingChatClient
+        // consumes FunctionCallContent internally; without this middleware,
+        // the outer stream never sees tool invocations.
+        return agent.AsBuilder()
+            .Use((AIAgent _, FunctionInvocationContext ctx, Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next, CancellationToken ct) =>
+            {
+                Logger.LogInformation("[Middleware] Tool call: {Name}, ForwardToolCall={HasCallback}",
+                    ctx.Function.Name, chat.ForwardToolCall != null);
+                var toolEntry = new ToolCallEntry
+                {
+                    Name = ctx.Function.Name,
+                    DisplayName = ctx.Function.Name,
+                    Arguments = ctx.Arguments?.Count > 0
+                        ? string.Join(", ", ctx.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
+                        : null,
+                    Timestamp = DateTime.UtcNow
+                };
+                chat.ForwardToolCall?.Invoke(toolEntry);
+                return next(ctx, ct);
+            })
+            .Build() as ChatClientAgent ?? agent;
+    }
+
+    /// <summary>
+    /// Wraps an AITool so that the user's access context is restored before each invocation.
+    /// This is the single injection point for ALL tool calls — delegation, MeshPlugin, etc.
+    /// </summary>
+    private static AITool WrapToolWithAccessContext(AITool tool, IAgentChat chat, AccessService? accessService)
+    {
+        if (accessService == null || tool is not AIFunction aiFunction)
+            return tool;
+
+        // Create a wrapper AIFunction that restores access context before delegating
+        return new AccessContextAIFunction(aiFunction, chat, accessService);
     }
 
     /// <summary>
@@ -224,9 +273,36 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
                     var execCtx = chat.ExecutionContext;
                     var userIdentity = execCtx?.UserAccessContext?.ObjectId ?? "(no-user)";
+
+                    // Guard: limit delegation depth to prevent recursive delegation.
+                    // Count segments after _Thread/ — each delegation adds msgId/subThreadId (2 segments per level).
+                    // Root thread: Org/_Thread/threadId → 0 extra segments → depth 0
+                    // 1st delegation: Org/_Thread/threadId/msgId/subId → 2 extra → depth 1
+                    // 2nd delegation: Org/_Thread/threadId/msgId/subId/msgId2/subId2 → 4 extra → depth 2
+                    var threadPath = execCtx?.ThreadPath ?? "";
+                    var threadIdx = threadPath.IndexOf("/_Thread/");
+                    var depth = 0;
+                    if (threadIdx >= 0)
+                    {
+                        var afterThread = threadPath[(threadIdx + "/_Thread/".Length)..];
+                        var segments = afterThread.Split('/').Length;
+                        depth = (segments - 1) / 2; // subtract the thread id, each delegation = 2 segments
+                    }
+                    if (depth >= 2)
+                    {
+                        Logger.LogWarning("[Delegation] Max delegation depth ({Depth}) reached at {ThreadPath} for {Source} → {Target}",
+                            depth, threadPath, agentConfig.Id, targetId);
+                        return Task.FromResult(new DelegationResult
+                        {
+                            AgentName = targetId, Task = task,
+                            Result = $"Maximum delegation depth reached ({depth}). You must handle this task directly without further delegation.",
+                            Success = false
+                        });
+                    }
+
                     Logger.LogInformation(
-                        "[Delegation] {Source} → {Target}, user={User}, task={Task}",
-                        agentConfig.Id, targetId, userIdentity, task.Length > 100 ? task[..97] + "..." : task);
+                        "[Delegation] {Source} → {Target}, user={User}, depth={Depth}, task={Task}",
+                        agentConfig.Id, targetId, userIdentity, depth, task.Length > 100 ? task[..97] + "..." : task);
 
                     if (execCtx == null)
                     {
@@ -243,90 +319,102 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     var tcs = new TaskCompletionSource<DelegationResult>();
                     var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
                     var workspace = Hub.GetWorkspace();
-                    var accessService = Hub.ServiceProvider.GetService<AccessService>();
 
-                    var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
+                    // Access context is restored by WrapToolWithAccessContext — no need to set it here.
+
                     var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
-                    var subThreadPath = $"{parentMsgPath}/{subThreadId}";
+                    // MainNode for sub-thread = parent thread's MainNode (content node).
+                    // ContextPath comes from the thread execution context which is set from
+                    // the thread node's MainNode (e.g., "PartnerRe/AIConsulting").
+                    var mainEntityPath = execCtx.ContextPath ?? context ?? execCtx.ThreadPath;
 
-                    // 1. Create sub-thread node (Observable — no await)
-                    var mainEntityPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath;
-                    var subThreadNode = new MeshNode(subThreadId, parentMsgPath)
-                    {
-                        Name = task.Length > 60 ? task[..57] + "..." : task,
-                        NodeType = ThreadNodeType.NodeType,
-                        MainNode = mainEntityPath,
-                        Content = new MeshThread()
-                    };
+                    // Build sub-thread with pre-populated messages
+                    var (subThreadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
+                        parentMsgPath, task, createdBy: execCtx.UserAccessContext?.ObjectId,
+                        agentName: targetId);
+                    subThreadNode = subThreadNode with { MainNode = mainEntityPath };
+                    var subThreadPath = subThreadNode.Path!;
 
-                    // Set delegation path and notify — the streaming loop is blocked
-                    // during tool execution, so the throttle never fires. The callback
-                    // pushes the tool call with DelegationPath immediately.
+                    // Store delegation path keyed by display name for parallel-safe lookup.
+                    var delegationDisplayName = $"Delegating to {targetId}...";
+                    chat.DelegationPaths[delegationDisplayName] = subThreadPath;
                     chat.LastDelegationPath = subThreadPath;
-                    chat.UpdateDelegationStatus?.Invoke($"Delegating to {targetId}...");
+                    chat.UpdateDelegationStatus?.Invoke(delegationDisplayName);
 
+                    // Create cells FIRST, then thread. WatchForExecution starts execution
+                    // when it sees IsExecuting=true on the thread.
+                    Logger.LogInformation("[Delegation] Creating cells for sub-thread {Path}: user={UserMsgId}, response={ResponseMsgId}", subThreadPath, userMsgId, responseMsgId);
+                    meshService.CreateNode(new MeshNode(userMsgId, subThreadPath)
+                    {
+                        NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntityPath,
+                        Content = new ThreadMessage
+                        {
+                            Role = "user", Text = task, Timestamp = DateTime.UtcNow,
+                            Type = ThreadMessageType.ExecutedInput, CreatedBy = execCtx.UserAccessContext?.ObjectId
+                        }
+                    }).Subscribe(_ => { }, error => Logger.LogError(error, "[Delegation] User cell creation failed for {Path}", subThreadPath));
+
+                    meshService.CreateNode(new MeshNode(responseMsgId, subThreadPath)
+                    {
+                        NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntityPath,
+                        Content = new ThreadMessage
+                        {
+                            Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
+                            Type = ThreadMessageType.AgentResponse, AgentName = targetId
+                        }
+                    }).Subscribe(_ => { }, error => Logger.LogError(error, "[Delegation] Response cell creation failed for {Path}", subThreadPath));
+
+                    Logger.LogInformation("[Delegation] Creating sub-thread at {Path}", subThreadPath);
                     meshService.CreateNode(subThreadNode).Subscribe(
                         _ =>
                         {
-                            Logger.LogInformation("[Delegation] Created sub-thread at {Path}", subThreadPath);
+                            Logger.LogInformation("[Delegation] Sub-thread created at {Path}, watching for completion", subThreadPath);
 
-                            // 2. Completion is notified via a second SubmitMessageResponse
-                            // with Status=ExecutionCompleted, posted by ThreadExecution when done.
-
-                            // 3. Submit message (Post + RegisterCallback — no AwaitResponse)
-                            var delivery = Hub.Post(new SubmitMessageRequest
+                            // Watch the sub-thread's state via ObserveQuery — when IsExecuting becomes false, delegation is done.
+                            var meshSvc = Hub.ServiceProvider.GetService<IMeshService>();
+                            bool IsComplete(QueryResultChange<MeshNode> c)
                             {
-                                ThreadPath = subThreadPath,
-                                UserMessageText = task,
-                                AgentName = targetId,
-                                ContextPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath
-                            }, o =>
-                            {
-                                o = o.WithTarget(new Address(subThreadPath));
-                                if (execCtx.UserAccessContext != null)
-                                    o = o.WithAccessContext(execCtx.UserAccessContext);
-                                return o;
-                            });
-
-                            if (delivery != null)
-                            {
-                                Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-                                {
-                                    if (response is IMessageDelivery<SubmitMessageResponse> sr)
-                                    {
-                                        var msg = sr.Message;
-                                        if (!msg.Success)
-                                        {
-                                            Logger.LogWarning("[Delegation] Submit failed: {Error}", msg.Error);
-                                            tcs.TrySetResult(new DelegationResult
-                                            {
-                                                AgentName = targetId, Task = task,
-                                                Result = $"Submit failed: {msg.Error}", Success = false
-                                            });
-                                        }
-                                        else if (msg.Status != SubmitMessageStatus.CellsCreated)
-                                        {
-                                            // Execution completed/cancelled/failed — resolve delegation
-                                            Logger.LogInformation("[Delegation] Child finished: {Path}, status={Status}, textLen={TextLen}",
-                                                subThreadPath, msg.Status, msg.ResponseText?.Length ?? 0);
-                                            using var __ = accessService?.SwitchAccessContext(execCtx.UserAccessContext);
-                                            tcs.TrySetResult(new DelegationResult
-                                            {
-                                                AgentName = targetId, Task = task,
-                                                Result = msg.ResponseText ?? $"Delegation to {targetId} completed.",
-                                                Success = msg.Status == SubmitMessageStatus.ExecutionCompleted,
-                                                ThreadId = subThreadPath
-                                            });
-                                        }
-                                        // CellsCreated = initial response, keep waiting for completion
-                                    }
-                                    return response;
-                                });
+                                foreach (var n in c.Items)
+                                    if (n.Content is MeshThread { IsExecuting: false, PendingUserMessage: null })
+                                        return true;
+                                return false;
                             }
+                            var filtered = System.Reactive.Linq.Observable.Where(
+                                meshSvc!.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{subThreadPath}")),
+                                IsComplete);
+                            System.Reactive.Linq.Observable.Timeout(
+                                System.Reactive.Linq.Observable.Take(filtered, 1),
+                                TimeSpan.FromSeconds(30))
+                                .Subscribe(
+                                    change =>
+                                    {
+                                        var node = change.Items.FirstOrDefault();
+                                        var thread = node?.Content as MeshThread;
+                                        // Read the response from the response message cell
+                                        var responseText = $"Delegation to {targetId} completed.";
+                                        Logger.LogInformation("[Delegation] Completed: {Path}", subThreadPath);
+                                        tcs.TrySetResult(new DelegationResult
+                                        {
+                                            AgentName = targetId, Task = task,
+                                            Result = responseText,
+                                            Success = true,
+                                            ThreadId = subThreadPath
+                                        });
+                                    },
+                                    ex =>
+                                    {
+                                        Logger.LogWarning(ex, "[Delegation] Watch failed for {Path}", subThreadPath);
+                                        tcs.TrySetResult(new DelegationResult
+                                        {
+                                            AgentName = targetId, Task = task,
+                                            Result = $"Delegation timed out: {ex.Message}",
+                                            Success = false, ThreadId = subThreadPath
+                                        });
+                                    });
                         },
                         error =>
                         {
-                            Logger.LogWarning(error, "[Delegation] Failed to create sub-thread for {Target}", targetId);
+                            Logger.LogWarning(error, "[Delegation] Failed to create sub-thread at {Path} for {Target}, Hub={Hub}", subThreadPath, targetId, Hub.Address);
                             tcs.TrySetResult(new DelegationResult
                             {
                                 AgentName = targetId, Task = task,
@@ -334,7 +422,18 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             });
                         });
 
-                    return tcs.Task; // AI framework awaits this — not our code
+                    // Register cancellation to prevent infinite hang if sub-thread routing fails
+                    cancellationToken.Register(() =>
+                    {
+                        tcs.TrySetResult(new DelegationResult
+                        {
+                            AgentName = targetId, Task = task,
+                            Result = $"Delegation to {targetId} was cancelled.",
+                            Success = false
+                        });
+                    });
+
+                    return tcs.Task;
                 },
                 Logger);
 
@@ -500,5 +599,31 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
 
         return result;
+    }
+}
+
+/// <summary>
+/// AIFunction wrapper that restores the user's access context before each invocation.
+/// This is the single injection point for ALL tool calls — delegation, MeshPlugin, etc.
+/// </summary>
+internal sealed class AccessContextAIFunction : DelegatingAIFunction
+{
+    private readonly IAgentChat _chat;
+    private readonly AccessService _accessService;
+
+    public AccessContextAIFunction(AIFunction inner, IAgentChat chat, AccessService accessService)
+        : base(inner)
+    {
+        _chat = chat;
+        _accessService = accessService;
+    }
+
+    protected override ValueTask<object?> InvokeCoreAsync(
+        AIFunctionArguments arguments, CancellationToken cancellationToken)
+    {
+        var userCtx = _chat.ExecutionContext?.UserAccessContext;
+        if (userCtx != null)
+            _accessService.SetContext(userCtx);
+        return base.InvokeCoreAsync(arguments, cancellationToken);
     }
 }

@@ -204,6 +204,33 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         };
     }
 
+    public async IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        IReadOnlyList<string> schemas,
+        string tableName,
+        string? userId = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (schemas.Count == 0)
+            yield break;
+
+        var generator = new PostgreSqlSqlGenerator();
+        var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(query, schemas, userId, tableName);
+
+        _logger?.LogInformation(
+            "[CrossSchema] Satellite query: table={Table}, schemas={Count}, userId={User}",
+            tableName, schemas.Count, userId);
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        foreach (var (name, value) in parameters)
+            cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            yield return ReadMeshNode(reader, options);
+    }
+
     private static string EscapeSql(string input) =>
         input.Replace("'", "''");
 }

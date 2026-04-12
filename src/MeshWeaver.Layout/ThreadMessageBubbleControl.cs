@@ -42,6 +42,11 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     public string? ThreadPath { get; init; }
 
     /// <summary>
+    /// The message ID within the thread. Used for edit/resubmit/delete operations.
+    /// </summary>
+    public string? MessageId { get; init; }
+
+    /// <summary>
     /// Data-bound list of completed tool calls for post-execution inspection.
     /// Rendered as collapsible entries in the Blazor view.
     /// </summary>
@@ -60,6 +65,7 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     public ThreadMessageBubbleControl WithText(object? text) => this with { Text = text };
     public ThreadMessageBubbleControl WithIsExecuting(object? isExecuting) => this with { IsExecuting = isExecuting };
     public ThreadMessageBubbleControl WithExecutionStatus(object? status) => this with { ExecutionStatus = status };
+    public ThreadMessageBubbleControl WithMessageId(string? id) => this with { MessageId = id };
     public ThreadMessageBubbleControl WithThreadPath(string? path) => this with { ThreadPath = path };
     public ThreadMessageBubbleControl WithToolCalls(object? toolCalls) => this with { ToolCalls = toolCalls };
 }

@@ -38,8 +38,10 @@ public partial class LayoutAreaView
         }
 
         // Only bind stream when already in interactive mode (not during prerender)
+        // try/catch: during navigation, old circuit's hub may already be disposing
+        // while Blazor still re-renders components before their DisposeAsync runs
         if (IsNotPreRender)
-            BindStream();
+            try { BindStream(); } catch (ObjectDisposedException) { }
     }
     private bool showProgress;
     private string? progressMessage;
@@ -111,14 +113,13 @@ public partial class LayoutAreaView
     {
         if (AreaStream is null)
         {
+
             Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address!, ViewModel.Reference);
             AreaStream = Address!.Equals(Workspace.Hub.Address)
                 ? Workspace.GetStream(ViewModel.Reference)!.Reduce(new JsonPointerReference("/"))
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address!, ViewModel.Reference);
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
-            // Only monitor menu from the top-level (main page) LayoutAreaView.
-            // Side panel LayoutAreaViews must not overwrite the main page's node menu.
             if (Top)
             {
                 MenuStream = SetupMenuAreaMonitoring(AreaStream!);

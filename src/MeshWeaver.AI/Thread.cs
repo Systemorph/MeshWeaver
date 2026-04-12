@@ -1,10 +1,12 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.AI;
+
 
 /// <summary>
 /// Tracks execution context for delegation sub-thread creation.
@@ -119,15 +121,32 @@ public record Thread
     public DateTime? ExecutionStartedAt { get; init; }
 
     /// <summary>
-    /// Streaming text buffer — updated at 2/sec during execution on the Thread node (local workspace).
-    /// Cleared when execution completes (final text is persisted on the response message).
+    /// Streaming text buffer — transient, never persisted.
+    /// Used only in-memory during active execution for the status bar preview.
     /// </summary>
+    /// <summary>
+    /// Pending user message text — set at thread creation to auto-start execution.
+    /// When the thread grain activates and sees this, it immediately starts streaming.
+    /// Cleared after execution starts.
+    /// </summary>
+    public string? PendingUserMessage { get; init; }
+
+    /// <summary>Agent name for pending execution.</summary>
+    public string? PendingAgentName { get; init; }
+
+    /// <summary>Model name for pending execution.</summary>
+    public string? PendingModelName { get; init; }
+
+    /// <summary>Context path for pending execution.</summary>
+    public string? PendingContextPath { get; init; }
+
+    /// <summary>Attachments for pending execution.</summary>
+    public IReadOnlyList<string>? PendingAttachments { get; init; }
+
+    [JsonIgnore]
     public string? StreamingText { get; init; }
 
-    /// <summary>
-    /// Streaming tool calls — updated at 2/sec during execution.
-    /// Cleared when execution completes.
-    /// </summary>
+    [JsonIgnore]
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 
 }
@@ -160,11 +179,6 @@ public static class ThreadMessageExtensions
 public record ThreadMessage
 {
     /// <summary>
-    /// Unique identifier for this message.
-    /// </summary>
-    public required string Id { get; init; }
-
-    /// <summary>
     /// The role of the message sender: "user", "assistant", or "system".
     /// </summary>
     public required string Role { get; init; }
@@ -183,11 +197,6 @@ public record ThreadMessage
     /// When the message was created.
     /// </summary>
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
-
-    /// <summary>
-    /// If this message triggered a delegation, path to the sub-thread node.
-    /// </summary>
-    public string? DelegationPath { get; init; }
 
     /// <summary>
     /// The type of this message for rendering purposes.
@@ -217,9 +226,9 @@ public record ThreadMessage
     public ImmutableList<ToolCallEntry> ToolCalls { get; init; } = [];
 
     /// <summary>
-    /// MeshNode changes made during this message's execution.
-    /// Tracks path, operation (Created/Updated/Deleted), and version before/after
-    /// so the version repo can load content at each point.
+    /// Nodes created or updated during this message's execution.
+    /// Tracks path and version before/after so the UI can show
+    /// which documents were written and the version delta.
     /// </summary>
-    public ImmutableList<NodeChangeEntry> NodeChanges { get; init; } = [];
+    public ImmutableList<NodeChangeEntry> UpdatedNodes { get; init; } = [];
 }

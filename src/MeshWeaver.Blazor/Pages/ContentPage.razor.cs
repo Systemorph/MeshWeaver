@@ -132,7 +132,12 @@ public partial class ContentPage : ComponentBase, IDisposable
             return;
 
         ContentType = collection.GetContentType(ResolvedPath!);
-        if (ContentType != "text/markdown")
+        // Document types with converter support are rendered as markdown
+        if (IsConvertibleDocument(ResolvedPath!))
+        {
+            ContentType = "text/markdown";
+        }
+        else if (ContentType != "text/markdown")
         {
             Content = await collection.GetContentAsync(ResolvedPath!);
         }
@@ -228,6 +233,15 @@ public partial class ContentPage : ComponentBase, IDisposable
     private void LoadMoreCsvRows()
     {
         CsvVisibleRows += 50;
+    }
+
+    /// <summary>
+    /// Checks if a file path points to a document that can be converted to markdown for preview.
+    /// </summary>
+    private static bool IsConvertibleDocument(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".docx";
     }
 
     /// <summary>
