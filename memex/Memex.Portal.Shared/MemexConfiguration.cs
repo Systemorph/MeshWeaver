@@ -3,6 +3,7 @@ using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Settings;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
+using MeshWeaver.AI.Layout;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
