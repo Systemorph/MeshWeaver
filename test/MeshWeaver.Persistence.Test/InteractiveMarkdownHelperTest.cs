@@ -53,7 +53,7 @@ public class InteractiveMarkdownHelperTest
             ```
 
             ```csharp
-            // This is not executable
+            // Bare csharp — also executes silently by default.
             var b = 2;
             ```
             """;
@@ -68,8 +68,8 @@ public class InteractiveMarkdownHelperTest
             .Where(s => s != null)
             .ToList();
 
-        // Only --execute and --render blocks produce SubmitCodeRequests
-        submissions.Should().HaveCount(2);
+        // --execute, --render, AND bare ```csharp all produce SubmitCodeRequests.
+        submissions.Should().HaveCount(3);
     }
 
     [Fact]
@@ -131,8 +131,12 @@ public class InteractiveMarkdownHelperTest
             "Each code block should get a unique submission ID");
     }
 
+    /// <summary>
+    /// Default behavior: bare ```csharp blocks execute silently (variables persist).
+    /// Non-C# languages (e.g. python) are never executed.
+    /// </summary>
     [Fact]
-    public void NonExecutableCodeBlocks_ProduceNoSubmissions()
+    public void BareCsharpBlocks_ExecuteSilently_NonCsharpBlocks_DoNot()
     {
         var markdown = """
             ```csharp
@@ -156,6 +160,32 @@ public class InteractiveMarkdownHelperTest
             .Where(s => s != null)
             .ToList();
 
-        submissions.Should().BeEmpty();
+        submissions.Should().HaveCount(1, "bare ```csharp executes silently; ```python does not");
+        submissions[0]!.Code.Should().Contain("var x = 1");
+    }
+
+    /// <summary>
+    /// Explicit opt-out with --no-execute for code samples that must not run.
+    /// </summary>
+    [Fact]
+    public void NoExecuteFlag_SuppressesSubmission()
+    {
+        var markdown = """
+            ```csharp --no-execute
+            var docOnly = 1;  // documentation sample, must not run
+            ```
+            """;
+
+        var pipeline = MdExtensions.CreateMarkdownPipeline(null, null);
+        var document = Markdig.Markdown.Parse(markdown, pipeline);
+        var blocks = document.Descendants<ExecutableCodeBlock>().ToList();
+        foreach (var b in blocks) b.Initialize();
+
+        var submissions = blocks
+            .Select(b => b.SubmitCode)
+            .Where(s => s != null)
+            .ToList();
+
+        submissions.Should().BeEmpty("--no-execute suppresses the default silent-execute behavior");
     }
 }

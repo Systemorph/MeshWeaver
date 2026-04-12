@@ -187,8 +187,47 @@ Common Rx operators for UI:
 
 ---
 
+# Click Actions Are Reactive, Not Async
+
+Button clicks via `WithClickAction` run inside the layout area host's hub pump. **Never use `await` on mesh-backed services inside a click handler** — it deadlocks the pump. Instead, compose `IObservable<T>` chains and `Subscribe`.
+
+```csharp
+// ✅ Reactive — synchronous click handler, observable chain
+.WithClickAction(ctx =>
+{
+    ctx.Host.UpdateData(statusId, "<p>Working…</p>");  // immediate feedback
+
+    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+        .Take(1)
+        .Subscribe(data =>
+        {
+            var input = data?.GetValueOrDefault("field")?.ToString() ?? "";
+
+            // IMeshService.CreateNode/UpdateNode/DeleteNode return IObservable<T>
+            myService.DoReactive(input).Subscribe(
+                result => ctx.Host.UpdateData(statusId, $"<p>Done: {result}</p>"),
+                ex     => ctx.Host.UpdateData(statusId, $"<p>Error: {ex.Message}</p>"));
+        });
+
+    return Task.CompletedTask;  // click handler itself is sync
+})
+
+// ❌ DON'T: async click handler — deadlocks under load.
+.WithClickAction(async ctx =>
+{
+    var data = await ctx.Host.Stream.GetDataStream<T>(id).FirstAsync();
+    var result = await myService.DoWorkAsync(data);
+    ctx.Host.UpdateData(statusId, result);
+})
+```
+
+See [AsynchronousCalls](../../Architecture/AsynchronousCalls) for the full rationale.
+
+---
+
 # See Also
 
 - [Container Control](../ContainerControl) - Adding content to containers
 - [Data Binding](../DataBinding) - How data flows to controls
 - [Editor Control](../Editor) - Real-world dynamic examples
+- [Asynchronous Calls](../../Architecture/AsynchronousCalls) - Why `await` deadlocks and how to compose observables

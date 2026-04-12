@@ -284,7 +284,7 @@ var wordFreq = corpus.Split(' ')
     /// 1) Parse the InteractiveShowcase.md markdown file
     /// 2) Extract SubmitCodeRequest objects via ExecutableCodeBlock.Initialize()
     /// 3) Post all submissions to the SAME kernel address (what MarkdownView does)
-    /// 4) Verify each --render block produces output
+    /// 4) Verify each block produces output (Markdown with expected text)
     /// This exercises the exact pipeline used by the UI.
     /// </summary>
     [Fact(Timeout = DefaultTimeoutMs)]
@@ -317,29 +317,41 @@ var wordFreq = corpus.Split(' ')
             .ToList();
 
         submissions.Should().NotBeEmpty("InteractiveShowcase.md must contain executable code blocks");
+        Output.WriteLine($"Parsed {submissions.Count} submissions from markdown");
 
         var client = GetClient();
         var kernelAddress = CreateKernelSession();
 
         // Post all submissions to the same kernel — exactly what MarkdownView does
         foreach (var submission in submissions)
-            client.Post(submission, o => o.WithTarget(kernelAddress));
-
-        // Every submission must produce a non-null, non-error result
-        foreach (var submission in submissions)
         {
+            Output.WriteLine($"Posting submission {submission.Id}: {submission.Code.Split('\n').FirstOrDefault()?.Trim()}");
+            client.Post(submission, o => o.WithTarget(kernelAddress));
+        }
+
+        // Each block in InteractiveShowcase.md returns a Controls.Markdown(...), so we expect
+        // a MarkdownControl result for each submission.
+        for (var i = 0; i < submissions.Count; i++)
+        {
+            var submission = submissions[i];
             var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
                 kernelAddress, new LayoutAreaReference(submission.Id));
-            var control = await stream.GetControlStream(submission.Id)
-                .Timeout(20.Seconds())
-                .FirstAsync(x => x is not null);
-
-            control.Should().NotBeNull($"Submission {submission.Id} must produce a result");
-            var asMarkdown = control as MarkdownControl;
-            if (asMarkdown != null)
+            try
             {
-                asMarkdown.Markdown.ToString().Should().NotContain("Execution failed",
-                    $"Submission {submission.Id} must not fail. Code:\n{submission.Code}");
+                var control = await stream.GetControlStream(submission.Id)
+                    .Timeout(15.Seconds())
+                    .FirstAsync(x => x is not null);
+
+                var asMarkdown = (control as MarkdownControl);
+                asMarkdown.Should().NotBeNull($"Block #{i} ({submission.Id}) should return MarkdownControl");
+                var rendered = asMarkdown!.Markdown.ToString() ?? "";
+                Output.WriteLine($"Block #{i} output: {rendered}");
+                rendered.Should().NotContain("Execution failed",
+                    $"Block #{i} failed. Code:\n{submission.Code}");
+            }
+            catch (TimeoutException)
+            {
+                Assert.Fail($"Block #{i} ({submission.Id}) timed out. Code:\n{submission.Code}");
             }
         }
     }

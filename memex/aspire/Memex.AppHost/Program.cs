@@ -113,11 +113,17 @@ var appInsights = builder.AddAzureApplicationInsights("appinsights")
     });
 
 // --- Database Migration ---
+// In local dev, run migrations only on demand via the Aspire dashboard (Start button).
+// In deployed modes (test/prod) the portal still waits for migration completion below.
 var dbMigration = builder
     .AddProject<Projects.Memex_Database_Migration>("db-migration")
     .WithEnvironment("Embedding__Model", embeddingModel);
 
-if (!useLocalDb)
+if (useLocalDb)
+{
+    dbMigration.WithExplicitStart();
+}
+else
 {
     dbMigration.WithReference(appInsights).WaitFor(appInsights);
 }
@@ -154,8 +160,14 @@ var portal = builder
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
     .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
     // Wait for dependencies
-    .WaitFor(orleansTables)
-    .WaitForCompletion(dbMigration)
+    .WaitFor(orleansTables);
+
+// In deployed modes, the portal must wait for DB migration to finish before starting.
+// In local dev, migration is on-demand (WithExplicitStart) — skip the wait to avoid hanging.
+if (!useLocalDb)
+    portal.WaitForCompletion(dbMigration);
+
+portal
     // ACA deployment: sticky sessions (Blazor Server) + custom domain + resources
     .PublishAsAzureContainerApp((module, app) =>
     {

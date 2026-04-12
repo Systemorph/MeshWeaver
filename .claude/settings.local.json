@@ -136,7 +136,9 @@
       "Bash(wait:*)",
       "Bash(sleep:*)",
       "Bash(*&&*)",
-      "Bash(*|*)"
+      "Bash(*|*)",
+      "Bash(wmic process:*)",
+      "Bash(powershell:*)"
     ],
     "deny": [],
     "additionalDirectories": ["/tmp/claude"]
