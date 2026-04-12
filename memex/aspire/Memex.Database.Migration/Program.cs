@@ -429,104 +429,65 @@ if (currentVersion < 5)
     logger.LogInformation("Repair v5 completed.");
 }
 
-// ── Data repair v6: Rebuild user_effective_permissions for all schemas ──
-// Ensures self-assignments and permissions are correct after fresh deployments,
-// schema re-initialization, or any silent failure in UserScopeGrantHandler.
-// This runs on fresh DBs (currentVersion=5 is set, not 6) and existing DBs alike.
+// ── Data repair v6: Fix search_across_schemas to enforce partition_access ──
+// Bug: public_read node types bypassed partition_access entirely, leaking
+// cross-partition data in search (e.g., meshweaver user could see PartnerRe).
+// Fix: partition_access is now always required; public_read only skips
+// node-level permission checks within accessible partitions.
+// The stored proc is re-created by InitializePublicSchemaAsync (idempotent).
 if (currentVersion < 6)
 {
-    logger.LogInformation("Running repair v6: Ensure user self-assignments and rebuild all permissions...");
-    await using (var cmd = dataSource.CreateCommand("""
-        DO $$
-        DECLARE
-            user_rec RECORD;
-            schema_rec RECORD;
-            assignment_exists BOOLEAN;
-            user_schema_exists BOOLEAN;
-        BEGIN
-            -- Guard: user schema may not exist on fresh DBs
-            SELECT EXISTS(
-                SELECT 1 FROM information_schema.schemata
-                WHERE schema_name = 'user'
-            ) INTO user_schema_exists;
+    logger.LogInformation("Running repair v6: Fix search_across_schemas access control...");
+    // Re-create the stored procedure with fixed access control logic
+    await PostgreSqlSchemaInitializer.InitializePartitionAccessTableAsync(dataSource);
+    currentVersion = 6;
+    logger.LogInformation("Repair v6 completed — search_across_schemas updated.");
+}
 
-            IF user_schema_exists THEN
-                -- Ensure every User node has an Admin self-assignment
-                FOR user_rec IN
-                    SELECT id FROM "user".mesh_nodes WHERE node_type = 'User'
-                LOOP
-                    SELECT EXISTS(
-                        SELECT 1 FROM "user".access
-                        WHERE namespace = 'User/' || user_rec.id || '/_Access'
-                          AND content->>'accessObject' = user_rec.id
-                    ) INTO assignment_exists;
+// ── Data repair v7: Deploy per-user permission rebuild trigger ──
+// The trigger function trg_access_changed() previously called rebuild_user_effective_permissions()
+// which rebuilds ALL users' permissions — causing deadlocks under concurrent access.
+// New trigger calls rebuild_user_permissions_for(affected_user) — only touches one user's rows.
+// The schema initializer already creates the new functions; we just need to re-run schema init
+// per partition to deploy the updated trigger function.
+if (currentVersion < 7)
+{
+    logger.LogInformation("Running repair v7: Deploy per-user permission rebuild trigger...");
 
-                    IF NOT assignment_exists THEN
-                        INSERT INTO "user".access (id, namespace, name, node_type, content, main_node, last_modified, version, state)
-                        VALUES (
-                            user_rec.id || '_SelfAccess',
-                            'User/' || user_rec.id || '/_Access',
-                            user_rec.id || ' Self Access',
-                            'AccessAssignment',
-                            jsonb_build_object(
-                                'accessObject', user_rec.id,
-                                'displayName', user_rec.id,
-                                'roles', jsonb_build_array(jsonb_build_object('role', 'Admin'))
-                            ),
-                            'User/' || user_rec.id,
-                            NOW(), 1, 2
-                        );
-                        RAISE NOTICE 'v6: Created self-assignment for user %', user_rec.id;
-                    END IF;
-                END LOOP;
-
-                -- Rebuild permissions for user schema
-                BEGIN
-                    PERFORM "user".rebuild_user_effective_permissions();
-                    RAISE NOTICE 'v6: Rebuilt permissions for user schema';
-                EXCEPTION WHEN OTHERS THEN
-                    RAISE NOTICE 'v6: user schema rebuild failed: %', SQLERRM;
-                END;
-            ELSE
-                RAISE NOTICE 'v6: user schema does not exist yet — skipping (trigger will handle first login)';
-            END IF;
-
-            -- Rebuild permissions for all other content schemas
-            FOR schema_rec IN
-                SELECT schema_name FROM information_schema.schemata s
-                WHERE EXISTS (SELECT 1 FROM information_schema.tables t
-                              WHERE t.table_schema = s.schema_name AND t.table_name = 'access')
-                AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast', 'user')
-                AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
-            LOOP
-                BEGIN
-                    EXECUTE format('SELECT %I.rebuild_user_effective_permissions()', schema_rec.schema_name);
-                    RAISE NOTICE 'v6: Rebuilt permissions for schema %', schema_rec.schema_name;
-                EXCEPTION WHEN OTHERS THEN
-                    RAISE NOTICE 'v6: Schema % rebuild failed: %', schema_rec.schema_name, SQLERRM;
-                END;
-            END LOOP;
-        END $$;
+    var schemas = new List<string>();
+    await using (var listCmd = dataSource.CreateCommand("""
+        SELECT schema_name FROM information_schema.schemata s
+        WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'access')
+        AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+        AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+        ORDER BY s.schema_name
         """))
     {
-        await cmd.ExecuteNonQueryAsync();
+        await using var rdr = await listCmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync()) schemas.Add(rdr.GetString(0));
     }
 
-    currentVersion = 6;
-    logger.LogInformation("Repair v6 completed.");
-}
+    foreach (var schema in schemas)
+    {
+        logger.LogInformation("Repair v7: Updating trigger functions for schema {Schema}...", schema);
+        var csb = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = $"{schema},public" };
+        var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+        dsb.UseVector();
+        await using var schemaDs = dsb.Build();
 
-// ── Always: rebuild user_effective_permissions to catch any new logins since last deploy ──
-try
-{
-    await using var rebuildCmd = dataSource.CreateCommand(
-        "SELECT \"user\".rebuild_user_effective_permissions()");
-    await rebuildCmd.ExecuteNonQueryAsync();
-    logger.LogInformation("Rebuilt user_effective_permissions for user schema.");
-}
-catch (Exception ex)
-{
-    logger.LogWarning(ex, "Could not rebuild user_effective_permissions (user schema may not exist yet).");
+        var schemaOpts = new PostgreSqlStorageOptions
+        {
+            ConnectionString = csb.ConnectionString,
+            VectorDimensions = options.Value.VectorDimensions,
+            Schema = schema
+        };
+
+        await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(schemaDs, schemaOpts);
+        logger.LogInformation("Repair v7: Schema {Schema} — trigger updated", schema);
+    }
+
+    currentVersion = 7;
+    logger.LogInformation("Repair v7 completed.");
 }
 
 // ── Always: populate searchable_schemas from remaining content partitions ──
@@ -573,6 +534,49 @@ catch (Exception ex)
     }
 
     logger.LogInformation("Searchable schemas: [{Schemas}]", string.Join(", ", contentSchemas));
+}
+
+// ── Data repair v8: Fix ThreadMessage MainNode ──
+// Thread message nodes created from the UI may have MainNode set to the thread path
+// (e.g., "Org/_Thread/thread-id") instead of the thread's content node (e.g., "Org").
+// This causes "Access denied" because SatelliteAccessRule delegates to MainNode.
+// Fix: set MainNode = the part before "/_Thread/" for all ThreadMessage nodes.
+if (currentVersion < 8)
+{
+    logger.LogInformation("Running repair v8: Fix ThreadMessage MainNode...");
+    var totalFixed = 0;
+
+    var schemas = new List<string>();
+    await using (var listCmd = dataSource.CreateCommand("""
+        SELECT schema_name FROM information_schema.schemata s
+        WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes')
+        AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast', 'admin')
+        AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+        ORDER BY s.schema_name
+        """))
+    {
+        await using var rdr = await listCmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync()) schemas.Add(rdr.GetString(0));
+    }
+
+    foreach (var schema in schemas)
+    {
+        await using var fixCmd = dataSource.CreateCommand($"""
+            UPDATE "{schema}".mesh_nodes
+            SET main_node = split_part(main_node, '/_Thread/', 1)
+            WHERE node_type = 'ThreadMessage'
+              AND main_node LIKE '%/_Thread/%'
+            """);
+        var affected = await fixCmd.ExecuteNonQueryAsync();
+        if (affected > 0)
+        {
+            logger.LogInformation("Repair v8: Fixed {Count} ThreadMessage MainNode(s) in schema {Schema}", affected, schema);
+            totalFixed += affected;
+        }
+    }
+
+    currentVersion = 8;
+    logger.LogInformation("Repair v8 completed — fixed {Total} ThreadMessage MainNode(s)", totalFixed);
 }
 
 // Save current version

@@ -126,11 +126,12 @@ var appInsights = builder.AddAzureApplicationInsights("appinsights")
 // --- Database Migration ---
 var dbMigration = builder
     .AddProject<Projects.Memex_Database_Migration>("db-migration")
-    .WithEnvironment("Embedding__Model", embeddingModel)
-    .WithReference(appInsights)
-    .WaitFor(appInsights);
-if (hasEmbedding)
-    dbMigration = dbMigration.WithEnvironment("Embedding__Model", embeddingModel!);
+    .WithEnvironment("Embedding__Model", embeddingModel);
+
+if (!useLocalDb)
+{
+    dbMigration.WithReference(appInsights).WaitFor(appInsights);
+}
 
 // --- Portal (co-hosted Orleans silo + web) ---
 var portal = builder

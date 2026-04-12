@@ -6,14 +6,12 @@ using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
-using MeshWeaver.AI.Layout;
-using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
-using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
@@ -63,7 +61,7 @@ public static class MemexConfiguration
         var services = builder.Services;
 
         // Trust forwarded headers from Azure Container Apps reverse proxy
-        services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+        services.Configure<ForwardedHeadersOptions>(options =>
         {
             options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
                                      | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
