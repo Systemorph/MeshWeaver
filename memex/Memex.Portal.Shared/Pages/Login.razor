@@ -1,5 +1,4 @@
 @page "/login"
-@using Microsoft.AspNetCore.Components.Authorization
 @using MeshWeaver.Blazor.Portal.Authentication
 @inject IAuthenticationNavigationService AuthNavService
 @inject NavigationManager Navigation
@@ -52,9 +51,6 @@
     [SupplyParameterFromQuery(Name = "error")]
     public string? ErrorMessage { get; set; }
 
-    [CascadingParameter]
-    private Task<AuthenticationState>? AuthStateTask { get; set; }
-
     private IReadOnlyList<ExternalProviderConfig> Providers { get; set; } = [];
     private bool ShowDevLogin { get; set; }
 
@@ -64,18 +60,8 @@
         Navigation.NavigateTo(url, forceLoad: true);
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        if (AuthStateTask is not null)
-        {
-            var authState = await AuthStateTask;
-            if (authState.User?.Identity?.IsAuthenticated == true)
-            {
-                Navigation.NavigateTo(ReturnUrl ?? "/", forceLoad: true);
-                return;
-            }
-        }
-
         if (AuthNavService is AuthenticationNavigationService navService)
         {
             Providers = navService.GetAvailableProviders();

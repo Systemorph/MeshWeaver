@@ -6,14 +6,12 @@ using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
-using MeshWeaver.AI.Layout;
-using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
-using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
@@ -63,7 +61,7 @@ public static class MemexConfiguration
         var services = builder.Services;
 
         // Trust forwarded headers from Azure Container Apps reverse proxy
-        services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+        services.Configure<ForwardedHeadersOptions>(options =>
         {
             options.KnownIPNetworks.Clear();
             options.KnownProxies.Clear();
@@ -90,17 +88,6 @@ public static class MemexConfiguration
 
         services.AddAzureFoundry(config =>
             builder.Configuration.GetSection("AzureAIS").Bind(config));
-
-        // DIAGNOSTIC — remove after fix confirmed
-        {
-            var probe = new MeshWeaver.AI.AzureFoundry.AzureFoundryConfiguration();
-            builder.Configuration.GetSection("AzureAIS").Bind(probe);
-            Console.WriteLine(
-                $"[DIAG:AzureAIS] Endpoint={probe.Endpoint ?? "(null)"}, " +
-                $"ApiKey={(!string.IsNullOrEmpty(probe.ApiKey) ? "SET" : "MISSING")}, " +
-                $"Models.Length={probe.Models.Length}: [{string.Join(", ", probe.Models)}], " +
-                $"Order={probe.Order}");
-        }
 
         services.AddAzureOpenAI(config =>
             builder.Configuration.GetSection("AzureOpenAIS").Bind(config));
@@ -320,15 +307,10 @@ public static class MemexConfiguration
                 // Each hub gets its own "content" collection pointing to a subdirectory
                 .ConfigureDefaultNodeHub(config =>
                 {
-                    // Declared before the if-block so it's available for both the "content"
-                    // collection mapping below and the "attachments" mapping further down.
-                    var nodePath = config.Address.ToString();
-
                     if (contentStorageConfig != null)
                     {
-                        // Scope static media (SVG, PNG, JPG) to a per-node subdirectory
-                        // so each hub serves only its own content files.
-                        var contentSubdir = $"content/{nodePath}";
+                        var nodePath = config.Address.ToString();
+                        var contentSubdir = nodePath;
                         // Combine with original BasePath for FileSystem; for AzureBlob, subdirectory is the blob prefix
                         var basePath = string.IsNullOrEmpty(contentStorageConfig.BasePath)
                             ? contentSubdir
@@ -345,10 +327,6 @@ public static class MemexConfiguration
                         };
                         config = config.AddContentCollection(_ => nodeContentConfig);
                     }
-
-                    // Map "attachments" to "storage" with per-node subdirectory
-                    // (needed by FutuRe and other samples that store datacube.csv, etc.)
-                    config = config.MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
                 })

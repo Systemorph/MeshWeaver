@@ -23,13 +23,10 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 {
     private const string CookieName = "meshweaver_virtual_user";
 
-    private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico", "/mcp"];
-
     public async Task InvokeAsync(HttpContext context)
     {
-        var path = context.Request.Path.Value ?? "";
-        if (ExcludedPrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+        // Skip virtual user assignment for MCP requests — they should get 401, not a virtual identity
+        if (context.Request.Path.StartsWithSegments("/mcp"))
         {
             await next(context);
             return;

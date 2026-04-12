@@ -11,22 +11,8 @@ namespace MeshWeaver.Blazor.Infrastructure;
 
 public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMiddleware> logger)
 {
-    // Blazor framework files, static assets, and favicon — no user context needed.
-    private static readonly string[] ExcludedPrefixes =
-        ["/_framework", "/_content", "/_blazor", "/static/", "/favicon.ico"];
-
     public async Task InvokeAsync(HttpContext context)
     {
-        // Skip user resolution for static assets and Blazor framework resources.
-        // These requests never need an AccessContext and resolving it adds unnecessary
-        // overhead (hub lookup, mesh query) on every JS/CSS/SignalR resource download.
-        var path = context.Request.Path.Value ?? "";
-        if (ExcludedPrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
-        {
-            await next(context);
-            return;
-        }
-
         var hub = context.RequestServices.GetRequiredService<PortalApplication>().Hub;
         var userService = hub.ServiceProvider.GetRequiredService<AccessService>();
 

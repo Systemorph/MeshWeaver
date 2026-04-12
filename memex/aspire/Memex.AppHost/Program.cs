@@ -4,15 +4,17 @@ using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Mode: "local" (default), "test", "prod", "monolith"
-// Pass as command line argument: dotnet run -- --mode test
+// Mode: "local" (default), "local-test", "local-prod", "test", "prod", "monolith"
+// Pass as command line argument: dotnet run -- --mode local-test
 //
 // Mode matrix:
 //   Mode        | PostgreSQL              | Blob Storage | Orleans    | Portal Name
 //   ----------- | ----------------------- | ------------ | ---------- | -----------
-//   local       | Docker pgvector (memex) | Emulated     | Emulated   | memex-local
-//   test        | Azure (memex-test)      | Azure        | Azure      | memex-test
-//   prod        | Azure (memex)           | Azure        | Azure      | memex-prod
+//   local       | Docker pgvector (memex)      | Emulated     | Emulated   | memex-local
+//   local-test  | Azure (memex-test)           | Azure (meshweavermemextest) | Emulated   | memex-local
+//   local-prod  | Azure (memex)                | Azure (meshweavermemex)     | Emulated   | memex-local
+//   test        | Azure (memex-test)           | Azure (meshweavermemextest) | Azure      | memex-test
+//   prod        | Azure (memex)                | Azure (meshweavermemex)     | Azure      | memex-prod
 //   monolith    | FileSystem (standalone) | —            | —          | memex-monolith
 //
 // Secrets: set locally via `dotnet user-secrets`, in CI/CD via GitHub secrets.
@@ -25,7 +27,10 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Parameters:embedding-model
 //   Parameters:microsoft-client-id
 //   Parameters:microsoft-client-secret
-//   Parameters:microsoft-tenant-id
+//
+// For local-test/local-prod, also set the connection string to the Azure PostgreSQL:
+//   ConnectionStrings:memex  (Azure PostgreSQL, bypassing provisioning)
+// Blob Storage uses RunAsExisting with Azure Identity (az login) — no secrets needed.
 
 var mode = builder.Configuration["mode"]?.ToLowerInvariant() ?? "local";
 
@@ -34,7 +39,6 @@ if (mode == "monolith")
     // Standalone portal without Orleans or external infrastructure
     builder
         .AddProject<Projects.Memex_Portal_Monolith>("memex-monolith")
-        .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
         .WithExternalHttpEndpoints();
     builder.Build().Run();
     return;
@@ -45,27 +49,20 @@ if (mode == "monolith")
 // LLM API key (single Azure Foundry key for both Anthropic and OpenAI endpoints)
 var azureFoundryKey = builder.AddParameter("azure-foundry-key", secret: true);
 
-// Authentication (Microsoft is required; Google is optional for local)
+// Embedding configuration
+var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
+var embeddingKey = builder.AddParameter("embedding-key", secret: true);
+var embeddingModel = builder.AddParameter("embedding-model", secret: false);
+
+// Authentication
 var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
-var microsoftTenantId = builder.AddParameter("microsoft-tenant-id", secret: false);
+var googleClientId = builder.AddParameter("google-client-id", secret: false);
+var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
 
-// Embedding, Google auth, and custom domain (non-secret optional — ACA accepts empty env vars)
-var embeddingEndpoint = builder.AddParameter("embedding-endpoint", value: "", secret: false);
-var embeddingModel = builder.AddParameter("embedding-model", value: "", secret: false);
-var googleClientId = builder.AddParameter("google-client-id", value: "", secret: false);
-var customDomain = builder.AddParameter("custom-domain", value: "", secret: false);
-var certificateName = builder.AddParameter("certificate-name", value: "", secret: false);
-
-// Optional secrets/params: ACA rejects secrets with empty values; ConfigureCustomDomain
-// rejects empty hostnames. Read actual config values to guard optional registrations.
-var embeddingKeyValue = builder.Configuration["Parameters:embedding-key"] ?? "";
-var googleClientSecretValue = builder.Configuration["Parameters:google-client-secret"] ?? "";
-var customDomainValue = builder.Configuration["Parameters:custom-domain"] ?? "";
-IResourceBuilder<ParameterResource>? embeddingKey = string.IsNullOrEmpty(embeddingKeyValue)
-    ? null : builder.AddParameter("embedding-key", secret: true);
-IResourceBuilder<ParameterResource>? googleClientSecret = string.IsNullOrEmpty(googleClientSecretValue)
-    ? null : builder.AddParameter("google-client-secret", secret: true);
+// --- Custom domain (for deployed modes) ---
+var customDomain = builder.AddParameter("custom-domain", secret: false);
+var certificateName = builder.AddParameter("certificate-name", secret: false);
 
 // --- Infrastructure axes ---
 var isDeployed = mode is "test" or "prod";
@@ -118,9 +115,12 @@ var appInsights = builder.AddAzureApplicationInsights("appinsights")
 // --- Database Migration ---
 var dbMigration = builder
     .AddProject<Projects.Memex_Database_Migration>("db-migration")
-    .WithEnvironment("Embedding__Model", embeddingModel)
-    .WithReference(appInsights)
-    .WaitFor(appInsights);
+    .WithEnvironment("Embedding__Model", embeddingModel);
+
+if (!useLocalDb)
+{
+    dbMigration.WithReference(appInsights).WaitFor(appInsights);
+}
 
 // --- Portal (co-hosted Orleans silo + web) ---
 var portal = builder
@@ -128,10 +128,9 @@ var portal = builder
     .WithExternalHttpEndpoints()
     .WithReference(orleans)
     .WithReference(appInsights)
-    // Local modes need Development environment for static web assets (_framework, _content)
-    .WithEnvironment("ASPNETCORE_ENVIRONMENT", isDeployed ? "Production" : "Development")
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
+    .WithEnvironment("Embedding__ApiKey", embeddingKey)
     .WithEnvironment("Embedding__Model", embeddingModel)
     // LLM: Anthropic (Azure Foundry Claude)
     .WithEnvironment("Anthropic__Endpoint", "https://s-meshweaver.services.ai.azure.com/anthropic/")
@@ -148,20 +147,12 @@ var portal = builder
     .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
     .WithEnvironment("AzureOpenAIS__Models__0", "gpt-5-mini")
     .WithEnvironment("AzureOpenAIS__Models__1", "gpt-5.4")
-    // LLM: Azure AI Foundry (multi-model inference endpoint)
-    .WithEnvironment("AzureAIS__Endpoint", "https://fy-meshweaver3-dev-swc-001.services.ai.azure.com/models")
-    .WithEnvironment("AzureAIS__ApiKey", azureFoundryKey)
-    .WithEnvironment("AzureAIS__Models__0", "gpt-5.4")
-    .WithEnvironment("AzureAIS__Models__1", "gpt-5.3-codex")
-    .WithEnvironment("AzureAIS__Models__2", "Mistral-Large-3")
-    .WithEnvironment("AzureAIS__Models__3", "DeepSeek-V3.2")
-    .WithEnvironment("AzureAIS__Order", "1")
     // Authentication
     .WithEnvironment("Authentication__EnableDevLogin", mode != "prod" ? "true" : "false")
     .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
-    .WithEnvironment("Authentication__Microsoft__TenantId", microsoftTenantId)
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
+    .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
     // Wait for dependencies
     .WaitFor(orleansTables)
     .WaitForCompletion(dbMigration)
@@ -169,20 +160,13 @@ var portal = builder
     .PublishAsAzureContainerApp((module, app) =>
     {
         app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
-        if (!string.IsNullOrEmpty(customDomainValue))
-            app.ConfigureCustomDomain(customDomain, certificateName);
+        app.ConfigureCustomDomain(customDomain, certificateName);
 
         // Scale: min 2 replicas (Orleans needs ≥2 for resilience), max 6 under load.
         // Each replica: 2 vCPU / 4Gi (50% of Consumption tier max 4 vCPU / 8Gi).
         app.Template.Scale.MinReplicas = 2;
         app.Template.Scale.MaxReplicas = 6;
     });
-
-// Optional secrets: only add as env vars when configured (ACA rejects empty secrets)
-if (embeddingKey is not null)
-    portal.WithEnvironment("Embedding__ApiKey", embeddingKey);
-if (googleClientSecret is not null)
-    portal.WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret);
 
 // --- Azure Blob Storage ---
 if (useLocalDb)
@@ -196,6 +180,15 @@ if (useLocalDb)
                 .WithExternalHttpEndpoints());
     var storageBlobs = contentStorage.AddBlobs("storage");
     portal.WithReference(storageBlobs).WaitFor(storageBlobs);
+}
+else if (mode is "local-test" or "local-prod")
+{
+    // Connect to existing Azure Blob Storage via Azure Identity (az login, no secrets needed)
+    var storageName = mode is "local-test" ? "meshweavermemextest" : "meshweavermemex";
+    var contentStorage = builder.AddAzureStorage("memexblobs")
+        .RunAsExisting(storageName, null);
+    var storageBlobs = contentStorage.AddBlobs("storage");
+    portal.WithReference(storageBlobs);
 }
 else
 {
@@ -225,6 +218,14 @@ if (useLocalDb)
 
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
+}
+else if (mode is "local-test" or "local-prod")
+{
+    // Use pre-configured connection string (set via dotnet user-secrets)
+    // to connect to existing Azure PostgreSQL without Aspire provisioning.
+    var db = builder.AddConnectionString("memex");
+    dbMigration.WithReference(db);
+    portal.WithReference(db);
 }
 else
 {

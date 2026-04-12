@@ -41,7 +41,7 @@ The `aspire deploy` command builds the application, pushes container images, and
 For local development with Docker containers:
 
 ```bash
-aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode local
+aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj
 ```
 
 This starts in `local` mode by default, using Docker pgvector and emulated Azure services.
@@ -99,19 +99,6 @@ Orleans provides distributed actor clustering for the microservices deployment.
 
 Telemetry and distributed tracing via Azure Application Insights, provisioned automatically in all deployed modes.
 
-# Azure AD App Registration
-
-Microsoft authentication requires an app registration in Microsoft Entra ID (Azure AD):
-
-1. **Azure Portal** → **App registrations** → select your app (or create one)
-2. Under **Authentication** → **Platform configurations** → **Web**, add redirect URIs:
-   - `http://localhost:5000/signin-microsoft` (local development)
-   - `https://<your-deployed-domain>/signin-microsoft` (deployed environments)
-3. Note the **Application (client) ID** and **Directory (tenant) ID** from the **Overview** page
-4. Under **Certificates & secrets**, create a client secret
-
-For single-tenant apps, the tenant ID must be configured — the default `/common` endpoint is not supported.
-
 # Secrets Management
 
 Secrets are managed via `dotnet user-secrets` locally and GitHub secrets in CI/CD.
@@ -126,7 +113,6 @@ Required secrets for distributed modes:
 | `Parameters:embedding-model` | Embedding model name |
 | `Parameters:microsoft-client-id` | Microsoft OAuth client ID |
 | `Parameters:microsoft-client-secret` | Microsoft OAuth client secret |
-| `Parameters:microsoft-tenant-id` | Microsoft Entra tenant ID (single-tenant apps) |
 | `Parameters:google-client-id` | Google OAuth client ID |
 | `Parameters:google-client-secret` | Google OAuth client secret |
 | `Parameters:custom-domain` | Custom domain for deployed portal |
