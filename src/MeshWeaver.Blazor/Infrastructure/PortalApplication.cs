@@ -1,4 +1,5 @@
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
@@ -35,6 +36,10 @@ public class PortalApplication : IDisposable
                 var meshRegistry = await routingService.RegisterStreamAsync(hub);
                 hub.RegisterForDisposal(meshRegistry);
             })
+            // Route kernel addresses to local hosted hubs — never delegate to grains.
+            .WithRoutes(routes => routes.RouteAddressToHostedHub(
+                AddressExtensions.KernelType,
+                c => c.AddKernelSubHubHandlers()))
             .AddContentCollections()
             .WithHandler<NavigationRequest>((_, delivery) =>
             {
