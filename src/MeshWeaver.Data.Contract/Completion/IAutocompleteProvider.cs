@@ -16,4 +16,13 @@ public interface IAutocompleteProvider
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Async enumerable of autocomplete items.</returns>
     IAsyncEnumerable<AutocompleteItem> GetItemsAsync(string query, string? contextPath = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Optional: the UCR prefix this provider handles (e.g., "content", "data", "schema").
+    /// Generic providers (mesh nodes, unified references) return null.
+    /// Specialized providers return their prefix so generic providers can skip
+    /// queries that should be handled exclusively by them.
+    /// Aggregated by <see cref="IAutocompletePrefixRegistry"/> and exposed via the prefix/ UCR.
+    /// </summary>
+    string? Prefix => null;
 }

@@ -104,6 +104,7 @@ public static class DataExtensions
                     return new Workspace(hub, loggerFactory.CreateLogger<Workspace>());
                 })
                 .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>()
+                .AddScoped<IAutocompletePrefixRegistry, AutocompletePrefixRegistry>()
                 .AddScoped<IDataValidator, RlsDataValidator>())
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>

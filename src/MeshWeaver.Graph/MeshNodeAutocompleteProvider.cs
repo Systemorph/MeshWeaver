@@ -11,7 +11,10 @@ namespace MeshWeaver.Graph;
 /// Uses the hub's address as the parent path to find children.
 /// Returns relative paths when contextPath matches the hub address, absolute otherwise.
 /// </summary>
-internal class MeshNodeAutocompleteProvider(IMeshService meshQuery, IMessageHub hub) : IAutocompleteProvider
+internal class MeshNodeAutocompleteProvider(
+    IMeshService meshQuery,
+    IMessageHub hub,
+    IAutocompletePrefixRegistry? prefixRegistry = null) : IAutocompleteProvider
 {
     private const int DefaultMaxResults = 20;
 
@@ -21,6 +24,10 @@ internal class MeshNodeAutocompleteProvider(IMeshService meshQuery, IMessageHub 
         string? contextPath = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Skip UCR prefix queries — handled by dedicated providers (Content, Data, etc.)
+        if (StartsWithUcrPrefix(query))
+            yield break;
+
         // Use the hub's address as the parent path
         var parentPath = hub.Address.ToString();
 
@@ -74,5 +81,15 @@ internal class MeshNodeAutocompleteProvider(IMeshService meshQuery, IMessageHub 
                 Kind: AutocompleteKind.Other
             );
         }
+    }
+
+    private bool StartsWithUcrPrefix(string? query)
+    {
+        if (string.IsNullOrEmpty(query) || prefixRegistry == null) return false;
+        var p = query.StartsWith("@") ? query[1..] : query;
+        if (p.StartsWith("/")) p = p[1..];
+        var firstSlash = p.IndexOf('/');
+        var firstSegment = firstSlash > 0 ? p[..firstSlash] : p;
+        return prefixRegistry.IsRegistered(firstSegment);
     }
 }

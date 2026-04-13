@@ -178,6 +178,30 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
+    public async Task ProgressiveTyping_AtContentSlash_DoesNotShowChildrenCategory()
+    {
+        // When typing @content/, we should NOT see "Children" or node-type categories
+        // (those come from UnifiedReferenceAutocompleteProvider/MeshNodeAutocompleteProvider
+        // which should skip UCR prefix queries).
+        var batches = await Orchestrator
+            .GetCompletionsAsync("@content/", "ACME/ProductLaunch")
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        var allItems = batches.SelectMany(b => b.Items).ToList();
+
+        Output.WriteLine($"Items for '@content/':");
+        foreach (var item in allItems.Take(20))
+            Output.WriteLine($"  [{item.Priority}] {item.Label} ({item.Category}) => {item.InsertText}");
+
+        // No "Children" or "Markdown" (node type) categories should appear
+        var unwantedCategories = allItems
+            .Where(i => i.Category == "Children" || i.Category == "Markdown" || i.Category == "Nodes")
+            .ToList();
+        unwantedCategories.Should().BeEmpty(
+            "@content/ should NOT trigger node-children autocomplete from UnifiedReferenceAutocompleteProvider or MeshNodeAutocompleteProvider");
+    }
+
+    [Fact(Timeout = 30000)]
     public async Task ProgressiveTyping_AtContentSlash_RoutesToTagQuery()
     {
         // Typing "@content/" should route to TagQuery mode (not CurrentNodeAndGlobal)
