@@ -87,7 +87,7 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         if (Info == "layout")
             return null;
 
-        // --execute: silent execution (explicit opt-in, overrides Info-based default).
+        // --execute: silent execution (explicit opt-in).
         if (Args.TryGetValue(Execute, out var executionId))
             return new(string.Join('\n', Lines.Lines)) { Id = executionId ?? Guid.NewGuid().AsString() };
         if (SubmitCode is not null)
@@ -95,16 +95,10 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         // --render <AreaId>: execute + stream output to a named layout area.
         if (Args.TryGetValue(Render, out var renderId))
             return new(string.Join('\n', Lines.Lines)) { Id = renderId ?? Guid.NewGuid().AsString() };
-        // Default for code blocks in supported languages is silent execution
-        // (variables persist across blocks, no output rendered). Opt out with --no-execute
-        // for documentation-only samples.
-        if (IsExecutableLanguage(Info) && !Args.ContainsKey(NoExecute))
-            return new(string.Join('\n', Lines.Lines)) { Id = Guid.NewGuid().AsString() };
+        // Bare ```csharp blocks are documentation-only by default.
+        // Use --execute for silent execution or --render <AreaId> to stream output.
         return null;
     }
-
-    private static bool IsExecutableLanguage(string? info) =>
-        info is "csharp" or "cs" or "c#";
 
     public LayoutAreaComponentInfo? GetLayoutAreaComponent()
     {

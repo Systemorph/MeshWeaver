@@ -12,6 +12,9 @@ namespace MeshWeaver.ContentCollections.Completion;
 public class ContentAutocompleteProvider(IContentService contentService) : IAutocompleteProvider
 {
     /// <inheritdoc />
+    public string? Prefix => "content";
+
+    /// <inheritdoc />
     public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
         string query,
         string? contextPath = null,

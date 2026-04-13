@@ -21,7 +21,8 @@ internal class UnifiedReferenceAutocompleteProvider(
     IMeshCatalog? meshCatalog,
     IMeshService? meshQuery,
     INavigationService? navigationContext,
-    IMessageHub hub) : IAutocompleteProvider
+    IMessageHub hub,
+    IAutocompletePrefixRegistry? prefixRegistry = null) : IAutocompleteProvider
 {
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
 
@@ -54,6 +55,11 @@ internal class UnifiedReferenceAutocompleteProvider(
         // Strip the @ prefix(es) - handle both @ and @@
         var path = query.TrimStart('@');
 
+        // If the path starts with (or contains) a UCR prefix segment (content/, data/, schema/, etc.),
+        // skip — dedicated providers (ContentAutocompleteProvider, DataAutocompleteProvider) handle these.
+        if (StartsWithUcrPrefix(path))
+            yield break;
+
         // Determine effective context: prefer explicit contextPath, fall back to navigation context
         var effectiveContext = contextPath ?? navigationContext?.CurrentNamespace;
 
@@ -77,6 +83,24 @@ internal class UnifiedReferenceAutocompleteProvider(
         // No context — fall back to global absolute mode
         await foreach (var item in GetAbsoluteSuggestions(path, ct))
             yield return item;
+    }
+
+    /// <summary>
+    /// Returns true if the path starts with a UCR prefix segment (content/, data/, schema/, etc.)
+    /// or is exactly a UCR prefix name. These are handled by dedicated providers.
+    /// Uses the injected IAutocompletePrefixRegistry, which aggregates from all registered providers.
+    /// </summary>
+    private bool StartsWithUcrPrefix(string path)
+    {
+        if (string.IsNullOrEmpty(path) || prefixRegistry == null) return false;
+
+        // Strip leading / for absolute paths
+        var p = path.StartsWith("/") ? path[1..] : path;
+
+        var firstSlash = p.IndexOf('/');
+        var firstSegment = firstSlash > 0 ? p[..firstSlash] : p;
+
+        return prefixRegistry.IsRegistered(firstSegment);
     }
 
     /// <summary>

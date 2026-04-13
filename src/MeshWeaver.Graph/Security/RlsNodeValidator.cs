@@ -117,7 +117,7 @@ public class RlsNodeValidator : INodeValidator
                 return NodeValidationResult.Valid();
             }
 
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "RLS: Custom access rule denied {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
                 userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
             return NodeValidationResult.Unauthorized(
@@ -155,7 +155,7 @@ public class RlsNodeValidator : INodeValidator
         {
             var displayUserId = userId ?? "(anonymous)";
 
-            _logger.LogWarning(
+            _logger.LogDebug(
                 "RLS: Access denied for user {UserId} - {Operation} on {Path} requires {Permission}",
                 displayUserId,
                 context.Operation,

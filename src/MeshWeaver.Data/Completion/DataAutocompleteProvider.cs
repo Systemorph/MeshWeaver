@@ -9,6 +9,9 @@ namespace MeshWeaver.Data.Completion;
 public class DataAutocompleteProvider(IWorkspace workspace) : IAutocompleteProvider
 {
     /// <inheritdoc />
+    public string? Prefix => "data";
+
+    /// <inheritdoc />
     public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
         string query,
         string? contextPath = null,
