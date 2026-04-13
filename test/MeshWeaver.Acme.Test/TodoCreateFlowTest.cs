@@ -701,7 +701,9 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Output.WriteLine("Node confirmed as Active.");
 
             // Step 5: Use GetDataRequest to retrieve the MeshNode via EntityReference
-            var entityRef = new EntityReference(nameof(MeshNode), nodePath);
+            // MeshNode key is Id (last segment), not full path
+            var nodeId = nodePath[(nodePath.LastIndexOf('/') + 1)..];
+            var entityRef = new EntityReference(nameof(MeshNode), nodeId);
             var getDataResponse = await client.AwaitResponse(
                 new GetDataRequest(entityRef),
                 o => o.WithTarget(nodeAddress),

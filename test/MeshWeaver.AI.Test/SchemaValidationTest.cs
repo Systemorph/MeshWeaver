@@ -175,9 +175,10 @@ public class SchemaValidationTest : MonolithMeshTestBase
     {
         var plugin = CreatePlugin();
 
+        var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var nodeJson = JsonSerializer.Serialize(new
         {
-            id = "ACME/Product/PricingTool",
+            id = $"ACME/Product/PricingTool-{uniqueSuffix}",
             @namespace = "",
             name = "Pricing Tool",
             nodeType = "Markdown"
