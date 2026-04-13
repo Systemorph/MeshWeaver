@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Messaging;
 
@@ -6,11 +7,14 @@ namespace MeshWeaver.ContentCollections.Completion;
 
 /// <summary>
 /// Provides autocomplete items for content collections.
-/// Filters files by query relevance and scores them to compete fairly with postgres-backed results.
-/// Priority scale: exact name match 3000, prefix match 2800, contains 2000.
+/// Uses fzf-style fuzzy matching (FuzzyScorer) so a query matching ANY word in the filename
+/// scores high — e.g., "two" matches "one two three.docx", "thr" matches "three" word.
+/// Priority scale: word-boundary fuzzy matches score in the thousands; proximity boost +1000 for local content.
 /// </summary>
 public class ContentAutocompleteProvider(IContentService contentService) : IAutocompleteProvider
 {
+    private static readonly FuzzyScorer Scorer = new();
+
     /// <inheritdoc />
     public string? Prefix => "content";
 
@@ -108,36 +112,27 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
     }
 
     /// <summary>
-    /// Scores a file name against the search text.
-    /// Returns priority values that compete with postgres ts_rank-based scores.
+    /// Scores a file name against the search text using fzf-style fuzzy matching.
+    /// Case-insensitive. Word-boundary matches (e.g., "thr" against "one two three.docx" → "three")
+    /// score high due to BonusAfterSeparator. Returns 0 if no match.
+    /// Scaled to thousands to compete with postgres ts_rank-based scores.
     /// </summary>
     private static int ScoreMatch(string fileName, string searchText)
     {
         if (string.IsNullOrEmpty(searchText))
             return 100; // Return all with low priority when no query
 
-        var nameLower = fileName.ToLowerInvariant();
-        var queryLower = searchText.ToLowerInvariant();
-        var nameWithoutExt = Path.GetFileNameWithoutExtension(nameLower);
+        // Drop extension for scoring so "report" matches "report.md" without penalty
+        var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
 
-        // Exact match (with or without extension)
-        if (nameLower == queryLower || nameWithoutExt == queryLower)
-            return 3000;
+        // Use FuzzyScorer (case-insensitive, word-boundary aware)
+        var scored = Scorer.Score(new[] { nameWithoutExt }, searchText, s => s).FirstOrDefault();
+        if (scored == null || scored.Score <= 0)
+            return 0;
 
-        // Starts with query
-        if (nameLower.StartsWith(queryLower) || nameWithoutExt.StartsWith(queryLower))
-            return 2800;
-
-        // Contains query as substring
-        if (nameLower.Contains(queryLower))
-            return 2000;
-
-        // Word-boundary match (query matches start of a word in the name)
-        var words = nameWithoutExt.Split([' ', '_', '-', '.'], StringSplitOptions.RemoveEmptyEntries);
-        if (words.Any(w => w.StartsWith(queryLower)))
-            return 1500;
-
-        return 0; // No match
+        // FuzzyScorer typically returns scores in 10s-100s range. Scale to compete with
+        // node scoring (which is in thousands). Multiply by 30 keeps strong matches well above 1000.
+        return scored.Score * 30;
     }
 
     /// <summary>
