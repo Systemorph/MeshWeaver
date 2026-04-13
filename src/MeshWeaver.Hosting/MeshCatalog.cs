@@ -261,8 +261,9 @@ internal sealed class MeshCatalog(
 
         var resolution = await ResolvePathCoreAsync(path);
 
-        // Cache the result (including null → cache as sentinel)
-        if (resolution != null)
+        // Only cache exact matches (no remainder). Partial matches are inherently
+        // unstable — they resolve to a parent when a child doesn't exist YET.
+        if (resolution is { Remainder: null or "" })
             cache.Set(cacheKey, resolution, ResolveCacheOptions);
 
         return resolution;
