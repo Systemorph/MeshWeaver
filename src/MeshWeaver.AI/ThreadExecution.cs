@@ -952,13 +952,17 @@ public static class ThreadExecution
         if (string.IsNullOrEmpty(text))
             return (null, null, true);
 
-        // Try JSON parsing only if text looks like JSON (starts with { or [)
+        // Try JSON parsing only if text looks like a JSON object — arrays/scalars don't carry
+        // threadId/result/success, and TryGetProperty would throw InvalidOperationException on them.
         var trimmed = text.AsSpan().TrimStart();
-        if (trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '['))
+        if (trimmed.Length > 0 && trimmed[0] == '{')
         try
         {
             using var doc = JsonDocument.Parse(text);
             var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return (text, null, !text.StartsWith("Error", StringComparison.Ordinal));
+
             string? threadId = null;
             if (root.TryGetProperty("threadId", out var tidProp) ||
                 root.TryGetProperty("ThreadId", out tidProp))

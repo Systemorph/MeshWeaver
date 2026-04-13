@@ -156,12 +156,8 @@ public static class DeleteLayoutArea
                     host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
                         .DeleteNode(nodePath).Subscribe();
 
-                    // Redirect to parent immediately
-                    var parentPath = GetParentPath(nodePath);
-                    var parentHref = !string.IsNullOrEmpty(parentPath)
-                        ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
-                        : "/";
-                    ctx.NavigateTo(parentHref);
+                    // Empty the area in-place — no redirect. The user can navigate via menu/back.
+                    ctx.Host.UpdateArea(MeshNodeLayoutAreas.DeleteArea, null);
                 })));
 
         return stack;

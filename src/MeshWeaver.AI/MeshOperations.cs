@@ -389,7 +389,22 @@ public class MeshOperations
                         NodeType = updated.NodeType,
                         NodeName = updated.Name
                     });
-                    patchTcs.TrySetResult($"Patched: {updated.Path}");
+
+                    // Silent-failure guard: if the version did not increment, the write did
+                    // not commit (likely a stale snapshot read or a routing-layer no-op).
+                    // The agent must see this and retry/refresh — never report success on a no-op.
+                    if (updated.Version == versionBefore)
+                    {
+                        logger.LogWarning(
+                            "Patch silent-failure on {Path}: version unchanged ({Version}) — write did not commit",
+                            updated.Path, versionBefore);
+                        patchTcs.TrySetResult(
+                            $"Error: patch on {updated.Path} did not commit (version stayed at {versionBefore}). " +
+                            "This usually means a stale snapshot — retry after re-fetching the node.");
+                        return;
+                    }
+
+                    patchTcs.TrySetResult($"Patched: {updated.Path} (v{versionBefore} → v{updated.Version})");
                 },
                 ex => patchTcs.TrySetResult($"Error patching {merged.Path}: {ex.Message}"));
             return await patchTcs.Task;

@@ -177,6 +177,42 @@ public class SpacesInFileNameTest(ITestOutputHelper output) : MonolithMeshTestBa
         simpleResult!.Score.Should().BeGreaterThan(0, "exact prefix match should score positively");
     }
 
+    /// <summary>
+    /// Per user requirement: "if the doc is called 'one two three.docx' I would expect it to appear
+    /// first when either writing one or two or thr". Tests fuzzy word-boundary matching.
+    /// </summary>
+    [Theory]
+    [InlineData("one")]
+    [InlineData("two")]
+    [InlineData("thr")]
+    [InlineData("ONE")]
+    [InlineData("Two")]
+    [InlineData("Thr")]
+    public void ContentAutocomplete_AnyWord_MatchesSpacedFile(string query)
+    {
+        var scorer = new FuzzyScorer();
+
+        var items = new[]
+        {
+            "one two three.docx",
+            "completely unrelated.txt",
+            "another doc.md",
+            "yet another file.pdf",
+        };
+
+        var scored = scorer.Score(items, query, s => s).ToList();
+
+        Output.WriteLine($"Query '{query}':");
+        foreach (var s in scored.Take(5))
+            Output.WriteLine($"  [{s.Score}] {s.Item}");
+
+        // The matching file MUST be the highest-ranked
+        scored.Should().NotBeEmpty($"query '{query}' should match at least one file");
+        scored.First().Item.Should().Be("one two three.docx",
+            $"query '{query}' should rank 'one two three.docx' first (matches a word in the name)");
+        scored.First().Score.Should().BeGreaterThan(0, "fuzzy match should be positive");
+    }
+
     #endregion
 }
 
