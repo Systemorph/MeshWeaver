@@ -3,6 +3,7 @@ using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Graph;
 
@@ -19,7 +20,10 @@ public static class GraphExtensions
         /// </summary>
         public MessageHubConfiguration AddMeshNodeAutocomplete()
             => configuration.WithServices(services =>
-                services.AddScoped<IAutocompleteProvider, MeshNodeAutocompleteProvider>());
+            {
+                services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, MeshNodeAutocompleteProvider>());
+                return services;
+            });
 
         /// <summary>
         /// Adds the unified reference autocomplete provider to the hub.
@@ -27,12 +31,21 @@ public static class GraphExtensions
         /// </summary>
         public MessageHubConfiguration AddUnifiedReferenceAutocomplete()
             => configuration.WithServices(services =>
-                services.AddScoped<IAutocompleteProvider>(sp =>
-                    new UnifiedReferenceAutocompleteProvider(
+            {
+                // Register concrete type once with factory (handles nullable optional dependencies)
+                if (services.All(d => d.ServiceType != typeof(UnifiedReferenceAutocompleteProvider)))
+                {
+                    services.AddScoped(sp => new UnifiedReferenceAutocompleteProvider(
                         sp.GetService<IMeshCatalog>(),
                         sp.GetService<IMeshService>(),
                         sp.GetService<INavigationService>(),
-                        sp.GetRequiredService<IMessageHub>())));
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetService<IAutocompletePrefixRegistry>()));
+                }
+                services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, UnifiedReferenceAutocompleteProvider>(
+                    sp => sp.GetRequiredService<UnifiedReferenceAutocompleteProvider>()));
+                return services;
+            });
 
         /// <summary>
         /// Adds both the mesh node autocomplete provider and the mesh catalog view.

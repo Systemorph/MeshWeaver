@@ -628,29 +628,13 @@ internal sealed class ChatCompletionOrchestrator(
             Path: suggestion.Path);
     }
 
+    /// <summary>
+    /// Pass through the provider's insert text. Providers are expected to produce relative
+    /// paths (e.g., "@content/file.md") when in context, since chat messages resolve
+    /// references relative to the current chat context.
+    /// </summary>
     private static string EnsureAbsoluteInsertText(string insertText, string currentNamespace)
-    {
-        if (string.IsNullOrEmpty(insertText))
-            return insertText;
-
-        // Already absolute
-        if (insertText.StartsWith("@/"))
-            return insertText;
-
-        // Strip @ if present, then make absolute
-        var path = insertText.StartsWith("@") ? insertText[1..] : insertText;
-
-        // If the path doesn't start with the namespace, prepend it
-        if (!string.IsNullOrEmpty(currentNamespace) &&
-            !path.StartsWith(currentNamespace + "/", StringComparison.OrdinalIgnoreCase) &&
-            !path.StartsWith(currentNamespace + ":", StringComparison.OrdinalIgnoreCase) &&
-            !path.Equals(currentNamespace, StringComparison.OrdinalIgnoreCase))
-        {
-            path = $"{currentNamespace}/{path}";
-        }
-
-        return $"@/{path}";
-    }
+        => insertText;
 
     /// <summary>
     /// Extracts the partition (first path segment) from a namespace.
