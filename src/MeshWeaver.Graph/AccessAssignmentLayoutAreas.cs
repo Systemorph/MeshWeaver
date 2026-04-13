@@ -495,12 +495,11 @@ public static class AccessAssignmentLayoutAreas
         var formId = $"change_subject_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?> { ["accessObject"] = "" });
 
-        // Default to User namespace for subject picker (most common case)
+        // Subject picker — only Users and Groups, both partition-scoped (no fan-out).
         var subjectQueries = new[]
         {
             "namespace:User nodeType:User",
-            "namespace:VUser nodeType:VUser",
-            "nodeType:Group"
+            "namespace:Group nodeType:Group"
         };
 
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
