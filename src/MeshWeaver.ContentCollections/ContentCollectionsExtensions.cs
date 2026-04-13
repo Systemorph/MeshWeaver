@@ -11,6 +11,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -333,11 +334,14 @@ public static class ContentCollectionsExtensions
                 .AddScoped<IContentService, ContentService>()
                 .AddScoped<Data.IFileContentProvider, FileContentProvider>()
                 .AddSingleton<IContentTransformer, DocSharpContentTransformer>()
-                .AddScoped<IAutocompleteProvider, ContentAutocompleteProvider>()
                 .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);
         }
+
+        // TryAddEnumerable dedupes by (ServiceType, ImplementationType) — safe to call multiple times.
+        // Required because AddContentService is invoked from both Blazor host and hub configurators.
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, ContentAutocompleteProvider>());
 
         return services;
     }

@@ -95,17 +95,20 @@ public static class DataExtensions
                 return Task.CompletedTask;
             })
             .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
-            .WithServices(sc => sc
-                .AddScoped<IWorkspace>(sp =>
+            .WithServices(sc =>
+            {
+                sc.AddScoped<IWorkspace>(sp =>
                 {
                     var hub = sp.GetRequiredService<IMessageHub>();
                     // Use factory pattern to lazily resolve logger to avoid circular dependency
                     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
                     return new Workspace(hub, loggerFactory.CreateLogger<Workspace>());
-                })
-                .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>()
-                .AddScoped<IAutocompletePrefixRegistry, AutocompletePrefixRegistry>()
-                .AddScoped<IDataValidator, RlsDataValidator>())
+                });
+                sc.AddScoped<IAutocompletePrefixRegistry, AutocompletePrefixRegistry>();
+                sc.AddScoped<IDataValidator, RlsDataValidator>();
+                sc.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, DataAutocompleteProvider>());
+                return sc;
+            })
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {

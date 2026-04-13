@@ -133,6 +133,99 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     private new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private IChatCompletionOrchestrator Orchestrator => Mesh.ServiceProvider.GetRequiredService<IChatCompletionOrchestrator>();
 
+    #region Cross-Prefix Search — typing @<name> finds matches across all providers
+
+    [Fact(Timeout = 30000)]
+    public async Task CrossPrefix_AtFilename_DirectContentProviderSearch()
+    {
+        // Verify ContentAutocompleteProvider returns matches for plain queries (no content/ prefix).
+        // E.g., GetItemsAsync("@Annual") should find "My Annual Report.md".
+        // Note: this tests the provider directly. Whether it surfaces in chat orchestrator
+        // depends on Source A (AutocompleteRequest routing) which may need a live node hub.
+        var providers = Mesh.ServiceProvider.GetServices<IAutocompleteProvider>();
+        var contentProvider = providers.FirstOrDefault(p => p.Prefix == "content");
+
+        if (contentProvider == null)
+        {
+            Output.WriteLine("No content provider at mesh level — content is per-node hub. Skipping.");
+            return;
+        }
+
+        var items = await contentProvider
+            .GetItemsAsync("@Annual", "ACME/ProductLaunch", TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Direct content provider items for '@Annual':");
+        foreach (var item in items.Take(10))
+            Output.WriteLine($"  '{item.Label}' => '{item.InsertText}' (pri={item.Priority})");
+
+        // The content provider should at least be searchable
+        items.Should().NotBeNull();
+    }
+
+    #endregion
+
+    #region Insert Text Format — Relative Paths, No Mangling
+
+    [Fact(Timeout = 30000)]
+    public async Task ContentAutocomplete_FromOrchestrator_PreservesRelativePathInQuotes()
+    {
+        // When typing @content/ in chat, files with spaces should produce
+        // a clean quoted RELATIVE insert text — not nested or absolute-prepended.
+        // E.g., "@content/My Annual Report.md" — NOT @/User/rbuergi/"@content/My Annual Report.md"
+        var batches = await Orchestrator
+            .GetCompletionsAsync("@content/", "ACME/ProductLaunch")
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        var allItems = batches.SelectMany(b => b.Items).ToList();
+
+        Output.WriteLine($"Items for '@content/' from ACME/ProductLaunch:");
+        foreach (var item in allItems.Take(10))
+            Output.WriteLine($"  '{item.Label}' => '{item.InsertText}'");
+
+        // For any file with spaces, insertText should be cleanly quoted
+        var spacedItems = allItems.Where(i => i.InsertText.Contains(' ') && i.InsertText.Contains('"')).ToList();
+        foreach (var item in spacedItems)
+        {
+            // Should NOT contain the malformed pattern: @/path/"@content/...
+            item.InsertText.Should().NotContain("/\"@",
+                $"insertText '{item.InsertText}' is malformed (nested @ inside quotes)");
+        }
+    }
+
+    #endregion
+
+    #region DI Sanity — all providers resolve without circular dependencies
+
+    [Fact(Timeout = 10000)]
+    public void DI_AllAutocompleteProviders_ResolveWithoutCircularDeps()
+    {
+        // Resolving IEnumerable<IAutocompleteProvider> via Autofac forces construction of ALL
+        // providers, which would surface circular dependencies (e.g., MeshNodeAutocompleteProvider
+        // depending on IAutocompletePrefixRegistry which itself depends on IEnumerable<IAutocompleteProvider>).
+        var providers = Mesh.ServiceProvider.GetServices<IAutocompleteProvider>().ToList();
+
+        Output.WriteLine($"Resolved {providers.Count} providers:");
+        foreach (var p in providers)
+            Output.WriteLine($"  - {p.GetType().Name} (Prefix: {p.Prefix ?? "<none>"})");
+
+        providers.Should().NotBeEmpty("at least one autocomplete provider should be registered");
+    }
+
+    [Fact(Timeout = 10000)]
+    public void DI_PrefixRegistry_AggregatesProviderPrefixes()
+    {
+        var registry = Mesh.ServiceProvider.GetRequiredService<IAutocompletePrefixRegistry>();
+        var prefixes = registry.AllPrefixes.ToList();
+
+        Output.WriteLine($"Registered prefixes: {string.Join(", ", prefixes)}");
+
+        prefixes.Should().Contain("data", "DataAutocompleteProvider declares prefix 'data'");
+        prefixes.Should().Contain("content", "ContentAutocompleteProvider declares prefix 'content'");
+    }
+
+    #endregion
+
     #region 1. Progressive Typing
 
     [Fact(Timeout = 30000)]

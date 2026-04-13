@@ -1,24 +1,41 @@
-using MeshWeaver.Data.Completion;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Data.Completion;
 
 /// <summary>
 /// Default registry that aggregates prefixes from all registered <see cref="IAutocompleteProvider"/>
 /// instances by reading their <see cref="IAutocompleteProvider.Prefix"/> property.
-/// Each module that registers a specialized provider (Content, Data, etc.) automatically
-/// contributes its prefix without additional configuration.
+///
+/// Uses <see cref="IServiceProvider"/> for lazy provider resolution to avoid circular DI
+/// (generic providers like MeshNodeAutocompleteProvider inject this registry, but they are
+/// also <see cref="IAutocompleteProvider"/> instances themselves).
 /// </summary>
-public class AutocompletePrefixRegistry(IEnumerable<IAutocompleteProvider> providers) : IAutocompletePrefixRegistry
+public class AutocompletePrefixRegistry(IServiceProvider serviceProvider) : IAutocompletePrefixRegistry
 {
-    private readonly Lazy<HashSet<string>> _prefixes = new(() =>
-        providers
-            .Select(p => p.Prefix)
-            .Where(p => !string.IsNullOrEmpty(p))
-            .Cast<string>()
-            .ToHashSet(StringComparer.OrdinalIgnoreCase));
+    private HashSet<string>? _prefixes;
+    private readonly Lock _lock = new();
+
+    private HashSet<string> Prefixes
+    {
+        get
+        {
+            if (_prefixes != null) return _prefixes;
+            lock (_lock)
+            {
+                if (_prefixes != null) return _prefixes;
+                var providers = serviceProvider.GetServices<IAutocompleteProvider>();
+                _prefixes = providers
+                    .Select(p => p.Prefix)
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .Cast<string>()
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                return _prefixes;
+            }
+        }
+    }
 
     public bool IsRegistered(string segment) =>
-        !string.IsNullOrEmpty(segment) && _prefixes.Value.Contains(segment);
+        !string.IsNullOrEmpty(segment) && Prefixes.Contains(segment);
 
-    public IReadOnlyCollection<string> AllPrefixes => _prefixes.Value;
+    public IReadOnlyCollection<string> AllPrefixes => Prefixes;
 }

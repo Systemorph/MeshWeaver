@@ -15,6 +15,7 @@ using MeshWeaver.Layout.Serialization;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
@@ -63,9 +64,12 @@ public static class LayoutExtensions
             var typeRegistry = config.TypeRegistry;
             config = config
                 .WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>())
-                .WithServices(services => services
-                    .AddScoped<IUiControlService, UiControlService>()
-                    .AddScoped<IAutocompleteProvider, LayoutAreaAutocompleteProvider>())
+                .WithServices(services =>
+                {
+                    services.AddScoped<IUiControlService, UiControlService>();
+                    services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, LayoutAreaAutocompleteProvider>());
+                    return services;
+                })
                 .WithHandler<GetDataRequest>(HandleLayoutAreasRequest)
                 .AddData(data =>
                 {
