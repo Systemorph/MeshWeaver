@@ -219,8 +219,11 @@ internal sealed class ChatCompletionOrchestrator(
 
             if (!string.IsNullOrEmpty(currentNamespace))
             {
+                // Resolve to parent node for satellite contexts (threads, comments, activity).
+                // Content collections, layout areas, data live on the parent node — not on satellites.
+                var targetNamespace = ResolveParentNodeNamespace(currentNamespace);
                 var response = await SendAutocompleteRequestAsync(
-                    $"@{reference}", currentNamespace, new Address(currentNamespace), ct);
+                    $"@{reference}", currentNamespace, new Address(targetNamespace), ct);
 
                 if (response?.Items != null)
                 {
@@ -460,6 +463,8 @@ internal sealed class ChatCompletionOrchestrator(
             }
 
             nodeAddress ??= currentNamespace;
+            // Resolve satellite contexts (threads, comments) to their parent node.
+            nodeAddress = ResolveParentNodeNamespace(nodeAddress);
 
             if (!string.IsNullOrEmpty(nodeAddress))
             {
@@ -635,6 +640,25 @@ internal sealed class ChatCompletionOrchestrator(
     /// </summary>
     private static string EnsureAbsoluteInsertText(string insertText, string currentNamespace)
         => insertText;
+
+    /// <summary>
+    /// For satellite contexts (threads, comments, activity), returns the parent node's namespace.
+    /// E.g., "User/rbuergi/_Thread/abc123" → "User/rbuergi". Content collections, layout areas,
+    /// and data live on the parent node, not on satellite sub-namespaces.
+    /// Satellite segments start with underscore (e.g., _Thread, _Comment, _Activity).
+    /// </summary>
+    private static string ResolveParentNodeNamespace(string ns)
+    {
+        if (string.IsNullOrEmpty(ns)) return ns;
+
+        var segments = ns.Split('/');
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (segments[i].StartsWith('_'))
+                return string.Join("/", segments.Take(i));
+        }
+        return ns;
+    }
 
     /// <summary>
     /// Extracts the partition (first path segment) from a namespace.
