@@ -78,16 +78,25 @@ public class MeshQuery(
     {
         var all = new ConcurrentBag<QuerySuggestion>();
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
 
         await Task.WhenAll(providers.Select(async provider =>
         {
-            await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, limit, ct))
+            try
             {
-                // Skip satellite nodes — they have /_Prefix/ segments in their path
-                if (IsSatellitePath(suggestion.Path))
-                    continue;
-                if (seen.TryAdd(suggestion.Path, 0))
-                    all.Add(suggestion);
+                await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, limit, ct))
+                {
+                    // Skip satellite nodes — they have /_Prefix/ segments in their path
+                    if (IsSatellitePath(suggestion.Path))
+                        continue;
+                    if (seen.TryAdd(suggestion.Path, 0))
+                        all.Add(suggestion);
+                }
+            }
+            catch (OperationCanceledException) { /* expected on cancel */ }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "{Provider} autocomplete failed", provider.GetType().Name);
             }
         }));
 
@@ -112,20 +121,29 @@ public class MeshQuery(
     {
         var all = new ConcurrentBag<QuerySuggestion>();
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
 
         await Task.WhenAll(providers.Select(async provider =>
         {
-            await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
+            try
             {
-                // Skip satellite nodes — they have /_Prefix/ segments in their path
-                if (IsSatellitePath(suggestion.Path))
-                    continue;
-                if (seen.TryAdd(suggestion.Path, 0))
+                await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
                 {
-                    // Apply proximity boost based on contextPath
-                    var boosted = ApplyProximityBoost(suggestion, contextPath, prefix);
-                    all.Add(boosted);
+                    // Skip satellite nodes — they have /_Prefix/ segments in their path
+                    if (IsSatellitePath(suggestion.Path))
+                        continue;
+                    if (seen.TryAdd(suggestion.Path, 0))
+                    {
+                        // Apply proximity boost based on contextPath
+                        var boosted = ApplyProximityBoost(suggestion, contextPath, prefix);
+                        all.Add(boosted);
+                    }
                 }
+            }
+            catch (OperationCanceledException) { /* expected on cancel */ }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "{Provider} autocomplete failed", provider.GetType().Name);
             }
         }));
 

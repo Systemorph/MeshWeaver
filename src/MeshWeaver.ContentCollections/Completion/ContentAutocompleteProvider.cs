@@ -27,6 +27,10 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
         // Strip @ prefix and any path before the query text
         var searchText = ExtractSearchText(query);
 
+        // Dedupe by insert text — same file can appear via multiple collections
+        // (parent/child hierarchy, mapped collections pointing to same storage path)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         // Iterate over all configured collections
         foreach (var config in contentService.GetAllCollectionConfigs())
         {
@@ -36,7 +40,8 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
 
             await foreach (var item in EnumerateMatchingFilesAsync(collection, "/", searchText, contextPath))
             {
-                yield return item;
+                if (seen.Add(item.InsertText))
+                    yield return item;
             }
         }
     }
