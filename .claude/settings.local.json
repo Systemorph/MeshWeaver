@@ -140,7 +140,8 @@
       "Bash(wmic process:*)",
       "Bash(powershell:*)",
       "WebFetch(domain:support.claude.com)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(docker cp:*)"
     ],
     "deny": [],
     "additionalDirectories": [

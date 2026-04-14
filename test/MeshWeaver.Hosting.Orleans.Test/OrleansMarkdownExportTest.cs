@@ -12,8 +12,10 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
+using System.Text.Json;
 using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Export.Configuration;
+using MeshWeaver.Markdown.Export.Layout;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -125,9 +127,56 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "discriminator didn't match any registered type on the client hub");
 
         var response = delivery.Message;
+        response.Error.Should().BeNull(response.Error);
         response.Format.Should().Be(ExportFormat.Pdf);
-        response.Content.Should().NotBeNull().And.NotBeEmpty("PDF render should produce bytes");
+        response.ContentPath.Should().StartWith("content:", "handler must save the render into the configured content collection");
+        response.ContentPath.Should().EndWith(".pdf");
         response.MimeType.Should().Be("application/pdf");
+    }
+
+    /// <summary>
+    /// Reproduces the user-facing <c>NotSupportedException</c> from
+    /// <c>LayoutExtensions.GetStream&lt;UiControl&gt;</c> — the client hub must deserialize a
+    /// polymorphic <see cref="UiControl"/> JSON payload whose <c>$type</c> is
+    /// <c>ExportDocumentControl</c>. If the client's type registry doesn't know that subtype,
+    /// <c>PolymorphicTypeInfoResolver</c> can't build the JsonDerivedType mapping and
+    /// deserialization throws "The JSON payload for polymorphic interface or abstract type
+    /// 'UiControl' must specify a type discriminator".
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ExportPdfArea_RendersExportDocumentControl_ClientDeserializes()
+    {
+        using var cts = new CancellationTokenSource(60.Seconds());
+        var client = await GetClientAsync("layout-stream");
+
+        var nodePath = await CreateMarkdownNodeAsync(
+            client, "pdf-layout-stream",
+            "# Hello\n\nFor layout-stream test.", cts.Token);
+        Output.WriteLine($"Created Markdown node: {nodePath}");
+
+        // Subscribe to the ExportPdf layout area — this is what the portal does when the
+        // user clicks "Export to PDF". The server renders an ExportDocumentControl; the
+        // client must deserialize it as UiControl via PolymorphicTypeInfoResolver.
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(ExportDocumentLayoutArea.PdfArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(nodePath), reference);
+
+        // GetControlStream hits LayoutExtensions.GetStream<UiControl> — exactly the path
+        // that throws in the user's stack trace.
+        var control = await stream.GetControlStream(string.Empty)
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x != null);
+
+        control.Should().NotBeNull("the ExportPdf area must render a UiControl");
+        control.Should().BeOfType<ExportDocumentControl>(
+            "the $type discriminator must resolve to ExportDocumentControl — if client " +
+            "type-registry is missing the type, deserialization falls back to the base " +
+            "UiControl and throws NotSupportedException");
+
+        var exportControl = (ExportDocumentControl)control!;
+        exportControl.SourcePath.Should().Be(nodePath);
+        exportControl.DefaultFormat.Should().Be("pdf");
     }
 
     [Fact(Timeout = 120000)]
@@ -152,8 +201,10 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "discriminator didn't match any registered type on the client hub");
 
         var response = delivery.Message;
+        response.Error.Should().BeNull(response.Error);
         response.Format.Should().Be(ExportFormat.Docx);
-        response.Content.Should().NotBeNull().And.NotBeEmpty("DOCX render should produce bytes");
+        response.ContentPath.Should().StartWith("content:", "handler must save the render into the configured content collection");
+        response.ContentPath.Should().EndWith(".docx");
         response.MimeType.Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     }
 }
