@@ -151,6 +151,64 @@ public static class ThreadSubmission
     }
 
     /// <summary>
+    /// Thread-hub handler: records a failed submission. Creates an error response cell
+    /// (role=assistant, Text=ErrorMessage, marked as AgentResponse), registers the user
+    /// message id on the thread if not already there, and marks it as ingested.
+    /// The UI sees the natural chat flow: user message followed by an error reply.
+    /// </summary>
+    public static IMessageDelivery HandleRecordSubmissionFailure(
+        IMessageHub hub,
+        IMessageDelivery<RecordSubmissionFailureRequest> delivery)
+    {
+        var req = delivery.Message;
+        var errorResponseId = Guid.NewGuid().ToString("N")[..8];
+
+        // Create the error response cell at {threadPath}/{errorResponseId}.
+        var errorCell = new MeshNode(errorResponseId, req.ThreadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = req.ThreadPath,
+            Content = new ThreadMessage
+            {
+                Role = "assistant",
+                Text = $"**Submission failed:** {req.ErrorMessage}",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
+            }
+        };
+        hub.Post(new CreateNodeRequest(errorCell), o => o.WithTarget(hub.Address));
+
+        // Update thread state: link user message (if missing) + error response + mark ingested.
+        hub.GetWorkspace().UpdateMeshNode(node =>
+        {
+            var t = node.Content as MeshThread ?? new MeshThread();
+            var msgs = t.Messages;
+            if (!msgs.Contains(req.UserMessageId)) msgs = msgs.Add(req.UserMessageId);
+            if (!msgs.Contains(errorResponseId)) msgs = msgs.Add(errorResponseId);
+            var userIds = t.UserMessageIds.Contains(req.UserMessageId)
+                ? t.UserMessageIds
+                : t.UserMessageIds.Add(req.UserMessageId);
+            var ingested = t.IngestedMessageIds.Contains(req.UserMessageId)
+                ? t.IngestedMessageIds
+                : t.IngestedMessageIds.Add(req.UserMessageId);
+            return node with
+            {
+                Content = t with
+                {
+                    Messages = msgs,
+                    UserMessageIds = userIds,
+                    IngestedMessageIds = ingested,
+                    // Clear any pending text for this message so the watcher doesn't dispatch it again.
+                    PendingUserMessage = null
+                }
+            };
+        });
+
+        hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+        return delivery.Processed();
+    }
+
+    /// <summary>
     /// Thread-hub handler: truncates the thread after the replayed user message id,
     /// drops it from IngestedMessageIds, optionally updates its text, and resets the
     /// executing flags. Watcher re-dispatches.
@@ -289,7 +347,13 @@ internal static class ThreadSubmissionClient
         var threadAddr = new Address(ctx.ThreadPath);
         var userCell = BuildUserCell(userMsgId, ctx.ThreadPath, ctx);
 
-        // 1) Create the user cell (goes to the cell's own hub).
+        void ReportFailure(string reason)
+        {
+            PostFailureRecord(ctx.Hub, ctx.ThreadPath!, userMsgId, ctx.UserText, reason);
+            ctx.OnError?.Invoke(reason);
+        }
+
+        // 1) Create the user cell.
         var createDelivery = ctx.Hub.Post(
             new CreateNodeRequest(userCell),
             o => o.WithTarget(threadAddr));
@@ -299,13 +363,12 @@ internal static class ThreadSubmissionClient
             ctx.Hub.RegisterCallback((IMessageDelivery)createDelivery, response =>
             {
                 if (response is IMessageDelivery<CreateNodeResponse> { Message.Success: false } fail)
-                    ctx.OnError?.Invoke($"User cell creation failed: {fail.Message.Error ?? "unknown"}");
+                    ReportFailure($"User cell creation failed: {fail.Message.Error ?? "unknown"}");
                 return response;
             });
         }
 
-        // 2) Tell the thread hub to register the id and queue it. Separate message so the
-        // thread hub owns its own state (no client-side remote stream writes → no patch races).
+        // 2) Tell the thread hub to register the id and queue it.
         var appendDelivery = ctx.Hub.Post(
             new AppendUserMessageRequest
             {
@@ -324,7 +387,7 @@ internal static class ThreadSubmissionClient
             ctx.Hub.RegisterCallback((IMessageDelivery)appendDelivery, response =>
             {
                 if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
-                    ctx.OnError?.Invoke($"Append failed: {fail.Message.Error ?? "unknown"}");
+                    ReportFailure($"Append failed: {fail.Message.Error ?? "unknown"}");
                 return response;
             });
         }
@@ -445,6 +508,29 @@ internal static class ThreadSubmissionClient
                 ctx.OnError?.Invoke($"Resubmit failed: {fail.Message.Error ?? "unknown"}");
             return response;
         });
+    }
+
+    /// <summary>
+    /// Fire-and-forget post of a <see cref="RecordSubmissionFailureRequest"/> so the thread
+    /// shows the failure as an error response cell. If this post also fails, we've exhausted
+    /// recovery — swallow silently (the OnError callback is still invoked separately).
+    /// </summary>
+    private static void PostFailureRecord(
+        IMessageHub hub, string threadPath, string userMsgId, string userText, string error)
+    {
+        try
+        {
+            hub.Post(
+                new RecordSubmissionFailureRequest
+                {
+                    ThreadPath = threadPath,
+                    UserMessageId = userMsgId,
+                    UserText = userText,
+                    ErrorMessage = error
+                },
+                o => o.WithTarget(new Address(threadPath)));
+        }
+        catch { /* swallow — caller's OnError will still fire */ }
     }
 
     private static MeshNode BuildUserCell(string userMsgId, string threadPath, SubmitContext ctx)

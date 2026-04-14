@@ -80,6 +80,7 @@ public static class AIExtensions
             .WithType(typeof(AppendUserMessageRequest), nameof(AppendUserMessageRequest))
             .WithType(typeof(AppendUserMessageResponse), nameof(AppendUserMessageResponse))
             .WithType(typeof(ResubmitUserMessageRequest), nameof(ResubmitUserMessageRequest))
+            .WithType(typeof(RecordSubmissionFailureRequest), nameof(RecordSubmissionFailureRequest))
 .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))

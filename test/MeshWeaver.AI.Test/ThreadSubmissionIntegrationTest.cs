@@ -161,6 +161,62 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.IngestedMessageIds.Should().BeEquivalentTo(userIds);
     }
 
+    // ─── Failure recovery: error renders as an assistant response cell ───
+
+    [Fact]
+    public async Task SubmissionFailure_RecordsErrorAsOutputCell_InThreadMessages()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadPath = await SeedEmptyThreadAsync(ct);
+        var client = GetClient();
+
+        var errorTcs = new TaskCompletionSource<string>();
+
+        // Simulate a failure path by posting RecordSubmissionFailureRequest directly.
+        // (Exercises the handler contract the client's OnError goes through.)
+        var fakeUserMsgId = Guid.NewGuid().ToString("N")[..8];
+        var delivery = client.Post(
+            new RecordSubmissionFailureRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageId = fakeUserMsgId,
+                UserText = "message that failed",
+                ErrorMessage = "network timeout"
+            },
+            o => o.WithTarget(new Address(threadPath)));
+
+        delivery.Should().NotBeNull();
+
+        // Wait for the thread to reflect: user id appended + an error response cell appended
+        // + user id marked as ingested (so watcher doesn't retry).
+        var final = await WaitForThreadAsync(
+            threadPath,
+            t => t.Messages.Contains(fakeUserMsgId)
+                 && t.IngestedMessageIds.Contains(fakeUserMsgId)
+                 && t.Messages.Count >= 2,
+            timeoutMs: 5_000,
+            ct);
+
+        final.UserMessageIds.Should().Contain(fakeUserMsgId);
+        final.IngestedMessageIds.Should().Contain(fakeUserMsgId);
+        final.Messages.Should().HaveCount(2);
+        final.Messages[0].Should().Be(fakeUserMsgId);
+
+        // The second entry must be an assistant cell with the error in its Text.
+        var errorCellId = final.Messages[1];
+        MeshNode? errorCell = null;
+        await foreach (var n in MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}/{errorCellId}", null, ct))
+        {
+            errorCell = n;
+            break;
+        }
+        errorCell.Should().NotBeNull();
+        var content = errorCell!.Content as ThreadMessage;
+        content.Should().NotBeNull();
+        content!.Role.Should().Be("assistant");
+        content.Text.Should().Contain("network timeout");
+    }
+
     // ─── Tool-call scenario: 3 rapid submits during a 1s "tool call" ───
 
     [Fact]

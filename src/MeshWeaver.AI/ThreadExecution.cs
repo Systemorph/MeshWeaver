@@ -42,6 +42,7 @@ public static class ThreadExecution
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
             .WithHandler<AppendUserMessageRequest>(ThreadSubmission.HandleAppendUserMessage)
             .WithHandler<ResubmitUserMessageRequest>(ThreadSubmission.HandleResubmitUserMessage)
+            .WithHandler<RecordSubmissionFailureRequest>(ThreadSubmission.HandleRecordSubmissionFailure)
             .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)

@@ -44,3 +44,18 @@ public record ResubmitUserMessageRequest : IRequest<AppendUserMessageResponse>
     public string? AgentName { get; init; }
     public string? ModelName { get; init; }
 }
+
+/// <summary>
+/// Request fired when the client's submit pipeline hits an error (cell creation failed,
+/// append failed, etc.). The thread hub creates a failed-response output cell that shows
+/// the error inline in the chat, links the user message to the thread if not already linked,
+/// and marks it as ingested so the watcher doesn't try to dispatch it.
+/// </summary>
+[SubmitMessagePermission]
+public record RecordSubmissionFailureRequest : IRequest<AppendUserMessageResponse>
+{
+    public required string ThreadPath { get; init; }
+    public required string UserMessageId { get; init; }
+    public required string UserText { get; init; }
+    public required string ErrorMessage { get; init; }
+}
