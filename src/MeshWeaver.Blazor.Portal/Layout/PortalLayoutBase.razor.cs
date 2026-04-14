@@ -97,6 +97,19 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             await ResolveSidePanelContentAsync();
     }
 
+    /// <summary>
+    /// Display name of the currently-focused node — rendered as a header inside the Node and Mesh menus
+    /// so the user can see what they're about to act on. Null when there's no node context (home page).
+    /// </summary>
+    private string? CurrentNodeName
+    {
+        get
+        {
+            var node = NavigationService.Context?.Node;
+            return node?.Name ?? node?.Id;
+        }
+    }
+
     private void ToggleNodeMenu()
     {
         isNodeMenuOpen = !isNodeMenuOpen;

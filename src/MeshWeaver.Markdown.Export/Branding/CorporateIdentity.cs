@@ -43,4 +43,13 @@ public record CorporateIdentity
 
     /// <summary>Organization website URL, shown on the cover page.</summary>
     public string? Website { get; init; }
+
+    /// <summary>
+    /// Optional path to a Word template (.docx) whose header/footer, page setup and
+    /// embedded logo are reused by the DOCX export. Supports the same path styles as
+    /// <see cref="LogoPath"/> (<c>content:...</c>, <c>/static/storage/content/...</c>).
+    /// When set, the first embedded raster image and the major font name from the template
+    /// also flow into PDF exports, so the two formats share the same look.
+    /// </summary>
+    public string? TemplatePath { get; init; }
 }

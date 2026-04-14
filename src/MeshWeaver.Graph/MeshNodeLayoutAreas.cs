@@ -445,12 +445,11 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// Returns the Edit menu item if the user has Update permission.
     /// </summary>
-    public static NodeMenuItemDefinition? GetEditMenuItem(string hubPath, string? nodeName, Permission perms)
+    public static NodeMenuItemDefinition? GetEditMenuItem(string hubPath, Permission perms)
     {
         if (!perms.HasFlag(Permission.Update))
             return null;
-        var label = string.IsNullOrEmpty(nodeName) ? "Edit" : $"Edit {nodeName}";
-        return new(label, EditArea,
+        return new("Edit", EditArea,
             RequiredPermission: Permission.Update, Order: -10, Href: BuildUrl(hubPath, EditArea));
     }
 

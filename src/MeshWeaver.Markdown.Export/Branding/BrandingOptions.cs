@@ -36,6 +36,13 @@ public record BrandingOptions
     /// <summary>Website URL; empty hides it.</summary>
     public string Website { get; init; } = "";
 
+    /// <summary>
+    /// Raw bytes of a Word template (.docx) to clone for DOCX export. When set the
+    /// renderer opens the template, clears the body (preserving section properties,
+    /// headers and footers) and appends the rendered content. Null when no template.
+    /// </summary>
+    public byte[]? TemplateDocxBytes { get; init; }
+
     /// <summary>Portal default branding used when no brand node is selected or resolvable.</summary>
     public static BrandingOptions Default { get; } = new();
 }

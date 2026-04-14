@@ -122,9 +122,28 @@ public class PdfDocumentRenderer
     private static void ApplyHeader(PageDescriptor page, Document document)
     {
         var text = document.Options.HeaderOverride ?? document.Branding.HeaderText;
-        if (string.IsNullOrEmpty(text)) return;
-        page.Header().PaddingBottom(5).BorderBottom(0.5f).BorderColor(document.Branding.AccentColor)
-            .Text(text).FontSize(9).FontColor(document.Branding.AccentColor);
+        var logo = document.Branding.Logo;
+
+        if (string.IsNullOrEmpty(text) && logo is null) return;
+
+        page.Header()
+            .Height(1.2f, Unit.Centimetre)
+            .BorderBottom(0.5f).BorderColor(document.Branding.AccentColor)
+            .PaddingBottom(3)
+            .Row(row =>
+            {
+                row.RelativeItem().AlignMiddle().Text(text ?? "")
+                    .FontSize(9).FontColor(document.Branding.AccentColor);
+
+                if (logo is not null)
+                {
+                    var slot = row.ConstantItem(2f, Unit.Centimetre).AlignRight().AlignMiddle();
+                    if (logo.IsSvg)
+                        slot.Svg(System.Text.Encoding.UTF8.GetString(logo.Bytes));
+                    else
+                        slot.Image(logo.Bytes).FitArea();
+                }
+            });
     }
 
     private static void ApplyFooter(PageDescriptor page, Document document)

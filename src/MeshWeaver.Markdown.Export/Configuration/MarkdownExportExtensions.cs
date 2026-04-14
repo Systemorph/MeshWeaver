@@ -37,10 +37,15 @@ public static class MarkdownExportExtensions
 
         builder.AddCorporateIdentityType();
 
-        builder.ConfigureServices(services =>
-            services.AddTransient<BrandingResolver>());
+        builder.ConfigureServices(services => services
+            .AddTransient<ExportTemplateResolver>()
+            .AddTransient<BrandingResolver>());
 
-        builder.ConfigureHub(hub => hub
+        // Menu items, layout views, and the export request handler must live on the
+        // node hubs (one per Markdown node) — that's where layout rendering runs and where
+        // the user's click navigates. Registering on the mesh hub via ConfigureHub would
+        // never surface the items to the per-node menu.
+        builder.ConfigureDefaultNodeHub(hub => hub
             .AddExportDocumentHandler()
             .WithTypes(typeof(CorporateIdentity), typeof(ExportDocumentControl))
             .AddNodeMenuItems(MarkdownExportMenuProvider.Provide)

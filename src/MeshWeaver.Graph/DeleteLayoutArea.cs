@@ -21,12 +21,11 @@ public static class DeleteLayoutArea
     /// <summary>
     /// Returns the Delete menu item if the user has Delete permission.
     /// </summary>
-    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, string? nodeName, Permission perms)
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
     {
         if (!perms.HasFlag(Permission.Delete))
             return null;
-        var label = string.IsNullOrEmpty(nodeName) ? "Delete" : $"Delete {nodeName}";
-        return new(label, MeshNodeLayoutAreas.DeleteArea,
+        return new("Delete", MeshNodeLayoutAreas.DeleteArea,
             RequiredPermission: Permission.Delete, Order: 100,
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.DeleteArea));
     }

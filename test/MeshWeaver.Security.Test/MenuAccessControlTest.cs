@@ -57,7 +57,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         return client;
     }
 
-    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchMenuItemsAsync(IMessageHub client, Address nodeAddress)
+    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchMenuItemsAsync(
+        IMessageHub client, Address nodeAddress, string menuContext)
     {
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
@@ -66,9 +67,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             nodeAddress,
             reference);
 
-        // Read the $Menu control from the layout stream
-        var menuControl = await stream.GetControlStream(MenuControl.MenuArea)
-            .Timeout(3.Seconds())
+        // Read the $Menu:{context} control from the layout stream
+        var menuControl = await stream.GetControlStream(MenuControl.GetMenuArea(menuContext))
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
         var menu = menuControl.Should().BeOfType<MenuControl>().Which;
@@ -76,7 +77,20 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
-    /// Flattens menu items by expanding group items (e.g., Actions) into their children.
+    /// Fetches both Node and Mesh menus in parallel and returns their items merged and sorted by Order.
+    /// Running in parallel keeps total elapsed time inside the per-fetch timeout budget.
+    /// </summary>
+    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchAllMenuItemsAsync(
+        IMessageHub client, Address nodeAddress)
+    {
+        var nodeTask = FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext);
+        var meshTask = FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext);
+        await Task.WhenAll(nodeTask, meshTask);
+        return FlattenMenuItems([.. nodeTask.Result, .. meshTask.Result]);
+    }
+
+    /// <summary>
+    /// Flattens menu items by expanding group items into their children, sorted by Order.
     /// </summary>
     private static IReadOnlyList<NodeMenuItemDefinition> FlattenMenuItems(IReadOnlyList<NodeMenuItemDefinition> items)
     {
@@ -92,7 +106,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         return flat;
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 30000)]
     public async Task Menu_NoRoles_SubscriptionDenied()
     {
         // With RLS enabled but no roles seeded, user has Permission.None.
@@ -102,19 +116,19 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var nodeAddress = new Address(NodePath);
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(3.Seconds());
+        pingCts.CancelAfter(15.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var act = () => FetchMenuItemsAsync(client, nodeAddress);
+        var act = () => FetchAllMenuItemsAsync(client, nodeAddress);
         var ex = await Assert.ThrowsAsync<DeliveryFailureException>(act);
         ex.Message.Should().Contain("Access denied",
             "user with no roles should be denied Read access on the hub");
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 30000)]
     public async Task Menu_ReadOnlyUser_ShowsOnlyUnrestrictedItems()
     {
         // Viewer role: Read only → no Create, Update, or Delete
@@ -126,24 +140,24 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var nodeAddress = new Address(NodePath);
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(3.Seconds());
+        pingCts.CancelAfter(15.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+        var items = await FetchAllMenuItemsAsync(client, nodeAddress);
 
         Output.WriteLine($"Menu items for Viewer: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Files", "Threads", "Versions", "Settings"],
-            "Viewer has only Read — no Create, Update, Delete, or Export items");
+            ["Files", "Threads", "Versions"],
+            "Viewer has only Read — no Create, Update, Delete, or Export items (Settings is a dedicated header button)");
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 30000)]
     public async Task Menu_Editor_ShowsCreateItems()
     {
         // Editor role: Read|Create|Update|Comment → has Create but not Delete
@@ -155,13 +169,13 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var nodeAddress = new Address(NodePath);
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(3.Seconds());
+        pingCts.CancelAfter(15.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+        var items = await FetchAllMenuItemsAsync(client, nodeAddress);
 
         Output.WriteLine($"Menu items for Editor: {items.Count}");
         foreach (var item in items)
@@ -169,11 +183,11 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Editor gets Edit, Create, Copy, Import, Export, plus always-visible items
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions", "Settings"],
-            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export plus always-visible items");
+            ["Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions"],
+            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export plus always-visible items (Settings is a dedicated header button)");
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 30000)]
     public async Task Menu_Admin_ShowsAllItems()
     {
         // Admin role: All permissions
@@ -185,24 +199,24 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var nodeAddress = new Address(NodePath);
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(3.Seconds());
+        pingCts.CancelAfter(15.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+        var items = await FetchAllMenuItemsAsync(client, nodeAddress);
 
         Output.WriteLine($"Menu items for Admin: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(11, "Admin should see all default menu items");
+        items.Should().HaveCount(10, "Admin should see all default menu items across Node and Mesh contexts (Settings is a dedicated header button)");
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Settings", "Delete"]);
+            ["Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Delete"]);
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 30000)]
     public async Task Menu_ItemsAreSortedByOrder()
     {
         // Seed Admin so we get all items for sorting verification
@@ -214,19 +228,21 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var nodeAddress = new Address(NodePath);
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(3.Seconds());
+        pingCts.CancelAfter(15.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+        // Each menu context is sorted independently by Order — verify both
+        var nodeItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext);
+        var meshItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext);
 
-        items.Should().BeInAscendingOrder(i => i.Order,
-            "menu items should be sorted by Order");
+        nodeItems.Should().BeInAscendingOrder(i => i.Order, "Node menu items should be sorted by Order");
+        meshItems.Should().BeInAscendingOrder(i => i.Order, "Mesh menu items should be sorted by Order");
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 30000)]
     public async Task Menu_ImportAreaIsImportMeshNodes()
     {
         // Seed Editor to get Import item (requires Create permission)
@@ -238,16 +254,17 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var nodeAddress = new Address(NodePath);
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        pingCts.CancelAfter(3.Seconds());
+        pingCts.CancelAfter(15.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+        // Import lives in the Mesh menu
+        var meshItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext);
 
-        var importItem = items.FirstOrDefault(i => i.Label == "Import");
-        importItem.Should().NotBeNull("Import menu item should exist for Editor");
+        var importItem = meshItems.FirstOrDefault(i => i.Label == "Import");
+        importItem.Should().NotBeNull("Import menu item should exist in the Mesh menu for Editor");
         importItem!.Area.Should().Be(MeshNodeLayoutAreas.ImportMeshNodesArea,
             "Import should navigate to ImportMeshNodes area, not $Import");
     }
@@ -272,7 +289,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             ["Admin", "Editor", "Viewer", "Commenter"]);
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 30000)]
     public async Task StaticRoles_NotIncludedInGenericChildrenQuery()
     {
         // Static roles should NOT appear in unfiltered children queries

@@ -26,6 +26,13 @@ public class DocxDocumentRenderer
     /// <summary>Produces a DOCX byte array from the document model.</summary>
     public byte[] Render(Document document)
     {
+        return document.Branding.TemplateDocxBytes is { Length: > 0 } templateBytes
+            ? RenderFromTemplate(document, templateBytes)
+            : RenderFromScratch(document);
+    }
+
+    private static byte[] RenderFromScratch(Document document)
+    {
         using var ms = new MemoryStream();
         using (var word = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
@@ -36,23 +43,55 @@ public class DocxDocumentRenderer
             AddStyles(main);
             AddHeaderAndFooter(main, document);
 
-            // Cover page
             if (document.Options.CoverPage)
                 AppendCover(body, document);
 
-            // TOC field (Word auto-populates on open)
             if (document.Options.TableOfContents && document.TocHeadings.Length > 0)
                 AppendToc(body);
 
-            // Body content
             foreach (var element in document.Elements)
                 AppendBlock(body, element, document);
 
-            // Section properties must be last for headers/footers to bind
             AppendSectionProperties(body, main);
 
             main.Document.Save();
         }
+        return ms.ToArray();
+    }
+
+    private static byte[] RenderFromTemplate(Document document, byte[] templateBytes)
+    {
+        // Copy into a writable MemoryStream so we can edit the package in place.
+        var ms = new MemoryStream();
+        ms.Write(templateBytes, 0, templateBytes.Length);
+        ms.Position = 0;
+
+        using (var word = WordprocessingDocument.Open(ms, isEditable: true))
+        {
+            var main = word.MainDocumentPart
+                ?? throw new InvalidOperationException("Template is missing a main document part.");
+            main.Document ??= new WpDocument(new Body());
+            var body = main.Document.Body ??= new Body();
+
+            // Preserve the last SectionProperties (links headers/footers, page size, margins).
+            var sectPr = body.Elements<SectionProperties>().LastOrDefault()?.CloneNode(true);
+            body.RemoveAllChildren();
+
+            if (document.Options.CoverPage)
+                AppendCover(body, document);
+
+            if (document.Options.TableOfContents && document.TocHeadings.Length > 0)
+                AppendToc(body);
+
+            foreach (var element in document.Elements)
+                AppendBlock(body, element, document);
+
+            if (sectPr is not null)
+                body.Append(sectPr);
+
+            main.Document.Save();
+        }
+
         return ms.ToArray();
     }
 

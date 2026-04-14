@@ -54,9 +54,7 @@ public static class ExportDocumentHandler
 
             var title = request.Options.Title ?? node.Name ?? node.Id;
 
-            var branding = await new BrandingResolver(
-                hub,
-                hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<BrandingResolver>())
+            var branding = await hub.ServiceProvider.GetRequiredService<BrandingResolver>()
                 .ResolveAsync(request.Options.BrandNodePath, ct);
 
             // Collect chapters: primary node + optional descendants

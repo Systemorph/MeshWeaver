@@ -14,7 +14,7 @@ namespace MeshWeaver.Markdown.Export.Branding;
 /// Cascade: <c>CorporateIdentity</c> node -> <c>Organization</c>-shaped content (logo-only) ->
 /// raw content path (logo-only) -> portal defaults.
 /// </summary>
-public class BrandingResolver(IMessageHub hub, ILogger<BrandingResolver> logger)
+public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateResolver, ILogger<BrandingResolver> logger)
 {
     /// <summary>
     /// Resolves the branding for a given path. Returns <see cref="BrandingOptions.Default"/> on any miss.
@@ -56,17 +56,20 @@ public class BrandingResolver(IMessageHub hub, ILogger<BrandingResolver> logger)
     private async Task<BrandingOptions> FromCorporateIdentityAsync(CorporateIdentity ci, CancellationToken ct)
     {
         var logo = await LoadLogoAsync(ci.LogoPath, ct);
+        var template = await templateResolver.LoadAsync(ci.TemplatePath, ct);
+
         return new BrandingOptions
         {
             Name = ci.Name ?? ci.Id,
             Tagline = ci.Tagline ?? "",
-            Logo = logo,
+            Logo = logo ?? template?.Logo,
             PrimaryColor = ci.PrimaryColor ?? BrandingOptions.Default.PrimaryColor,
             AccentColor = ci.AccentColor ?? BrandingOptions.Default.AccentColor,
-            FontFamily = ci.FontFamily ?? BrandingOptions.Default.FontFamily,
+            FontFamily = ci.FontFamily ?? template?.FontFamily ?? BrandingOptions.Default.FontFamily,
             HeaderText = ci.HeaderText ?? "",
             FooterText = ci.FooterText ?? "",
-            Website = ci.Website ?? ""
+            Website = ci.Website ?? "",
+            TemplateDocxBytes = template?.DocxBytes
         };
     }
 

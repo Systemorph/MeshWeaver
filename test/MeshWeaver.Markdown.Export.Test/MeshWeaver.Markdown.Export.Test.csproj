@@ -10,4 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Export\MeshWeaver.Markdown.Export.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\samples\Graph\content\Systemorph\template.docx" Link="Fixtures\template.docx" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -23,6 +23,11 @@
                 </div>
                 @* Node menu (Cube icon) — per-node operations *@
                 <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
+                    @if (!string.IsNullOrEmpty(CurrentNodeName))
+                    {
+                        <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
+                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                    }
                     @foreach (var menuItem in FlattenMenuItems(GetNodeMenuItems()))
                     {
                         var item = menuItem;
@@ -49,7 +54,7 @@
                         }
                     }
                 </FluentMenu>
-                <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth"
+                <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
                     Title="Node menu" aria-label="Node menu"
                     OnClick="@ToggleNodeMenu">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Cube())" Color="Color.FillInverse" />
@@ -57,6 +62,11 @@
 
                 @* Mesh menu — mesh-level operations (Create, Import, Export) *@
                 <FluentMenu Anchor="mesh-menu-anchor" Open="@isMeshMenuOpen" OpenChanged="@OnMeshMenuOpenChanged">
+                    @if (!string.IsNullOrEmpty(CurrentNodeName))
+                    {
+                        <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
+                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                    }
                     @foreach (var menuItem in FlattenMenuItems(GetMeshMenuItems()))
                     {
                         var item = menuItem;
@@ -83,14 +93,14 @@
                         }
                     }
                 </FluentMenu>
-                <FluentButton Id="mesh-menu-anchor" Appearance="Appearance.Stealth"
+                <FluentButton Id="mesh-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
                     Title="Mesh menu" aria-label="Mesh menu"
                     OnClick="@ToggleMeshMenu">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Grid())" Color="Color.FillInverse" />
                 </FluentButton>
 
                 @* Settings — direct navigation *@
-                <FluentButton Appearance="Appearance.Stealth"
+                <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
                     Title="Settings" aria-label="Settings"
                     OnClick="@NavigateToSettings">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.FillInverse" />
