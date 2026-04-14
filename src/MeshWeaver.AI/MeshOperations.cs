@@ -614,32 +614,54 @@ public class MeshOperations
     {
         logger.LogInformation("Delete called");
 
+        List<string>? pathList;
         try
         {
-            var pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
-            if (pathList == null || pathList.Count == 0)
-                return Task.FromResult("No paths provided.");
-
-            var results = ImmutableList<string>.Empty;
-            foreach (var path in pathList)
-            {
-                var resolvedPath = ResolvePath(path);
-                // Fire-and-forget: post delete request, don't await (avoids deadlock)
-                mesh.DeleteNode(resolvedPath).Subscribe();
-                results = results.Add($"Delete requested: {resolvedPath}");
-            }
-
-            return Task.FromResult(string.Join("\n", results));
+            pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
         }
         catch (JsonException ex)
         {
             return Task.FromResult($"Invalid JSON: {ex.Message}");
         }
-        catch (Exception ex)
+        if (pathList == null || pathList.Count == 0)
+            return Task.FromResult("No paths provided.");
+
+        // Subscribe to each IMeshService.DeleteNode observable and aggregate the per-path
+        // outcome into a single result string once all complete. No `await` on a Task — the
+        // TaskCompletionSource is resolved from the Subscribe callbacks, which run off the
+        // hub scheduler. This lets the caller rely on "Deleted: ..." meaning the delete
+        // actually finished (matches what tests and agent follow-up Gets expect).
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new object();
+        var lines = new string[pathList.Count];
+        var remaining = pathList.Count;
+
+        for (var i = 0; i < pathList.Count; i++)
         {
-            logger.LogWarning(ex, "Error deleting nodes");
-            return Task.FromResult($"Error: {ex.Message}");
+            var index = i;
+            var resolvedPath = ResolvePath(pathList[i]);
+            mesh.DeleteNode(resolvedPath).Subscribe(
+                _ =>
+                {
+                    lock (gate)
+                    {
+                        lines[index] = $"Deleted: {resolvedPath}";
+                        if (--remaining == 0)
+                            tcs.TrySetResult(string.Join("\n", lines));
+                    }
+                },
+                ex =>
+                {
+                    logger.LogWarning(ex, "Error deleting {Path}", resolvedPath);
+                    lock (gate)
+                    {
+                        lines[index] = $"Error deleting {resolvedPath}: {ex.Message}";
+                        if (--remaining == 0)
+                            tcs.TrySetResult(string.Join("\n", lines));
+                    }
+                });
         }
+        return tcs.Task;
     }
 
     /// <summary>
