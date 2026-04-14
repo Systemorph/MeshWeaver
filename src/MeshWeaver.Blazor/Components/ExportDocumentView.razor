@@ -168,17 +168,18 @@
                 new ExportDocumentRequest(SourcePath, options),
                 o => o.WithTarget(new MeshWeaver.Messaging.Address(SourcePath)));
 
-            if (response?.Message is { } result && result.Content.Length > 0)
+            if (response?.Message is { } result && !string.IsNullOrEmpty(result.ContentPath))
             {
-                using var ms = new MemoryStream(result.Content);
-                using var streamRef = new DotNetStreamReference(ms);
-                await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", result.FileName, streamRef);
+                // Handler saved the rendered file into a content collection; open the content URL
+                // so the browser triggers a download.
+                var url = "/" + result.ContentPath.Replace("content:", "content/");
+                await JSRuntime.InvokeVoidAsync("open", url, "_blank");
 
                 _done = true;
             }
             else
             {
-                _error = "Empty response from the export handler.";
+                _error = response?.Message?.Error ?? "Empty response from the export handler.";
             }
         }
         catch (Exception ex)

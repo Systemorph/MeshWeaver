@@ -47,10 +47,21 @@ public static class MarkdownExportExtensions
     /// the CorporateIdentity node type, the request/response hub handler, menu items,
     /// and the dialog layout areas.
     /// </summary>
-    public static TBuilder AddMarkdownExport<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    /// <summary>
+    /// Registers the markdown export pipeline. Use the <paramref name="configure"/> callback
+    /// to pick the target content collection and sub-directory, and whether to overwrite
+    /// existing files.
+    /// </summary>
+    public static TBuilder AddMarkdownExport<TBuilder>(
+        this TBuilder builder,
+        Action<MarkdownExportConfig>? configure = null)
+        where TBuilder : MeshBuilder
     {
         // Accept QuestPDF's Community License once per process. Safe to call repeatedly.
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+
+        var cfg = new MarkdownExportConfig();
+        configure?.Invoke(cfg);
 
         builder.AddCorporateIdentityType();
 
@@ -64,6 +75,7 @@ public static class MarkdownExportExtensions
             .WithMeshType(typeof(DocumentExportOptions), nameof(DocumentExportOptions));
 
         builder.ConfigureServices(services => services
+            .AddSingleton(cfg)
             .AddTransient<ExportTemplateResolver>()
             .AddTransient<BrandingResolver>());
 
