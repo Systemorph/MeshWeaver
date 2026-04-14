@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.Components.Monaco;
@@ -85,15 +86,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
     private IReadOnlyList<string> ThreadMessages => ThreadViewModel?.Messages ?? [];
-    private string? lastContextUrl; // Track URL for context change detection
 
     // Input state
     private MonacoEditorView? monacoEditor;
     private ElementReference messagesContainer;
     private string? MessageText;
-    private bool isCreatingThread;
+    private readonly bool isCreatingThread;
     private bool isCancelling;
-    private CancellationTokenSource? _submissionCts;
+    private readonly CancellationTokenSource? _submissionCts;
     private readonly ChatSubmissionHandler submissionHandler = new();
 
     // Pending (optimistic) cells — rendered directly as bubbles, not via LayoutAreaView.
@@ -121,9 +121,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private IEnumerable<IChatClientFactory> ChatClientFactories => Hub.ServiceProvider.GetServices<IChatClientFactory>();
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitializedAsync started", _instanceId);
+        Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized started", _instanceId);
 
         // Initialize from direct ViewModel properties (side panel / dashboard case)
         threadPath ??= ViewModel.ThreadPath;
@@ -132,36 +132,41 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Subscribe to side panel menu actions
         SidePanelState.OnActionRequested += OnSidePanelAction;
 
-        // Track navigation changes proactively so context is always fresh on submit
-        NavigationManager.LocationChanged += OnLocationChanged;
+        // Track navigation changes via NavigationService — no query, no await.
+        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
 
         // Set initial title
         UpdateSidePanelTitle();
 
-        // Capture initial URL context
-        lastContextUrl = NavigationManager.Uri;
+        // Seed initial context attachment from NavigationService (already resolved, no query).
         if (string.IsNullOrEmpty(initialContext))
         {
-            var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
-            if (!string.IsNullOrEmpty(path) && path != "chat")
+            var ctx = NavigationService.Context;
+            if (ctx is not null && !string.IsNullOrEmpty(ctx.PrimaryPath) && ctx.Path != "chat")
             {
-                // Resolve satellite content to its primary node path
-                path = await ResolvePrimaryContextPathAsync(path);
-                initialContext = path;
-                var displayName = await ResolveContextDisplayNameAsync(path);
-                attachments.Add(new AttachmentInfo(path, displayName, IsContext: true));
+                initialContext = ctx.PrimaryPath;
+                attachments.Add(new AttachmentInfo(ctx.PrimaryPath, ctx.Node?.Name ?? ctx.Node?.Id, IsContext: true));
             }
         }
         else
         {
-            // initialContext was set via data binding; add as context attachment
-            var displayName = await ResolveContextDisplayNameAsync(initialContext);
-            attachments.Add(new AttachmentInfo(initialContext, displayName, IsContext: true));
+            // ViewModel.InitialContext passed the raw path (e.g., side panel with ctx.PrimaryPath).
+            // Look up the display name via GetDataRequest + RegisterCallback — never await.
+            var capturedContext = initialContext;
+            attachments.Add(new AttachmentInfo(capturedContext, null, IsContext: true));
+            RequestDisplayName(capturedContext, name => InvokeAsync(() =>
+            {
+                if (_isDisposed) return;
+                var idx = attachments.FindIndex(a => a.IsContext && a.Path == capturedContext);
+                if (idx >= 0)
+                    attachments[idx] = attachments[idx] with { DisplayName = name };
+                StateHasChanged();
+            }));
         }
 
         try
         {
-            await InitializeAgentAndModelSelectionsAsync();
+            InitializeAgentAndModelSelections();
             Logger.LogDebug("[ThreadChat:{InstanceId}] Agent and model selections initialized", _instanceId);
         }
         catch (Exception ex)
@@ -169,72 +174,54 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] Failed to initialize agent/model selections", _instanceId);
         }
 
-        Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitializedAsync completed", _instanceId);
-    }
-
-    private async Task<string?> ResolveContextDisplayNameAsync(string? path)
-    {
-        if (string.IsNullOrEmpty(path))
-            return null;
-
-        try
-        {
-            var pathResolver = Hub.ServiceProvider.GetService<IPathResolver>();
-            if (pathResolver == null)
-                return null;
-
-            var resolution = await pathResolver.ResolvePathAsync(path);
-            if (resolution == null)
-                return null;
-
-            var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix}").FirstOrDefaultAsync();
-            return node?.Name ?? node?.Id;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogDebug(ex, "Error resolving context display name for path: {Path}", path);
-            return null;
-        }
+        Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitialized completed", _instanceId);
     }
 
     /// <summary>
-    /// Resolves a path to its primary context path, handling satellite nodes.
-    /// If the node at the path is a satellite, returns its PrimaryNodePath instead.
+    /// Resolves the display name of a node at the given path via GetDataRequest.
+    /// Purely Post + RegisterCallback — no query, no await.
     /// </summary>
-    private async Task<string> ResolvePrimaryContextPathAsync(string path)
+    private void RequestDisplayName(string path, Action<string?> onResult)
     {
+        if (string.IsNullOrEmpty(path))
+        {
+            onResult(null);
+            return;
+        }
+
         try
         {
-            // Strip layout area suffixes (e.g., "/Thread", "/Overview") from the path
-            var cleanPath = path;
-            var lastSlash = cleanPath.LastIndexOf('/');
-            if (lastSlash > 0)
+            var delivery = Hub.Post(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(path)));
+
+            if (delivery == null)
             {
-                var lastSegment = cleanPath[(lastSlash + 1)..];
-                // Known area names that are not part of the node path
-                if (lastSegment is "Thread" or "Overview" or "History" or "Settings" or "Metadata")
-                    cleanPath = cleanPath[..lastSlash];
+                onResult(null);
+                return;
             }
 
-            var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
-            if (meshQuery == null)
-                return cleanPath;
-
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{cleanPath}").FirstOrDefaultAsync();
-            if (node == null)
-                return cleanPath;
-
-            // For satellite nodes (threads, comments): use MainNode (content entity)
-            if (node.MainNode != node.Path)
-                return node.MainNode;
+            Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+            {
+                try
+                {
+                    if (response is IMessageDelivery<GetDataResponse> gdr && gdr.Message.Data is MeshNode node)
+                        onResult(node.Name ?? node.Id);
+                    else
+                        onResult(null);
+                }
+                catch (Exception ex) when (!_isDisposed)
+                {
+                    Logger.LogDebug(ex, "Error reading display name for {Path}", path);
+                    onResult(null);
+                }
+                return response;
+            });
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!_isDisposed)
         {
-            Logger.LogDebug(ex, "Error resolving primary context path for: {Path}", path);
+            Logger.LogDebug(ex, "Error posting GetDataRequest for {Path}", path);
+            onResult(null);
         }
-
-        return path;
     }
 
     protected override void BindData()
@@ -244,7 +231,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
 
-    private Task InitializeAgentAndModelSelectionsAsync()
+    private void InitializeAgentAndModelSelections()
     {
         // Load available models from DI-registered factories
         var factories = ChatClientFactories.ToList();
@@ -265,8 +252,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         // Subscribe to agent MeshNodes reactively
         SubscribeToAgentNodes();
-
-        return Task.CompletedTask;
     }
 
     // Merged agent nodes from multiple reactive queries, keyed by path
@@ -376,21 +361,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return availableModels.FirstOrDefault();
     }
 
-    private async Task SendMessageAsync()
+    private void SendMessage()
     {
         if (_isDisposed)
             return;
 
-        // Read the editor value directly to avoid truncation from async binding lag
-        string? userMessageText;
-        if (monacoEditor != null)
-        {
-            userMessageText = await monacoEditor.GetValueAsync();
-        }
-        else
-        {
-            userMessageText = MessageText;
-        }
+        // No await in the click path — dispatch to Blazor render context and return void.
+        // All Hub operations use Post + RegisterCallback; all IMeshService operations
+        // use IObservable + Subscribe. No awaits on hub-backed calls anywhere in this chain.
+        _ = InvokeAsync(SubmitMessageCore);
+    }
+
+    private void SubmitMessageCore()
+    {
+        if (_isDisposed)
+            return;
+
+        // Use MessageText (updated via Monaco ValueChanged binding) — no blocking Monaco read.
+        var userMessageText = MessageText;
 
         // Attempt to begin submission — rejects empty text and concurrent submissions
         if (!submissionHandler.TryBeginSubmit(userMessageText))
@@ -399,205 +387,87 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Disable input and clear the editor immediately — flush render so spinner shows
         MessageText = null;
         StateHasChanged();
-        await Task.Yield(); // Let Blazor flush the render before continuing
 
+        // Fire-and-forget Monaco clear — no await in the submit path.
         if (monacoEditor != null)
         {
-            await monacoEditor.ClearAsync();
+            _ = ClearMonacoAsync();
         }
 
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+        var authorName = accessService?.Context?.Name ?? "You";
+        var isCompact = ViewModel.HideEmptyState;
+        var capturedAttachments = attachments.Select(a => a.Path).ToList();
+
+        var ctx = new SubmitContext
+        {
+            Hub = Hub,
+            ThreadPath = threadPath,
+            Namespace = NavigationService.CurrentNamespace ?? initialContext
+                        ?? (!string.IsNullOrEmpty(createdBy) ? $"User/{createdBy}" : "User"),
+            UserText = userMessageText!,
+            AgentName = selectedAgentInfo?.Name,
+            ModelName = selectedModelInfo?.Name,
+            ContextPath = initialContext,
+            Attachments = capturedAttachments,
+            CreatedBy = createdBy,
+            AuthorName = authorName,
+            OnError = err => InvokeAsync(() =>
+            {
+                if (_isDisposed) return;
+                Logger.LogWarning("[ThreadChat:{InstanceId}] Submit failed: {Error}", _instanceId, err);
+                showSubmissionProgress = false;
+                submissionHandler.ForceRelease();
+                StateHasChanged();
+            }),
+            OnThreadCreated = node => InvokeAsync(() =>
+            {
+                if (_isDisposed) return;
+                threadPath = node.Path;
+                threadName = node.Name;
+                UpdateSidePanelTitle();
+                if (isCompact && !string.IsNullOrEmpty(node.Path))
+                {
+                    NavigationManager.NavigateTo($"/{node.Path}");
+                }
+                else if (!string.IsNullOrEmpty(node.Path))
+                {
+                    SidePanelState.SetContentPath(node.Path);
+                }
+                showSubmissionProgress = false;
+                StateHasChanged();
+            })
+        };
+
+        if (string.IsNullOrEmpty(threadPath))
+        {
+            showSubmissionProgress = isCompact;
+            ThreadSubmission.CreateThreadAndSubmit(ctx);
+        }
+        else
+        {
+            ThreadSubmission.Submit(ctx);
+        }
+
+        // Claude-Code-style queue: input stays enabled so the user can keep typing while
+        // previous submissions are being processed by the thread. The server watcher
+        // batches unprocessed user messages into a single round.
+        submissionHandler.ForceRelease();
+        StateHasChanged();
+    }
+
+    private async Task ClearMonacoAsync()
+    {
         try
         {
-            // Context is tracked proactively via LocationChanged — no blocking await here.
-            // References are already extracted during OnMessageTextChanged — no redundant call.
-
-            var accessService = Hub.ServiceProvider.GetService<AccessService>();
-            var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-            var authorName = accessService?.Context?.Name ?? "You";
-
-            // Generate IDs for both cells
-            var userMsgId = Guid.NewGuid().ToString("N")[..8];
-            var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-
-            // No pending cells — GUI creates real nodes, LayoutAreaView renders them.
-
-            if (string.IsNullOrEmpty(threadPath))
-            {
-                // NEW THREAD: create thread first, then cells + submit (same as existing thread flow).
-                var ns = NavigationService.CurrentNamespace ?? initialContext;
-                if (string.IsNullOrEmpty(ns))
-                    ns = !string.IsNullOrEmpty(createdBy) ? $"User/{createdBy}" : "User";
-
-                // BuildThreadNode — no PendingUserMessage, no auto-execute.
-                var threadNode = ThreadNodeType.BuildThreadNode(ns, userMessageText!, createdBy);
-                threadPath = threadNode.Path;
-                threadName = threadNode.Name;
-
-                ThreadViewModel = new AI.ThreadViewModel
-                {
-                    Messages = [userMsgId, responseMsgId],
-                    ThreadPath = threadPath,
-                    IsExecuting = true
-                };
-
-                showSubmissionProgress = ViewModel.HideEmptyState;
-                UpdateSidePanelTitle();
-
-                var isCompact = ViewModel.HideEmptyState;
-                var capturedText = userMessageText!;
-                var capturedAgent = selectedAgentInfo?.Name;
-                var capturedModel = selectedModelInfo?.Name;
-                var capturedContext = ns;
-                var capturedAttachments = attachments.Select(a => a.Path).ToList();
-
-                // Step 1: Create thread node
-                var createDelivery = Hub.Post(new CreateNodeRequest(threadNode),
-                    o => o.WithTarget(new Address(ns)));
-                // Observable chain: each step waits for confirmation before proceeding.
-                // Step 1: Create thread → verify
-                // Step 2: Create user cell → verify
-                // Step 3: Create response cell → verify
-                // Step 4: Submit (adds to Messages, starts execution) → verify → navigate
-                if (createDelivery != null)
-                {
-                    PostAndVerify(createDelivery, "thread creation", createdPath =>
-                    {
-                        // Step 2: Create user cell
-                        var userDelivery = Hub.Post(new CreateNodeRequest(new MeshNode(userMsgId, createdPath)
-                        {
-                            NodeType = ThreadMessageNodeType.NodeType, MainNode = capturedContext,
-                            Content = new ThreadMessage
-                            {
-                                Role = "user", Text = capturedText, Timestamp = DateTime.UtcNow,
-                                Type = ThreadMessageType.ExecutedInput, CreatedBy = createdBy
-                            }
-                        }), o => o.WithTarget(new Address(createdPath)));
-
-                        PostAndVerify(userDelivery, "user cell", _ =>
-                        {
-                            // Step 3: Create response cell
-                            var responseDelivery = Hub.Post(new CreateNodeRequest(new MeshNode(responseMsgId, createdPath)
-                            {
-                                NodeType = ThreadMessageNodeType.NodeType, MainNode = capturedContext,
-                                Content = new ThreadMessage
-                                {
-                                    Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                                    Type = ThreadMessageType.AgentResponse,
-                                    AgentName = capturedAgent, ModelName = capturedModel
-                                }
-                            }), o => o.WithTarget(new Address(createdPath)));
-
-                            PostAndVerify(responseDelivery, "response cell", _ =>
-                            {
-                                // Step 4: All cells exist — submit
-                                var submitDelivery = Hub.Post(new SubmitMessageRequest
-                                {
-                                    ThreadPath = createdPath,
-                                    UserMessageText = capturedText,
-                                    UserMessageId = userMsgId,
-                                    ResponseMessageId = responseMsgId,
-                                    AgentName = capturedAgent,
-                                    ModelName = capturedModel,
-                                    ContextPath = capturedContext,
-                                    Attachments = capturedAttachments
-                                }, o => o.WithTarget(new Address(createdPath)));
-
-                                // Navigate after submit response (Messages + IsExecuting set)
-                                // WatchForExecution on the thread hub picks up execution.
-                                if (submitDelivery != null)
-                                {
-                                    Hub.RegisterCallback((IMessageDelivery)submitDelivery, resp =>
-                                    {
-                                        InvokeAsync(() =>
-                                        {
-                                            showSubmissionProgress = false;
-                                            if (isCompact)
-                                                NavigationManager.NavigateTo($"/{createdPath}");
-                                            else
-                                                SidePanelState.SetContentPath(createdPath);
-                                            StateHasChanged();
-                                        });
-                                        return resp;
-                                    });
-                                }
-                            });
-                        });
-                    });
-                }
-            }
-            else
-            {
-                // EXISTING THREAD: same chain — create cells with verification, then submit
-                // MainNode must be the thread's content node (e.g. "PartnerRe/AIConsulting"),
-                // NOT the thread path. initialContext is resolved from the thread's MainNode.
-                var mainEntity = initialContext ?? "";
-                var existingThreadPath = threadPath!;
-                var existingAgent = selectedAgentInfo?.Name;
-                var existingModel = selectedModelInfo?.Name;
-                var existingContext = initialContext;
-                var existingAttachments = attachments.Select(a => a.Path).ToList();
-
-                var userDelivery = Hub.Post(new CreateNodeRequest(new MeshNode(userMsgId, existingThreadPath)
-                {
-                    NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
-                    Content = new ThreadMessage
-                    {
-                        Role = "user", Text = userMessageText!, Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.ExecutedInput, CreatedBy = createdBy
-                    }
-                }), o => o.WithTarget(new Address(existingThreadPath)));
-
-                PostAndVerify(userDelivery, "user cell", _ =>
-                {
-                    var responseDelivery = Hub.Post(new CreateNodeRequest(new MeshNode(responseMsgId, existingThreadPath)
-                    {
-                        NodeType = ThreadMessageNodeType.NodeType, MainNode = mainEntity,
-                        Content = new ThreadMessage
-                        {
-                            Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
-                            Type = ThreadMessageType.AgentResponse,
-                            AgentName = existingAgent, ModelName = existingModel
-                        }
-                    }), o => o.WithTarget(new Address(existingThreadPath)));
-
-                    PostAndVerify(responseDelivery, "response cell", _ =>
-                    {
-                        var submitDelivery = Hub.Post(new SubmitMessageRequest
-                        {
-                            ThreadPath = existingThreadPath,
-                            UserMessageText = userMessageText!,
-                            UserMessageId = userMsgId,
-                            ResponseMessageId = responseMsgId,
-                            AgentName = existingAgent,
-                            ModelName = existingModel,
-                            ContextPath = existingContext,
-                            Attachments = existingAttachments
-                        }, o => o.WithTarget(new Address(existingThreadPath)));
-
-                        RegisterSubmitCallback(submitDelivery, userMessageText!);
-                    });
-                });
-            }
-
-            // (submit callback is registered inside PostSubmit → RegisterSubmitCallback)
-
-            // Transition to WaitingForResponse — spinner stays until new cells appear
-            submissionHandler.OnMessagePosted();
-
-            // In compact/dashboard mode: navigate after a brief delay so user sees progress
-            if (ViewModel.HideEmptyState && !string.IsNullOrEmpty(threadPath))
-            {
-                showSubmissionProgress = false;
-                NavigationManager.NavigateTo($"/{threadPath}");
-            }
+            if (monacoEditor != null)
+                await monacoEditor.ClearAsync();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!_isDisposed)
         {
-            Logger.LogError(ex, "[ThreadChat:{InstanceId}] Error during message submission", _instanceId);
-            submissionHandler.ForceRelease();
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to clear Monaco editor", _instanceId);
         }
-
-        StateHasChanged();
     }
 
     private async Task ScrollToBottomAsync()
@@ -631,84 +501,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
-    /// <summary>
-    /// Posts a CreateNodeRequest and verifies the response before proceeding.
-    /// On success: calls onSuccess with the created node's path.
-    /// On failure: logs error, releases submission handler.
-    /// </summary>
-    private void PostAndVerify(IMessageDelivery<CreateNodeRequest>? delivery, string stepName, Action<string> onSuccess)
-    {
-        if (delivery == null) { ReportError(stepName, "Post returned null"); return; }
-        _ = Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-        {
-            if (response is IMessageDelivery<CreateNodeResponse> { Message.Success: true } cnr)
-            {
-                var path = cnr.Message.Node?.Path ?? delivery.Message.Node.Path!;
-                onSuccess(path);
-            }
-            else
-            {
-                var error = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "Unknown";
-                ReportError(stepName, error);
-            }
-            return response;
-        });
-    }
-
-    private void ReportError(string step, string error)
-    {
-        Logger.LogError("[ThreadChat:{InstanceId}] {Step} failed: {Error}", _instanceId, step, error);
-        InvokeAsync(() => { showSubmissionProgress = false; submissionHandler.ForceRelease(); StateHasChanged(); });
-    }
-
-    private void RegisterSubmitCallback(IMessageDelivery<SubmitMessageRequest>? submitDelivery,
-        string userMessageText, Action? onFirstResponse = null)
-    {
-        if (submitDelivery == null) return;
-        var firstResponseFired = false;
-
-        void Register()
-        {
-            _ = Hub.RegisterCallback((IMessageDelivery)submitDelivery!, response =>
-            {
-                if (response is IMessageDelivery<SubmitMessageResponse> smr)
-                {
-                    // Fire onFirstResponse once (Messages are set on the thread now)
-                    if (!firstResponseFired && smr.Message.Success)
-                    {
-                        firstResponseFired = true;
-                        if (onFirstResponse != null)
-                            InvokeAsync(onFirstResponse);
-                    }
-
-                    if (!smr.Message.Success)
-                    {
-                        Logger.LogError("[ThreadChat:{InstanceId}] Submit FAILED: {Error}", _instanceId, smr.Message.Error);
-                        InvokeAsync(() =>
-                        {
-                            MessageText = userMessageText;
-                            submissionHandler.ForceRelease();
-                            StateHasChanged();
-                        });
-                    }
-                    else if (smr.Message.Status == SubmitMessageStatus.ExecutionCompleted ||
-                             smr.Message.Status == SubmitMessageStatus.ExecutionFailed)
-                    {
-                        // Execution done
-                        InvokeAsync(StateHasChanged);
-                    }
-                    else
-                    {
-                        // Intermediate response — re-register for completion
-                        Register();
-                    }
-                }
-                return response;
-            });
-        }
-        Register();
-    }
-
     private void CancelExecution()
     {
         if (string.IsNullOrEmpty(threadPath) || isCancelling)
@@ -737,58 +529,44 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Handles navigation changes proactively — resolves context in the background
-    /// so it's already available when the user submits a message (no blocking await on submit).
+    /// Reacts to navigation context changes from INavigationService.
+    /// NavigationService owns path resolution — we just read Context.PrimaryPath and Context.Node.
+    /// No query, no await.
     /// </summary>
-    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    private void OnNavigationContextChanged(NavigationContext? ctx)
     {
-        if (_isDisposed)
-            return;
+        if (_isDisposed) return;
+        if (ctx is null || string.IsNullOrEmpty(ctx.PrimaryPath) || ctx.Path == "chat") return;
 
-        var currentUrl = e.Location;
-        if (lastContextUrl == currentUrl)
-            return;
+        var newPath = ctx.PrimaryPath;
+        if (newPath == initialContext) return;
 
-        lastContextUrl = currentUrl;
-        var newPath = NavigationManager.ToBaseRelativePath(currentUrl);
+        var name = ctx.Node?.Name ?? ctx.Node?.Id;
 
-        if (string.IsNullOrEmpty(newPath) || newPath == "chat")
-            return;
-
-        // Fire-and-forget: resolve context in the background, update UI when ready
-        _ = InvokeAsync(async () =>
+        InvokeAsync(() =>
         {
-            try
-            {
-                newPath = await ResolvePrimaryContextPathAsync(newPath);
-                if (newPath != initialContext)
-                {
-                    Logger.LogDebug("[ThreadChat:{InstanceId}] Context changed from {OldContext} to {NewContext}",
-                        _instanceId, initialContext, newPath);
+            if (_isDisposed) return;
+            if (newPath == initialContext) return;
 
-                    initialContext = newPath;
-                    var displayName = await ResolveContextDisplayNameAsync(newPath);
+            Logger.LogDebug("[ThreadChat:{InstanceId}] Context changed from {OldContext} to {NewContext}",
+                _instanceId, initialContext, newPath);
 
-                    attachments.RemoveAll(a => a.IsContext);
-                    attachments.Insert(0, new AttachmentInfo(newPath, displayName, IsContext: true));
-                    StateHasChanged();
-                }
-            }
-            catch (Exception ex) when (!_isDisposed)
-            {
-                Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Error resolving context on navigation", _instanceId);
-            }
+            initialContext = newPath;
+            attachments.RemoveAll(a => a.IsContext);
+            attachments.Insert(0, new AttachmentInfo(newPath, name, IsContext: true));
+            StateHasChanged();
         });
     }
 
-    private async Task OnMessageTextChanged(string value)
+    private void OnMessageTextChanged(string value)
     {
         MessageText = value;
-        await UpdateExtractedReferencesAsync();
+        // Fire-and-forget reference extraction — may touch Monaco via JS interop.
+        _ = UpdateExtractedReferencesAsync();
         StateHasChanged();
     }
 
-    private async Task OnCompletionItemAccepted(string path)
+    private void OnCompletionItemAccepted(string path)
     {
         if (string.IsNullOrEmpty(path))
             return;
@@ -807,8 +585,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Add as attachment chip if not already present (text stays in editor)
         if (!attachments.Any(a => a.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
         {
-            var displayName = await ResolveContextDisplayNameAsync(path);
-            attachments.Add(new AttachmentInfo(path, displayName, IsContext: false));
+            // Add the chip immediately with path-only label; resolve display name via Post/RegisterCallback.
+            attachments.Add(new AttachmentInfo(path, null, IsContext: false));
+            RequestDisplayName(path, displayName => InvokeAsync(() =>
+            {
+                if (_isDisposed) return;
+                var idx = attachments.FindIndex(a => a.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0)
+                    attachments[idx] = attachments[idx] with { DisplayName = displayName };
+                StateHasChanged();
+            }));
         }
 
         StateHasChanged();
@@ -1094,7 +880,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 // Push updated list to Monaco if we got new items
                 if (hadNew && monacoEditor != null)
                 {
-                    await InvokeAsync(async () =>
+                    InvokeAsync(async () =>
                     {
                         try
                         {
@@ -1184,7 +970,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
-            NavigationManager.LocationChanged -= OnLocationChanged;
+            NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
             SidePanelState.OnActionRequested -= OnSidePanelAction;

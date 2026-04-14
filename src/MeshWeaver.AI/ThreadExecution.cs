@@ -40,10 +40,25 @@ public static class ThreadExecution
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
+            .WithHandler<AppendUserMessageRequest>(ThreadSubmission.HandleAppendUserMessage)
+            .WithHandler<ResubmitUserMessageRequest>(ThreadSubmission.HandleResubmitUserMessage)
             .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
-            .WithInitialization(WatchForExecution);
+            .WithInitialization(WatchForExecution)
+            .WithInitialization(InstallSubmissionWatcher);
+
+    /// <summary>
+    /// Installs the continuous server-side watcher that ingests queued user messages
+    /// into new rounds and dispatches agent execution. See <see cref="ThreadSubmission"/>.
+    /// </summary>
+    private static Task InstallSubmissionWatcher(IMessageHub hub, CancellationToken ct)
+    {
+        var sub = ThreadSubmission.InstallServerWatcher(hub);
+        // Dispose with the hub lifetime.
+        hub.RegisterForDisposal(sub);
+        return Task.CompletedTask;
+    }
 
     /// <summary>
     /// Sets the thread hub's access context to the thread creator's identity.

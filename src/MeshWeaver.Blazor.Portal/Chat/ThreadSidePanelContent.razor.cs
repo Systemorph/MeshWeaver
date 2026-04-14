@@ -5,7 +5,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using Microsoft.AspNetCore.Components;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
@@ -20,18 +19,12 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
     [Inject] private INavigationService NavigationService { get; set; } = null!;
-    [Inject] private IMeshService MeshQuery { get; set; } = null!;
 
     [Parameter] public EventCallback OnCloseRequested { get; set; }
 
-    private bool showThreadList;
     private bool positionMenuVisible;
     private string? selectedThreadPath;
     private string? selectedThreadName;
-
-    // Thread list
-    private List<MeshNode> threadList = [];
-    private bool isLoadingThreads;
 
     protected override void OnInitialized()
     {
@@ -46,7 +39,6 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         if (newPath != selectedThreadPath)
         {
             selectedThreadPath = newPath;
-            showThreadList = false;
             InvokeAsync(StateHasChanged);
         }
     }
@@ -76,54 +68,12 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
 
     private string SidePanelTitle => selectedThreadName ?? "New Chat";
 
-    private void SelectThread(MeshNode thread)
-    {
-        selectedThreadPath = thread.Path;
-        selectedThreadName = thread.Name;
-        SidePanelState.SetContentPath(thread.Path);
-        showThreadList = false;
-        StateHasChanged();
-    }
-
     private void OnNewChat()
     {
         selectedThreadPath = null;
         selectedThreadName = null;
         SidePanelState.SetContentPath(null);
-        showThreadList = false;
         StateHasChanged();
-    }
-
-    private async Task ToggleThreadList()
-    {
-        showThreadList = !showThreadList;
-        if (showThreadList)
-            await LoadThreadListAsync();
-        StateHasChanged();
-    }
-
-    private async Task LoadThreadListAsync()
-    {
-        isLoadingThreads = true;
-        StateHasChanged();
-
-        try
-        {
-            var ns = NavigationService.CurrentNamespace;
-            var query = string.IsNullOrEmpty(ns)
-                ? "nodeType:Thread limit:20 sort:LastModified-desc"
-                : $"nodeType:Thread namespace:{ns}/_Thread limit:20 sort:LastModified-desc";
-            threadList = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-        }
-        catch
-        {
-            threadList = [];
-        }
-        finally
-        {
-            isLoadingThreads = false;
-            StateHasChanged();
-        }
     }
 
     private void OpenThreadFullScreen()
