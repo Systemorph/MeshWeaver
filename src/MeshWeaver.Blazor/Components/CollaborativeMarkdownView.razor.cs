@@ -1,5 +1,3 @@
-using Markdig;
-using Markdig.Syntax;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Kernel;
@@ -16,7 +14,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using System.Reactive.Linq;
-using System.Text.Json;
 using MeshWeaver.Markdown.Collaboration;
 using AnnotationType = MeshWeaver.Markdown.AnnotationType;
 
@@ -225,10 +222,10 @@ public partial class CollaborativeMarkdownView
         }
 
         // Submit code to kernel — the mesh routing rule creates the hub on demand.
-        if (!_codeSubmitted && _codeSubmissions != null && _codeSubmissions.Count > 0)
+        if (!_codeSubmitted && _codeSubmissions is { Count: > 0 })
         {
             _codeSubmitted = true;
-            InteractiveMarkdownHelper.SubmitCode(Hub, KernelAddress, _codeSubmissions);
+            MarkdownViewLogic.SubmitCode(Hub, KernelAddress, _codeSubmissions);
         }
     }
 
@@ -256,8 +253,8 @@ public partial class CollaborativeMarkdownView
         _processedHtml = RenderMarkdown(content);
 
         // Replace kernel address placeholder with actual kernel address
-        if (_processedHtml != null && _codeSubmissions != null && _codeSubmissions.Count > 0)
-            _processedHtml = InteractiveMarkdownHelper.ReplaceKernelPlaceholder(_processedHtml, KernelAddress);
+        if (_processedHtml != null && _codeSubmissions is { Count: > 0 })
+            _processedHtml = MarkdownViewLogic.ReplaceKernelPlaceholder(_processedHtml, KernelAddress);
     }
 
     /// <summary>
@@ -278,26 +275,19 @@ public partial class CollaborativeMarkdownView
     private string RenderMarkdown(string content)
     {
         if (string.IsNullOrWhiteSpace(content))
+        {
+            _codeSubmissions = null;
             return "";
+        }
 
-        // Transform annotation markers to HTML spans before markdown rendering
+        // Transform annotation markers to HTML spans before markdown rendering,
+        // then render with source-position data attributes (data-start/data-end) so JS
+        // can map text selections back to markdown source positions.
         var transformed = AnnotationMarkdownExtension.TransformAnnotations(content);
-
-        // Render with source position data attributes (data-start/data-end)
-        // so JS can map text selections back to markdown source positions.
-        var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null, BoundNodePath);
+        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(null, BoundNodePath);
         var document = Markdig.Markdown.Parse(transformed, pipeline);
 
-        // Extract code submissions from executable code blocks
-        var executableBlocks = document.Descendants<ExecutableCodeBlock>().ToList();
-        foreach (var block in executableBlocks)
-            block.Initialize();
-        var submissions = executableBlocks
-            .Select(b => b.SubmitCode)
-            .Where(s => s != null)
-            .Cast<SubmitCodeRequest>()
-            .ToList();
-        _codeSubmissions = submissions.Count > 0 ? submissions : null;
+        _codeSubmissions = MarkdownViewLogic.ExtractCodeSubmissions(document);
 
         return SourceMapHtmlRenderer.RenderWithSourceMap(document, pipeline);
     }
