@@ -599,16 +599,13 @@ internal static class ThreadSubmissionServer
                     var threadNode = nodes.FirstOrDefault(n => n.Path == threadPath);
                     if (threadNode?.Content is not MeshThread thread) return;
 
-                    // If the thread is executing AND new user messages are queued, signal the
-                    // in-flight execution to wind down (agent loop finishes current tool call and
-                    // exits). The watcher then dispatches a fresh round with the queued inputs.
-                    if (thread.IsExecuting)
-                    {
-                        var queued = ThreadSubmission.FindUnprocessedUserMessages(thread);
-                        if (!queued.IsEmpty)
-                            ThreadExecution.RequestSafeCancellation(threadPath);
-                        return;
-                    }
+                    // Queue-don't-cancel: if the thread is executing, do nothing. The queued
+                    // user messages stay in UserMessageIds; as soon as IsExecuting flips to
+                    // false (current round completed naturally), we dispatch the next round.
+                    // This matches Claude Code / Anthropic's recommended pattern — the Messages
+                    // API doesn't support mid-stream injection and cancelling during a tool_use
+                    // produces orphaned blocks that need synthetic tool_result recovery.
+                    if (thread.IsExecuting) return;
 
                     var dispatch = ThreadSubmission.PlanNextRound(thread);
                     if (dispatch is null) return;

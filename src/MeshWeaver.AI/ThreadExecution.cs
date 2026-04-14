@@ -62,10 +62,13 @@ public static class ThreadExecution
     }
 
     /// <summary>
-    /// Signals the active execution on <paramref name="threadPath"/> that new user input has
-    /// arrived and the round should wind down. The CancellationTokenSource is cancelled, which
-    /// interrupts the streaming loop in <see cref="ExecuteMessageAsync"/>. The SDK allows the
-    /// current in-flight tool call to complete; the loop then exits gracefully.
+    /// Cancels the active execution on <paramref name="threadPath"/> — used by the explicit
+    /// user "Stop" button. Do NOT call this automatically when queued user messages arrive
+    /// during execution: the Anthropic Messages API does not support mid-stream injection,
+    /// and cancelling during a tool_use produces orphaned tool_use blocks that require a
+    /// synthetic error tool_result to recover. The correct pattern for queued input is
+    /// "wait for the round to complete, then dispatch a fresh round with all queued
+    /// messages in history". See ThreadSubmissionServer.InstallServerWatcher.
     /// Idempotent — repeated calls during the same round are no-ops.
     /// </summary>
     internal static void RequestSafeCancellation(string threadPath)

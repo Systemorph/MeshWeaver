@@ -352,17 +352,17 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.UserMessageIds.Should().NotContain(final.Messages[5]);
     }
 
-    // ─── Safe-cancel: new input during execution cancels current round ───
+    // ─── Queue-don't-cancel: new input during execution waits until round completes ───
 
     [Fact]
-    public async Task Submit_DuringExecution_CancelsCurrentRound_NextRoundPicksUpQueued()
+    public async Task Submit_DuringExecution_QueuedUntilRoundCompletes_ThenNextRoundDispatches()
     {
         var ct = TestContext.Current.CancellationToken;
         var threadPath = await SeedEmptyThreadAsync(ct);
         var client = GetClient();
         var slowModel = "slow-model";
 
-        // Round 1: slow submit to ensure the execution is in-flight when we cancel.
+        // Round 1: slow submit so the execution is in-flight when u2 arrives.
         ThreadSubmission.Submit(new SubmitContext
         {
             Hub = client, ThreadPath = threadPath, UserText = "First (slow)",
@@ -374,15 +374,16 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
             timeoutMs: 5_000, ct);
 
-        // Submit u2 while round 1 is still executing. The watcher sees a queued user message
-        // during IsExecuting=true and signals cancellation on the active CTS.
+        // Submit u2 while round 1 is still executing. Queue-don't-cancel: the current round
+        // is NOT aborted — it completes naturally (tool calls finish, response persists).
+        // The watcher holds u2 back until IsExecuting flips to false, then dispatches round 2.
         ThreadSubmission.Submit(new SubmitContext
         {
             Hub = client, ThreadPath = threadPath, UserText = "Second",
             ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
         });
 
-        // Both user messages end up ingested and two response cells exist in the final state.
+        // Final: both rounds complete cleanly. [u1, r1, u2, r2].
         var final = await WaitForThreadAsync(
             threadPath,
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 2,
@@ -390,8 +391,6 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         final.UserMessageIds.Should().HaveCount(2);
         final.IngestedMessageIds.Should().HaveCount(2);
-        // Minimum expected shape: [u1, r1, u2, r2]. Cancellation might or might not have produced
-        // partial content for r1, but the cell count / ingestion invariants must hold.
         final.Messages.Should().HaveCount(4);
     }
 
