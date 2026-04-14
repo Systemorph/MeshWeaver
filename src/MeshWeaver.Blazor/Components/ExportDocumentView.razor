@@ -168,12 +168,11 @@
                 new ExportDocumentRequest(SourcePath, options),
                 o => o.WithTarget(new MeshWeaver.Messaging.Address(SourcePath)));
 
-            if (response?.Message is { } result && !string.IsNullOrEmpty(result.ContentPath))
+            if (response?.Message is { } result && result.Content.Length > 0)
             {
-                // Handler saved the rendered file into a content collection; open the content URL
-                // so the browser triggers a download.
-                var url = "/" + result.ContentPath.Replace("content:", "content/");
-                await JSRuntime.InvokeVoidAsync("open", url, "_blank");
+                using var ms = new MemoryStream(result.Content);
+                using var streamRef = new DotNetStreamReference(ms);
+                await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", result.FileName, streamRef);
 
                 _done = true;
             }

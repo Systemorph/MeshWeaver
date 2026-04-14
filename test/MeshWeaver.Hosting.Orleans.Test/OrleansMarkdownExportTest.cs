@@ -129,8 +129,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var response = delivery.Message;
         response.Error.Should().BeNull(response.Error);
         response.Format.Should().Be(ExportFormat.Pdf);
-        response.ContentPath.Should().StartWith("content:", "handler must save the render into the configured content collection");
-        response.ContentPath.Should().EndWith(".pdf");
+        response.Content.Should().NotBeNull().And.NotBeEmpty("PDF render should produce bytes");
         response.MimeType.Should().Be("application/pdf");
     }
 
@@ -203,8 +202,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var response = delivery.Message;
         response.Error.Should().BeNull(response.Error);
         response.Format.Should().Be(ExportFormat.Docx);
-        response.ContentPath.Should().StartWith("content:", "handler must save the render into the configured content collection");
-        response.ContentPath.Should().EndWith(".docx");
+        response.Content.Should().NotBeNull().And.NotBeEmpty("DOCX render should produce bytes");
         response.MimeType.Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     }
 }
