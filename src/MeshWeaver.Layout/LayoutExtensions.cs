@@ -209,8 +209,28 @@ public static class LayoutExtensions
                     first = false;
                     var evaluated = referencePointer
                         .Evaluate(i.Value);
-                    return evaluated is null ? default!
-                        : evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!;
+                    if (evaluated is null) return default!;
+                    try
+                    {
+                        return evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!;
+                    }
+                    catch (Exception ex) when (ex is NotSupportedException || ex is JsonException)
+                    {
+                        // Most common cause: the incoming JSON carries a polymorphic $type
+                        // discriminator the local hub's TypeRegistry doesn't know about. Surface
+                        // the failure via the hub logger and yield default(T) so the observable
+                        // pipeline keeps flowing instead of crashing the circuit on decode.
+                        var logger = stream.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger("LayoutExtensions.GetStream");
+                        logger?.LogError(ex,
+                            "Failed to deserialize layout-stream entry as {Type} at pointer {Pointer}. " +
+                            "Raw JSON: {Raw}",
+                            typeof(T).Name, referencePointer,
+                            evaluated.Value.ValueKind == JsonValueKind.Undefined
+                                ? "<undefined>"
+                                : evaluated.Value.GetRawText());
+                        return default!;
+                    }
                 }
             );
     }

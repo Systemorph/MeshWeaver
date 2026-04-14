@@ -1,18 +1,20 @@
 using System.ComponentModel;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Markdown.Export.Layout;
 
 /// <summary>
-/// Layout areas for the markdown export dialog. Each entry point renders the
-/// <see cref="ExportDocumentControl"/> — the Blazor view posts the request, receives
-/// the rendered bytes in <see cref="MeshWeaver.Markdown.Export.Messaging.ExportDocumentResponse.Content"/>,
-/// and hands them to the browser as a download stream (no server-side storage).
+/// Layout areas that render the export dialog for a markdown node.
+/// Two entry points: <c>ExportPdf</c> and <c>ExportDocx</c>. Both render the same
+/// <see cref="ExportDocumentControl"/>; the Blazor view decides the default format.
+/// Uses the reactive <c>GetDataRequest</c> + <c>RegisterCallback</c> pattern — never
+/// <c>await</c> inside the hub — so it can't deadlock the message pump.
 /// </summary>
 [Browsable(false)]
 public static class ExportDocumentLayoutArea
@@ -31,21 +33,39 @@ public static class ExportDocumentLayoutArea
     private static IObservable<UiControl?> RenderExport(LayoutAreaHost host, string defaultFormat)
     {
         var hubPath = host.Hub.Address.ToString();
-        return Observable.FromAsync(async () =>
-        {
-            var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = await meshService.QueryAsync<Mesh.MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
-            var hasDescendants = await meshService
-                .QueryAsync<Mesh.MeshNode>($"path:{hubPath} scope:descendants")
-                .FirstOrDefaultAsync() is not null;
 
-            return (UiControl?)new ExportDocumentControl
+        // Seed the observable with a partial control (SourcePath + DefaultFormat always known).
+        // The hub then fires a GetDataRequest via Post + RegisterCallback — NO await — and when
+        // the response arrives the observable emits an enriched control with NodeName set.
+        var seed = (UiControl?)new ExportDocumentControl
+        {
+            SourcePath = hubPath,
+            DefaultFormat = defaultFormat,
+            HasDescendants = false
+        };
+
+        var subject = new BehaviorSubject<UiControl?>(seed);
+
+        var nodeId = hubPath.Contains('/')
+            ? hubPath[(hubPath.LastIndexOf('/') + 1)..]
+            : hubPath;
+        var request = new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId));
+        host.Hub.Post(request, o => o.WithTarget(host.Hub.Address));
+        host.Hub.RegisterCallback<GetDataResponse>(request, delivery =>
+        {
+            if (delivery.Message.Data is MeshNode node)
             {
-                SourcePath = hubPath,
-                NodeName = node?.Name,
-                DefaultFormat = defaultFormat,
-                HasDescendants = hasDescendants
-            };
+                subject.OnNext(new ExportDocumentControl
+                {
+                    SourcePath = hubPath,
+                    NodeName = node.Name,
+                    DefaultFormat = defaultFormat,
+                    HasDescendants = false
+                });
+            }
+            return delivery.Processed();
         });
+
+        return subject.AsObservable();
     }
 }

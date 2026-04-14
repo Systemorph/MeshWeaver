@@ -336,11 +336,9 @@ public class DocxDocumentRenderer
             {
                 if (child is ParagraphElement p)
                 {
-                    // We emit the bullet / number as a literal run (with an indent that grows by
-                    // depth) rather than via Word's <w:numPr>. Word's NumberingProperties require
-                    // a matching abstract numbering definition in numbering.xml; without it Word
-                    // falls back to document-wide continuous numbering, which is why every list
-                    // item was getting a consecutively increasing number throughout the doc.
+                    // Emit bullet / number as a literal run with a hanging indent scaled by depth.
+                    // Using <w:numPr> without a matching abstract numbering definition in
+                    // numbering.xml makes Word apply document-wide continuous numbering.
                     var indentTwips = (depth + 1) * 360; // 0.25 inch per level
                     var para = new Paragraph(new ParagraphProperties(
                         new Indentation { Left = indentTwips.ToString(), Hanging = "360" }));

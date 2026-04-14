@@ -178,6 +178,96 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         exportControl.DefaultFormat.Should().Be("pdf");
     }
 
+    /// <summary>
+    /// Regression for the user-facing prod bug: the portal's per-circuit hosted sub-hub has its
+    /// OWN <see cref="ITypeRegistry"/>. When the subtype ( <see cref="ExportDocumentControl"/>)
+    /// is only registered on the mesh-wide silo registry, the sub-hub's
+    /// <c>PolymorphicTypeInfoResolver</c> fails to resolve the <c>$type</c> discriminator and
+    /// <c>LayoutExtensions.GetStream&lt;UiControl&gt;</c> throws
+    /// <c>NotSupportedException: "The JSON payload for polymorphic interface or abstract type
+    /// 'UiControl' must specify a type discriminator"</c>. The fix is to register the types on
+    /// the sub-hub too (see <c>PortalApplication.DefaultPortalConfig</c>).
+    /// This test is green when the fix is present and red without it.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task SubHub_WithExportTypesRegistered_DeserializesPolymorphicExportDocumentControl()
+    {
+        using var cts = new CancellationTokenSource(60.Seconds());
+        var parent = await GetClientAsync("portal-parent");
+
+        var nodePath = await CreateMarkdownNodeAsync(
+            parent, "subhub-with-types",
+            "# Hello\n\nSub-hub with export types registered.", cts.Token);
+        Output.WriteLine($"Created Markdown node: {nodePath}");
+
+        // Mirror PortalApplication.DefaultPortalConfig: a hosted sub-hub that explicitly
+        // registers the export types on its own TypeRegistry.
+        var subHub = parent.GetHostedHub(new Address("portal", "subhub-ok"),
+            c =>
+            {
+                c.TypeRegistry.AddMarkdownExportTypes();
+                return c.AddLayoutClient();
+            })!;
+
+        var stream = subHub.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(nodePath), new LayoutAreaReference(ExportDocumentLayoutArea.PdfArea));
+        // Server renders the UiControl under the Area pointer (not empty string).
+
+        var control = await stream.GetControlStream(ExportDocumentLayoutArea.PdfArea)
+            .Timeout(30.Seconds())
+            .FirstAsync(x => x != null);
+
+        control.Should().BeOfType<ExportDocumentControl>(
+            "the sub-hub's TypeRegistry was primed with ExportDocumentControl, so the " +
+            "polymorphic UiControl $type resolves to the concrete type.");
+        ((ExportDocumentControl)control!).SourcePath.Should().Be(nodePath);
+    }
+
+    /// <summary>
+    /// Negative counterpart: a sub-hub that does NOT register the export types — reproduces the
+    /// prod condition before <c>PortalApplication.DefaultPortalConfig</c> was updated. The
+    /// deserialize path used to throw <see cref="NotSupportedException"/> straight into the
+    /// observable and crash the circuit. After the robustness fix in
+    /// <c>LayoutExtensions.GetStream&lt;T&gt;</c>, the exception is caught and logged, and the
+    /// observable yields <c>default(T)</c> so subscribers keep flowing. This test asserts the
+    /// graceful-degradation contract: the stream completes with <c>null</c> rather than tearing
+    /// down the pipeline.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task SubHub_WithoutExportTypesRegistered_DegradesGracefullyToNull()
+    {
+        using var cts = new CancellationTokenSource(60.Seconds());
+        var parent = await GetClientAsync("portal-parent-bare");
+
+        var nodePath = await CreateMarkdownNodeAsync(
+            parent, "subhub-bare",
+            "# Hello\n\nSub-hub without export types registered.", cts.Token);
+        Output.WriteLine($"Created Markdown node: {nodePath}");
+
+        // Bare sub-hub — no AddMarkdownExportTypes. This is what the portal did before the fix.
+        var subHub = parent.GetHostedHub(new Address("portal", "subhub-bare"),
+            c => c.AddLayoutClient())!;
+
+        var stream = subHub.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(nodePath), new LayoutAreaReference(ExportDocumentLayoutArea.PdfArea));
+        // Server renders the UiControl under the Area pointer (not empty string).
+
+        // Observe the control stream — should NOT throw. An entry arrives but deserialization
+        // fails (caught + logged), yielding null.
+        UiControl? control = null;
+        using var subscription = stream.GetControlStream(ExportDocumentLayoutArea.PdfArea)
+            .Subscribe(v => control = v);
+
+        // Give the server time to render and the failed decode time to settle.
+        await Task.Delay(5.Seconds(), cts.Token);
+
+        control.Should().BeNull(
+            "without the sub-hub's TypeRegistry knowing ExportDocumentControl, the polymorphic " +
+            "UiControl deserialize throws NotSupportedException internally; the catch in " +
+            "LayoutExtensions.GetStream turns the crash into a logged error + null yield " +
+            "instead of tearing down the observable pipeline.");
+    }
+
     [Fact(Timeout = 120000)]
     public async Task ExportDocx_RoundTrips_AsTypedResponse()
     {
