@@ -62,6 +62,21 @@ public static class ThreadExecution
     }
 
     /// <summary>
+    /// Signals the active execution on <paramref name="threadPath"/> that new user input has
+    /// arrived and the round should wind down. The CancellationTokenSource is cancelled, which
+    /// interrupts the streaming loop in <see cref="ExecuteMessageAsync"/>. The SDK allows the
+    /// current in-flight tool call to complete; the loop then exits gracefully.
+    /// Idempotent — repeated calls during the same round are no-ops.
+    /// </summary>
+    internal static void RequestSafeCancellation(string threadPath)
+    {
+        if (ExecutionCancellations.TryGetValue(threadPath, out var cts) && !cts.IsCancellationRequested)
+        {
+            try { cts.Cancel(); } catch { /* already disposed */ }
+        }
+    }
+
+    /// <summary>
     /// Sets the thread hub's access context to the thread creator's identity.
     /// Without this, the hub's default identity is its own address path,
     /// causing "Access denied" when reading child message nodes.

@@ -161,6 +161,55 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.IngestedMessageIds.Should().BeEquivalentTo(userIds);
     }
 
+    // ─── Resubmit: truncates after the replayed message, new round dispatches ───
+
+    [Fact]
+    public async Task Resubmit_TruncatesAfterReplayedMessage_NewRoundCreated()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadPath = await SeedEmptyThreadAsync(ct);
+        var client = GetClient();
+
+        // Round 1: submit u1 and wait for it to complete.
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client, ThreadPath = threadPath, UserText = "First",
+            CreatedBy = "rbuergi@systemorph.com"
+        });
+        var afterRoundOne = await WaitForThreadAsync(
+            threadPath,
+            t => !t.IsExecuting && t.IngestedMessageIds.Count == 1 && t.Messages.Count == 2,
+            timeoutMs: 10_000, ct);
+
+        var u1 = afterRoundOne.UserMessageIds[0];
+        var r1 = afterRoundOne.Messages[1];
+
+        // Resubmit u1 with new text.
+        ThreadSubmission.Resubmit(new ResubmitContext
+        {
+            Hub = client,
+            ThreadPath = threadPath,
+            UserMessageIdToReplay = u1,
+            NewUserText = "First, revised"
+        });
+
+        // The intermediate "truncated" state (Messages=[u1], IngestedMessageIds=[]) is racy —
+        // the server watcher dispatches the new round almost immediately after the truncation
+        // commits, often before we can observe it. Instead assert the end state: u1 is
+        // ingested again, a NEW response cell (!= r1) follows, and IsExecuting is back to false.
+        var afterResubmit = await WaitForThreadAsync(
+            threadPath,
+            t => t.IngestedMessageIds.Contains(u1)
+                 && t.Messages.Count == 2
+                 && t.Messages[1] != r1
+                 && !t.IsExecuting,
+            timeoutMs: 20_000, ct);
+
+        afterResubmit.Messages[0].Should().Be(u1);
+        afterResubmit.Messages[1].Should().NotBe(r1, "resubmit must produce a fresh response cell");
+        afterResubmit.UserMessageIds.Should().ContainSingle().Which.Should().Be(u1);
+    }
+
     // ─── Failure recovery: error renders as an assistant response cell ───
 
     [Fact]
@@ -301,6 +350,49 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         // Positions 1 and 5 are response cells (not in UserMessageIds).
         final.UserMessageIds.Should().NotContain(final.Messages[1]);
         final.UserMessageIds.Should().NotContain(final.Messages[5]);
+    }
+
+    // ─── Safe-cancel: new input during execution cancels current round ───
+
+    [Fact]
+    public async Task Submit_DuringExecution_CancelsCurrentRound_NextRoundPicksUpQueued()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadPath = await SeedEmptyThreadAsync(ct);
+        var client = GetClient();
+        var slowModel = "slow-model";
+
+        // Round 1: slow submit to ensure the execution is in-flight when we cancel.
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client, ThreadPath = threadPath, UserText = "First (slow)",
+            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
+        });
+
+        await WaitForThreadAsync(
+            threadPath,
+            t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
+            timeoutMs: 5_000, ct);
+
+        // Submit u2 while round 1 is still executing. The watcher sees a queued user message
+        // during IsExecuting=true and signals cancellation on the active CTS.
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client, ThreadPath = threadPath, UserText = "Second",
+            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
+        });
+
+        // Both user messages end up ingested and two response cells exist in the final state.
+        var final = await WaitForThreadAsync(
+            threadPath,
+            t => !t.IsExecuting && t.IngestedMessageIds.Count == 2,
+            timeoutMs: 20_000, ct);
+
+        final.UserMessageIds.Should().HaveCount(2);
+        final.IngestedMessageIds.Should().HaveCount(2);
+        // Minimum expected shape: [u1, r1, u2, r2]. Cancellation might or might not have produced
+        // partial content for r1, but the cell count / ingestion invariants must hold.
+        final.Messages.Should().HaveCount(4);
     }
 
     // ─── Helpers ───

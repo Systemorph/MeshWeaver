@@ -218,17 +218,35 @@ public static class ThreadSubmission
         IMessageDelivery<ResubmitUserMessageRequest> delivery)
     {
         var req = delivery.Message;
+        ApplyResubmit(hub, req.ThreadPath, req.UserMessageId, req.NewUserText, req.AgentName, req.ModelName);
+        hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+        return delivery.Processed();
+    }
 
+    /// <summary>
+    /// Truncates the thread after <paramref name="userMessageId"/>, drops it from
+    /// IngestedMessageIds so the watcher re-dispatches a new round, and optionally
+    /// updates the user cell text. Shared by <see cref="HandleResubmitUserMessage"/>
+    /// and the legacy <see cref="ResubmitMessageRequest"/> shim.
+    /// </summary>
+    public static void ApplyResubmit(
+        IMessageHub hub,
+        string threadPath,
+        string userMessageId,
+        string? newUserText,
+        string? agentName,
+        string? modelName)
+    {
         // Optionally update the user cell text.
-        if (!string.IsNullOrEmpty(req.NewUserText))
+        if (!string.IsNullOrEmpty(newUserText))
         {
-            var updatedCell = new MeshNode(req.UserMessageId, req.ThreadPath)
+            var updatedCell = new MeshNode(userMessageId, threadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType,
                 Content = new ThreadMessage
                 {
                     Role = "user",
-                    Text = req.NewUserText,
+                    Text = newUserText,
                     Timestamp = DateTime.UtcNow,
                     Type = ThreadMessageType.ExecutedInput
                 }
@@ -239,12 +257,12 @@ public static class ThreadSubmission
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
-            var idx = t.Messages.IndexOf(req.UserMessageId);
+            var idx = t.Messages.IndexOf(userMessageId);
             if (idx < 0) return node;
 
             var keep = t.Messages.Take(idx + 1).ToImmutableList();
             var trimmedUserIds = t.UserMessageIds.Where(uid => keep.Contains(uid)).ToImmutableList();
-            var ingested = t.IngestedMessageIds.Remove(req.UserMessageId);
+            var ingested = t.IngestedMessageIds.Remove(userMessageId);
             return node with
             {
                 Content = t with
@@ -255,15 +273,12 @@ public static class ThreadSubmission
                     IsExecuting = false,
                     ActiveMessageId = null,
                     ExecutionStartedAt = null,
-                    PendingUserMessage = req.NewUserText ?? t.PendingUserMessage,
-                    PendingAgentName = req.AgentName ?? t.PendingAgentName,
-                    PendingModelName = req.ModelName ?? t.PendingModelName
+                    PendingUserMessage = newUserText ?? t.PendingUserMessage,
+                    PendingAgentName = agentName ?? t.PendingAgentName,
+                    PendingModelName = modelName ?? t.PendingModelName
                 }
             };
         });
-
-        hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
-        return delivery.Processed();
     }
 }
 
@@ -583,7 +598,17 @@ internal static class ThreadSubmissionServer
                 {
                     var threadNode = nodes.FirstOrDefault(n => n.Path == threadPath);
                     if (threadNode?.Content is not MeshThread thread) return;
-                    if (thread.IsExecuting) return;
+
+                    // If the thread is executing AND new user messages are queued, signal the
+                    // in-flight execution to wind down (agent loop finishes current tool call and
+                    // exits). The watcher then dispatches a fresh round with the queued inputs.
+                    if (thread.IsExecuting)
+                    {
+                        var queued = ThreadSubmission.FindUnprocessedUserMessages(thread);
+                        if (!queued.IsEmpty)
+                            ThreadExecution.RequestSafeCancellation(threadPath);
+                        return;
+                    }
 
                     var dispatch = ThreadSubmission.PlanNextRound(thread);
                     if (dispatch is null) return;
