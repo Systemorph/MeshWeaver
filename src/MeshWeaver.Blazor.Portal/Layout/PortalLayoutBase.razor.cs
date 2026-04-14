@@ -392,7 +392,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
 
     // Side panel content state
-    private readonly string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
+    // Key derived from the primary path so the ThreadChatView is rebuilt (re-running
+    // OnInitialized, re-seeding the context attachment chip) when navigation moves
+    // to a different node. Without this, the ThreadChatView stays stuck on the
+    // InitialContext it was first rendered with.
+    private string sidePanelContentKey => $"newchat-{NavigationService.Context?.PrimaryPath ?? string.Empty}";
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
     private string? _cachedContextPath;
