@@ -4,6 +4,7 @@ using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -51,10 +52,17 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected bool IsNavMenuOpen => isNavMenuOpen;
 
     private bool isNodeMenuOpen;
+    private bool isMeshMenuOpen;
 
-    // Menu items from IMenuItemsProvider (populated by LayoutAreaView from $Menu stream)
-    private IReadOnlyList<NodeMenuItemDefinition> _menuItems = [];
-    private IDisposable? _menuSubscription;
+    // Menu context names (must match NodeMenuItemsExtensions.NodeMenuContext / MeshMenuContext).
+    private const string NodeMenuContext = "Node";
+    private const string MeshMenuContext = "Mesh";
+
+    // Menu items per context from IMenuItemsProvider (populated by LayoutAreaView from $Menu:{context} streams)
+    private IReadOnlyList<NodeMenuItemDefinition> _nodeMenuItems = [];
+    private IReadOnlyList<NodeMenuItemDefinition> _meshMenuItems = [];
+    private IDisposable? _nodeMenuSubscription;
+    private IDisposable? _meshMenuSubscription;
 
 
     // Editable content collections
@@ -68,9 +76,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested += OnSidePanelNavigation;
         NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
-        _menuSubscription = MenuItemsProvider.MenuItems.Subscribe(items =>
+        _nodeMenuSubscription = MenuItemsProvider.GetMenu(NodeMenuContext).Subscribe(items =>
         {
-            _menuItems = items;
+            _nodeMenuItems = items;
+            InvokeAsync(StateHasChanged);
+        });
+        _meshMenuSubscription = MenuItemsProvider.GetMenu(MeshMenuContext).Subscribe(items =>
+        {
+            _meshMenuItems = items;
             InvokeAsync(StateHasChanged);
         });
     }
@@ -94,6 +107,28 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         isNodeMenuOpen = open;
     }
 
+    private void ToggleMeshMenu()
+    {
+        isMeshMenuOpen = !isMeshMenuOpen;
+    }
+
+    private void OnMeshMenuOpenChanged(bool open)
+    {
+        isMeshMenuOpen = open;
+    }
+
+    /// <summary>
+    /// Navigates to the Settings page — per-node Settings when on a node, Global Settings at the root.
+    /// </summary>
+    private void NavigateToSettings()
+    {
+        var ns = NavigationService.CurrentNamespace;
+        var url = string.IsNullOrEmpty(ns)
+            ? $"/{GlobalSettingsLayoutArea.GlobalSettingsArea}"
+            : $"/{ns}/Settings";
+        NavigationManager.NavigateTo(url);
+    }
+
     /// <summary>
     /// Handles a click on a dynamic menu item.
     /// Uses Href for absolute navigation when set, otherwise constructs URL from Area.
@@ -101,6 +136,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private void HandleMenuItemClick(NodeMenuItemDefinition item)
     {
         isNodeMenuOpen = false;
+        isMeshMenuOpen = false;
         if (!string.IsNullOrEmpty(item.Href))
             NavigationManager.NavigateTo(item.Href);
         else
@@ -121,13 +157,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Returns menu items from the layout stream.
-    /// Permission filtering is done server-side by the providers.
+    /// Returns menu items for the Node context. Permission filtering is done server-side by the providers.
     /// </summary>
-    private IReadOnlyList<NodeMenuItemDefinition> GetVisibleMenuItems()
-    {
-        return _menuItems;
-    }
+    private IReadOnlyList<NodeMenuItemDefinition> GetNodeMenuItems() => _nodeMenuItems;
+
+    /// <summary>
+    /// Returns menu items for the Mesh context. Permission filtering is done server-side by the providers.
+    /// </summary>
+    private IReadOnlyList<NodeMenuItemDefinition> GetMeshMenuItems() => _meshMenuItems;
 
     private static readonly NodeMenuItemDefinition Separator = new("", "_separator");
 
@@ -433,7 +470,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested -= OnSidePanelNavigation;
         NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
-        _menuSubscription?.Dispose();
+        _nodeMenuSubscription?.Dispose();
+        _meshMenuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }

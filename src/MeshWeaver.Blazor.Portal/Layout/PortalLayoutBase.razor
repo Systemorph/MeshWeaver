@@ -21,9 +21,9 @@
                 <div class="search-container">
                     <SearchBar />
                 </div>
-                @* Node menu (Cube icon) *@
+                @* Node menu (Cube icon) — per-node operations *@
                 <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
-                    @foreach (var menuItem in FlattenMenuItems(GetVisibleMenuItems()))
+                    @foreach (var menuItem in FlattenMenuItems(GetNodeMenuItems()))
                     {
                         var item = menuItem;
                         @if (item.Area == "_separator")
@@ -53,6 +53,47 @@
                     Title="Node menu" aria-label="Node menu"
                     OnClick="@ToggleNodeMenu">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Cube())" Color="Color.FillInverse" />
+                </FluentButton>
+
+                @* Mesh menu — mesh-level operations (Create, Import, Export) *@
+                <FluentMenu Anchor="mesh-menu-anchor" Open="@isMeshMenuOpen" OpenChanged="@OnMeshMenuOpenChanged">
+                    @foreach (var menuItem in FlattenMenuItems(GetMeshMenuItems()))
+                    {
+                        var item = menuItem;
+                        @if (item.Area == "_separator")
+                        {
+                            <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                        }
+                        else
+                        {
+                            <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                @if (!string.IsNullOrEmpty(item.Icon))
+                                {
+                                    if (IsEmoji(item.Icon))
+                                    {
+                                        <span style="margin-right: 8px;">@item.Icon</span>
+                                    }
+                                    else
+                                    {
+                                        <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                    }
+                                }
+                                @item.Label
+                            </FluentMenuItem>
+                        }
+                    }
+                </FluentMenu>
+                <FluentButton Id="mesh-menu-anchor" Appearance="Appearance.Stealth"
+                    Title="Mesh menu" aria-label="Mesh menu"
+                    OnClick="@ToggleMeshMenu">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Grid())" Color="Color.FillInverse" />
+                </FluentButton>
+
+                @* Settings — direct navigation *@
+                <FluentButton Appearance="Appearance.Stealth"
+                    Title="Settings" aria-label="Settings"
+                    OnClick="@NavigateToSettings">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.FillInverse" />
                 </FluentButton>
                 @HeaderLinks
             </div>
