@@ -92,17 +92,6 @@ public static class MemexConfiguration
         services.AddAzureFoundry(config =>
             builder.Configuration.GetSection("AzureAIS").Bind(config));
 
-        // DIAGNOSTIC — remove after fix confirmed
-        {
-            var probe = new MeshWeaver.AI.AzureFoundry.AzureFoundryConfiguration();
-            builder.Configuration.GetSection("AzureAIS").Bind(probe);
-            Console.WriteLine(
-                $"[DIAG:AzureAIS] Endpoint={probe.Endpoint ?? "(null)"}, " +
-                $"ApiKey={(!string.IsNullOrEmpty(probe.ApiKey) ? "SET" : "MISSING")}, " +
-                $"Models.Length={probe.Models.Length}: [{string.Join(", ", probe.Models)}], " +
-                $"Order={probe.Order}");
-        }
-
         services.AddAzureOpenAI(config =>
             builder.Configuration.GetSection("AzureOpenAIS").Bind(config));
 

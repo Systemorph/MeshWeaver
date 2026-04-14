@@ -68,19 +68,6 @@ builder.UseMeshWeaver(
 
 var app = builder.Build();
 
-// DIAGNOSTIC — remove after fix confirmed
-try
-{
-    var factories = app.Services.GetServices<IChatClientFactory>().ToList();
-    Console.WriteLine($"[DIAG] IChatClientFactory count from root DI: {factories.Count}");
-    foreach (var f in factories)
-        Console.WriteLine($"[DIAG]   {f.GetType().Name}: Name={f.Name}, Models=[{string.Join(", ", f.Models)}], Order={f.Order}");
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"[DIAG] IChatClientFactory resolution FAILED: {ex.GetType().Name}: {ex.Message}\n{ex}");
-}
-
 // Map Aspire default endpoints (health checks)
 app.MapDefaultEndpoints();
 

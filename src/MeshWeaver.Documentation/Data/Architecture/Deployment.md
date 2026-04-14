@@ -14,8 +14,6 @@ The AppHost supports multiple modes, passed as `--mode <mode>`:
 | Mode        | PostgreSQL                   | Blob Storage                  | Orleans   | Portal Name     |
 |-------------|------------------------------|-------------------------------|-----------|-----------------|
 | `local`     | Docker pgvector container    | Emulated (Azurite)            | Emulated  | memex-local     |
-| `local-test`| Azure (memex-test)           | Azure (meshweavermemextest)   | Emulated  | memex-local     |
-| `local-prod`| Azure (memex)                | Azure (meshweavermemex)       | Emulated  | memex-local     |
 | `test`      | Azure (memex-test)           | Azure (meshweavermemextest)   | Azure     | memex-test      |
 | `prod`      | Azure (memex)                | Azure (meshweavermemex)       | Azure     | memex-prod      |
 | `monolith`  | FileSystem (standalone)      | —                             | —         | memex-monolith  |
@@ -46,15 +44,6 @@ aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode l
 
 This starts in `local` mode by default, using Docker pgvector and emulated Azure services.
 
-To run locally against Azure test or prod databases:
-
-```bash
-aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode local-test
-aspire run --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode local-prod
-```
-
-These modes connect to Azure PostgreSQL and Blob Storage while keeping Orleans emulated locally.
-
 # Monolith Mode
 
 For standalone development without Orleans or external infrastructure:
@@ -79,7 +68,6 @@ Deployed modes (`test`, `prod`) run on **Azure Container Apps** in Sweden Centra
 
 - **Local**: Docker container with pgvector extension (`pgvector/pgvector:pg17`)
 - **Deployed**: Azure PostgreSQL Flexible Server with pgvector, provisioned automatically
-- **local-test/local-prod**: Connects to existing Azure PostgreSQL via connection string
 
 ## Azure Blob Storage
 
@@ -92,7 +80,7 @@ Content files (attachments, documents) are stored in Azure Blob Storage.
 
 Orleans provides distributed actor clustering for the microservices deployment.
 
-- **Local/local-test/local-prod**: Emulated (in-process)
+- **Local**: Emulated (in-process)
 - **Deployed**: Azure Table Storage for clustering, Azure Blob Storage for grain state
 
 ## Application Insights
@@ -131,12 +119,6 @@ Required secrets for distributed modes:
 | `Parameters:google-client-secret` | Google OAuth client secret |
 | `Parameters:custom-domain` | Custom domain for deployed portal |
 | `Parameters:certificate-name` | TLS certificate name for custom domain |
-
-For `local-test` and `local-prod` modes, also set:
-
-| Secret | Description |
-|--------|-------------|
-| `ConnectionStrings:memex` | Azure PostgreSQL connection string |
 
 Set secrets using:
 
