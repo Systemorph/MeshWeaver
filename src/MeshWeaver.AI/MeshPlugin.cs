@@ -33,15 +33,15 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
         => ops.Create(node);
 
-    [Description("Full replacement update of existing nodes. Pass a JSON array of complete MeshNode objects (from Get). WARNING: all fields are replaced — missing fields become null.")]
+    [Description("Full replacement update of existing nodes. ALWAYS Get the node first, modify the returned object, then send it back here unchanged-except-for-edits. The 'content' field MUST be present and non-null — null content is rejected and the response will include the expected schema. Prefer Patch for small changes.")]
     public Task<string> Update(
-        [Description("JSON array of complete MeshNode objects")] string nodes)
+        [Description("JSON array of complete MeshNode objects fetched via Get and then modified")] string nodes)
         => ops.Update(nodes);
 
-    [Description("Partial update of a single node. Only the specified fields are changed; all other fields are preserved. Use this for simple changes like updating icon, name, or content without needing to Get the full node first.")]
+    [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless you intend to overwrite it — and never set 'content' to null (will be rejected with the schema). Prefer this over Update for small edits like icon/name/category.")]
     public Task<string> Patch(
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
-        [Description("JSON object with only the fields to update (e.g., {\"icon\": \"<svg>...</svg>\"} or {\"name\": \"New Name\", \"content\": {...}})")] string fields)
+        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}. Include 'content' only if overwriting — and never as null.")] string fields)
         => ops.Patch(ResolveContextPath(path), fields);
 
     [Description("Deletes nodes from the mesh by path.")]

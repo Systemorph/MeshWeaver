@@ -252,7 +252,7 @@ public class MeshOperations
             // Validate content against schema if both nodeType and content are provided
             if (!string.IsNullOrEmpty(meshNode.NodeType) && meshNode.Content != null)
             {
-                var validationError = await ValidateContentAgainstSchemaAsync(meshNode);
+                var validationError = await ValidateContentWithSchemaAsync(meshNode);
                 if (validationError != null)
                     return validationError;
             }
@@ -301,14 +301,53 @@ public class MeshOperations
             var results = ImmutableList<string>.Empty;
             foreach (var rawNode in nodeList)
             {
+                if (rawNode == null)
+                {
+                    results = results.Add("Error: array contained a null entry. " +
+                                "Each array element must be a complete MeshNode JSON object.");
+                    continue;
+                }
+
                 var meshNode = SanitizeNodeId(rawNode);
+
+                // Reject empty identity — without id we cannot address the node.
+                if (string.IsNullOrWhiteSpace(meshNode.Id))
+                {
+                    results = results.Add("Error: node is missing 'id'. " +
+                                "Every node requires an id — fetch with Get first if unsure.");
+                    continue;
+                }
+
+                // Reject empty name — downstream UI and streams key off Name.
+                if (string.IsNullOrWhiteSpace(meshNode.Name))
+                {
+                    results = results.Add($"Error: node at {meshNode.Path} has empty 'name'. " +
+                                "Provide a non-empty human-readable display name.");
+                    continue;
+                }
 
                 // Reject partial nodes — Update does full replacement.
                 // Use Patch for partial changes instead.
                 if (string.IsNullOrEmpty(meshNode.NodeType))
                 {
-                    results = results.Add($"Error: node at {meshNode.Path} is missing nodeType. " +
+                    results = results.Add($"Error: node at {meshNode.Path} is missing 'nodeType'. " +
                                 "Update requires the complete node (from Get). Use Patch for partial updates.");
+                    continue;
+                }
+
+                // Reject updates that would blank out content — agents must always send the
+                // full content payload. Returning the schema lets the agent reconstruct it.
+                if (meshNode.Content == null)
+                {
+                    results = results.Add(await BuildNullContentErrorAsync(meshNode.Path, meshNode.NodeType!));
+                    continue;
+                }
+
+                // Validate the content against the registered content type for this NodeType.
+                var validationError = await ValidateContentWithSchemaAsync(meshNode);
+                if (validationError != null)
+                {
+                    results = results.Add(validationError);
                     continue;
                 }
 
@@ -361,6 +400,11 @@ public class MeshOperations
             if (jsonObj == null)
                 return "Error: fields must be a JSON object";
 
+            // Reject patches that explicitly blank out content (key present, value null).
+            // Omitting the key entirely is fine — that preserves existing content.
+            if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
+                return await BuildNullContentErrorAsync(existing.Path, existing.NodeType!);
+
             // Deserialize to get typed values using the hub's serializer options
             var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
                 ?? new MeshNode(existing.Id, existing.Namespace);
@@ -374,6 +418,21 @@ public class MeshOperations
                 Content = jsonObj.ContainsKey("content") ? partial.Content : existing.Content,
                 PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
             };
+
+            // If the patch touches content, validate the merged content against the node's schema.
+            // This protects downstream consumers (sync streams, persistence) from shape-broken writes.
+            if (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
+            {
+                var validationError = await ValidateContentWithSchemaAsync(merged);
+                if (validationError != null)
+                    return validationError;
+            }
+
+            // Reject empty or effectively-empty names — empty string names corrupt UI
+            // and downstream streams that key off Name.
+            if (jsonObj.ContainsKey("name") && string.IsNullOrWhiteSpace(merged.Name))
+                return $"Error: cannot patch {existing.Path}: 'name' is empty. " +
+                       "Provide a non-empty human-readable display name, or omit the 'name' key to keep the current name.";
 
             var versionBefore = existing.Version;
             var patchTcs = new TaskCompletionSource<string>();
@@ -426,7 +485,7 @@ public class MeshOperations
     /// </summary>
     private MeshNode SanitizeNodeId(MeshNode node)
     {
-        if (!node.Id.Contains('/'))
+        if (string.IsNullOrEmpty(node.Id) || !node.Id.Contains('/'))
             return node;
 
         // Split full path into namespace + id
@@ -516,6 +575,84 @@ public class MeshOperations
         {
             logger.LogWarning(ex, "Error deleting nodes");
             return Task.FromResult($"Error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Builds the standard "content is null" rejection message for Update/Patch,
+    /// embedding the JSON schema for the node's content type when available so the
+    /// agent can fill content correctly on the next call.
+    /// </summary>
+    internal async Task<string> BuildNullContentErrorAsync(string path, string nodeType)
+    {
+        var msg = $"Error: cannot write {path}: 'content' is null. " +
+                  "Fetch the node first with Get, modify the returned content in-place, " +
+                  "and resend the complete node. Never send null content.";
+        var schema = await GetContentSchemaAsync(nodeType);
+        if (schema != null)
+            msg += $" Expected content schema for NodeType '{nodeType}': {schema}";
+        return msg;
+    }
+
+    /// <summary>
+    /// Runs schema validation for <paramref name="meshNode"/> and, when invalid,
+    /// appends the expected JSON schema to the error so the agent can recover.
+    /// Returns null when content is valid (or when no schema is available).
+    /// </summary>
+    internal async Task<string?> ValidateContentWithSchemaAsync(MeshNode meshNode)
+    {
+        var validationError = await ValidateContentAgainstSchemaAsync(meshNode);
+        if (validationError == null)
+            return null;
+
+        if (!string.IsNullOrEmpty(meshNode.NodeType))
+        {
+            var schema = await GetContentSchemaAsync(meshNode.NodeType);
+            if (schema != null)
+                validationError += $" Expected content schema for NodeType '{meshNode.NodeType}': {schema}";
+        }
+        return validationError;
+    }
+
+    /// <summary>
+    /// Returns the JSON schema string for the content type registered against
+    /// <paramref name="nodeType"/>, or null if no schema can be derived.
+    /// </summary>
+    internal Task<string?> GetContentSchemaAsync(string nodeType)
+    {
+        try
+        {
+            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+            if (nodeTypeService == null)
+                return Task.FromResult<string?>(null);
+
+            var hubConfig = nodeTypeService.GetCachedHubConfiguration(nodeType);
+            if (hubConfig == null)
+                return Task.FromResult<string?>(null);
+
+            var tempAddress = new Address($"_schema_lookup/{Guid.NewGuid():N}");
+            var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
+            if (tempHub == null)
+                return Task.FromResult<string?>(null);
+
+            try
+            {
+                var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
+                if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
+                    return Task.FromResult<string?>(null);
+
+                var schemaNode = hub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
+                return Task.FromResult<string?>(schemaNode.ToJsonString());
+            }
+            finally
+            {
+                tempHub.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Schema retrieval skipped for NodeType {NodeType}", nodeType);
+            return Task.FromResult<string?>(null);
         }
     }
 

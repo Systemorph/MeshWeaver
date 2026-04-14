@@ -168,6 +168,178 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #endregion
 
+    #region Update — Null Content Rejection
+
+    [Fact]
+    public async Task Update_WithNullContent_ReturnsValidationErrorAndSchema()
+    {
+        var plugin = CreatePlugin();
+        var uniqueId = $"null-content-update-{Guid.NewGuid():N}";
+
+        // Seed a node with valid content
+        var createJson = JsonSerializer.Serialize(new
+        {
+            id = uniqueId,
+            @namespace = "ACME",
+            name = "Original",
+            nodeType = TestNodeType,
+            content = new { name = "Widget", price = 9.99m, quantity = 5 }
+        });
+        (await plugin.Create(createJson)).Should().StartWith("Created:");
+
+        // Update with content explicitly set to null — should be rejected
+        var updateJson = JsonSerializer.Serialize(new object[]
+        {
+            new
+            {
+                id = uniqueId,
+                @namespace = "ACME",
+                name = "Updated Without Content",
+                nodeType = TestNodeType,
+                content = (object?)null
+            }
+        });
+
+        var result = await plugin.Update(updateJson);
+
+        result.Should().Contain("Error", because: "null content must be rejected");
+        result.Should().Contain("content", because: "the error must call out the content field");
+        // Schema for TestProduct must be embedded so the agent can recover
+        result.Should().Contain("Expected content schema", because: "agent needs the schema to retry");
+        result.Should().Contain("name", because: "schema should include the TestProduct.name property");
+        result.Should().Contain("price", because: "schema should include the TestProduct.price property");
+        result.Should().Contain("quantity", because: "schema should include the TestProduct.quantity property");
+
+        // Original content must still be intact (the rejected update did not overwrite anything)
+        var afterReject = await plugin.Get($"@ACME/{uniqueId}");
+        afterReject.Should().Contain("Widget");
+    }
+
+    [Fact]
+    public async Task Update_WithMissingContent_ReturnsValidationErrorAndSchema()
+    {
+        var plugin = CreatePlugin();
+        var uniqueId = $"missing-content-update-{Guid.NewGuid():N}";
+
+        // Seed a node
+        var createJson = JsonSerializer.Serialize(new
+        {
+            id = uniqueId,
+            @namespace = "ACME",
+            name = "Original",
+            nodeType = TestNodeType,
+            content = new { name = "Widget", price = 9.99m, quantity = 5 }
+        });
+        (await plugin.Create(createJson)).Should().StartWith("Created:");
+
+        // Update without including the content key at all — also rejected
+        var updateJson = JsonSerializer.Serialize(new object[]
+        {
+            new
+            {
+                id = uniqueId,
+                @namespace = "ACME",
+                name = "Name Only",
+                nodeType = TestNodeType
+            }
+        });
+
+        var result = await plugin.Update(updateJson);
+
+        result.Should().Contain("Error");
+        result.Should().Contain("content");
+        result.Should().Contain("Expected content schema");
+    }
+
+    [Fact]
+    public async Task Patch_WithExplicitNullContent_ReturnsValidationErrorAndSchema()
+    {
+        var plugin = CreatePlugin();
+        var uniqueId = $"null-content-patch-{Guid.NewGuid():N}";
+
+        var createJson = JsonSerializer.Serialize(new
+        {
+            id = uniqueId,
+            @namespace = "ACME",
+            name = "Original",
+            nodeType = TestNodeType,
+            content = new { name = "Widget", price = 9.99m, quantity = 5 }
+        });
+        (await plugin.Create(createJson)).Should().StartWith("Created:");
+
+        // Patch with content: null should be rejected and return the schema
+        var patchFields = "{\"content\": null}";
+        var result = await plugin.Patch($"@ACME/{uniqueId}", patchFields);
+
+        result.Should().Contain("Error");
+        result.Should().Contain("content");
+        result.Should().Contain("Expected content schema");
+        result.Should().Contain("name");
+        result.Should().Contain("price");
+
+        // Existing content must still be intact
+        var afterReject = await plugin.Get($"@ACME/{uniqueId}");
+        afterReject.Should().Contain("Widget");
+    }
+
+    [Fact]
+    public async Task Patch_WithoutContentKey_PreservesExistingContent()
+    {
+        var plugin = CreatePlugin();
+        var uniqueId = $"patch-no-content-{Guid.NewGuid():N}";
+
+        var createJson = JsonSerializer.Serialize(new
+        {
+            id = uniqueId,
+            @namespace = "ACME",
+            name = "Original",
+            nodeType = TestNodeType,
+            content = new { name = "Widget", price = 9.99m, quantity = 5 }
+        });
+        (await plugin.Create(createJson)).Should().StartWith("Created:");
+
+        // Patching only the name must not touch content, and must not trip the null-content guard.
+        var result = await plugin.Patch($"@ACME/{uniqueId}", "{\"name\": \"Renamed\"}");
+
+        // The null-content guard must NOT fire when 'content' key is omitted.
+        result.Should().NotContain("'content' is null",
+            because: "omitting the content key is the supported way to leave content alone");
+        result.Should().NotContain("Expected content schema",
+            because: "no schema should be returned when the patch is valid");
+
+        var after = await plugin.Get($"@ACME/{uniqueId}");
+        after.Should().Contain("Widget", because: "existing content must survive a content-less patch");
+    }
+
+    #endregion
+
+    #region Schema Helper API
+
+    [Fact]
+    public async Task GetContentSchemaAsync_ForRegisteredType_ReturnsSchema()
+    {
+        var ops = new MeshOperations(Mesh);
+
+        var schema = await ops.GetContentSchemaAsync(TestNodeType);
+
+        schema.Should().NotBeNullOrEmpty();
+        schema!.Should().Contain("name");
+        schema.Should().Contain("price");
+        schema.Should().Contain("quantity");
+    }
+
+    [Fact]
+    public async Task GetContentSchemaAsync_ForUnknownType_ReturnsNull()
+    {
+        var ops = new MeshOperations(Mesh);
+
+        var schema = await ops.GetContentSchemaAsync("NonExistentType");
+
+        schema.Should().BeNull();
+    }
+
+    #endregion
+
     #region Id Validation
 
     [Fact]
