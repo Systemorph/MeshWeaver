@@ -39,6 +39,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
+                services.AddSingleton<IChatClientFactory>(new SlowFakeChatClientFactory());
                 return services;
             });
 
@@ -160,6 +161,92 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.IngestedMessageIds.Should().BeEquivalentTo(userIds);
     }
 
+    // ─── Tool-call scenario: 3 rapid submits during a 1s "tool call" ───
+
+    [Fact]
+    public async Task Submit_ThreeMessagesDuringActiveRound_QueuedThenBatchedIntoSecondRound()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadPath = await SeedEmptyThreadAsync(ct);
+        var client = GetClient();
+
+        // Use the slow-model factory so round 1 takes ~1 second.
+        // This gives us a deterministic window to submit u2/u3/u4 while round 1 is still executing.
+        var slowModel = "slow-model";
+
+        // Submit u1 — triggers round 1.
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client, ThreadPath = threadPath, UserText = "First",
+            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
+        });
+
+        // Wait for round 1 to start (IsExecuting=true). This proves u1 has been ingested.
+        var roundOneStart = await WaitForThreadAsync(
+            threadPath,
+            t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
+            timeoutMs: 5_000,
+            ct);
+
+        roundOneStart.IngestedMessageIds.Should().HaveCount(1, "u1 should be ingested once round 1 starts");
+        var u1 = roundOneStart.IngestedMessageIds[0];
+
+        // While round 1 is running, submit 3 more messages in quick succession.
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client, ThreadPath = threadPath, UserText = "Second",
+            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
+        });
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client, ThreadPath = threadPath, UserText = "Third",
+            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
+        });
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client, ThreadPath = threadPath, UserText = "Fourth",
+            ModelName = slowModel, CreatedBy = "rbuergi@systemorph.com"
+        });
+
+        // Observe: during round 1 execution, all three new user ids should appear in Messages
+        // and UserMessageIds, but NOT yet in IngestedMessageIds — the server holds them back
+        // because the thread is busy.
+        var pendingState = await WaitForThreadAsync(
+            threadPath,
+            t => t.UserMessageIds.Count == 4,
+            timeoutMs: 3_000,
+            ct);
+
+        // If we're quick enough, round 1 is still executing here. Either way, we can assert
+        // that u2/u3/u4 are NOT yet ingested while u1 already is (or that all 4 are ingested
+        // if round 1 already finished). The key invariant: no user message is ingested
+        // before it exists in UserMessageIds.
+        pendingState.UserMessageIds.Should().HaveCount(4, "all four user messages should be registered on the thread");
+        pendingState.UserMessageIds.Should().StartWith(u1);
+        pendingState.IngestedMessageIds.Count.Should().BeGreaterThanOrEqualTo(1);
+        pendingState.IngestedMessageIds.Should().BeSubsetOf(pendingState.UserMessageIds);
+
+        // Wait for all 4 to become ingested. This requires round 1 to finish, then round 2 to commit.
+        var final = await WaitForThreadAsync(
+            threadPath,
+            t => t.IngestedMessageIds.Count == 4 && !t.IsExecuting,
+            timeoutMs: 20_000,
+            ct);
+
+        final.IngestedMessageIds.Should().HaveCount(4);
+        final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds);
+
+        // Final Messages layout must be: input - output - input - input - input - output
+        //                                 u1    - r1     - u2    - u3    - u4    - r2
+        // i.e. the first four positions are u1, r1, u2, u3; u4 precedes r2 at the end.
+        final.Messages.Should().HaveCount(6, "expected exactly [u1, r1, u2, u3, u4, r2]");
+        final.Messages[0].Should().Be(u1, "u1 first");
+        final.UserMessageIds.Should().ContainInOrder(final.Messages[0], final.Messages[2], final.Messages[3], final.Messages[4]);
+        // Positions 1 and 5 are response cells (not in UserMessageIds).
+        final.UserMessageIds.Should().NotContain(final.Messages[1]);
+        final.UserMessageIds.Should().NotContain(final.Messages[5]);
+    }
+
     // ─── Helpers ───
 
     private async Task<string> SeedEmptyThreadAsync(CancellationToken ct)
@@ -240,6 +327,62 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             => serviceType == typeof(IChatClient) ? this : null;
 
         public void Dispose() { }
+    }
+
+    /// <summary>
+    /// Slow variant — delays ~1 second in the streaming response so tests can observe
+    /// the IsExecuting=true state window and submit additional messages during a round.
+    /// </summary>
+    private sealed class SlowFakeChatClient : IChatClient
+    {
+        public ChatClientMetadata Metadata => new("SlowFakeProvider");
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "slow ack")));
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            // Long enough for tests to race in a few more submits; short enough to keep CI fast.
+            await Task.Delay(1000, cancellationToken);
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "slow ack");
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(IChatClient) ? this : null;
+
+        public void Dispose() { }
+    }
+
+    private sealed class SlowFakeChatClientFactory : IChatClientFactory
+    {
+        public string Name => "SlowFakeFactory";
+        public IReadOnlyList<string> Models => ["slow-model"];
+        public int Order => 1;
+
+        public Microsoft.Agents.AI.ChatClientAgent CreateAgent(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, Microsoft.Agents.AI.ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => new(
+                chatClient: new SlowFakeChatClient(),
+                instructions: config.Instructions ?? "slow test assistant",
+                name: config.Id,
+                description: config.Description ?? config.Id,
+                tools: [],
+                loggerFactory: null,
+                services: null);
+
+        public Task<Microsoft.Agents.AI.ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, Microsoft.Agents.AI.ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     private sealed class FakeChatClientFactory : IChatClientFactory
