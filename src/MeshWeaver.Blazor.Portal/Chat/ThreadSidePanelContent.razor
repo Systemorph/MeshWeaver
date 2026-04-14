@@ -41,8 +41,11 @@
         }
         else
         {
-            @* New chat — render ThreadChatControl directly (no thread hub yet) *@
-            <ThreadChatView ViewModel="@GetNewChatControl()" />
+            @* New chat — render ThreadChatControl directly (no thread hub yet).
+               @key includes the primary path so the component rebuilds when the user
+               navigates to a new context (side panel stays open, chat context updates). *@
+            <ThreadChatView @key="@($"newchat-{lastPrimaryPath ?? string.Empty}")"
+                            ViewModel="@GetNewChatControl()" />
         }
     </ChildContent>
 </ChatSidePanel>

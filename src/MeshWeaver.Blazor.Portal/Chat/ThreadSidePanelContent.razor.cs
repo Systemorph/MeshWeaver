@@ -26,11 +26,18 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     private string? selectedThreadPath;
     private string? selectedThreadName;
 
+    private string? lastPrimaryPath;
+
     protected override void OnInitialized()
     {
         base.OnInitialized();
         selectedThreadPath = SidePanelState.ContentPath;
+        lastPrimaryPath = NavigationService.Context?.PrimaryPath;
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
+        // React to navigation changes: when the user browses to a thread or another node,
+        // the side panel's new-chat context (MainNode / PrimaryPath) changes and the
+        // ThreadChatControl must be rebuilt with the new context attachment.
+        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
     }
 
     private void OnSidePanelStateChanged()
@@ -43,9 +50,21 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         }
     }
 
+    private void OnNavigationContextChanged(NavigationContext? ctx)
+    {
+        var newPrimary = ctx?.PrimaryPath;
+        if (newPrimary == lastPrimaryPath) return;
+        lastPrimaryPath = newPrimary;
+        // Only rebuild when showing the new-chat control (no selected thread).
+        // An in-flight thread keeps its own context.
+        if (string.IsNullOrEmpty(selectedThreadPath))
+            InvokeAsync(StateHasChanged);
+    }
+
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
+        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
     }
 
     /// <summary>
