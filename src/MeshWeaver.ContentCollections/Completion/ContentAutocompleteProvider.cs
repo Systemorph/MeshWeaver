@@ -127,11 +127,23 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
         if (string.IsNullOrEmpty(searchText))
             return 100; // Return all with low priority when no query
 
-        // Drop extension for scoring so "report" matches "report.md" without penalty
+        // Exact filename match (including extension) is the strongest possible match —
+        // the user typed the full file name. Bypass fuzzy scoring so typing "sample.docx"
+        // doesn't score 0 just because "sample.docx" is longer than "sample".
+        if (string.Equals(fileName, searchText, StringComparison.OrdinalIgnoreCase))
+            return 3000;
+
+        // Drop extension for scoring so "report" matches "report.md" without penalty.
+        // Also drop the searchText extension if present — "sample.doc" should still match "sample.docx".
         var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+        var searchWithoutExt = Path.GetFileNameWithoutExtension(searchText);
+        var effectiveSearch = string.IsNullOrEmpty(searchWithoutExt) ? searchText : searchWithoutExt;
+
+        if (string.Equals(nameWithoutExt, effectiveSearch, StringComparison.OrdinalIgnoreCase))
+            return 3000;
 
         // Use FuzzyScorer (case-insensitive, word-boundary aware)
-        var scored = Scorer.Score(new[] { nameWithoutExt }, searchText, s => s).FirstOrDefault();
+        var scored = Scorer.Score(new[] { nameWithoutExt }, effectiveSearch, s => s).FirstOrDefault();
         if (scored == null || scored.Score <= 0)
             return 0;
 

@@ -36,6 +36,11 @@ public static class NodeMenuItemsExtensions
             return config;
         config = config.Set(true, nameof(AddDefaultMeshMenu));
 
+        // Snapshot of registered contexts at renderer-registration time. Captured so the
+        // renderer always writes to EVERY registered $Menu:{context} area, even when the
+        // bucket for a context comes back empty. Without this, a subscriber that asks for
+        // "$Menu:Node" on a node whose built-in menu items were all permission-gated out
+        // would hang forever (no control ever lands on that area).
         return config
             .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition))
             .AddNodeMenuItems(NodeMenuContext, DefaultNodeMenuProvider)
@@ -58,13 +63,25 @@ public static class NodeMenuItemsExtensions
                         var menuControl = (IUiControl)new MenuControl(defaultItems);
                         var result = menuControl.Render(host, new RenderingContext(MenuControl.MenuArea), store);
 
-                        // Render each named context bucket exactly once.
-                        foreach (var kvp in byContext)
+                        // Write every registered named context so subscribers never wait on
+                        // an area that would otherwise never be populated. The union of
+                        // "buckets that produced items" and "contexts that were registered"
+                        // covers both runtime-discovered providers and statically configured
+                        // contexts whose providers happened to yield nothing on this pass.
+                        var registered = host.Hub.Configuration.Get<RegisteredMenuContexts>()?.Contexts
+                            ?? (IReadOnlyCollection<string>)Array.Empty<string>();
+                        var contextsToRender = new HashSet<string>(byContext.Keys);
+                        contextsToRender.UnionWith(registered);
+
+                        foreach (var key in contextsToRender)
                         {
-                            if (kvp.Key.Length == 0) continue;  // default already rendered above
-                            var contextMenu = (IUiControl)new MenuControl(kvp.Value.ToImmutableList());
+                            if (key.Length == 0) continue; // default already rendered above
+                            var items = byContext.TryGetValue(key, out var bucket)
+                                ? bucket.ToImmutableList()
+                                : ImmutableList<NodeMenuItemDefinition>.Empty;
+                            var contextMenu = (IUiControl)new MenuControl(items);
                             var contextResult = contextMenu.Render(host,
-                                new RenderingContext(MenuControl.GetMenuArea(kvp.Key)), result.Store);
+                                new RenderingContext(MenuControl.GetMenuArea(key)), result.Store);
                             result = new EntityStoreAndUpdates(contextResult.Store,
                                 result.Updates.Concat(contextResult.Updates), result.ChangedBy);
                         }
