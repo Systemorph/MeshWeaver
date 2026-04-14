@@ -5,22 +5,28 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Extension methods for registering node-type-specific menu item providers.
 /// Providers yield items via IAsyncEnumerable during layout rendering.
+/// Items are organised into named menu contexts — the header renders one dropdown per context.
 /// </summary>
 public static class NodeMenuItemsExtensions
 {
+    /// <summary>Menu context name for per-node operations (Edit, Delete, Versions, …).</summary>
+    public const string NodeMenuContext = "Node";
+
+    /// <summary>Menu context name for mesh-level operations (Create, Import, Export subtree).</summary>
+    public const string MeshMenuContext = "Mesh";
+
     /// <summary>
     /// Registers the menu infrastructure with default menu items.
     /// Registers a predicate-based renderer that evaluates all providers and stores
-    /// results at $Menu in the entity store (same pattern as $Dialog).
-    /// Also renders any named-context menus (e.g., "SidePanel") at $Menu:{context}.
+    /// results at $Menu:{context} in the entity store (same pattern as $Dialog).
+    /// Built-in items are registered into the "Node" and "Mesh" contexts; the Portal
+    /// renders one header dropdown per context.
     /// </summary>
     public static MessageHubConfiguration AddDefaultMeshMenu(this MessageHubConfiguration config)
     {
@@ -30,32 +36,30 @@ public static class NodeMenuItemsExtensions
 
         return config
             .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition))
-            .AddNodeMenuItems(DefaultMenuProvider)
+            .AddNodeMenuItems(NodeMenuContext, DefaultNodeMenuProvider)
+            .AddNodeMenuItems(MeshMenuContext, DefaultMeshMenuProvider)
             .AddLayout(layout => layout
                 .WithRenderer(
                     _ => true,
                     async (host, ctx, store) =>
                     {
-                        // Main menu (default context)
+                        // Default (unnamed) context — kept for back-compat, typically empty.
                         var items = await host.Hub.Configuration.EvaluateMenuItemsAsync(host, ctx);
                         var menuControl = (IUiControl)new MenuControl(items);
                         var result = menuControl.Render(host, new RenderingContext(MenuControl.MenuArea), store);
 
-                        // Named contexts (e.g., "SidePanel")
+                        // Named contexts ("Node", "Mesh", "SidePanel", …)
                         var contexts = host.Hub.Configuration.Get<RegisteredMenuContexts>();
                         if (contexts != null)
                         {
                             foreach (var menuContext in contexts.Contexts)
                             {
                                 var contextItems = await host.Hub.Configuration.EvaluateMenuItemsAsync(host, ctx, menuContext);
-                                if (contextItems.Count > 0)
-                                {
-                                    var contextMenu = (IUiControl)new MenuControl(contextItems);
-                                    var contextResult = contextMenu.Render(host,
-                                        new RenderingContext(MenuControl.GetMenuArea(menuContext)), result.Store);
-                                    result = new EntityStoreAndUpdates(contextResult.Store,
-                                        result.Updates.Concat(contextResult.Updates), result.ChangedBy);
-                                }
+                                var contextMenu = (IUiControl)new MenuControl(contextItems);
+                                var contextResult = contextMenu.Render(host,
+                                    new RenderingContext(MenuControl.GetMenuArea(menuContext)), result.Store);
+                                result = new EntityStoreAndUpdates(contextResult.Store,
+                                    result.Updates.Concat(contextResult.Updates), result.ChangedBy);
                             }
                         }
 
@@ -64,15 +68,60 @@ public static class NodeMenuItemsExtensions
     }
 
     /// <summary>
-    /// Default menu provider that yields standard menu items with inline permission checks.
-    /// Delegates to individual layout area classes for menu item definitions.
+    /// Default provider for the "Node" menu — per-node operations.
     /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultMenuProvider(
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultNodeMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
+    {
+        var (menuPath, nodeName, _, perms) = await GetMenuContextAsync(host);
+
+        var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, nodeName, perms);
+        if (edit != null) yield return edit;
+
+        var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
+        if (files != null) yield return files;
+
+        yield return MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath);
+
+        var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
+        if (versions != null) yield return versions;
+
+        var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
+        if (copy != null) yield return copy;
+
+        var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
+        if (move != null) yield return move;
+
+        var delete = DeleteLayoutArea.GetMenuItem(menuPath, nodeName, perms);
+        if (delete != null) yield return delete;
+    }
+
+    /// <summary>
+    /// Default provider for the "Mesh" menu — mesh-level operations.
+    /// </summary>
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultMeshMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        var (menuPath, nodeName, menuNode, perms) = await GetMenuContextAsync(host);
+
+        var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
+        if (create != null) yield return create;
+
+        var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
+        if (import != null) yield return import;
+
+        var export = ExportLayoutArea.GetMenuItem(menuPath, nodeName, perms);
+        if (export != null) yield return export;
+    }
+
+    /// <summary>
+    /// Shared node lookup: resolves the effective menu node (satellite → main), its name, and the user's permissions.
+    /// </summary>
+    private static async Task<(string menuPath, string nodeName, MeshNode? menuNode, Permission perms)>
+        GetMenuContextAsync(LayoutAreaHost host)
     {
         var hubPath = host.Hub.Address.ToString();
 
-        // Get the current node to determine name and type
         var nodes = await (host.Workspace.GetStream<MeshNode>()
                 ?.Select(n => n ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>()))
@@ -85,61 +134,21 @@ public static class NodeMenuItemsExtensions
         var nodeName = menuNode?.Name ?? node?.Name ?? "";
 
         var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, menuPath);
-
-        // Each area class provides its own GetMenuItem — factored for reuse
-        var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, nodeName, perms);
-        if (edit != null) yield return edit;
-
-        var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
-        if (files != null) yield return files;
-
-        yield return MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath);
-
-        var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
-        if (versions != null) yield return versions;
-
-        var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(menuPath, perms);
-        if (settings != null) yield return settings;
-
-        // Group Create, Copy, Move, Import, Export, Delete under "Actions" sub-menu
-        var actionsChildren = new List<NodeMenuItemDefinition>();
-
-        var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
-        if (create != null) actionsChildren.Add(create);
-
-        var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
-        if (copy != null) actionsChildren.Add(copy);
-
-        var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
-        if (move != null) actionsChildren.Add(move);
-
-        var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
-        if (import != null) actionsChildren.Add(import);
-
-        var export = ExportLayoutArea.GetMenuItem(menuPath, nodeName, perms);
-        if (export != null) actionsChildren.Add(export);
-
-        var delete = DeleteLayoutArea.GetMenuItem(menuPath, nodeName, perms);
-        if (delete != null) actionsChildren.Add(delete);
-
-        if (actionsChildren.Count > 0)
-            yield return new NodeMenuItemDefinition("Actions", "Actions", Order: 95, Children: actionsChildren);
+        return (menuPath, nodeName, menuNode, perms);
     }
 
     /// <summary>
-    /// Registers additional menu item providers for the default (main) menu context.
+    /// Registers additional menu item providers for the "Node" menu (per-node operations).
+    /// For mesh-level operations use <see cref="AddMeshMenuItems(MessageHubConfiguration, NodeMenuItemProvider[])"/>,
+    /// or specify a context explicitly via <see cref="AddNodeMenuItems(MessageHubConfiguration, string, NodeMenuItemProvider[])"/>.
     /// </summary>
     public static MessageHubConfiguration AddNodeMenuItems(
         this MessageHubConfiguration config,
         params NodeMenuItemProvider[] providers)
-    {
-        var existing = config.Get<NodeMenuProviderCollection>() ?? new NodeMenuProviderCollection([]);
-        var updated = existing.AddRange(providers);
-        return config.Set(updated);
-    }
+        => config.AddNodeMenuItems(NodeMenuContext, providers);
 
     /// <summary>
-    /// Registers additional menu item providers for a specific named menu context (e.g., "SidePanel").
+    /// Registers additional menu item providers for a specific named menu context (e.g., "Node", "Mesh", "SidePanel").
     /// </summary>
     public static MessageHubConfiguration AddNodeMenuItems(
         this MessageHubConfiguration config,
@@ -159,20 +168,13 @@ public static class NodeMenuItemsExtensions
     }
 
     /// <summary>
-    /// Registers additional static menu items for the default (main) menu context.
+    /// Registers additional static menu items for the "Node" menu (per-node operations).
     /// Each definition is wrapped in a trivial provider that always yields it.
     /// </summary>
     public static MessageHubConfiguration AddNodeMenuItems(
         this MessageHubConfiguration config,
         params NodeMenuItemDefinition[] items)
-    {
-        var providers = items.Select(item =>
-        {
-            var captured = item;
-            return new NodeMenuItemProvider((_, _) => YieldSingle(captured));
-        }).ToArray();
-        return config.AddNodeMenuItems(providers);
-    }
+        => config.AddNodeMenuItems(NodeMenuContext, items);
 
     /// <summary>
     /// Registers additional static menu items for a specific named menu context.
@@ -190,6 +192,22 @@ public static class NodeMenuItemsExtensions
         }).ToArray();
         return config.AddNodeMenuItems(menuContext, providers);
     }
+
+    /// <summary>
+    /// Registers additional menu item providers for the "Mesh" menu (mesh-level operations like Create, Import, Export).
+    /// </summary>
+    public static MessageHubConfiguration AddMeshMenuItems(
+        this MessageHubConfiguration config,
+        params NodeMenuItemProvider[] providers)
+        => config.AddNodeMenuItems(MeshMenuContext, providers);
+
+    /// <summary>
+    /// Registers additional static menu items for the "Mesh" menu.
+    /// </summary>
+    public static MessageHubConfiguration AddMeshMenuItems(
+        this MessageHubConfiguration config,
+        params NodeMenuItemDefinition[] items)
+        => config.AddNodeMenuItems(MeshMenuContext, items);
 
     private static async IAsyncEnumerable<NodeMenuItemDefinition> YieldSingle(NodeMenuItemDefinition item)
     {

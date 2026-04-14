@@ -471,16 +471,6 @@ public static class MeshNodeLayoutAreas
         => new("Threads", ThreadsArea, Order: 50, Href: BuildUrl(hubPath, ThreadsArea));
 
     /// <summary>
-    /// Returns the Settings menu item if the user has Read permission.
-    /// </summary>
-    public static NodeMenuItemDefinition? GetSettingsMenuItem(string hubPath, Permission perms)
-    {
-        if (!perms.HasFlag(Permission.Read))
-            return null;
-        return new("Settings", SettingsArea, Order: 90, Href: BuildUrl(hubPath, SettingsArea));
-    }
-
-    /// <summary>
     /// Gets the display name for a node type with count (e.g., "Project (5)").
     /// </summary>
     public static string GetGroupDisplayName(string nodeType, int count)
