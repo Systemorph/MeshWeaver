@@ -35,8 +35,6 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Components;
-using ModelContextProtocol.AspNetCore.Authentication;
-using ModelContextProtocol.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -166,8 +164,7 @@ public static class MemexConfiguration
                 .AddMicrosoftIdentityWebApp(entraIdConfig);
             services.AddAuthentication()
                 .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
-                    ApiTokenAuthenticationHandler.SchemeName, _ => { })
-                .AddMcp(ConfigureMcpResourceMetadata);
+                    ApiTokenAuthenticationHandler.SchemeName, _ => { });
             services.AddControllersWithViews()
                 .AddMicrosoftIdentityUI();
         }
@@ -201,58 +198,17 @@ public static class MemexConfiguration
             // Add API token auth scheme for MCP bearer authentication
             authBuilder.AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
                 ApiTokenAuthenticationHandler.SchemeName, _ => { });
-
-            // MCP auth scheme: see ConfigureMcpResourceMetadata.
-            authBuilder.AddMcp(ConfigureMcpResourceMetadata);
         }
 
-        // Add authorization with McpAuth policy. The policy authenticates via the MCP
-        // scheme, which forwards to ApiToken (or later, JwtBearer) for actual validation
-        // and emits the OAuth discovery challenge on failure.
+        // Add authorization with McpAuth policy (ApiToken scheme only — no cookie redirects for API clients)
         services.AddAuthorization(options =>
         {
             options.AddPolicy("McpAuth", policy =>
             {
-                policy.AddAuthenticationSchemes(McpAuthenticationDefaults.AuthenticationScheme);
+                policy.AddAuthenticationSchemes(ApiTokenAuthenticationHandler.SchemeName);
                 policy.RequireAuthenticatedUser();
             });
         });
-    }
-
-    /// <summary>
-    /// Configures the MCP authentication scheme so that unauthenticated requests to /mcp
-    /// return a 401 with <c>WWW-Authenticate: Bearer resource_metadata="..."</c> and the
-    /// <c>/.well-known/oauth-protected-resource</c> endpoint serves RFC 9728 metadata.
-    /// This is what MCP clients (claude.ai Connectors, Claude Desktop, Claude Code) need
-    /// to discover our OAuth authorization server per the MCP auth spec 2025-06-18.
-    /// Actual token validation is forwarded to the ApiToken scheme today; JwtBearer will
-    /// be chained in once the OpenIddict-issued OAuth tokens are in place.
-    /// </summary>
-    private static void ConfigureMcpResourceMetadata(McpAuthenticationOptions options)
-    {
-        options.ForwardDefaultSelector = _ => ApiTokenAuthenticationHandler.SchemeName;
-        options.ResourceMetadata = new ProtectedResourceMetadata
-        {
-            BearerMethodsSupported = { "header" },
-            ScopesSupported = { "mcp" },
-            AuthorizationServers = { new Uri("https://placeholder.invalid/connect") },
-        };
-        options.Events = new McpAuthenticationEvents
-        {
-            OnResourceMetadataRequest = ctx =>
-            {
-                var req = ctx.HttpContext.Request;
-                var origin = $"{req.Scheme}://{req.Host}";
-                ctx.ResourceMetadata = new ProtectedResourceMetadata
-                {
-                    Resource = new Uri($"{origin}/mcp"),
-                    BearerMethodsSupported = { "header" },
-                    ScopesSupported = { "mcp" },
-                    AuthorizationServers = { new Uri($"{origin}/connect") },
-                };
-                return Task.CompletedTask;
-            }
-        };
     }
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
