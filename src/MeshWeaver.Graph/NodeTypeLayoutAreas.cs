@@ -159,7 +159,8 @@ public static class NodeTypeLayoutAreas
                         .WithShowLoadingIndicator(false)
                         .WithRenderMode(MeshSearchRenderMode.Grouped)
                         .WithSectionCounts(true)
-                        .WithItemLimit(10)
+                        .WithItemLimit(50)
+                        .WithMaxRows(3)
                         .WithCollapsibleSections(true)
                         .WithCreateHref(BuildCreateHref(hubPath, typeDef))));
 

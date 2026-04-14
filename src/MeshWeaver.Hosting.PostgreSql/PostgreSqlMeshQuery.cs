@@ -49,6 +49,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
     {
+        // System identity bypasses access control (infrastructure queries)
+        if (request.UserId == WellKnownUsers.System)
+            return "";
+
         if (!string.IsNullOrEmpty(request.UserId))
             return request.UserId;
 

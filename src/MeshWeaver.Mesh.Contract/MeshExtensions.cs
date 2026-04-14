@@ -59,7 +59,36 @@ public static class MeshExtensions
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
             .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
-            .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest);
+            .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest)
+            .WithHandler<HeartBeatEvent>(HandleHeartBeat);
+    }
+
+    /// <summary>
+    /// Handles HeartBeatEvent: signals the Orleans grain to delay deactivation.
+    /// Walks up the parent hub chain because GrainKeepAliveCallback is set on the
+    /// grain's top-level hub, not on child hubs (threads, messages, _Exec).
+    /// In monolith mode, no GrainKeepAliveCallback is registered → no-op.
+    /// </summary>
+    private static IMessageDelivery HandleHeartBeat(
+        IMessageHub hub, IMessageDelivery<HeartBeatEvent> delivery)
+    {
+        var current = hub;
+        while (current != null)
+        {
+            var callback = current.Configuration.Get<GrainKeepAliveCallback>();
+            if (callback != null)
+            {
+                var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.GrainKeepAlive");
+                logger?.LogInformation("HeartBeat: keeping grain alive for {Hub} (callback on {Parent})",
+                    hub.Address, current.Address);
+                callback.KeepAlive();
+                break;
+            }
+            var parent = current.Configuration.ParentHub;
+            if (parent == current) break;
+            current = parent;
+        }
+        return delivery.Processed();
     }
 
     private static async Task<IMessageDelivery> HandleCreateNodeRequest(
@@ -206,6 +235,11 @@ public static class MeshExtensions
                 newNode = await persistence.SaveNodeAsync(newNode, ct);
             }
 
+            // 6a. Notify infrastructure of the new node (cache invalidation, query updates)
+            hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                ?.Publish(MeshChangeEvent.Created(newNode));
+
+
             // 7. Write version history snapshot (non-critical, skip satellite types like threads/comments)
             if (!catalog.Configuration.IsSatelliteNodeType(newNode.NodeType))
             {
@@ -308,6 +342,8 @@ public static class MeshExtensions
             {
                 // Leaf node — delete immediately
                 await catalog.DeleteNodeAsync(path, recursive: false, ct);
+                hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                    ?.Publish(MeshChangeEvent.Deleted(path));
                 hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
                 logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
                 return request.Processed();
@@ -624,6 +660,8 @@ public static class MeshExtensions
             // 5. Persist the validated node
             var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
             var savedNode = await persistence.SaveNodeAsync(nodeToSave, ct);
+            hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                ?.Publish(MeshChangeEvent.Updated(savedNode));
 
             // 5b. Write version history snapshot (non-critical, skip satellite types like threads/comments)
             if (!catalog.Configuration.IsSatelliteNodeType(savedNode.NodeType))
@@ -780,6 +818,9 @@ public static class MeshExtensions
 
             // 4. Move the node
             var movedNode = await persistence.MoveNodeAsync(moveRequest.SourcePath, moveRequest.TargetPath, ct);
+            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+            changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
+            changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
 
             // 5. Return success
             hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));

@@ -2,6 +2,7 @@
 Name: Satellite Entity Patterns
 Category: Architecture
 Description: Implementation and test patterns for satellite entities (comments, threads, tracked changes) — data model, handlers, workspace updates, and Orleans testing
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v7M5 20l5.5-7M19 20l-5.5-7"/><circle cx="12" cy="2" r="2"/><circle cx="5" cy="20" r="2"/><circle cx="19" cy="20" r="2"/></svg>
 ---
 
 Satellite entities (Comments, Threads, Tracked Changes) follow a specific pattern for both handler implementation and testing. This document covers the non-blocking handler pattern, the parent-child tracking pattern, and the reactive test verification approach.

@@ -307,6 +307,16 @@ For full examples, see: [Interactive Markdown](@@Doc/DataMesh/InteractiveMarkdow
 
 When asked to create an interactive document, create a Markdown node with the executable code blocks embedded.
 
+# CRITICAL: You MUST write output
+
+**NEVER just describe what you would create. ALWAYS call Create, Update, or Patch to write the actual content.** If you didn't call a write tool, nothing was produced. The user expects to see a real node with real content after your work — not a description of what could be created.
+
+- Asked to create a Markdown document? → Call `Create` with the full markdown content.
+- Asked to create a NodeType? → Call `Create` for each source file and the JSON definition.
+- Asked to modify a node? → Call `Get` first, then `Update` with the modified content.
+
+**Every delegation MUST end with at least one write tool call.**
+
 # Tools
 
 Use the standard Mesh tools (Get, Search, Create, Update, Delete) to manage nodes.

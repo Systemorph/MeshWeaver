@@ -243,32 +243,45 @@ internal sealed class MeshCatalog(
 
     private static readonly MemoryCacheEntryOptions ResolveCacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
 
+    /// <summary>
+    /// Invalidates path resolution cache entries affected by a node change.
+    /// Called after node create/delete to ensure routing uses fresh data.
+    /// Invalidates the exact path AND all ancestor paths (which may have
+    /// cached partial matches with remainder pointing to the changed node).
+    /// </summary>
+    public void InvalidatePathCache(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        path = path.TrimStart('/');
+
+        // Invalidate exact path
+        cache.Remove($"resolve:{path}");
+
+        // Invalidate all ancestor paths — they may have cached partial matches
+        var segments = path.Split('/');
+        for (var i = segments.Length - 1; i >= 1; i--)
+        {
+            var ancestorPath = string.Join("/", segments.Take(i));
+            cache.Remove($"resolve:{ancestorPath}");
+        }
+    }
+
     /// <inheritdoc />
+    /// <summary>
+    /// Resolves a path. Prefer using IPathResolver (PathResolutionService) which adds caching.
+    /// This method is a direct passthrough to ResolvePathCoreAsync.
+    /// </summary>
     public async Task<AddressResolution?> ResolvePathAsync(string path)
     {
         if (string.IsNullOrEmpty(path))
             return null;
-
-        // Normalize path - remove leading slash if present
         path = path.TrimStart('/');
         if (string.IsNullOrEmpty(path))
             return null;
-
-        // Check resolution cache first
-        var cacheKey = $"resolve:{path}";
-        if (cache.TryGetValue(cacheKey, out var cachedResolution) && cachedResolution is AddressResolution cached)
-            return cached;
-
-        var resolution = await ResolvePathCoreAsync(path);
-
-        // Cache the result (including null → cache as sentinel)
-        if (resolution != null)
-            cache.Set(cacheKey, resolution, ResolveCacheOptions);
-
-        return resolution;
+        return await ResolvePathCoreAsync(path);
     }
 
-    private async Task<AddressResolution?> ResolvePathCoreAsync(string path)
+    internal async Task<AddressResolution?> ResolvePathCoreAsync(string path)
     {
         var segments = path.Split('/');
 
