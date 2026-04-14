@@ -52,6 +52,8 @@ public static class ExportDocumentLayoutArea
         var delivery = host.Hub.Post(
             new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
             o => o.WithTarget(host.Hub.Address));
+        if (delivery is null)
+            return subject.AsObservable();
         // RegisterCallback returns a Task<IMessageDelivery>. Hook a continuation instead of
         // awaiting — awaiting blocks the hub's message pump and deadlocks.
         host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default)
