@@ -73,9 +73,9 @@ public static class NodeMenuItemsExtensions
     private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultNodeMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        var (menuPath, nodeName, _, perms) = await GetMenuContextAsync(host);
+        var (menuPath, _, _, perms) = await GetMenuContextAsync(host);
 
-        var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, nodeName, perms);
+        var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
         if (edit != null) yield return edit;
 
         var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
@@ -92,7 +92,7 @@ public static class NodeMenuItemsExtensions
         var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
         if (move != null) yield return move;
 
-        var delete = DeleteLayoutArea.GetMenuItem(menuPath, nodeName, perms);
+        var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
         if (delete != null) yield return delete;
     }
 
@@ -102,7 +102,7 @@ public static class NodeMenuItemsExtensions
     private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultMeshMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        var (menuPath, nodeName, menuNode, perms) = await GetMenuContextAsync(host);
+        var (menuPath, _, menuNode, perms) = await GetMenuContextAsync(host);
 
         var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
         if (create != null) yield return create;
@@ -110,7 +110,7 @@ public static class NodeMenuItemsExtensions
         var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
         if (import != null) yield return import;
 
-        var export = ExportLayoutArea.GetMenuItem(menuPath, nodeName, perms);
+        var export = ExportLayoutArea.GetMenuItem(menuPath, perms);
         if (export != null) yield return export;
     }
 

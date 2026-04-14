@@ -14,9 +14,9 @@
     "logoPath": "/static/storage/content/Systemorph/logo.svg",
     "primaryColor": "#0ea5e9",
     "accentColor": "#6366f1",
-    "fontFamily": "Segoe UI",
     "headerText": "Systemorph",
     "footerText": "© Systemorph AG · systemorph.cloud",
-    "website": "https://systemorph.cloud"
+    "website": "https://systemorph.cloud",
+    "templatePath": "content:Systemorph/template.docx"
   }
 }
