@@ -6,6 +6,7 @@ using MeshWeaver.Markdown.Export.Docx;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Markdown.Export.Pdf;
 using MeshWeaver.Mesh;
+using MarkdownExportConfig = MeshWeaver.Markdown.Export.Configuration.MarkdownExportExtensions;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,12 +24,12 @@ public static class ExportDocumentHandler
     /// Registers the handler on a hub configuration. Registered inside <c>AddMarkdownExport()</c>.
     /// </summary>
     public static MessageHubConfiguration AddExportDocumentHandler(this MessageHubConfiguration config)
-        => config
-            .WithTypes(
-                typeof(ExportDocumentRequest),
-                typeof(ExportDocumentResponse),
-                typeof(DocumentExportOptions))
-            .WithHandler<ExportDocumentRequest>(HandleAsync);
+    {
+        // Short names via the shared AddMarkdownExportTypes — keeps $type discriminators in sync
+        // across mesh/node/client hubs.
+        config.TypeRegistry.AddMarkdownExportTypes();
+        return config.WithHandler<ExportDocumentRequest>(HandleAsync);
+    }
 
     private static async Task<IMessageDelivery> HandleAsync(
         IMessageHub hub, IMessageDelivery<ExportDocumentRequest> delivery, CancellationToken ct)

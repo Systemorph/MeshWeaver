@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -5,6 +6,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -43,24 +45,28 @@ public static class NodeMenuItemsExtensions
                     _ => true,
                     async (host, ctx, store) =>
                     {
+                        // Enumerate every provider exactly once for this render pass and bucket
+                        // the yielded items by context. Prevents repeated IAsyncEnumerable
+                        // evaluations that would otherwise happen once per target context.
+                        // Items are inserted into a sorted list on the fly (no final OrderBy).
+                        var byContext = await CollectMenuItemsByContextAsync(host, ctx);
+
                         // Default (unnamed) context — kept for back-compat, typically empty.
-                        var items = await host.Hub.Configuration.EvaluateMenuItemsAsync(host, ctx);
-                        var menuControl = (IUiControl)new MenuControl(items);
+                        var defaultItems = byContext.TryGetValue("", out var d)
+                            ? d.ToImmutableList()
+                            : ImmutableList<NodeMenuItemDefinition>.Empty;
+                        var menuControl = (IUiControl)new MenuControl(defaultItems);
                         var result = menuControl.Render(host, new RenderingContext(MenuControl.MenuArea), store);
 
-                        // Named contexts ("Node", "Mesh", "SidePanel", …)
-                        var contexts = host.Hub.Configuration.Get<RegisteredMenuContexts>();
-                        if (contexts != null)
+                        // Render each named context bucket exactly once.
+                        foreach (var kvp in byContext)
                         {
-                            foreach (var menuContext in contexts.Contexts)
-                            {
-                                var contextItems = await host.Hub.Configuration.EvaluateMenuItemsAsync(host, ctx, menuContext);
-                                var contextMenu = (IUiControl)new MenuControl(contextItems);
-                                var contextResult = contextMenu.Render(host,
-                                    new RenderingContext(MenuControl.GetMenuArea(menuContext)), result.Store);
-                                result = new EntityStoreAndUpdates(contextResult.Store,
-                                    result.Updates.Concat(contextResult.Updates), result.ChangedBy);
-                            }
+                            if (kvp.Key.Length == 0) continue;  // default already rendered above
+                            var contextMenu = (IUiControl)new MenuControl(kvp.Value.ToImmutableList());
+                            var contextResult = contextMenu.Render(host,
+                                new RenderingContext(MenuControl.GetMenuArea(kvp.Key)), result.Store);
+                            result = new EntityStoreAndUpdates(contextResult.Store,
+                                result.Updates.Concat(contextResult.Updates), result.ChangedBy);
                         }
 
                         return result;
@@ -216,33 +222,73 @@ public static class NodeMenuItemsExtensions
     }
 
     /// <summary>
-    /// Evaluates all registered providers for the default (main) menu context.
+    /// Comparer for <see cref="NodeMenuItemDefinition"/> used by the per-context sorted sets.
+    /// Primary key: <see cref="NodeMenuItemDefinition.Order"/> (ascending). Tiebreaker: <c>Label</c>
+    /// then <c>Area</c> ordinal — both are needed so items with the same Order but different
+    /// identity don't collide when the set dedupes on comparer equality.
     /// </summary>
-    internal static async Task<IReadOnlyList<NodeMenuItemDefinition>> EvaluateMenuItemsAsync(
-        this MessageHubConfiguration config, LayoutAreaHost host, RenderingContext ctx)
-        => await config.EvaluateMenuItemsAsync(host, ctx, null);
+    private static readonly IComparer<NodeMenuItemDefinition> MenuItemComparer =
+        Comparer<NodeMenuItemDefinition>.Create((a, b) =>
+        {
+            var c = a.Order.CompareTo(b.Order);
+            if (c != 0) return c;
+            c = string.CompareOrdinal(a.Label, b.Label);
+            if (c != 0) return c;
+            return string.CompareOrdinal(a.Area, b.Area);
+        });
 
     /// <summary>
-    /// Evaluates all registered providers for a specific menu context, collects items, and sorts by Order.
+    /// Single-pass collector: enumerates every registered provider exactly once per render and
+    /// inserts each yielded item directly into an <see cref="ImmutableSortedSet{T}.Builder"/>
+    /// keyed on <see cref="NodeMenuItemDefinition.Order"/>. No post-hoc <c>OrderBy</c>, no sort
+    /// at the end — the sorted set maintains order on every <c>Add</c>. Duplicates (same Order
+    /// + Label + Area) collapse via the comparer.
+    /// Aggregates from two sources:
+    /// 1. Legacy delegate-based providers registered via <see cref="AddNodeMenuItems(MessageHubConfiguration, NodeMenuItemProvider[])"/>.
+    /// 2. DI-registered <see cref="INodeMenuProvider"/> instances whose <see cref="INodeMenuProvider.Context"/>
+    ///    identifies their target bucket — same pattern as <c>IAutocompleteProvider</c>.
     /// </summary>
-    internal static async Task<IReadOnlyList<NodeMenuItemDefinition>> EvaluateMenuItemsAsync(
-        this MessageHubConfiguration config, LayoutAreaHost host, RenderingContext ctx, string? menuContext)
+    internal static async Task<ImmutableDictionary<string, ImmutableSortedSet<NodeMenuItemDefinition>>>
+        CollectMenuItemsByContextAsync(LayoutAreaHost host, RenderingContext ctx)
     {
-        var collection = config.Get<NodeMenuProviderCollection>(menuContext);
-        if (collection == null)
-            return [];
+        var config = host.Hub.Configuration;
+        var buckets = new Dictionary<string, ImmutableSortedSet<NodeMenuItemDefinition>.Builder>();
 
-        var items = new List<NodeMenuItemDefinition>();
-        foreach (var provider in collection.Providers)
+        ImmutableSortedSet<NodeMenuItemDefinition>.Builder GetBucket(string key)
+            => buckets.TryGetValue(key, out var b)
+                ? b
+                : buckets[key] = ImmutableSortedSet.CreateBuilder(MenuItemComparer);
+
+        async Task ConsumeAsync(string key, IAsyncEnumerable<NodeMenuItemDefinition> items)
         {
-            await foreach (var item in provider(host, ctx))
-            {
-                items.Add(item);
-            }
+            var bucket = GetBucket(key);
+            await foreach (var item in items)
+                bucket.Add(item);  // sorted-set Add inserts in position, dedupes via comparer
         }
 
-        items.Sort((a, b) => a.Order.CompareTo(b.Order));
-        return items;
+        // Legacy delegate-based providers — each context has its own provider collection.
+        // We call each provider's IAsyncEnumerable exactly once per render pass.
+        var seenContexts = new HashSet<string> { "" };
+        var registered = config.Get<RegisteredMenuContexts>()?.Contexts;
+        if (registered != null) seenContexts.UnionWith(registered);
+
+        foreach (var ctxKey in seenContexts)
+        {
+            var legacyKey = ctxKey.Length == 0 ? null : ctxKey;
+            var coll = config.Get<NodeMenuProviderCollection>(legacyKey);
+            if (coll == null) continue;
+            foreach (var provider in coll.Providers)
+                await ConsumeAsync(ctxKey, provider(host, ctx));
+        }
+
+        // DI-registered providers — each invoked exactly once, items routed to their declared Context.
+        foreach (var provider in host.Hub.ServiceProvider.GetServices<INodeMenuProvider>())
+            await ConsumeAsync(provider.Context ?? "", provider.GetItemsAsync(host, ctx));
+
+        var result = ImmutableDictionary.CreateBuilder<string, ImmutableSortedSet<NodeMenuItemDefinition>>();
+        foreach (var kvp in buckets)
+            result[kvp.Key] = kvp.Value.ToImmutable();
+        return result.ToImmutable();
     }
 }
 

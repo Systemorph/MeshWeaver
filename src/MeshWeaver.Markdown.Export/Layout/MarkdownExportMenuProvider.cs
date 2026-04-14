@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -9,18 +10,22 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Markdown.Export.Layout;
 
 /// <summary>
-/// Menu provider that contributes "Export to PDF" and "Export to DOCX" menu items
-/// to the node action menu. Yields items only when the current node is of type <c>Markdown</c>.
+/// DI-registered <see cref="INodeMenuProvider"/> that contributes "Export to PDF" and
+/// "Export to DOCX" items to the Node menu when the focused node is of type
+/// <c>Markdown</c>. Registered via <c>TryAddEnumerable</c> so each hub sees exactly one
+/// instance even when its configuration lambda runs multiple times — same pattern as
+/// <c>IAutocompleteProvider</c>.
 /// </summary>
-public static class MarkdownExportMenuProvider
+public class MarkdownExportMenuProvider : INodeMenuProvider
 {
-    /// <summary>Menu item label/area for the PDF export.</summary>
+    /// <summary>Menu item label for the PDF export.</summary>
     public const string PdfLabel = "Export to PDF";
-    /// <summary>Menu item label/area for the DOCX export.</summary>
+    /// <summary>Menu item label for the DOCX export.</summary>
     public const string DocxLabel = "Export to DOCX";
 
-    /// <summary>The provider delegate registered via <c>AddNodeMenuItems</c>.</summary>
-    public static async IAsyncEnumerable<NodeMenuItemDefinition> Provide(
+    public string Context => NodeMenuItemsExtensions.NodeMenuContext;
+
+    public async IAsyncEnumerable<NodeMenuItemDefinition> GetItemsAsync(
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();

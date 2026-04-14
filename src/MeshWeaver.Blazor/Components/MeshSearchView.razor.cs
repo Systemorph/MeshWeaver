@@ -415,11 +415,27 @@ public partial class MeshSearchView : IDisposable
                     if (change.ChangeType == QueryChangeType.Initial ||
                         change.ChangeType == QueryChangeType.Reset)
                     {
-                        _nodes = change.Items.ToList();
+                        // Reset the list — dedupe by path in case the server's Initial
+                        // payload itself contains duplicates (UNION ALL across partitions
+                        // on the server side can surface the same path twice).
+                        var seen = new HashSet<string>();
+                        _nodes = new List<MeshNode>();
+                        foreach (var n in change.Items)
+                        {
+                            if (n.Path != null && seen.Add(n.Path))
+                                _nodes.Add(n);
+                        }
                     }
                     else if (change.ChangeType == QueryChangeType.Added)
                     {
-                        _nodes.AddRange(change.Items);
+                        // Only add items whose path isn't already present — otherwise a
+                        // reactive Added event that overlaps the current set doubles rows.
+                        var existing = new HashSet<string>(_nodes.Where(n => n.Path != null).Select(n => n.Path!));
+                        foreach (var n in change.Items)
+                        {
+                            if (n.Path != null && existing.Add(n.Path))
+                                _nodes.Add(n);
+                        }
                     }
                     else if (change.ChangeType == QueryChangeType.Removed)
                     {

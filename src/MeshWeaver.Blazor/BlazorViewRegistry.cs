@@ -14,6 +14,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Markdown;
+using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Formatting;
@@ -36,7 +37,18 @@ public static class BlazorViewRegistry
             .Invoke(c.WithView((i, s, a) => DefaultFormatting(c.Hub, i, s, a))))
         .AddMeshTypes()
         .AddMarkdownTypes()
+        .AddMarkdownExportTypes()
     ;
+
+    /// <summary>
+    /// Registers the markdown-export request/response + dialog control on the Blazor client's
+    /// type registry so polymorphic UiControl deserialization can resolve the $type discriminator.
+    /// </summary>
+    private static MessageHubConfiguration AddMarkdownExportTypes(this MessageHubConfiguration config)
+    {
+        config.TypeRegistry.AddMarkdownExportTypes();
+        return config;
+    }
 
     /// <summary>
     /// Registers Markdown-related types for JSON serialization.

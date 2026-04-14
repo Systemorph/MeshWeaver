@@ -4,9 +4,12 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown.Export.Branding;
 using MeshWeaver.Markdown.Export.Handlers;
 using MeshWeaver.Markdown.Export.Layout;
+using MeshWeaver.Domain;
+using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Markdown.Export.Configuration;
 
@@ -16,6 +19,20 @@ namespace MeshWeaver.Markdown.Export.Configuration;
 /// </summary>
 public static class MarkdownExportExtensions
 {
+    /// <summary>
+    /// Registers the markdown-export messaging types on a hub type registry. Call this on any
+    /// hub (mesh, node, client) that sends or receives <see cref="ExportDocumentRequest"/> or
+    /// <see cref="ExportDocumentResponse"/>. Uses short names (<c>nameof</c>) so the <c>$type</c>
+    /// discriminator matches across hub boundaries — same convention as <c>AddAITypes</c>.
+    /// </summary>
+    public static ITypeRegistry AddMarkdownExportTypes(this ITypeRegistry typeRegistry)
+        => typeRegistry
+            .WithType(typeof(ExportDocumentRequest), nameof(ExportDocumentRequest))
+            .WithType(typeof(ExportDocumentResponse), nameof(ExportDocumentResponse))
+            .WithType(typeof(DocumentExportOptions), nameof(DocumentExportOptions))
+            .WithType(typeof(CorporateIdentity), nameof(CorporateIdentity))
+            .WithType(typeof(ExportDocumentControl), nameof(ExportDocumentControl));
+
     /// <summary>
     /// Registers the <c>CorporateIdentity</c> node type on the mesh builder.
     /// </summary>
@@ -37,6 +54,15 @@ public static class MarkdownExportExtensions
 
         builder.AddCorporateIdentityType();
 
+        // Register the request/response on the mesh-wide type registry so every hub (mesh, node,
+        // client) can serialize/deserialize them with a consistent $type discriminator. Without
+        // this the client hub receives a MessageDelivery<JsonElement> that can't be cast to
+        // IMessageDelivery<ExportDocumentResponse>.
+        builder
+            .WithMeshType(typeof(ExportDocumentRequest), nameof(ExportDocumentRequest))
+            .WithMeshType(typeof(ExportDocumentResponse), nameof(ExportDocumentResponse))
+            .WithMeshType(typeof(DocumentExportOptions), nameof(DocumentExportOptions));
+
         builder.ConfigureServices(services => services
             .AddTransient<ExportTemplateResolver>()
             .AddTransient<BrandingResolver>());
@@ -45,10 +71,21 @@ public static class MarkdownExportExtensions
         // node hubs (one per Markdown node) — that's where layout rendering runs and where
         // the user's click navigates. Registering on the mesh hub via ConfigureHub would
         // never surface the items to the per-node menu.
+        // Provider registered via TryAddEnumerable — DI guarantees exactly one instance per hub
+        // (same pattern as IAutocompleteProvider). Layout views + request handler still need
+        // the per-node-hub registration so clicks land on a hub that can render the export dialog.
+        // AddExportDocumentHandler registers the request/response + handler on the node hub.
+        // Layout views + the DI-scoped menu provider also belong on per-node hubs.
+        // The cross-hub request/response types are already registered mesh-wide via WithMeshType above.
         builder.ConfigureDefaultNodeHub(hub => hub
             .AddExportDocumentHandler()
             .WithTypes(typeof(CorporateIdentity), typeof(ExportDocumentControl))
-            .AddNodeMenuItems(MarkdownExportMenuProvider.Provide)
+            .WithServices(services =>
+            {
+                services.TryAddEnumerable(
+                    ServiceDescriptor.Scoped<INodeMenuProvider, MarkdownExportMenuProvider>());
+                return services;
+            })
             .AddLayout(layout => layout
                 .WithView(ExportDocumentLayoutArea.PdfArea, ExportDocumentLayoutArea.RenderPdf)
                 .WithView(ExportDocumentLayoutArea.DocxArea, ExportDocumentLayoutArea.RenderDocx)));
