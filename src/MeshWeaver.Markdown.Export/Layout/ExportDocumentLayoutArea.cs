@@ -49,22 +49,27 @@ public static class ExportDocumentLayoutArea
         var nodeId = hubPath.Contains('/')
             ? hubPath[(hubPath.LastIndexOf('/') + 1)..]
             : hubPath;
-        var request = new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId));
-        host.Hub.Post(request, o => o.WithTarget(host.Hub.Address));
-        host.Hub.RegisterCallback<GetDataResponse>(request, delivery =>
-        {
-            if (delivery.Message.Data is MeshNode node)
+        var delivery = host.Hub.Post(
+            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+            o => o.WithTarget(host.Hub.Address));
+        // RegisterCallback returns a Task<IMessageDelivery>. Hook a continuation instead of
+        // awaiting — awaiting blocks the hub's message pump and deadlocks.
+        host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default)
+            .ContinueWith(t =>
             {
-                subject.OnNext(new ExportDocumentControl
+                if (t.Status != TaskStatus.RanToCompletion) return;
+                if (t.Result is IMessageDelivery<GetDataResponse> resp
+                    && resp.Message.Data is MeshNode node)
                 {
-                    SourcePath = hubPath,
-                    NodeName = node.Name,
-                    DefaultFormat = defaultFormat,
-                    HasDescendants = false
-                });
-            }
-            return delivery.Processed();
-        });
+                    subject.OnNext(new ExportDocumentControl
+                    {
+                        SourcePath = hubPath,
+                        NodeName = node.Name,
+                        DefaultFormat = defaultFormat,
+                        HasDescendants = false
+                    });
+                }
+            }, TaskContinuationOptions.ExecuteSynchronously);
 
         return subject.AsObservable();
     }
