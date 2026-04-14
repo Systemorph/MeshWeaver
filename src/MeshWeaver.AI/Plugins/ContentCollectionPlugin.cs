@@ -24,7 +24,7 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
 
     [Description("Uploads text content (SVG, markdown, JSON, CSS, etc.) to a node's content collection. Use for storing diagrams, images (SVG), stylesheets, or any text-based files alongside a node.")]
     public async Task<string> UploadContent(
-        [Description("Path to the node that owns the collection (e.g., @PartnerRe/AiConsulting)")] string nodePath,
+        [Description("Canonical path to the node that owns the collection — use the MeshNode's `path` property, NOT its `name`. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field of the match.")] string nodePath,
         [Description("File name/path within the collection (e.g., 'diagram.svg', 'images/architecture.svg')")] string filePath,
         [Description("The text content to upload (SVG markup, markdown, JSON, etc.)")] string content,
         [Description("Collection name (default: 'content')")] string collectionName = "content",

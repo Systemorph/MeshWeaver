@@ -31,7 +31,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
 
     [Description("Adds a comment to a text passage in a Markdown document. The comment is anchored to the selected text and visible to all collaborators.")]
     public async Task<string> AddComment(
-        [Description("Path to the document (e.g., @org/MyDoc)")] string documentPath,
+        [Description("Canonical path to the document — NOT the display name. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting/FinalReport or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field.")] string documentPath,
         [Description("The exact text passage to comment on — must match document content")] string selectedText,
         [Description("The comment text")] string commentText,
         CancellationToken cancellationToken)
@@ -78,7 +78,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
 
     [Description("Suggests a text edit (insertion, replacement, or deletion) on a Markdown document as a tracked change. Other collaborators can accept or reject the suggestion.")]
     public async Task<string> SuggestEdit(
-        [Description("Path to the document (e.g., @org/MyDoc)")] string documentPath,
+        [Description("Canonical path to the document — NOT the display name. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting/FinalReport or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field.")] string documentPath,
         [Description("The exact text to replace (empty string for pure insertion at document start)")] string originalText,
         [Description("The replacement text (empty string for deletion)")] string newText,
         CancellationToken cancellationToken)

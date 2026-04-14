@@ -5,27 +5,43 @@ Description: Complete tools reference for AI agents
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
 ---
 
-MeshPlugin provides tools for interacting with the mesh data graph. All paths support the `@` prefix shorthand: `@graph/org1` resolves to `graph/org1`.
+MeshPlugin provides tools for interacting with the mesh data graph.
 
 **IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
 
 ## Path Rules
 
-**Tool calls use paths relative to the current context by default.** The "Current Application Context" tells you your current node path.
+**Every tool argument that expects a node reference MUST be the node's `path` property — never its `name`, `id`, or any human-readable label.** When `Get` / `Search` returns a MeshNode, you will see both `name` ("Final Report – AI Readiness Assessment & 100-Day Plan") and `path` ("PartnerRe/AIConsulting/FinalReport"). **Use the `path` value.** Passing the name instead routes the request to a non-existent grain and the operation silently fails (no error shown to the user). If you only know the display name, call `Search('name:"...the name..."')` first and read the `path` field off the match.
 
-- **Relative paths** (no leading `/`): resolved against your current context. When the user references a file or node they can see, use a relative path.
-  - `content/report.docx` → file in the current node's content collection
-  - `Get('@content/report.docx')` → get content from current node
-  - `Get('@MyChild/*')` → list children of a child node under current context
-- **Absolute paths** (leading `/`): start from the root, independent of context.
-  - `Get('@/OrgA/Projects/my-doc')` → always resolves to the same node
-  - `Get('@/Doc/Architecture/content/icon.svg')` → file from a specific node
+**The `@` prefix is a reference marker — the character after it determines absolute vs. relative:**
+
+| Form | Meaning |
+|------|---------|
+| `@/Full/Path/To/Node` | **Absolute path** — starts from the mesh root, independent of context. Always resolves to the same node. |
+| `@Partial/Path` | **Relative path** — resolved against the current context path (the canonical node path given in the user message's "Current Application Context"). |
+
+The leading `/` after `@` is load-bearing: `@/X` ≠ `@X`.
+
+### Context comes from the user message
+
+Every user message carries a **"Current Application Context"** header with the canonical path of the node the user is currently viewing. **That is the path to use when resolving `@...` relative references.** Examples:
+
+- Context = `PartnerRe/AIConsulting`, agent calls `Get('@FinalReport')` → resolves to `@/PartnerRe/AIConsulting/FinalReport`.
+- Context = `PartnerRe/AIConsulting`, agent calls `Get('@/OrgA/Docs/other')` → resolves to `@/OrgA/Docs/other` (absolute — context ignored).
+- Context = `PartnerRe/AIConsulting`, agent calls `Get('@content/report.docx')` → resolves to `@/PartnerRe/AIConsulting/content/report.docx`.
+- Context = none, agent calls `Get('@FinalReport')` → no context to prepend; lookup will fail — use an absolute path instead.
+
+### Output links
 
 **LINKS in markdown output**: Always use **absolute paths** starting with `@/` so they are clickable regardless of where the message is viewed.
 - Correct: `@/OrgA/Projects/my-doc`, `@/User/rbuergi/my-page`
-- **Wrong**: `my-doc`, `../Projects/my-doc`
+- **Wrong**: `my-doc`, `../Projects/my-doc`, `@my-doc` (relative links break when viewed from another context)
 
-**When the user mentions a file or document they see on screen**, they are referring to something in the current context. Use the relative path (e.g., `content/filename.docx`), not a fully qualified absolute path.
+### Choosing relative vs. absolute in tool calls
+
+- When the user references a file or document they can see on screen, it's in the current context — use a relative path like `@content/report.docx` or `@MyChild/*`.
+- When the user references something outside their current context (a specific org, a link they pasted, a cross-reference), use an absolute path starting with `@/`.
+- If in doubt, absolute is always safe.
 
 ## Get
 
