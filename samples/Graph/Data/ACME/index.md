@@ -12,10 +12,10 @@ Welcome to ACME, a task management demo showcasing MeshWeaver's collaborative pr
 
 | Resource | Description |
 |----------|-------------|
-| [CustomerOnboarding](ACME/CustomerOnboarding) | Insurance onboarding workflow with compliance tasks |
-| [ProductLaunch](ACME/ProductLaunch) | Marketing campaign with cross-functional tasks |
-| [Getting Started](ACME/Documentation/GettingStarted) | Setup and first steps |
-| [Documentation](ACME/Documentation) | Complete guides and references |
+| [CustomerOnboarding](@ACME/CustomerOnboarding) | Insurance onboarding workflow with compliance tasks |
+| [ProductLaunch](@ACME/ProductLaunch) | Marketing campaign with cross-functional tasks |
+| [Getting Started](@ACME/Documentation/GettingStarted) | Setup and first steps |
+| [Documentation](@ACME/Documentation) | Complete guides and references |
 
 ---
 
@@ -39,8 +39,8 @@ ACME (Organization)
 
 | Project | Focus | Tasks |
 |---------|-------|-------|
-| [CustomerOnboarding](ACME/CustomerOnboarding) | Insurance compliance | KYC review, risk scoring, policy generation |
-| [ProductLaunch](ACME/ProductLaunch) | Marketing campaign | Landing pages, demos, sales training |
+| [CustomerOnboarding](@ACME/CustomerOnboarding) | Insurance compliance | KYC review, risk scoring, policy generation |
+| [ProductLaunch](@ACME/ProductLaunch) | Marketing campaign | Landing pages, demos, sales training |
 
 ---
 
@@ -90,6 +90,6 @@ Projects include multiple perspectives for task management:
 
 | Topic | Link |
 |-------|------|
-| Architecture | [How ACME is built](ACME/Documentation/Architecture) |
-| AI Integration | [Using the TodoAgent](ACME/Documentation/AIAgentIntegration) |
-| References | [Paths, queries, and areas](ACME/Documentation/UnifiedReferences) |
+| Architecture | [How ACME is built](@ACME/Documentation/Architecture) |
+| AI Integration | [Using the TodoAgent](@ACME/Documentation/AIAgentIntegration) |
+| References | [Paths, queries, and areas](@ACME/Documentation/UnifiedReferences) |

@@ -19,10 +19,10 @@ The Software sample organization demonstrates MeshWeaver capabilities through re
 
 | Topic | Go here |
 |-------|---------|
-| Get up and running | [Getting Started](ACME/Documentation/GettingStarted) - Setup, navigation, first steps |
-| Understand the architecture | [Architecture](ACME/Documentation/Architecture) - MeshNodes, namespaces, message hubs |
-| Add AI to your app | [AI Agent Integration](ACME/Documentation/AIAgentIntegration) - Agents, MeshPlugin, NLP |
-| Reference paths and queries | [Unified References](ACME/Documentation/UnifiedReferences) - Paths, queries, layout areas |
+| Get up and running | [Getting Started](@ACME/Documentation/GettingStarted) - Setup, navigation, first steps |
+| Understand the architecture | [Architecture](@ACME/Documentation/Architecture) - MeshNodes, namespaces, message hubs |
+| Add AI to your app | [AI Agent Integration](@ACME/Documentation/AIAgentIntegration) - Agents, MeshPlugin, NLP |
+| Reference paths and queries | [Unified References](@ACME/Documentation/UnifiedReferences) - Paths, queries, layout areas |
 
 ---
 

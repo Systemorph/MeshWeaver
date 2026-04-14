@@ -21,4 +21,10 @@ public record AccessContext
     /// The Api permission flag is required for operations in this context.
     /// </summary>
     public bool IsApiToken { get; init; }
+
+    /// <summary>
+    /// When true, this context represents a hub identity (set by ImpersonateAsHub).
+    /// Hub-to-hub communication is trusted infrastructure and bypasses access control.
+    /// </summary>
+    public bool IsHub { get; init; }
 }

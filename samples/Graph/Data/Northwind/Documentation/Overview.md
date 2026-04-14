@@ -19,10 +19,10 @@ The Northwind sample demonstrates MeshWeaver capabilities through a realistic go
 
 | Topic | Go here |
 |-------|---------|
-| Get up and running | [Getting Started](Northwind/Documentation/GettingStarted) - Setup, navigation, first steps |
-| Understand the architecture | [Architecture](Northwind/Documentation/Architecture) - Data model, views, analytics pipeline |
-| Add AI to your app | [AI Agent Integration](Northwind/Documentation/AIAgentIntegration) - NorthwindAgent, analytics queries |
-| Reference paths and queries | [Unified References](Northwind/Documentation/UnifiedReferences) - Paths, queries, layout areas |
+| Get up and running | [Getting Started](@Northwind/Documentation/GettingStarted) - Setup, navigation, first steps |
+| Understand the architecture | [Architecture](@Northwind/Documentation/Architecture) - Data model, views, analytics pipeline |
+| Add AI to your app | [AI Agent Integration](@Northwind/Documentation/AIAgentIntegration) - NorthwindAgent, analytics queries |
+| Reference paths and queries | [Unified References](@Northwind/Documentation/UnifiedReferences) - Paths, queries, layout areas |
 
 ---
 

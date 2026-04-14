@@ -242,9 +242,9 @@ Key features:
 
 For detailed understanding of MeshWeaver's architecture in the context of the Software Sample Organization:
 
-- **[Understanding MeshWeaver Architecture](ACME/Documentation/Architecture)**: Message hubs, MVVM patterns, reactive design
-- **[AI Agent Integration](ACME/Documentation/AIAgentIntegration)**: How AI agents work with MeshWeaver
-- **[Unified References](ACME/Documentation/UnifiedReferences)**: Path syntax and reference patterns
+- **[Understanding MeshWeaver Architecture](@ACME/Documentation/Architecture)**: Message hubs, MVVM patterns, reactive design
+- **[AI Agent Integration](@ACME/Documentation/AIAgentIntegration)**: How AI agents work with MeshWeaver
+- **[Unified References](@ACME/Documentation/UnifiedReferences)**: Path syntax and reference patterns
 
 # Next Steps
 

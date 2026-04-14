@@ -112,7 +112,8 @@ public class AccessService
         return new AccessContextScope(this, new AccessContext
         {
             ObjectId = hub.Address.ToFullString(),
-            Name = hub.Address.ToString()
+            Name = hub.Address.ToString(),
+            IsHub = true
         });
     }
 

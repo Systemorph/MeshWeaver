@@ -71,7 +71,8 @@ public record PostOptions(Address Sender)
         ImpersonateContext = new AccessContext
         {
             ObjectId = hubAddress.ToFullString(),
-            Name = hubAddress.ToString()
+            Name = hubAddress.ToString(),
+            IsHub = true
         }
     };
 

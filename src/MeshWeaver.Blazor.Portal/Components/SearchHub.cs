@@ -141,7 +141,7 @@ internal sealed class SearchHub
         IMeshService meshService, SearchRequest req, PendingSearch pending, CancellationToken ct)
     {
         // Fetch a wider pool so scoring can surface the best matches
-        var query = $"*{req.Input}* scope:descendants context:search is:main limit:{CandidatePoolSize}";
+        var query = $"*{req.Input}* scope:subtree context:search is:main limit:{CandidatePoolSize}";
         var candidates = new List<QuerySuggestion>();
 
         await foreach (var obj in meshService.QueryAsync(

@@ -12,11 +12,11 @@ Welcome to Cornerstone, a reinsurance pricing demo showcasing MeshWeaver's capab
 
 | Resource | Description |
 |----------|-------------|
-| [Microsoft](Cornerstone/Microsoft) | Technology sector pricing with full sample data |
-| [Tesla](Cornerstone/Tesla) | Industrial and specialty lines |
-| [Nestle](Cornerstone/Nestle) | Consumer and agricultural coverage |
-| [Getting Started](Cornerstone/Documentation/GettingStarted) | Setup and first steps |
-| [Documentation](Cornerstone/Documentation) | Complete guides and references |
+| [Microsoft](@Cornerstone/Microsoft) | Technology sector pricing with full sample data |
+| [Tesla](@Cornerstone/Tesla) | Industrial and specialty lines |
+| [Nestle](@Cornerstone/Nestle) | Consumer and agricultural coverage |
+| [Getting Started](@Cornerstone/Documentation/GettingStarted) | Setup and first steps |
+| [Documentation](@Cornerstone/Documentation) | Complete guides and references |
 
 ---
 
@@ -40,12 +40,12 @@ Each insured company contains yearly pricing instances with property risks, rein
 
 | Insured | Sector | Status |
 |---------|--------|--------|
-| [Microsoft](Cornerstone/Microsoft) | Technology | Full sample data (2026) |
-| [Tesla](Cornerstone/Tesla) | Industrial | Sample pricing (2026) |
-| [Nestle](Cornerstone/Nestle) | Consumer/Agriculture | Sample pricing (2026) |
-| [GlobalManufacturing](Cornerstone/GlobalManufacturing) | Manufacturing | Historical (2024) |
-| [EuropeanLogistics](Cornerstone/EuropeanLogistics) | Logistics | Historical (2024) |
-| [TechIndustries](Cornerstone/TechIndustries) | Technology | Historical (2024) |
+| [Microsoft](@Cornerstone/Microsoft) | Technology | Full sample data (2026) |
+| [Tesla](@Cornerstone/Tesla) | Industrial | Sample pricing (2026) |
+| [Nestle](@Cornerstone/Nestle) | Consumer/Agriculture | Sample pricing (2026) |
+| [GlobalManufacturing](@Cornerstone/GlobalManufacturing) | Manufacturing | Historical (2024) |
+| [EuropeanLogistics](@Cornerstone/EuropeanLogistics) | Logistics | Historical (2024) |
+| [TechIndustries](@Cornerstone/TechIndustries) | Technology | Historical (2024) |
 
 ---
 
@@ -97,6 +97,6 @@ Pricings use standardized dimensions for filtering and aggregation:
 
 | Topic | Link |
 |-------|------|
-| Architecture | [How Cornerstone is built](Cornerstone/Documentation/Architecture) |
-| AI Integration | [Using the pricing assistant](Cornerstone/Documentation/AIAgentIntegration) |
-| References | [Paths, queries, and areas](Cornerstone/Documentation/UnifiedReferences) |
+| Architecture | [How Cornerstone is built](@Cornerstone/Documentation/Architecture) |
+| AI Integration | [Using the pricing assistant](@Cornerstone/Documentation/AIAgentIntegration) |
+| References | [Paths, queries, and areas](@Cornerstone/Documentation/UnifiedReferences) |

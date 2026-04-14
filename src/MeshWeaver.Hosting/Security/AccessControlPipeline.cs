@@ -45,6 +45,11 @@ public static class AccessControlPipeline
                 if (attr == null)
                     return await next.Invoke(delivery, ct);
 
+                // Hub-to-hub communication is trusted infrastructure — skip access control.
+                // This handles child hubs subscribing to parent data during initialization.
+                if (delivery.AccessContext is { IsHub: true })
+                    return await next.Invoke(delivery, ct);
+
                 var userId = ResolveIdentity(delivery, accessService);
 
                 // Log identity resolution details for debugging access issues

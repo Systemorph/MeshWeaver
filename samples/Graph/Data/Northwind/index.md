@@ -12,10 +12,10 @@ Welcome to Northwind, a comprehensive analytics demo showcasing MeshWeaver's cap
 
 | Resource | Description |
 |----------|-------------|
-| [Analytics](Northwind/Analytics) | 53 interactive dashboards and analytics views |
-| [Getting Started](Northwind/Documentation/GettingStarted) | Setup and first steps |
-| [Documentation](Northwind/Documentation) | Complete guides and references |
-| [Reports](Northwind/Reports) | Pre-built analytical reports |
+| [Analytics](@Northwind/Analytics) | 53 interactive dashboards and analytics views |
+| [Getting Started](@Northwind/Documentation/GettingStarted) | Setup and first steps |
+| [Documentation](@Northwind/Documentation) | Complete guides and references |
+| [Reports](@Northwind/Reports) | Pre-built analytical reports |
 
 ---
 
@@ -34,7 +34,7 @@ Explore **53 views** organized across 8 categories:
 - **Suppliers** - Supplier analytics
 - **Financial** - Financial metrics and profitability
 
-[Open Analytics](Northwind/Analytics)
+[Open Analytics](@Northwind/Analytics)
 
 ---
 
@@ -88,6 +88,6 @@ Northwind specializes in gourmet foods:
 
 | Topic | Link |
 |-------|------|
-| Architecture | [How Northwind is built](Northwind/Documentation/Architecture) |
-| AI Integration | [Using the NorthwindAgent](Northwind/Documentation/AIAgentIntegration) |
-| References | [Paths, queries, and areas](Northwind/Documentation/UnifiedReferences) |
+| Architecture | [How Northwind is built](@Northwind/Documentation/Architecture) |
+| AI Integration | [Using the NorthwindAgent](@Northwind/Documentation/AIAgentIntegration) |
+| References | [Paths, queries, and areas](@Northwind/Documentation/UnifiedReferences) |

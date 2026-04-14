@@ -19,10 +19,10 @@ The Cornerstone sample organization demonstrates MeshWeaver capabilities through
 
 | Topic | Go here |
 |-------|---------|
-| Get up and running | [Getting Started](Cornerstone/Documentation/GettingStarted) - Setup, navigation, first steps |
-| Understand the architecture | [Architecture](Cornerstone/Documentation/Architecture) - Data model, NodeTypes, pricing pipeline |
-| Add AI to your app | [AI Agent Integration](Cornerstone/Documentation/AIAgentIntegration) - Pricing assistant, risk queries |
-| Reference paths and queries | [Unified References](Cornerstone/Documentation/UnifiedReferences) - Paths, queries, layout areas |
+| Get up and running | [Getting Started](@Cornerstone/Documentation/GettingStarted) - Setup, navigation, first steps |
+| Understand the architecture | [Architecture](@Cornerstone/Documentation/Architecture) - Data model, NodeTypes, pricing pipeline |
+| Add AI to your app | [AI Agent Integration](@Cornerstone/Documentation/AIAgentIntegration) - Pricing assistant, risk queries |
+| Reference paths and queries | [Unified References](@Cornerstone/Documentation/UnifiedReferences) - Paths, queries, layout areas |
 
 ---
 

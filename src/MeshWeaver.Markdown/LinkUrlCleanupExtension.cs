@@ -27,8 +27,9 @@ public class LinkUrlCleanupExtension(string? currentNodePath = null) : IMarkdown
 
             var url = link.Url;
 
-            // Strip leading '@' prefix
-            if (url.StartsWith('@'))
+            // Track whether URL had @ prefix (UCR = absolute mesh path)
+            var wasAtPrefixed = url.StartsWith('@');
+            if (wasAtPrefixed)
                 url = url.TrimStart('@');
 
             // Skip external links, anchors, and mailto
@@ -52,9 +53,14 @@ public class LinkUrlCleanupExtension(string? currentNodePath = null) : IMarkdown
                 // Already absolute — keep as-is
                 link.Url = url + fragment;
             }
+            else if (wasAtPrefixed && !string.IsNullOrEmpty(url))
+            {
+                // @-prefixed = absolute UCR reference — prepend / directly, no relative resolution
+                link.Url = $"/{url}" + fragment;
+            }
             else if (!string.IsNullOrEmpty(url))
             {
-                // Relative — resolve against current node path, prepend '/'
+                // Bare relative path — resolve against current node path, prepend '/'
                 var resolved = PathUtils.ResolveRelativePath(url, currentNodePath);
                 link.Url = $"/{resolved}" + fragment;
             }

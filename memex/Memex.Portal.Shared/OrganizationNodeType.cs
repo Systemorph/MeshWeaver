@@ -92,6 +92,7 @@ public static class OrganizationNodeType
             .AddContentCollections()
             .AddNodeTypeLayoutAreas()
             .AddLayout(layout => layout
+                .WithDefaultArea(MeshNodeLayoutAreas.OverviewArea)
                 .WithView(MeshNodeLayoutAreas.OverviewArea, OrganizationLayoutAreas.Overview))
     };
 

@@ -21,18 +21,18 @@ public static class OrganizationLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var orgStream = host.Workspace.GetStream<Organization>()
-            ?.Select(orgs => orgs?.FirstOrDefault())
-            ?? Observable.Return<Organization?>(null);
-
         var nodeStream = host.Workspace.GetStream<MeshNode>()
             ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
             ?? Observable.Return<MeshNode?>(null);
 
-        return orgStream.CombineLatest(nodeStream).SelectMany(async t =>
+        var orgStream = host.Workspace.GetStream<Organization>()
+            ?.Select(orgs => orgs?.FirstOrDefault())
+            ?? Observable.Return<Organization?>(null);
+
+        return nodeStream.CombineLatest(orgStream).SelectMany(async t =>
         {
-            var (org, node) = t;
-            if (org == null && node == null)
+            var (node, org) = t;
+            if (node == null)
                 return Controls.Markdown("*Loading...*") as UiControl;
 
             var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
