@@ -31,11 +31,11 @@ MeshWeaver applications can be organized using various architectural patterns de
 - **[Modular Monolith](https://medium.com/design-microservices-architecture-with-patterns/microservices-killer-modular-monolithic-architecture-ac83814f6862)**: Applications can start as modular monoliths where different modules are deployed together but maintain logical separation through message hubs and distinct namespace paths
 - **[Vertical Slice Architecture](https://en.wikipedia.org/wiki/Hexagonal_architecture_(software))**: Each feature or business capability can be implemented as a complete vertical slice, from UI layout areas down to data persistence, organized around namespace paths
 
-The Software sample demonstrates a modular approach where the Todo functionality is encapsulated in a reusable NodeType (`ACME/Project/Todo`) with clear message-based interfaces, making it easy to share across multiple projects within the organization.
+The Software sample demonstrates a modular approach where the Todo functionality is encapsulated in a reusable NodeType (`ACME/Project/Todo`) with clear message-based interfaces, making it easy to share across projects within the organization.
 
 # The MeshNode and Namespace Hierarchy
 
-MeshWeaver organizes data using MeshNodes in a hierarchical namespace. For the complete architecture details, see [Mesh Graph Architecture](Doc/Architecture/MeshGraph).
+MeshWeaver organizes data using MeshNodes in a hierarchical namespace. For the complete architecture details, see [Mesh Graph Architecture](/Doc/Architecture/MeshGraph).
 
 ## Software Namespace Hierarchy
 
@@ -47,12 +47,7 @@ ACME/                                    # Organization
 │   │   └── Code/                        # Todo.cs, TodoViews.cs, Status.cs
 │   ├── Code/                            # ProjectViews.cs
 │   └── TodoAgent.md                     # AI agent definition
-├── CustomerOnboarding/                  # Project 1
-│   └── Todo/                            # Tasks for this project
-│       ├── ReviewKYC.json               # ACME/CustomerOnboarding/Todo/ReviewKYC
-│       ├── CalculateRiskScore.json
-│       └── SanctionsScreening.json
-└── ProductLaunch/                       # Project 2
+└── ProductLaunch/                       # Project
     └── Todo/                            # Tasks for this project
         ├── PricingStrategy.json         # ACME/ProductLaunch/Todo/PricingStrategy
         ├── EmailCampaign.json
@@ -63,10 +58,9 @@ ACME/                                    # Organization
 
 | Node | Full Path |
 |------|-----------|
-| ReviewKYC task | `ACME/CustomerOnboarding/Todo/ReviewKYC` |
 | Email campaign task | `ACME/ProductLaunch/Todo/EmailCampaign` |
 | Todo NodeType | `ACME/Project/Todo` |
-| CustomerOnboarding project | `ACME/CustomerOnboarding` |
+| ProductLaunch project | `ACME/ProductLaunch` |
 
 This addressing scheme naturally creates namespaces that improve scalability and isolation.
 
@@ -76,17 +70,13 @@ The heart of MeshWeaver's distributed architecture lies in its message hub syste
 
 ## Hub Addressing and Partitioning
 
-- **Namespace Paths**: Primary hubs handle core business logic. In Software, projects like `ACME/CustomerOnboarding` and `ACME/ProductLaunch` each get their own hub context
+- **Namespace Paths**: Primary hubs handle core business logic. In Software, the `ACME/ProductLaunch` project gets its own hub context
 - **Sub-Hubs**: Smaller, specialized hubs handle specific tasks like maintaining data streams and layout synchronization
 - **Partitioning Strategy**: Namespace paths serve a dual purpose - they define logical boundaries and control data partitioning
 
-For example, the Software organization uses:
-- `ACME/CustomerOnboarding` - Insurance client onboarding workflows
-- `ACME/ProductLaunch` - Product marketing campaign management
-
 ## NodeType Configuration
 
-NodeTypes define the behavior for instances. See [Mesh Graph](Doc/Architecture/MeshGraph) for NodeType configuration patterns.
+NodeTypes define the behavior for instances. See [Mesh Graph](/Doc/Architecture/MeshGraph) for NodeType configuration patterns.
 
 The Todo NodeType (`ACME/Project/Todo`) is configured with:
 
@@ -127,7 +117,7 @@ The following diagram illustrates how distributed components interact when a use
 ```mermaid
 sequenceDiagram
     participant Portal as Portal Hub<br/>(portal/[session-id])
-    participant ProjectHub as Project Hub<br/>(ACME/CustomerOnboarding)
+    participant ProjectHub as Project Hub<br/>(ACME/ProductLaunch)
     participant UI as User Interface
     participant LayoutArea as TodaysFocus View
 
@@ -160,7 +150,7 @@ This reactive architecture ensures that all connected users see changes in real-
 
 # Message-based Communication
 
-At the core of MeshWeaver's architecture lies a fundamental principle: **every interaction is a message**. For details on message-based communication patterns, see [Message-Based Communication](Doc/Architecture/MessageBasedCommunication).
+At the core of MeshWeaver's architecture lies a fundamental principle: **every interaction is a message**. For details on message-based communication patterns, see [Message-Based Communication](/Doc/Architecture/MessageBasedCommunication).
 
 In the Software sample, messages flow through the system as follows:
 

@@ -12,10 +12,9 @@ Welcome to ACME, a task management demo showcasing MeshWeaver's collaborative pr
 
 | Resource | Description |
 |----------|-------------|
-| [CustomerOnboarding](ACME/CustomerOnboarding) | Insurance onboarding workflow with compliance tasks |
-| [ProductLaunch](ACME/ProductLaunch) | Marketing campaign with cross-functional tasks |
-| [Getting Started](ACME/Documentation/GettingStarted) | Setup and first steps |
-| [Documentation](ACME/Documentation) | Complete guides and references |
+| [ProductLaunch](/ACME/ProductLaunch) | Marketing campaign with cross-functional tasks |
+| [Getting Started](/ACME/Documentation/GettingStarted) | Setup and first steps |
+| [Documentation](/ACME/Documentation) | Complete guides and references |
 
 ---
 
@@ -31,16 +30,15 @@ ACME (Organization)
         └── Todo (NodeType)
 ```
 
-**NodeType Reuse**: The `Project` and `Todo` types are defined once in the `ACME` namespace and reused across multiple project instances.
+**NodeType Reuse**: The `Project` and `Todo` types are defined once in the `ACME` namespace and reused across project instances.
 
 ---
 
-## Sample Projects
+## Sample Project
 
 | Project | Focus | Tasks |
 |---------|-------|-------|
-| [CustomerOnboarding](ACME/CustomerOnboarding) | Insurance compliance | KYC review, risk scoring, policy generation |
-| [ProductLaunch](ACME/ProductLaunch) | Marketing campaign | Landing pages, demos, sales training |
+| [ProductLaunch](/ACME/ProductLaunch) | Marketing campaign | Landing pages, demos, sales training |
 
 ---
 
@@ -75,9 +73,6 @@ Projects include multiple perspectives for task management:
 
 | Member | Role |
 |--------|------|
-| Oliver | Project management |
-| Paul | Technical lead |
-| Quinn | QA and compliance |
 | Alice | Marketing |
 | Bob | Development |
 | Carol | Design |
@@ -90,6 +85,6 @@ Projects include multiple perspectives for task management:
 
 | Topic | Link |
 |-------|------|
-| Architecture | [How ACME is built](ACME/Documentation/Architecture) |
-| AI Integration | [Using the TodoAgent](ACME/Documentation/AIAgentIntegration) |
-| References | [Paths, queries, and areas](ACME/Documentation/UnifiedReferences) |
+| Architecture | [How ACME is built](/ACME/Documentation/Architecture) |
+| AI Integration | [Using the TodoAgent](/ACME/Documentation/AIAgentIntegration) |
+| References | [Paths, queries, and areas](/ACME/Documentation/UnifiedReferences) |

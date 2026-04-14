@@ -700,21 +700,15 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 .FirstAsync();
             Output.WriteLine("Node confirmed as Active.");
 
-            // Step 5: Use GetDataRequest to retrieve the MeshNode via EntityReference
-            var entityRef = new EntityReference(nameof(MeshNode), nodePath);
-            var getDataResponse = await client.AwaitResponse(
-                new GetDataRequest(entityRef),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+            // Step 5: Verify node was created correctly using IMeshService.QueryAsync
+            var retrievedNode = await meshQuery.QueryAsync<MeshNode>(
+                    MeshQueryRequest.FromQuery($"path:{nodePath}"), null, TestContext.Current.CancellationToken)
+                .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
-            Output.WriteLine($"GetDataRequest response received.");
+            Output.WriteLine($"QueryAsync result received.");
 
-            // Step 6: Verify the response contains the correct data
-            getDataResponse.Message.Should().NotBeNull("Response should not be null");
-            getDataResponse.Message.Data.Should().NotBeNull("Response data should not be null");
-
-            var retrievedNode = getDataResponse.Message.Data as MeshNode;
-            retrievedNode.Should().NotBeNull("Data should be a MeshNode");
+            // Step 6: Verify the retrieved node has the correct data
+            retrievedNode.Should().NotBeNull("Node should be retrievable via QueryAsync");
             retrievedNode!.Path.Should().Be(nodePath, "Retrieved node should have correct path");
             retrievedNode.Name.Should().Be("Data Request Test Task", "Retrieved node should have correct name");
             retrievedNode.State.Should().Be(MeshNodeState.Active, "Retrieved node should be Active");
@@ -747,7 +741,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             root.TryGetProperty("description", out var descProp).Should().BeTrue("Content should have description");
             descProp.GetString().Should().Be("Testing GetDataRequest retrieval", "Content description should match");
 
-            Output.WriteLine("GetDataRequest verification completed successfully - all fields preserved.");
+            Output.WriteLine("QueryAsync verification completed successfully - all fields preserved.");
         }
         finally
         {

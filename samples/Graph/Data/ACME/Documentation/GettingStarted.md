@@ -11,7 +11,7 @@ Tags:
   - "Getting Started"
 ---
 
-The Software sample organization demonstrates MeshWeaver's capabilities through a realistic business scenario: an organization with multiple projects, each using a shared Todo application for task management.
+The Software sample organization demonstrates MeshWeaver's capabilities through a realistic business scenario: an organization with a project using a shared Todo application for task management.
 
 # The Software Sample Organization
 
@@ -26,8 +26,6 @@ ACME/                                    # Organization level
 │   ├── Todo/_Source/                    # Todo.cs, TodoViews.cs, Status.cs, etc.
 │   ├── _Source/                         # ProjectViews.cs (project-level views)
 │   └── TodoAgent.md                     # AI agent for task management
-├── CustomerOnboarding/                  # Project: Insurance onboarding
-│   └── Todo/                            # Tasks: ReviewKYC, CalculateRiskScore, etc.
 └── ProductLaunch/                       # Project: Marketing campaign
     └── Todo/                            # Tasks: PricingStrategy, EmailCampaign, etc.
 ```
@@ -35,16 +33,11 @@ ACME/                                    # Organization level
 ## Key Concepts Demonstrated
 
 1. **Organization → Project → Task Hierarchy**: Software shows how namespaces create natural data partitioning
-2. **Shared NodeTypes**: The Todo NodeType (`ACME/Project/Todo`) is reused across multiple projects
+2. **Shared NodeTypes**: The Todo NodeType (`ACME/Project/Todo`) is reused across projects
 3. **Domain-Specific Data**: Each project has its own tasks with appropriate categories
 4. **AI Agent Integration**: The TodoAgent helps manage tasks across all projects
 
-## Sample Projects
-
-**CustomerOnboarding** - Insurance client onboarding workflow:
-- Tasks: Review KYC, Calculate Risk Score, Sanctions Screening, Verify Ownership
-- Team: Oliver (Compliance), Paul (Risk Management), Quinn (Customer Support)
-- Categories: Legal, Compliance, Risk, Operations
+## Sample Project
 
 **ProductLaunch** - Marketing campaign management:
 - Tasks: Pricing Strategy, Email Campaign, Demo Environment, Landing Page Design
@@ -73,7 +66,7 @@ Navigate to `http://localhost:7122` in your browser.
 ## Navigate to Software
 
 1. Navigate to **Software** organization
-2. Explore **CustomerOnboarding** or **ProductLaunch** projects
+2. Explore the **ProductLaunch** project
 3. View tasks using different views: TodaysFocus, AllTasks, TodosByCategory
 
 # Setting up AI Integration
@@ -84,13 +77,13 @@ MeshWeaver supports multiple AI providers for the chat agent functionality. To e
 
 ## Project Views
 
-Each project (CustomerOnboarding, ProductLaunch) has these views:
+The ProductLaunch project has these views:
 
 | View | Description |
 |------|-------------|
 | **TodaysFocus** | Urgent tasks: overdue, due today, in progress |
 | **AllTasks** | All tasks grouped by status (Planning, Active, Completed, etc.) |
-| **TodosByCategory** | Tasks grouped by category (Legal, Marketing, Engineering, etc.) |
+| **TodosByCategory** | Tasks grouped by category (Marketing, Engineering, etc.) |
 | **MyTasks** | Your assigned tasks grouped by urgency |
 | **Backlog** | Unassigned tasks organized by priority |
 
@@ -114,14 +107,11 @@ Clicking a task opens the full details:
 
 # Using the Todo Agent
 
-The AI chat agent understands natural language and can manage tasks across projects.
+The AI chat agent understands natural language and can manage tasks.
 
 ## Creating Tasks
 
 ```
-"I need to create a compliance review for the new client"
-→ Creates task in CustomerOnboarding with Legal category
-
 "Add a task to update the demo environment before launch"
 → Creates task in ProductLaunch with Engineering category
 ```
@@ -134,21 +124,18 @@ The AI chat agent understands natural language and can manage tasks across proje
 
 "What Marketing tasks are in ProductLaunch?"
 → Shows TodosByCategory filtered to Marketing
-
-"Show Oliver's tasks"
-→ Displays tasks assigned to Oliver
 ```
 
 ## Modifying Tasks
 
 ```
-"Mark the KYC review as complete"
+"Mark the pricing strategy as complete"
 → Updates status to Completed
 
-"Move the pricing strategy task to next week"
+"Move the email campaign task to next week"
 → Updates due date
 
-"Assign the email campaign to Emma"
+"Assign the landing page design to Carol"
 → Updates assignee
 ```
 
@@ -156,7 +143,7 @@ The AI chat agent understands natural language and can manage tasks across proje
 
 The agent understands context:
 - **Project context**: Knows which project you're viewing
-- **Team members**: Recognizes Oliver, Paul, Quinn (Software) and Alice, Bob, etc. (platform)
+- **Team members**: Recognizes Alice, Bob, Carol, David, Emma
 - **Categories**: Maps descriptions to appropriate categories
 - **Relative dates**: Converts "tomorrow", "next Friday" to specific dates
 
@@ -217,22 +204,22 @@ Key features:
 }
 ```
 
-## Task Instance (`ReviewKYC.json`)
+## Task Instance (`PricingStrategy.json`)
 
 ```json
 {
-  "id": "ReviewKYC",
-  "namespace": "ACME/CustomerOnboarding/Todo",
-  "name": "Review KYC documentation",
+  "id": "PricingStrategy",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Pricing strategy",
   "nodeType": "ACME/Project/Todo",
   "content": {
     "$type": "Todo",
-    "id": "ReviewKYC",
-    "title": "Review KYC documentation",
-    "description": "Review all submitted KYC documents...",
-    "category": "Legal",
-    "priority": "Critical",
-    "assignee": "Oliver",
+    "id": "PricingStrategy",
+    "title": "Pricing strategy",
+    "description": "Develop competitive pricing...",
+    "category": "Strategy",
+    "priority": "High",
+    "assignee": "Alice",
     "status": "InProgress"
   }
 }
@@ -242,13 +229,13 @@ Key features:
 
 For detailed understanding of MeshWeaver's architecture in the context of the Software Sample Organization:
 
-- **[Understanding MeshWeaver Architecture](ACME/Documentation/Architecture)**: Message hubs, MVVM patterns, reactive design
-- **[AI Agent Integration](ACME/Documentation/AIAgentIntegration)**: How AI agents work with MeshWeaver
-- **[Unified References](ACME/Documentation/UnifiedReferences)**: Path syntax and reference patterns
+- **[Understanding MeshWeaver Architecture](/ACME/Documentation/Architecture)**: Message hubs, MVVM patterns, reactive design
+- **[AI Agent Integration](/ACME/Documentation/AIAgentIntegration)**: How AI agents work with MeshWeaver
+- **[Unified References](/ACME/Documentation/UnifiedReferences)**: Path syntax and reference patterns
 
 # Next Steps
 
-1. **Explore the Data**: Navigate through Software projects and examine task data
+1. **Explore the Data**: Navigate through the Software project and examine task data
 2. **Use the Agent**: Try natural language commands in the chat interface
 3. **Modify Tasks**: Create, edit, and update tasks to see real-time updates
 4. **Examine the Code**: Review `Todo.cs`, `TodoViews.cs`, `ProjectViews.cs`
