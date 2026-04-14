@@ -39,10 +39,10 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         logger.LogInformation("AddComment on {Path}: text='{SelectedText}', comment='{Comment}'",
             documentPath, selectedText, commentText);
 
-        var resolvedPath = MeshOperations.ResolvePath(documentPath);
+        var resolvedPath = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, documentPath));
 
         // Get document content to find the text position
-        var docJson = await ops.Get(documentPath);
+        var docJson = await ops.Get(MeshOperations.ResolveContextPath(chat, documentPath));
         if (docJson.StartsWith("Not found") || docJson.StartsWith("Error"))
             return $"Document not found: {documentPath}";
 
@@ -86,10 +86,10 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         logger.LogInformation("SuggestEdit on {Path}: original='{Original}', new='{New}'",
             documentPath, originalText, newText);
 
-        var resolvedPath = MeshOperations.ResolvePath(documentPath);
+        var resolvedPath = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, documentPath));
 
         // Get document content
-        var docJson = await ops.Get(documentPath);
+        var docJson = await ops.Get(MeshOperations.ResolveContextPath(chat, documentPath));
         if (docJson.StartsWith("Not found") || docJson.StartsWith("Error"))
             return $"Document not found: {documentPath}";
 

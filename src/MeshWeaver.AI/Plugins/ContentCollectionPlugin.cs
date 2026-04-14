@@ -13,9 +13,7 @@ namespace MeshWeaver.AI.Plugins;
 /// the IFileContentProvider registered.
 /// </summary>
 
-#pragma warning disable CS9113 // Parameter 'chat' is unread — required by plugin DI convention
 public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugin
-#pragma warning restore CS9113
 {
     public string Name => "ContentCollection";
 
@@ -32,7 +30,7 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         [Description("Collection name (default: 'content')")] string collectionName = "content",
         CancellationToken cancellationToken = default)
     {
-        var resolvedPath = MeshOperations.ResolvePath(nodePath);
+        var resolvedPath = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodePath));
 
         try
         {

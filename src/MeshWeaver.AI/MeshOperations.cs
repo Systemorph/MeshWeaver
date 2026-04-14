@@ -50,6 +50,70 @@ public class MeshOperations
         return path;
     }
 
+    /// <summary>
+    /// Resolves a path relative to the current chat context.
+    /// Absolute paths (starting with @/ or /) are returned as-is.
+    /// Relative paths (e.g., @content:file.docx, @MyChild) are prepended with the chat's context path.
+    /// Call this before <see cref="ResolvePath"/> whenever a tool accepts a user-supplied path
+    /// — otherwise relative paths or bare names get shipped to the mesh unchanged and fail to route.
+    /// </summary>
+    public static string ResolveContextPath(IAgentChat chat, string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return path;
+
+        // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
+        if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
+            path = path[1..^1];
+
+        var raw = path.StartsWith("@") ? path[1..] : path;
+
+        // Absolute path — starts with /
+        if (raw.StartsWith("/"))
+            return "@" + raw[1..]; // strip the leading / and re-add @
+
+        // Already looks absolute (contains a colon with address before it, like OrgA/content:file)
+        var colonIndex = raw.IndexOf(':');
+        if (colonIndex > 0)
+        {
+            var beforeColon = raw[..colonIndex];
+            if (beforeColon.Contains('/'))
+                return path; // already absolute
+        }
+        else if (raw.Contains('/'))
+        {
+            // No colon, has slashes — check if it starts with a UCR prefix (content/file.md)
+            var firstSlash = raw.IndexOf('/');
+            if (firstSlash > 0)
+            {
+                var firstSegment = raw[..firstSlash];
+                if (Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(firstSegment))
+                {
+                    // Relative unified path like "content/My Report.md" — prepend context
+                    var contextPath = chat.Context?.Context;
+                    if (!string.IsNullOrEmpty(contextPath))
+                        return $"@{contextPath}/{raw}";
+                    return path;
+                }
+            }
+
+            // Multi-segment path like "OrgA/Doc" — likely absolute already
+            return path;
+        }
+
+        // Relative path — prepend context
+        var contextPath2 = chat.Context?.Context;
+        if (string.IsNullOrEmpty(contextPath2))
+            return path; // no context, return as-is
+
+        // For unified refs like "content:file.docx", prepend context as address
+        if (colonIndex > 0)
+            return $"@{contextPath2}/{raw}";
+
+        // For simple names like "MyChild", prepend context
+        return $"@{contextPath2}/{raw}";
+    }
+
     public async Task<string> Get(string path)
     {
         logger.LogInformation("Get called with path={Path}", path);
