@@ -124,7 +124,13 @@ internal sealed class ChatCompletionOrchestrator(
             }
         }
 
-        await foreach (var batch in channel.Reader.ReadAllAsync(CancellationToken.None))
+        // Honour the caller's cancellation token AND make sure a stuck producer can never
+        // hang the iterator: if ct fires before all producers complete the channel writer,
+        // force-complete it so ReadAllAsync exits cleanly. Without this, a producer that
+        // never reaches its `finally { tracker.OnProducerDone(); }` block (e.g. a deadlocked
+        // mesh query) would hold the test process forever — exactly the CI symptom we hit.
+        await using var registration = ct.Register(() => channel.Writer.TryComplete());
+        await foreach (var batch in channel.Reader.ReadAllAsync(ct))
         {
             yield return batch;
         }
