@@ -4,10 +4,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="Namotion.Reflection" />
     <PackageReference Include="NSubstitute" />
   </ItemGroup>
