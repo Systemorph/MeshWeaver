@@ -877,10 +877,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     }
                 }
 
-                // Push updated list to Monaco if we got new items
+                // Push updated list to Monaco if we got new items. Fire-and-forget by design —
+                // this runs inside the streaming completion loop and must not block; errors are
+                // non-fatal (debug-logged). Discard silences CS4014.
                 if (hadNew && monacoEditor != null)
                 {
-                    InvokeAsync(async () =>
+                    _ = InvokeAsync(async () =>
                     {
                         try
                         {

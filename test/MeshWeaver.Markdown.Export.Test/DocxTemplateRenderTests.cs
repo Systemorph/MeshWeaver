@@ -89,8 +89,11 @@ public class DocxTemplateRenderTests
         using var ms = new MemoryStream(docx);
         using var word = WordprocessingDocument.Open(ms, isEditable: false);
 
-        var body = word.MainDocumentPart!.Document.Body!;
-        body.Elements<SectionProperties>().Should().ContainSingle(
+        var document = word.MainDocumentPart?.Document;
+        document.Should().NotBeNull();
+        var body = document!.Body;
+        body.Should().NotBeNull();
+        body!.Elements<SectionProperties>().Should().ContainSingle(
             "SectionProperties bind the body to the preserved header/footer parts");
     }
 

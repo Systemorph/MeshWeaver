@@ -36,14 +36,17 @@ public record MeshChangeEvent(
     DateTimeOffset Timestamp
 )
 {
+    /// <summary>Builds a <see cref="MeshChangeKind.Created"/> event for the given node.</summary>
     public static MeshChangeEvent Created(MeshNode node)
         => new(node.Namespace ?? "", node.Id, node.Path, MeshChangeKind.Created,
             node.NodeType, node.Version, DateTimeOffset.UtcNow);
 
+    /// <summary>Builds a <see cref="MeshChangeKind.Updated"/> event for the given node.</summary>
     public static MeshChangeEvent Updated(MeshNode node)
         => new(node.Namespace ?? "", node.Id, node.Path, MeshChangeKind.Updated,
             node.NodeType, node.Version, DateTimeOffset.UtcNow);
 
+    /// <summary>Builds a <see cref="MeshChangeKind.Deleted"/> event from a node path.</summary>
     public static MeshChangeEvent Deleted(string path, string? nodeType = null)
     {
         var segments = path.Split('/');
@@ -58,7 +61,10 @@ public record MeshChangeEvent(
 /// </summary>
 public enum MeshChangeKind
 {
+    /// <summary>A node was created.</summary>
     Created,
+    /// <summary>A node was updated in place.</summary>
     Updated,
+    /// <summary>A node was removed.</summary>
     Deleted
 }

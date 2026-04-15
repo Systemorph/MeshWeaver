@@ -20,6 +20,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class ResolveContextPathTest
 {
+    /// <summary>Absolute paths (leading <c>@/</c> or multi-segment <c>@</c>) are returned unchanged.</summary>
     [Theory]
     [InlineData("@/PartnerRe/AIConsulting/FinalReport", "@PartnerRe/AIConsulting/FinalReport")] // absolute @/ → keeps path
     [InlineData("/PartnerRe/AIConsulting/FinalReport", "@PartnerRe/AIConsulting/FinalReport")] // absolute / → rewrites to @
@@ -31,6 +32,7 @@ public class ResolveContextPathTest
         MeshOperations.ResolveContextPath(chat, input).Should().Be(expected);
     }
 
+    /// <summary>Relative bare names are prefixed with the chat's context path before routing.</summary>
     [Fact]
     public void RelativeBareName_IsPrefixedWithContextPath()
     {
@@ -45,6 +47,7 @@ public class ResolveContextPathTest
             .Should().Be("@PartnerRe/AIConsulting/FinalReport");
     }
 
+    /// <summary>Relative UCR prefix paths (e.g. <c>content/file</c>) resolve against the context.</summary>
     [Fact]
     public void RelativeUnifiedPath_IsPrefixedWithContextPath()
     {
@@ -55,6 +58,7 @@ public class ResolveContextPathTest
             .Should().Be("@PartnerRe/AIConsulting/content/report.docx");
     }
 
+    /// <summary>Legacy colon-syntax relative paths (e.g. <c>content:file</c>) resolve against the context.</summary>
     [Fact]
     public void RelativeColonPath_IsPrefixedWithContextPath()
     {
@@ -65,6 +69,7 @@ public class ResolveContextPathTest
             .Should().Be("@Doc/Architecture/content:icon.svg");
     }
 
+    /// <summary>Quoted paths from autocomplete are unwrapped before context resolution.</summary>
     [Fact]
     public void QuotedPath_IsUnwrappedBeforeResolving()
     {
@@ -75,6 +80,7 @@ public class ResolveContextPathTest
             .Should().Be("@Doc/Architecture/content/My File.md");
     }
 
+    /// <summary>With no chat context, a relative path is returned verbatim (nothing to prefix).</summary>
     [Fact]
     public void NoContext_RelativePath_ReturnsInputUnchanged()
     {
@@ -84,6 +90,7 @@ public class ResolveContextPathTest
         MeshOperations.ResolveContextPath(chat, "@FinalReport").Should().Be("@FinalReport");
     }
 
+    /// <summary>Absolute paths still resolve (losing the leading slash) even without a chat context.</summary>
     [Fact]
     public void NoContext_AbsolutePath_StillResolves()
     {
@@ -92,6 +99,7 @@ public class ResolveContextPathTest
         MeshOperations.ResolveContextPath(chat, "@/OrgA/Doc").Should().Be("@OrgA/Doc");
     }
 
+    /// <summary>An empty input produces an empty output regardless of context.</summary>
     [Fact]
     public void EmptyPath_ReturnsEmpty()
     {
