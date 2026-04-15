@@ -16,38 +16,71 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 {
     private readonly MeshOperations ops = new(hub) { OnNodeChange = change => chat.ForwardNodeChange?.Invoke(change) };
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
+    private readonly AccessService? accessService = hub.ServiceProvider.GetService<AccessService>();
 
     [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes: content/, data/, schema/, model/, collection/, area/.")]
     public Task<string> Get(
         [Description("Path to data. Relative: @content/file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content/file.docx. For spaces: \"@content/My File.docx\"")] string path)
-        => ops.Get(ResolveContextPath(path));
+    {
+        RestoreAccessContext();
+        return ops.Get(ResolveContextPath(path));
+    }
 
     [Description("Searches the mesh using GitHub-style query syntax.")]
     public Task<string> Search(
         [Description("Query string (e.g., 'nodeType:Agent', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
-        => ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null);
+    {
+        RestoreAccessContext();
+        return ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null);
+    }
 
     [Description("Creates a new node in the mesh. ALWAYS set the 'name' property to a human-readable display name.")]
     public Task<string> Create(
         [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
-        => ops.Create(node);
+    {
+        RestoreAccessContext();
+        return ops.Create(node);
+    }
 
     [Description("Full replacement update of existing nodes. ALWAYS Get the node first, modify the returned object, then send it back here unchanged-except-for-edits. The 'content' field MUST be present and non-null — null content is rejected and the response will include the expected schema. Prefer Patch for small changes.")]
     public Task<string> Update(
         [Description("JSON array of complete MeshNode objects fetched via Get and then modified")] string nodes)
-        => ops.Update(nodes);
+    {
+        RestoreAccessContext();
+        return ops.Update(nodes);
+    }
 
     [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless you intend to overwrite it — and never set 'content' to null (will be rejected with the schema). Prefer this over Update for small edits like icon/name/category.")]
     public Task<string> Patch(
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
         [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}. Include 'content' only if overwriting — and never as null.")] string fields)
-        => ops.Patch(ResolveContextPath(path), fields);
+    {
+        RestoreAccessContext();
+        return ops.Patch(ResolveContextPath(path), fields);
+    }
 
     [Description("Deletes nodes from the mesh by path.")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete")] string paths)
-        => ops.Delete(paths);
+    {
+        RestoreAccessContext();
+        return ops.Delete(paths);
+    }
+
+    /// <summary>
+    /// Restores the user's AccessContext from <see cref="IAgentChat.ExecutionContext"/>.
+    /// AsyncLocal doesn't flow reliably through the AI framework's streaming + tool
+    /// invocation pipeline, so every plugin entry point must explicitly re-seed the
+    /// context before it hits downstream hub-backed operations. Idempotent when the
+    /// AccessContextAIFunction wrapper has already run.
+    /// </summary>
+    private void RestoreAccessContext()
+    {
+        var userCtx = chat.ExecutionContext?.UserAccessContext;
+        if (userCtx != null)
+            accessService?.SetContext(userCtx);
+    }
 
     [Description("Displays a node's visual layout in the chat UI.")]
     public string NavigateTo(

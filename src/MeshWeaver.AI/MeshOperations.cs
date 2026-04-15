@@ -639,7 +639,34 @@ public class MeshOperations
         for (var i = 0; i < pathList.Count; i++)
         {
             var index = i;
-            var resolvedPath = ResolvePath(pathList[i]);
+            var rawPath = pathList[i];
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                lock (gate)
+                {
+                    lines[index] = "Error deleting: empty path";
+                    if (--remaining == 0)
+                        tcs.TrySetResult(string.Join("\n", lines));
+                }
+                continue;
+            }
+
+            string resolvedPath;
+            try
+            {
+                resolvedPath = ResolvePath(rawPath);
+            }
+            catch (Exception ex)
+            {
+                lock (gate)
+                {
+                    lines[index] = $"Error deleting '{rawPath}': {ex.Message}";
+                    if (--remaining == 0)
+                        tcs.TrySetResult(string.Join("\n", lines));
+                }
+                continue;
+            }
+
             mesh.DeleteNode(resolvedPath).Subscribe(
                 _ =>
                 {
