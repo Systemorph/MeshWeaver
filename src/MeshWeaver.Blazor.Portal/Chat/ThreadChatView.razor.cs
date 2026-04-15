@@ -505,7 +505,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                                 // WatchForExecution on the thread hub picks up execution.
                                 if (submitDelivery != null)
                                 {
-                                    Hub.RegisterCallback((IMessageDelivery)submitDelivery, resp =>
+                                    var __ = Hub.RegisterCallback((IMessageDelivery)submitDelivery, resp =>
                                     {
                                         InvokeAsync(() =>
                                         {

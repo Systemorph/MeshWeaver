@@ -108,7 +108,7 @@ public partial class MarkdownView
                 o => o.WithTarget(Hub.Address));
             if (delivery != null)
             {
-                Hub.RegisterCallback((IMessageDelivery)delivery, _ =>
+                _ = Hub.RegisterCallback((IMessageDelivery)delivery, _ =>
                 {
                     foreach (var submission in CodeSubmissions)
                         Hub.Post(submission, o => o.WithTarget(KernelAddress));
