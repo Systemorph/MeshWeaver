@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -583,10 +584,21 @@ public static class MeshExtensions
         return null; // All validators passed
     }
 
-    private static async Task<IMessageDelivery> HandleUpdateNodeRequest(
+    /// <summary>
+    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
+    /// All hub-backed work goes through Post + RegisterCallback; non-hub async work (catalog reads,
+    /// persistence writes, validator runs) is wrapped in <c>Observable.FromAsync</c> and composed
+    /// via <c>Subscribe</c>. The handler returns <c>request.Processed()</c> immediately so the hub
+    /// scheduler is never blocked. See <c>Doc/Architecture/AsynchronousCalls</c>.
+    ///
+    /// The terminal step (sending UpdateNodeResponse.Ok / Fail) is performed inside the deepest
+    /// callback of the chain, so the response is only emitted once the workspace has acked the
+    /// underlying DataChangeRequest — fixes the 2026-04-14 cached-display bug where Ok went out
+    /// before the live workspace observed the change and Blazor views kept rendering stale content.
+    /// </summary>
+    private static IMessageDelivery HandleUpdateNodeRequest(
         IMessageHub hub,
-        IMessageDelivery<UpdateNodeRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<UpdateNodeRequest> request)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
         var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
@@ -599,122 +611,184 @@ public static class MeshExtensions
             return request.Processed();
         }
 
-        try
-        {
-            var updateRequest = request.Message;
+        var updateRequest = request.Message;
 
-            // Identity resolution: if no explicit UpdatedBy, use AccessContext identity
-            if (string.IsNullOrEmpty(updateRequest.UpdatedBy)
-                && request.AccessContext?.ObjectId is { Length: > 0 } updateSenderId)
-                updateRequest = updateRequest with { UpdatedBy = updateSenderId };
+        // Identity resolution: if no explicit UpdatedBy, use AccessContext identity
+        if (string.IsNullOrEmpty(updateRequest.UpdatedBy)
+            && request.AccessContext?.ObjectId is { Length: > 0 } updateSenderId)
+            updateRequest = updateRequest with { UpdatedBy = updateSenderId };
 
-            var updatedNode = updateRequest.Node;
+        var capturedRequest = updateRequest;
+        var updatedNode = updateRequest.Node;
+        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
 
-            // 1. Check if node exists
-            var existingNode = await catalog.GetNodeAsync(new Address(updatedNode.Path));
-            if (existingNode == null)
+        // Read existing → check NodeType → validate → persist → workspace ack → response.
+        // Each step lives in a Subscribe callback; the handler returns synchronously below.
+        Observable.FromAsync(_ => catalog.GetNodeAsync(new Address(updatedNode.Path)))
+            .SelectMany(existingNode =>
             {
-                hub.Post(
-                    UpdateNodeResponse.Fail(
-                        $"Node not found at path: {updatedNode.Path}",
-                        NodeUpdateRejectionReason.NodeNotFound),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 2. Validate NodeType hasn't changed (if set)
-            if (!string.IsNullOrEmpty(existingNode.NodeType) &&
-                !string.IsNullOrEmpty(updatedNode.NodeType) &&
-                existingNode.NodeType != updatedNode.NodeType)
-            {
-                hub.Post(
-                    UpdateNodeResponse.Fail(
-                        $"Cannot change NodeType from '{existingNode.NodeType}' to '{updatedNode.NodeType}'",
-                        NodeUpdateRejectionReason.InvalidNodeType),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 3. Run validators (global + NodeType-specific)
-            var validationError = await RunUpdateValidatorsAsync(hub, catalog, existingNode, updatedNode, updateRequest, ct);
-            if (validationError != null)
-            {
-                logger.LogWarning("Validator rejected node update at {Path}: {Error}",
-                    updatedNode.Path, validationError.Value.ErrorMessage);
-
-                hub.Post(
-                    UpdateNodeResponse.Fail(
-                        validationError.Value.ErrorMessage ?? "Validation failed",
-                        validationError.Value.Reason),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 4. Update the node - preserve HubConfiguration from existing; allow State changes
-            var nodeToSave = updatedNode with
-            {
-                State = updatedNode.State != default ? updatedNode.State : existingNode.State,
-                HubConfiguration = existingNode.HubConfiguration
-            };
-
-            // 5. Persist the validated node
-            var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
-            var savedNode = await persistence.SaveNodeAsync(nodeToSave, ct);
-            hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                ?.Publish(MeshChangeEvent.Updated(savedNode));
-
-            // 5b. Write version history snapshot (non-critical, skip satellite types like threads/comments)
-            if (!catalog.Configuration.IsSatelliteNodeType(savedNode.NodeType))
-            {
-                var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                if (versionQuery != null)
+                if (existingNode == null)
                 {
-                    try { await versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, ct); }
-                    catch { /* version write failure is non-critical */ }
+                    hub.Post(
+                        UpdateNodeResponse.Fail(
+                            $"Node not found at path: {updatedNode.Path}",
+                            NodeUpdateRejectionReason.NodeNotFound),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<MeshNode>();
                 }
-            }
 
-            // 6. Update workspace stream via DataChangeRequest — target the node's hub so subscribed views refresh
-            //    Do NOT await — posting to the same hub inside a handler would deadlock.
-            hub.Post(
-                DataChangeRequest.Update([nodeToSave]),
-                o => o.WithTarget(new Address(nodeToSave.Path)));
+                if (!string.IsNullOrEmpty(existingNode.NodeType)
+                    && !string.IsNullOrEmpty(updatedNode.NodeType)
+                    && existingNode.NodeType != updatedNode.NodeType)
+                {
+                    hub.Post(
+                        UpdateNodeResponse.Fail(
+                            $"Cannot change NodeType from '{existingNode.NodeType}' to '{updatedNode.NodeType}'",
+                            NodeUpdateRejectionReason.InvalidNodeType),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<MeshNode>();
+                }
 
-            // 7. Return success response immediately after persistence
-            hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
+                return RunUpdateValidatorsObs(hub, existingNode, updatedNode, capturedRequest)
+                    .SelectMany(validationError =>
+                    {
+                        if (validationError != null)
+                        {
+                            logger.LogWarning(
+                                "Validator rejected node update at {Path}: {Error}",
+                                updatedNode.Path, validationError.Value.ErrorMessage);
+                            hub.Post(
+                                UpdateNodeResponse.Fail(
+                                    validationError.Value.ErrorMessage ?? "Validation failed",
+                                    validationError.Value.Reason),
+                                o => o.ResponseFor(request));
+                            return Observable.Empty<MeshNode>();
+                        }
 
-            logger.LogInformation("Node updated successfully at {Path} by {UpdatedBy}",
-                nodeToSave.Path, updateRequest.UpdatedBy ?? "system");
-            return request.Processed();
-        }
-        catch (InvalidOperationException ex)
-        {
-            logger.LogWarning(ex, "Node update failed for path {Path}", request.Message.Node.Path);
-            hub.Post(
-                UpdateNodeResponse.Fail(ex.Message, NodeUpdateRejectionReason.ValidationFailed),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error during node update at {Path}", request.Message.Node.Path);
-            hub.Post(
-                UpdateNodeResponse.Fail($"Unexpected error: {ex.Message}"),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                        var nodeToSave = updatedNode with
+                        {
+                            State = updatedNode.State != default ? updatedNode.State : existingNode.State,
+                            HubConfiguration = existingNode.HubConfiguration
+                        };
+
+                        return Observable.FromAsync(token => persistence.SaveNodeAsync(nodeToSave, token));
+                    });
+            })
+            .Subscribe(
+                savedNode =>
+                {
+                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                        ?.Publish(MeshChangeEvent.Updated(savedNode));
+
+                    // Version history — fire-and-forget Subscribe; failures are non-critical.
+                    if (!catalog.Configuration.IsSatelliteNodeType(savedNode.NodeType))
+                    {
+                        var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                        if (versionQuery != null)
+                        {
+                            Observable.FromAsync(token =>
+                                    versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, token))
+                                .Subscribe(
+                                    _ => { },
+                                    ex => logger.LogWarning(ex,
+                                        "Version history write failed at {Path} (non-critical)",
+                                        savedNode.Path));
+                        }
+                    }
+
+                    logger.LogInformation(
+                        "Node persisted at {Path} by {UpdatedBy}; awaiting workspace ack",
+                        savedNode.Path, capturedRequest.UpdatedBy ?? "system");
+
+                    // Post + RegisterCallback: response is sent only after workspace acks the
+                    // DataChangeRequest. Failures (DeliveryFailure / Status=Failed / unexpected ack
+                    // type) all surface as UpdateNodeResponse.Fail.
+                    var dcDelivery = hub.Post(
+                        DataChangeRequest.Update([savedNode]),
+                        o => o.WithTarget(new Address(savedNode.Path)))!;
+
+                    hub.RegisterCallback(dcDelivery, ack =>
+                    {
+                        switch (ack)
+                        {
+                            case IMessageDelivery<DataChangeResponse> dcResp
+                                when dcResp.Message.Status == DataChangeStatus.Committed:
+                                hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
+                                break;
+                            case IMessageDelivery<DataChangeResponse> dcFail:
+                                var failMsg = string.Join("; ",
+                                    dcFail.Message.Log?.Messages?.Select(m => m.Message)
+                                    ?? Array.Empty<string>());
+                                logger.LogWarning(
+                                    "Workspace rejected DataChangeRequest at {Path}: {Reason}",
+                                    savedNode.Path, failMsg);
+                                hub.Post(
+                                    UpdateNodeResponse.Fail(
+                                        $"Persisted but workspace rejected: {failMsg}",
+                                        NodeUpdateRejectionReason.Unknown),
+                                    o => o.ResponseFor(request));
+                                break;
+                            case IMessageDelivery<DeliveryFailure> failure:
+                                logger.LogWarning(
+                                    "DataChangeRequest delivery failed at {Path}: {Reason}",
+                                    savedNode.Path, failure.Message.Message);
+                                hub.Post(
+                                    UpdateNodeResponse.Fail(
+                                        $"Persisted but workspace fan-out failed: {failure.Message.Message ?? "delivery failed"}",
+                                        NodeUpdateRejectionReason.Unknown),
+                                    o => o.ResponseFor(request));
+                                break;
+                            default:
+                                logger.LogWarning(
+                                    "Unexpected DataChangeRequest ack type {Type} at {Path}",
+                                    ack.Message?.GetType().Name, savedNode.Path);
+                                hub.Post(
+                                    UpdateNodeResponse.Fail(
+                                        $"Persisted but workspace ack was unexpected: {ack.Message?.GetType().Name ?? "null"}",
+                                        NodeUpdateRejectionReason.Unknown),
+                                    o => o.ResponseFor(request));
+                                break;
+                        }
+                        return ack;
+                    });
+                },
+                ex =>
+                {
+                    if (ex is InvalidOperationException)
+                    {
+                        logger.LogWarning(ex, "Node update failed for path {Path}", updatedNode.Path);
+                        hub.Post(
+                            UpdateNodeResponse.Fail(ex.Message, NodeUpdateRejectionReason.ValidationFailed),
+                            o => o.ResponseFor(request));
+                    }
+                    else
+                    {
+                        logger.LogError(ex, "Unexpected error during node update at {Path}", updatedNode.Path);
+                        hub.Post(
+                            UpdateNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                                NodeUpdateRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                    }
+                });
+
+        return request.Processed();
     }
 
     /// <summary>
     /// Runs all update validators from DI using the unified INodeValidator interface.
     /// </summary>
-    private static async Task<(string? ErrorMessage, NodeUpdateRejectionReason Reason)?> RunUpdateValidatorsAsync(
+    /// <summary>
+    /// Sync-friendly observable variant of the unified update-validator runner.
+    /// Iterates validators in order via <c>Concat</c> (preserves short-circuit semantics —
+    /// the chain stops at the first failure) and returns either a tuple describing the
+    /// failure or <c>null</c> if all validators pass. No <c>await</c>; consumers compose
+    /// via <c>SelectMany</c> on a <c>Subscribe</c>-based chain.
+    /// </summary>
+    private static IObservable<(string? ErrorMessage, NodeUpdateRejectionReason Reason)?> RunUpdateValidatorsObs(
         IMessageHub hub,
-        IMeshCatalog _,
         MeshNode existingNode,
         MeshNode updatedNode,
-        UpdateNodeRequest request,
-        CancellationToken ct)
+        UpdateNodeRequest request)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -726,19 +800,20 @@ public static class MeshExtensions
             AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
-        // Run unified validators from DI
-        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
-        foreach (var validator in validators)
-        {
-            // Check if validator handles Update operations
-            if (validator.SupportedOperations.Count > 0 &&
-                !validator.SupportedOperations.Contains(NodeOperation.Update))
-            {
-                continue;
-            }
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
+            .Where(v => v.SupportedOperations.Count == 0
+                        || v.SupportedOperations.Contains(NodeOperation.Update))
+            .ToList();
 
-            var result = await validator.ValidateAsync(context, ct);
-            if (!result.IsValid)
+        if (validators.Count == 0)
+            return Observable.Return<(string?, NodeUpdateRejectionReason)?>(null);
+
+        // Run validators sequentially via Concat; emit the first failure (or null at the end).
+        return validators
+            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Concat()
+            .Where(result => !result.IsValid)
+            .Select(result =>
             {
                 var reason = result.Reason switch
                 {
@@ -748,11 +823,10 @@ public static class MeshExtensions
                     NodeRejectionReason.Unauthorized => NodeUpdateRejectionReason.ValidationFailed,
                     _ => NodeUpdateRejectionReason.ValidationFailed
                 };
-                return (result.ErrorMessage, reason);
-            }
-        }
-
-        return null; // All validators passed
+                return ((string?, NodeUpdateRejectionReason)?)(result.ErrorMessage, reason);
+            })
+            .Take(1)
+            .DefaultIfEmpty(null);
     }
 
     private static async Task<IMessageDelivery> HandleMoveNodeRequest(
