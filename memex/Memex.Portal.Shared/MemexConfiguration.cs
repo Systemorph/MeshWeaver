@@ -105,6 +105,14 @@ public static class MemexConfiguration
         services.AddWebSearchPlugin(config =>
             builder.Configuration.GetSection("WebSearch").Bind(config));
 
+        // Register GitHub plugin (agents declare it in frontmatter; requires GITHUB_TOKEN env var or GitHub:PersonalAccessToken)
+        services.AddGitHubPlugin(config =>
+        {
+            builder.Configuration.GetSection("GitHub").Bind(config);
+            config.DefaultOwner ??= "Systemorph";
+            config.DefaultRepo ??= "MeshWeaver";
+        });
+
         // Configure GoogleMaps
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
 

@@ -15,6 +15,7 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 |---------|-------------|
 | [Agentic AI](AgenticAI) | Understand the paradigm shift to proactive, goal-oriented AI agents |
 | [Vibe Coding](VibeCoding) | Can AI build complex business apps? Watch the Mesh Bros put it to the test |
+| [SpecWriter Agent](SpecWriter) | Generate structured specs from nodes and publish them as GitHub issues |
 
 ---
 
@@ -23,6 +24,8 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 | I want to... | Go here |
 |--------------|---------|
 | Use mesh tools in agents | [MeshPlugin Tools](Tools/MeshPlugin) - Get, Search, Create, Update, Delete, NavigateTo |
+| Manage GitHub issues from agents | [GitHubPlugin Tools](Tools/GitHubPlugin) - CreateIssue, GetIssue, ListIssues, UpdateIssue |
+| Generate specs from nodes | [SpecWriter Agent](SpecWriter) - Structured specs → GitHub issues |
 | Understand agent architecture | [Agentic AI](../Architecture/AgenticAI) - Multi-agent patterns |
 | Connect external AI via MCP | [MCP Integration](../Architecture/AgenticAI#exposing-meshweaver-as-mcp-server) - Claude Code, Copilot, Snowflake |
 
@@ -49,6 +52,21 @@ Get supports **Unified Path prefixes** for accessing schemas and data models:
 - `Get('@path/model:')` — Full data model
 
 [Read more: MeshPlugin Tools](Tools/MeshPlugin)
+
+## GitHubPlugin
+
+The GitHubPlugin provides AI agents with tools to manage GitHub issues:
+
+| Tool | Purpose |
+|------|---------|
+| **CreateIssue** | Create a new issue with title, body, labels, and milestone |
+| **GetIssue** | Retrieve full details of an issue by number |
+| **ListIssues** | List issues filtered by state and labels |
+| **UpdateIssue** | Update issue state, title, body, or labels |
+
+Requires a GitHub Personal Access Token via `GitHubConfiguration` or the `GITHUB_TOKEN` environment variable.
+
+[Read more: GitHubPlugin Tools](Tools/GitHubPlugin)
 
 ---
 

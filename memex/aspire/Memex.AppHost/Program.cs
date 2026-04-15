@@ -27,6 +27,7 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Parameters:embedding-model
 //   Parameters:microsoft-client-id
 //   Parameters:microsoft-client-secret
+//   Parameters:github-token
 //
 // For local-test/local-prod, also set the connection string to the Azure PostgreSQL:
 //   ConnectionStrings:memex  (Azure PostgreSQL, bypassing provisioning)
@@ -59,6 +60,9 @@ var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: fals
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
 var googleClientId = builder.AddParameter("google-client-id", secret: false);
 var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
+
+// GitHub plugin (SpecWriter agent → issue creation)
+var githubToken = builder.AddParameter("github-token", secret: true);
 
 // --- Custom domain (for deployed modes) ---
 var customDomain = builder.AddParameter("custom-domain", secret: false);
@@ -153,6 +157,8 @@ var portal = builder
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
     .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
+    // GitHub
+    .WithEnvironment("GitHub__PersonalAccessToken", githubToken)
     // Wait for dependencies
     .WaitFor(orleansTables)
     .WaitForCompletion(dbMigration)
