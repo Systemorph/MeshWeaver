@@ -92,10 +92,16 @@ public static class MeshExtensions
         return delivery.Processed();
     }
 
-    private static async Task<IMessageDelivery> HandleCreateNodeRequest(
+    /// <summary>
+    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
+    /// All async work is wrapped in <c>Observable.FromAsync</c> and composed via Subscribe; the
+    /// terminal response is posted from inside the deepest callback. The handler itself returns
+    /// <c>request.Processed()</c> immediately so the hub scheduler is never blocked.
+    /// See <c>Doc/Architecture/AsynchronousCalls</c>.
+    /// </summary>
+    private static IMessageDelivery HandleCreateNodeRequest(
         IMessageHub hub,
-        IMessageDelivery<CreateNodeRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<CreateNodeRequest> request)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
         var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
@@ -109,175 +115,216 @@ public static class MeshExtensions
             return request.Processed();
         }
 
-        try
+        var createRequest = request.Message;
+
+        // Identity resolution: if no explicit CreatedBy, use the sender's AccessContext identity.
+        if (string.IsNullOrEmpty(createRequest.CreatedBy)
+            && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
+            createRequest = createRequest with { CreatedBy = senderId };
+
+        var capturedRequest = createRequest;
+        var node = createRequest.Node;
+
+        // 0. Path validation (sync — fail-fast).
+        if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
         {
-            var createRequest = request.Message;
+            hub.Post(
+                CreateNodeResponse.Fail("Node path and Id must not be empty",
+                    NodeCreationRejectionReason.ValidationFailed),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
 
-            // Identity resolution: if no explicit CreatedBy, use the sender's
-            // AccessContext identity from the authenticated pipeline.
-            if (string.IsNullOrEmpty(createRequest.CreatedBy)
-                && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
-                createRequest = createRequest with { CreatedBy = senderId };
+        // 1. Read existing — persistence first (catalog.GetNodeAsync auto-creates from templates),
+        //    then fall back to the in-memory config. Wrap in Observable.FromAsync so no `await`.
+        var existingObs = persistence != null
+            ? Observable.FromAsync(token => persistence.GetNodeAsync(node.Path, token))
+            : Observable.Return<MeshNode?>(null);
 
-            var node = createRequest.Node;
-
-            // 0. Validate path is not empty or whitespace
-            if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
+        existingObs
+            .Select(existing =>
             {
-                hub.Post(
-                    CreateNodeResponse.Fail("Node path and Id must not be empty", NodeCreationRejectionReason.ValidationFailed),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 1. Check if node already exists
-            // Use persistence directly (not catalog.GetNodeAsync which auto-creates from templates)
-            var existingNode = persistence != null
-                ? await persistence.GetNodeAsync(node.Path, ct)
-                : null;
-            // Also check in-memory configuration for statically registered nodes
-            if (existingNode == null && catalog.Configuration.Nodes.TryGetValue(node.Path, out var configNode))
-                existingNode = configNode;
-            if (existingNode != null)
+                if (existing == null && catalog.Configuration.Nodes.TryGetValue(node.Path, out var configNode))
+                    return configNode;
+                return existing;
+            })
+            .SelectMany(existingNode =>
             {
-                // If existing node is Transient and request wants Active, this is a "confirm" operation
-                if (existingNode.State == MeshNodeState.Transient && node.State == MeshNodeState.Active)
+                if (existingNode != null)
                 {
-                    // Merge request node with existing node (preserve NodeType, update content/properties)
-                    var confirmedNode = existingNode with
+                    // Transient → Active confirmation path.
+                    if (existingNode.State == MeshNodeState.Transient && node.State == MeshNodeState.Active)
                     {
-                        State = MeshNodeState.Active,
-                        Name = node.Name ?? existingNode.Name,
-                        Icon = node.Icon ?? existingNode.Icon,
-                        Category = node.Category ?? existingNode.Category,
-                        Content = node.Content ?? existingNode.Content
-                    };
+                        var confirmedNode = existingNode with
+                        {
+                            State = MeshNodeState.Active,
+                            Name = node.Name ?? existingNode.Name,
+                            Icon = node.Icon ?? existingNode.Icon,
+                            Category = node.Category ?? existingNode.Category,
+                            Content = node.Content ?? existingNode.Content
+                        };
+                        var saveObs = persistence != null
+                            ? Observable.FromAsync(token => persistence.SaveNodeAsync(confirmedNode, token))
+                            : Observable.Return(confirmedNode);
+                        return saveObs.Select(savedConfirmed => (mode: "confirm", node: savedConfirmed));
+                    }
+                    // Node exists & not a confirmation → fail.
+                    hub.Post(
+                        CreateNodeResponse.Fail(
+                            $"Node already exists at path: {node.Path}",
+                            NodeCreationRejectionReason.NodeAlreadyExists),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<(string mode, MeshNode node)>();
+                }
 
-                    // Save via persistence
-                    if (persistence != null)
+                // 1b. Auto-set MainNode for satellite types before validation.
+                if (!string.IsNullOrEmpty(node.NodeType)
+                    && !string.IsNullOrEmpty(node.Namespace)
+                    && catalog.Configuration.IsSatelliteNodeType(node.NodeType)
+                    && node.MainNode == node.Path)
+                {
+                    node = node with { MainNode = node.Namespace };
+                }
+
+                // 2. Validators → 3. NodeType existence → 4-7. Enrich + save + change feed + version
+                return RunCreationValidatorsObs(hub, node, capturedRequest)
+                    .SelectMany(validationError =>
                     {
-                        await persistence.SaveNodeAsync(confirmedNode, ct);
+                        if (validationError != null)
+                        {
+                            logger.LogWarning(
+                                "Validator rejected node creation at {Path}: {Error}",
+                                node.Path, validationError.Value.ErrorMessage);
+                            hub.Post(
+                                CreateNodeResponse.Fail(
+                                    validationError.Value.ErrorMessage ?? "Validation failed",
+                                    validationError.Value.Reason),
+                                o => o.ResponseFor(request));
+                            return Observable.Empty<(string mode, MeshNode node)>();
+                        }
+
+                        // 3. NodeType existence check.
+                        IObservable<bool> typeExistsObs;
+                        if (string.IsNullOrEmpty(node.NodeType))
+                        {
+                            typeExistsObs = Observable.Return(true);
+                        }
+                        else if (catalog.Configuration.Nodes.ContainsKey(node.NodeType))
+                        {
+                            typeExistsObs = Observable.Return(true);
+                        }
+                        else if (persistence != null)
+                        {
+                            typeExistsObs = Observable.FromAsync(token =>
+                                persistence.ExistsAsync(node.NodeType, token));
+                        }
+                        else
+                        {
+                            typeExistsObs = Observable.Return(false);
+                        }
+
+                        return typeExistsObs.SelectMany(typeExists =>
+                        {
+                            if (!typeExists)
+                            {
+                                hub.Post(
+                                    CreateNodeResponse.Fail(
+                                        $"NodeType '{node.NodeType}' is not registered",
+                                        NodeCreationRejectionReason.InvalidNodeType),
+                                    o => o.ResponseFor(request));
+                                return Observable.Empty<(string mode, MeshNode node)>();
+                            }
+
+                            // 4. Active state.
+                            var newNode = node with { State = MeshNodeState.Active };
+
+                            // 5. Enrich (optional service).
+                            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+                            var enrichedObs = nodeTypeService != null
+                                ? Observable.FromAsync(token => nodeTypeService.EnrichWithNodeTypeAsync(newNode, token))
+                                : Observable.Return(newNode);
+
+                            // 6. Persist.
+                            return enrichedObs.SelectMany(enriched =>
+                            {
+                                var saveObs = persistence != null
+                                    ? Observable.FromAsync(token => persistence.SaveNodeAsync(enriched, token))
+                                    : Observable.Return(enriched);
+                                return saveObs.Select(saved => (mode: "create", node: saved));
+                            });
+                        });
+                    });
+            })
+            .Subscribe(
+                tuple =>
+                {
+                    var resultNode = tuple.node;
+                    var mode = tuple.mode;
+
+                    // Notify change feed (sync side-effect).
+                    var changeEvent = mode == "create"
+                        ? MeshChangeEvent.Created(resultNode)
+                        : MeshChangeEvent.Updated(resultNode);
+                    hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(changeEvent);
+
+                    // Version history (non-critical, fire-and-forget Subscribe).
+                    if (mode == "create" && !catalog.Configuration.IsSatelliteNodeType(resultNode.NodeType))
+                    {
+                        var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                        if (versionQuery != null)
+                        {
+                            Observable.FromAsync(token =>
+                                    versionQuery.WriteVersionAsync(resultNode, hub.JsonSerializerOptions, token))
+                                .Subscribe(
+                                    _ => { },
+                                    ex => logger.LogWarning(ex,
+                                        "Version history write failed at {Path} (non-critical)",
+                                        resultNode.Path));
+                        }
                     }
 
-                    // Update workspace stream via DataChangeRequest — target the node's hub so subscribed views refresh
-                    hub.Post(DataChangeRequest.Update([confirmedNode]), o => o.WithTarget(new Address(confirmedNode.Path)));
+                    if (mode == "confirm")
+                    {
+                        // Workspace fan-out for transient confirmation (fire-and-forget — same
+                        // semantics as the previous code).
+                        hub.Post(DataChangeRequest.Update([resultNode]),
+                            o => o.WithTarget(new Address(resultNode.Path)));
+                    }
 
-                    // Run post-creation handlers (e.g. grant creator Admin role)
-                    await RunPostCreationHandlersAsync(hub, confirmedNode, createRequest.CreatedBy, logger, ct);
+                    logger.LogInformation(
+                        mode == "confirm" ? "Confirmed transient node at {Path}" : "Node created at {Path} by {CreatedBy}",
+                        resultNode.Path, capturedRequest.CreatedBy ?? "system");
 
-                    hub.Post(CreateNodeResponse.Ok(confirmedNode), o => o.ResponseFor(request));
-                    logger.LogInformation("Confirmed transient node at {Path}", confirmedNode.Path);
-                    return request.Processed();
-                }
-
-                // Node exists and is not a Transient->Active confirmation
-                hub.Post(
-                    CreateNodeResponse.Fail(
-                        $"Node already exists at path: {node.Path}",
-                        NodeCreationRejectionReason.NodeAlreadyExists),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 1b. Auto-set MainNode for satellite types before validation
-            // so that SatelliteAccessRule can delegate to the parent node.
-            if (!string.IsNullOrEmpty(node.NodeType)
-                && !string.IsNullOrEmpty(node.Namespace)
-                && catalog.Configuration.IsSatelliteNodeType(node.NodeType)
-                && node.MainNode == node.Path) // still at default (self-referencing)
-            {
-                node = node with { MainNode = node.Namespace };
-            }
-
-            // 2. Run validators (global + NodeType-specific)
-            var validationError = await RunCreationValidatorsAsync(hub, catalog, node, createRequest, ct);
-            if (validationError != null)
-            {
-                logger.LogWarning("Validator rejected node creation at {Path}: {Error}",
-                    node.Path, validationError.Value.ErrorMessage);
-
-                hub.Post(
-                    CreateNodeResponse.Fail(
-                        validationError.Value.ErrorMessage ?? "Validation failed",
-                        validationError.Value.Reason),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 3. Validate NodeType exists (if specified)
-            if (!string.IsNullOrEmpty(node.NodeType))
-            {
-                var nodeTypeExists = catalog.Configuration.Nodes.ContainsKey(node.NodeType)
-                    || (persistence != null && await persistence.ExistsAsync(node.NodeType, ct));
-                if (!nodeTypeExists)
+                    // Run post-creation handlers (Subscribe-based) and post Ok inside the
+                    // OnCompleted so the response only goes out after handlers have all run.
+                    RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
+                        .Subscribe(
+                            _ => { },
+                            ex => logger.LogWarning(ex,
+                                "Post-creation handler chain errored at {Path}", resultNode.Path),
+                            () => hub.Post(CreateNodeResponse.Ok(resultNode),
+                                o => o.ResponseFor(request)));
+                },
+                ex =>
                 {
-                    hub.Post(
-                        CreateNodeResponse.Fail($"NodeType '{node.NodeType}' is not registered", NodeCreationRejectionReason.InvalidNodeType),
-                        o => o.ResponseFor(request));
-                    return request.Processed();
-                }
-            }
+                    if (ex is InvalidOperationException)
+                    {
+                        logger.LogWarning(ex, "Node creation failed for path {Path}", node.Path);
+                        hub.Post(
+                            CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed),
+                            o => o.ResponseFor(request));
+                    }
+                    else
+                    {
+                        logger.LogError(ex, "Unexpected error during node creation at {Path}", node.Path);
+                        hub.Post(
+                            CreateNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                                NodeCreationRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                    }
+                });
 
-            // 4. Create node with Active state (validated, ready to persist)
-            var newNode = node with { State = MeshNodeState.Active };
-
-            // 4a. MainNode already set in step 1b (before validation)
-
-            // 5. Enrich with HubConfiguration based on NodeType
-            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-            if (nodeTypeService != null)
-            {
-                newNode = await nodeTypeService.EnrichWithNodeTypeAsync(newNode, ct);
-            }
-
-            // 6. Save to persistence
-            if (persistence != null)
-            {
-                newNode = await persistence.SaveNodeAsync(newNode, ct);
-            }
-
-            // 6a. Notify infrastructure of the new node (cache invalidation, query updates)
-            hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                ?.Publish(MeshChangeEvent.Created(newNode));
-
-
-            // 7. Write version history snapshot (non-critical, skip satellite types like threads/comments)
-            if (!catalog.Configuration.IsSatelliteNodeType(newNode.NodeType))
-            {
-                var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                if (versionQuery != null)
-                {
-                    try { await versionQuery.WriteVersionAsync(newNode, hub.JsonSerializerOptions, ct); }
-                    catch { /* version write failure is non-critical */ }
-                }
-            }
-
-            logger.LogInformation("Node created at {Path} by {CreatedBy}", newNode.Path, createRequest.CreatedBy ?? "system");
-
-            // 8. Run post-creation handlers (e.g. grant creator Admin role)
-            await RunPostCreationHandlersAsync(hub, newNode, createRequest.CreatedBy, logger, ct);
-
-            // 9. Return success response
-            hub.Post(CreateNodeResponse.Ok(newNode), o => o.ResponseFor(request));
-
-            return request.Processed();
-        }
-        catch (InvalidOperationException ex)
-        {
-            logger.LogWarning(ex, "Node creation failed for path {Path}", request.Message.Node.Path);
-            hub.Post(
-                CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error during node creation at {Path}", request.Message.Node.Path);
-            hub.Post(
-                CreateNodeResponse.Fail($"Unexpected error: {ex.Message}"),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        return request.Processed();
     }
 
     private static async Task<IMessageDelivery> HandleDeleteNodeRequest(
@@ -433,14 +480,15 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Runs all creation validators from DI using the unified INodeValidator interface.
+    /// Sync-friendly observable variant of the creation-validator runner. Iterates
+    /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
+    /// stops at the first failure), emits the first failure as a tuple or <c>null</c>
+    /// if all pass. Consumers compose via <c>SelectMany</c>; no <c>await</c>.
     /// </summary>
-    private static async Task<(string? ErrorMessage, NodeCreationRejectionReason Reason)?> RunCreationValidatorsAsync(
+    private static IObservable<(string? ErrorMessage, NodeCreationRejectionReason Reason)?> RunCreationValidatorsObs(
         IMessageHub hub,
-        IMeshCatalog _,
         MeshNode node,
-        CreateNodeRequest request,
-        CancellationToken ct)
+        CreateNodeRequest request)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -451,19 +499,19 @@ public static class MeshExtensions
             AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
-        // Run unified validators from DI
-        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
-        foreach (var validator in validators)
-        {
-            // Check if validator handles Create operations
-            if (validator.SupportedOperations.Count > 0 &&
-                !validator.SupportedOperations.Contains(NodeOperation.Create))
-            {
-                continue;
-            }
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
+            .Where(v => v.SupportedOperations.Count == 0
+                        || v.SupportedOperations.Contains(NodeOperation.Create))
+            .ToList();
 
-            var result = await validator.ValidateAsync(context, ct);
-            if (!result.IsValid)
+        if (validators.Count == 0)
+            return Observable.Return<(string?, NodeCreationRejectionReason)?>(null);
+
+        return validators
+            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Concat()
+            .Where(result => !result.IsValid)
+            .Select(result =>
             {
                 var reason = result.Reason switch
                 {
@@ -473,68 +521,91 @@ public static class MeshExtensions
                     NodeRejectionReason.Unauthorized => NodeCreationRejectionReason.ValidationFailed,
                     _ => NodeCreationRejectionReason.ValidationFailed
                 };
-                return (result.ErrorMessage, reason);
-            }
-        }
-
-        return null; // All validators passed
+                return ((string?, NodeCreationRejectionReason)?)(result.ErrorMessage, reason);
+            })
+            .Take(1)
+            .DefaultIfEmpty(null);
     }
 
     /// <summary>
-    /// Runs DI-registered post-creation handlers for the given node type.
-    /// Failures are logged but do not affect the creation response.
-    /// Additional nodes returned by handlers are persisted directly via IMeshStorage
-    /// (bypassing the hub pipeline to avoid deadlocks).
+    /// Sync-friendly observable variant of the post-creation handler runner. Returns
+    /// an observable that emits no values and completes once all handlers have run.
+    /// Failures from individual handlers are logged but never break the chain — they
+    /// surface as <c>OnNext(false)</c> elements that the caller can ignore. Additional
+    /// nodes from each handler are persisted via <c>IMeshStorage</c> wrapped in
+    /// <c>Observable.FromAsync</c>; no <c>await</c> in handler code itself.
     /// </summary>
-    private static async Task RunPostCreationHandlersAsync(
+    private static IObservable<System.Reactive.Unit> RunPostCreationHandlersObs(
         IMessageHub hub,
         MeshNode node,
         string? createdBy,
-        ILogger logger,
-        CancellationToken ct)
+        ILogger logger)
     {
         if (string.IsNullOrEmpty(node.NodeType))
-            return;
+            return Observable.Empty<System.Reactive.Unit>();
 
         var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
-        var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>();
-        foreach (var handler in handlers)
-        {
-            if (!handler.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
-                continue;
+        var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>()
+            .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
-            try
-            {
-                await handler.HandleAsync(node, createdBy, ct);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex,
-                    "Post-creation handler {Handler} failed for node {Path}",
-                    handler.GetType().Name, node.Path);
-            }
+        if (handlers.Count == 0)
+            return Observable.Empty<System.Reactive.Unit>();
 
-            // Persist additional nodes directly (bypass hub pipeline to avoid deadlocks)
-            try
+        // For each matching handler: invoke HandleAsync (logged-and-swallowed), then
+        // persist any additional nodes it returns. Sequentially via Concat to preserve
+        // the original order's side-effect dependencies.
+        return handlers
+            .Select(handler =>
             {
-                var additionalNodes = handler.GetAdditionalNodes(node);
-                foreach (var additional in additionalNodes)
-                {
-                    if (persistence != null)
+                var handleObs = Observable.FromAsync(token => handler.HandleAsync(node, createdBy, token))
+                    .Catch<System.Reactive.Unit, Exception>(ex =>
                     {
-                        var saved = await persistence.SaveNodeAsync(additional with { State = MeshNodeState.Active }, ct);
-                        hub.Post(DataChangeRequest.Update([saved]), o => o.WithTarget(new Address(saved.Path)));
-                        logger.LogInformation("Post-creation handler created additional node at {Path}", saved.Path);
-                    }
+                        logger.LogWarning(ex,
+                            "Post-creation handler {Handler} failed for node {Path}",
+                            handler.GetType().Name, node.Path);
+                        return Observable.Return(System.Reactive.Unit.Default);
+                    });
+
+                IEnumerable<MeshNode> additional;
+                try
+                {
+                    additional = handler.GetAdditionalNodes(node) ?? Array.Empty<MeshNode>();
                 }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex,
-                    "Post-creation handler {Handler} failed to create additional nodes for {Path}",
-                    handler.GetType().Name, node.Path);
-            }
-        }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Post-creation handler {Handler}.GetAdditionalNodes threw for node {Path}",
+                        handler.GetType().Name, node.Path);
+                    additional = Array.Empty<MeshNode>();
+                }
+
+                if (persistence == null || !additional.Any())
+                    return handleObs;
+
+                var saveExtras = additional
+                    .Select(extra => Observable.FromAsync(token =>
+                            persistence.SaveNodeAsync(extra with { State = MeshNodeState.Active }, token))
+                        .Do(saved =>
+                        {
+                            hub.Post(DataChangeRequest.Update([saved]),
+                                o => o.WithTarget(new Address(saved.Path)));
+                            logger.LogInformation(
+                                "Post-creation handler created additional node at {Path}", saved.Path);
+                        })
+                        .Catch<MeshNode, Exception>(ex =>
+                        {
+                            logger.LogWarning(ex,
+                                "Failed to persist post-creation additional node from {Handler} for {Path}",
+                                handler.GetType().Name, node.Path);
+                            return Observable.Empty<MeshNode>();
+                        })
+                        .Select(_ => System.Reactive.Unit.Default))
+                    .Concat();
+
+                return handleObs.Concat(saveExtras);
+            })
+            .Concat();
     }
 
     /// <summary>
