@@ -360,22 +360,19 @@ public static class MeshExtensions
         var capturedRequest = deleteRequest;
         var path = deleteRequest.Path;
 
-        var workspace = hub.GetWorkspace();
-        var nodeStream = workspace?.GetStream<MeshNode>();
-        if (nodeStream == null)
-        {
-            hub.Post(
-                DeleteNodeResponse.Fail("Workspace stream unavailable on hub",
-                    NodeDeletionRejectionReason.Unknown),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        var nodeStream = hub.GetWorkspace()?.GetStream<MeshNode>();
+        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
 
-        // Read own node from the live workspace stream (BehaviorSubject — emits current value
-        // synchronously on subscribe). Then validate. Then list children via IMeshQueryCore.
-        nodeStream
-            .Take(1)
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == path))
+        // Read own node from the live workspace stream when the hub exposes one (BehaviorSubject —
+        // emits current value synchronously on subscribe). Fall back to persistence when not (some
+        // test/infra configurations don't materialize the stream). No catalog usage either way.
+        var existingNodeObs = nodeStream != null
+            ? nodeStream
+                .Take(1)
+                .Select(nodes => nodes?.FirstOrDefault(n => n.Path == path))
+            : Observable.FromAsync(token => persistence.GetNodeAsync(path, token));
+
+        existingNodeObs
             .SelectMany(existingNode =>
             {
                 if (existingNode == null)
@@ -431,36 +428,10 @@ public static class MeshExtensions
 
                     if (children.Count == 0)
                     {
-                        // Leaf — delete via IMeshService.DeleteNode (Posts DeleteNodeRequest internally).
-                        meshService.DeleteNode(path).Subscribe(
-                            success =>
-                            {
-                                if (success)
-                                {
-                                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                                        ?.Publish(MeshChangeEvent.Deleted(path));
-                                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
-                                    logger.LogInformation(
-                                        "Node deleted at {Path} by {DeletedBy}",
-                                        path, capturedRequest.DeletedBy ?? "system");
-                                }
-                                else
-                                {
-                                    hub.Post(
-                                        DeleteNodeResponse.Fail(
-                                            $"DeleteNode at {path} returned false",
-                                            NodeDeletionRejectionReason.Unknown),
-                                        o => o.ResponseFor(request));
-                                }
-                            },
-                            ex =>
-                            {
-                                logger.LogError(ex, "Error deleting leaf node at {Path}", path);
-                                hub.Post(
-                                    DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}",
-                                        NodeDeletionRejectionReason.Unknown),
-                                    o => o.ResponseFor(request));
-                            });
+                        // Leaf — delete via IMeshStorage directly. We CANNOT use
+                        // IMeshService.DeleteNode here: that posts DeleteNodeRequest, which
+                        // routes back to this handler for the SAME path and recurses forever.
+                        DeleteSelfFromStorage(hub, path, capturedRequest, request, persistence, logger);
                         return;
                     }
 
@@ -501,39 +472,10 @@ public static class MeshExtensions
                                 if (Interlocked.Decrement(ref remaining) == 0
                                     && Interlocked.CompareExchange(ref failureFlag, 0, 0) == 0)
                                 {
-                                    // All children deleted successfully — now delete self.
-                                    meshService.DeleteNode(path).Subscribe(
-                                        ok =>
-                                        {
-                                            if (ok)
-                                            {
-                                                hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                                                    ?.Publish(MeshChangeEvent.Deleted(path));
-                                                hub.Post(DeleteNodeResponse.Ok(),
-                                                    o => o.ResponseFor(request));
-                                                logger.LogInformation(
-                                                    "Node deleted at {Path} by {DeletedBy}",
-                                                    path, capturedRequest.DeletedBy ?? "system");
-                                            }
-                                            else
-                                            {
-                                                hub.Post(
-                                                    DeleteNodeResponse.Fail(
-                                                        $"DeleteNode at {path} returned false after children succeeded",
-                                                        NodeDeletionRejectionReason.Unknown),
-                                                    o => o.ResponseFor(request));
-                                            }
-                                        },
-                                        ex =>
-                                        {
-                                            logger.LogError(ex,
-                                                "Error completing deletion of {Path}", path);
-                                            hub.Post(
-                                                DeleteNodeResponse.Fail(
-                                                    $"Unexpected error: {ex.Message}",
-                                                    NodeDeletionRejectionReason.Unknown),
-                                                o => o.ResponseFor(request));
-                                        });
+                                    // All children deleted successfully — now delete self via
+                                    // IMeshStorage (NOT IMeshService — that would re-trigger
+                                    // this handler for the same path and recurse forever).
+                                    DeleteSelfFromStorage(hub, path, capturedRequest, request, persistence, logger);
                                 }
                             },
                             ex =>
@@ -706,6 +648,43 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Issues a storage-level delete of the given path and posts the appropriate
+    /// DeleteNodeResponse on completion. Used by the leaf and "all children deleted"
+    /// branches of HandleDeleteNodeRequest. We CANNOT use IMeshService.DeleteNode here
+    /// because that posts DeleteNodeRequest which routes back to this same handler for
+    /// the same path and recurses forever. The storage-level call is fine because the
+    /// caller has already passed RunDeletionValidatorsObs.
+    /// </summary>
+    private static void DeleteSelfFromStorage(
+        IMessageHub hub,
+        string path,
+        DeleteNodeRequest capturedRequest,
+        IMessageDelivery<DeleteNodeRequest> request,
+        IMeshStorage persistence,
+        ILogger logger)
+    {
+        Observable.FromAsync(token => persistence.DeleteNodeAsync(path, recursive: false, token))
+            .Subscribe(
+                _ =>
+                {
+                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                        ?.Publish(MeshChangeEvent.Deleted(path));
+                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+                    logger.LogInformation(
+                        "Node deleted at {Path} by {DeletedBy}",
+                        path, capturedRequest.DeletedBy ?? "system");
+                },
+                ex =>
+                {
+                    logger.LogError(ex, "Error deleting node at {Path}", path);
+                    hub.Post(
+                        DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                            NodeDeletionRejectionReason.Unknown),
+                        o => o.ResponseFor(request));
+                });
+    }
+
+    /// <summary>
     /// Sync-friendly observable variant of the deletion-validator runner. Iterates
     /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
     /// stops at the first failure); emits the first failure as a tuple or <c>null</c>
@@ -768,16 +747,7 @@ public static class MeshExtensions
         IMessageHub hub,
         IMessageDelivery<UpdateNodeRequest> request)
     {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
-        var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-
-        if (catalog == null)
-        {
-            hub.Post(
-                UpdateNodeResponse.Fail("IMeshCatalog not available", NodeUpdateRejectionReason.Unknown),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
 
         var updateRequest = request.Message;
 
@@ -789,10 +759,22 @@ public static class MeshExtensions
         var capturedRequest = updateRequest;
         var updatedNode = updateRequest.Node;
         var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var meshConfig = hub.ServiceProvider.GetService<IMeshCatalog>()?.Configuration;
+
+        // Read existing from our own workspace when the hub is backed by MeshDataSource —
+        // the workspace's replay-cached MeshNode stream already has the live node. Fall back
+        // to persistence when the hub doesn't expose the stream (some test/infra configs).
+        // No catalog usage either way.
+        var nodeStream = hub.GetWorkspace()?.GetStream<MeshNode>();
+        var existingNodeObs = nodeStream != null
+            ? nodeStream
+                .Take(1)
+                .Select(nodes => nodes?.FirstOrDefault(n => n.Path == updatedNode.Path))
+            : Observable.FromAsync(token => persistence.GetNodeAsync(updatedNode.Path, token));
 
         // Read existing → check NodeType → validate → persist → workspace ack → response.
         // Each step lives in a Subscribe callback; the handler returns synchronously below.
-        Observable.FromAsync(_ => catalog.GetNodeAsync(new Address(updatedNode.Path)))
+        existingNodeObs
             .SelectMany(existingNode =>
             {
                 if (existingNode == null)
@@ -849,7 +831,7 @@ public static class MeshExtensions
                         ?.Publish(MeshChangeEvent.Updated(savedNode));
 
                     // Version history — fire-and-forget Subscribe; failures are non-critical.
-                    if (!catalog.Configuration.IsSatelliteNodeType(savedNode.NodeType))
+                    if (meshConfig != null && !meshConfig.IsSatelliteNodeType(savedNode.NodeType))
                     {
                         var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
                         if (versionQuery != null)
