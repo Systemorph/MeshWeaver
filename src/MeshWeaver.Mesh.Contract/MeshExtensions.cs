@@ -327,156 +327,253 @@ public static class MeshExtensions
         return request.Processed();
     }
 
-    private static async Task<IMessageDelivery> HandleDeleteNodeRequest(
+    /// <summary>
+    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
+    /// No <c>IMeshCatalog</c> usage:
+    /// <list type="bullet">
+    /// <item>Own-node read: <c>hub.GetWorkspace().GetStream&lt;MeshNode&gt;().Take(1)</c> — the
+    /// node-operation handlers run on the node's own hub (registered via MeshDataSource), so
+    /// the workspace already has the live MeshNode in its replay-cached BehaviorSubject.</item>
+    /// <item>Children listing: internal <see cref="IMeshQueryCore"/> with <c>namespace:{path}</c>
+    /// — bypasses access control because the caller has already passed RunDeletionValidatorsObs.</item>
+    /// <item>Self / child deletion: <see cref="IMeshService.DeleteNode"/>, which Posts
+    /// <see cref="DeleteNodeRequest"/> through the security pipeline and returns
+    /// <c>IObservable&lt;bool&gt;</c>. No <c>catalog.DeleteNodeAsync</c> call.</item>
+    /// </list>
+    /// Recursive child deletes are issued in parallel; on the FIRST failure observed, the
+    /// parent's Fail response is posted (in-flight child deletes are not aborted but the
+    /// parent will not be deleted).
+    /// </summary>
+    private static IMessageDelivery HandleDeleteNodeRequest(
         IMessageHub hub,
-        IMessageDelivery<DeleteNodeRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<DeleteNodeRequest> request)
     {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
-        var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQueryCore = hub.ServiceProvider.GetService<IMeshQueryCore>();
 
-        if (catalog == null)
+        var deleteRequest = request.Message;
+        if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
+            && request.AccessContext?.ObjectId is { Length: > 0 } deleteSenderId)
+            deleteRequest = deleteRequest with { DeletedBy = deleteSenderId };
+
+        var capturedRequest = deleteRequest;
+        var path = deleteRequest.Path;
+
+        var workspace = hub.GetWorkspace();
+        var nodeStream = workspace?.GetStream<MeshNode>();
+        if (nodeStream == null)
         {
             hub.Post(
-                DeleteNodeResponse.Fail("IMeshCatalog not available", NodeDeletionRejectionReason.Unknown),
+                DeleteNodeResponse.Fail("Workspace stream unavailable on hub",
+                    NodeDeletionRejectionReason.Unknown),
                 o => o.ResponseFor(request));
             return request.Processed();
         }
 
-        try
-        {
-            var deleteRequest = request.Message;
-
-            // Identity resolution: if no explicit DeletedBy, use AccessContext identity
-            if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
-                && request.AccessContext?.ObjectId is { Length: > 0 } deleteSenderId)
-                deleteRequest = deleteRequest with { DeletedBy = deleteSenderId };
-
-            var path = deleteRequest.Path;
-
-            // 1. Check if node exists
-            var existingNode = await catalog.GetNodeAsync(new Address(path));
-            if (existingNode == null)
+        // Read own node from the live workspace stream (BehaviorSubject — emits current value
+        // synchronously on subscribe). Then validate. Then list children via IMeshQueryCore.
+        nodeStream
+            .Take(1)
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == path))
+            .SelectMany(existingNode =>
             {
-                hub.Post(
-                    DeleteNodeResponse.Fail(
-                        $"Node not found at path: {path}",
-                        NodeDeletionRejectionReason.NodeNotFound),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 2. Run validators on this node (global + NodeType-specific)
-            var validationError = await RunDeletionValidatorsAsync(hub, catalog, existingNode, deleteRequest, ct);
-            if (validationError != null)
-            {
-                logger.LogWarning("Validator rejected node deletion at {Path}: {Error}",
-                    path, validationError.Value.ErrorMessage);
-
-                hub.Post(
-                    DeleteNodeResponse.Fail(
-                        validationError.Value.ErrorMessage ?? "Validation failed",
-                        validationError.Value.Reason),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 3. Get direct children
-            var children = new List<MeshNode>();
-            await foreach (var child in catalog.QueryAsync(path, maxResults: int.MaxValue, ct: ct))
-                children.Add(child);
-
-            if (children.Count == 0)
-            {
-                // Leaf node — delete immediately
-                await catalog.DeleteNodeAsync(path, recursive: false, ct);
-                hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                    ?.Publish(MeshChangeEvent.Deleted(path));
-                hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
-                logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
-                return request.Processed();
-            }
-
-            // Non-recursive delete with children — reject
-            if (!deleteRequest.Recursive)
-            {
-                hub.Post(
-                    DeleteNodeResponse.Fail(
-                        $"Node at '{path}' has children. Use recursive delete to remove it.",
-                        NodeDeletionRejectionReason.HasChildren),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 4. Has children — post DeleteNodeRequest for each child, do NOT await.
-            //    Use RegisterCallback to collect responses asynchronously.
-            //    When all children have responded, delete self and post response.
-            var childResponses = new DeleteNodeResponse[children.Count];
-            var remaining = children.Count;
-
-            for (var i = 0; i < children.Count; i++)
-            {
-                var idx = i;
-                var childRequest = new DeleteNodeRequest(children[i].Path) { DeletedBy = deleteRequest.DeletedBy, Recursive = true };
-                var delivery = hub.Post(childRequest, o => o.WithTarget(hub.Address))!;
-
-                _ = hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
+                if (existingNode == null)
                 {
-                    childResponses[idx] = response.Message;
+                    hub.Post(
+                        DeleteNodeResponse.Fail(
+                            $"Node not found at path: {path}",
+                            NodeDeletionRejectionReason.NodeNotFound),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<MeshNode>();
+                }
 
-                    if (Interlocked.Decrement(ref remaining) == 0)
+                return RunDeletionValidatorsObs(hub, existingNode, capturedRequest)
+                    .SelectMany(validationError =>
                     {
-                        // All children responded — decide on parent deletion
-                        hub.InvokeAsync(async _ =>
+                        if (validationError != null)
                         {
-                            var failed = childResponses.Where(r => !r.Success).Select(r => r.Error).ToList();
-                            if (failed.Count > 0)
-                            {
-                                hub.Post(
-                                    DeleteNodeResponse.Fail(
-                                        $"Cannot delete '{path}': {failed.Count} child deletion(s) failed: {string.Join("; ", failed)}",
-                                        NodeDeletionRejectionReason.ChildDeletionFailed),
-                                    o => o.ResponseFor(request));
-                            }
-                            else
-                            {
-                                await catalog.DeleteNodeAsync(path, recursive: false, ct);
-                                hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
-                                logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
-                            }
-                        }, ex =>
-                        {
-                            logger.LogError(ex, "Error completing deletion of {Path}", path);
+                            logger.LogWarning(
+                                "Validator rejected node deletion at {Path}: {Error}",
+                                path, validationError.Value.ErrorMessage);
                             hub.Post(
-                                DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                                DeleteNodeResponse.Fail(
+                                    validationError.Value.ErrorMessage ?? "Validation failed",
+                                    validationError.Value.Reason),
                                 o => o.ResponseFor(request));
-                            return Task.CompletedTask;
-                        });
+                            return Observable.Empty<MeshNode>();
+                        }
+                        return Observable.Return(existingNode);
+                    });
+            })
+            .SelectMany(existingNode =>
+                // Collect direct children via the internal IMeshQueryCore (no access control —
+                // the caller has already passed the deletion validator chain).
+                Observable.FromAsync(async token =>
+                {
+                    var list = new List<MeshNode>();
+                    if (meshQueryCore != null)
+                    {
+                        var query = new MeshQueryRequest { Query = $"namespace:{path}", Limit = int.MaxValue };
+                        await foreach (var child in meshQueryCore.QueryAsync(query, hub.JsonSerializerOptions, token))
+                        {
+                            if (child is MeshNode mn)
+                                list.Add(mn);
+                        }
+                    }
+                    return list;
+                })
+                .Select(children => (existingNode, children: (IList<MeshNode>)children)))
+            .Subscribe(
+                tuple =>
+                {
+                    var children = tuple.children;
+
+                    if (children.Count == 0)
+                    {
+                        // Leaf — delete via IMeshService.DeleteNode (Posts DeleteNodeRequest internally).
+                        meshService.DeleteNode(path).Subscribe(
+                            success =>
+                            {
+                                if (success)
+                                {
+                                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                                        ?.Publish(MeshChangeEvent.Deleted(path));
+                                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+                                    logger.LogInformation(
+                                        "Node deleted at {Path} by {DeletedBy}",
+                                        path, capturedRequest.DeletedBy ?? "system");
+                                }
+                                else
+                                {
+                                    hub.Post(
+                                        DeleteNodeResponse.Fail(
+                                            $"DeleteNode at {path} returned false",
+                                            NodeDeletionRejectionReason.Unknown),
+                                        o => o.ResponseFor(request));
+                                }
+                            },
+                            ex =>
+                            {
+                                logger.LogError(ex, "Error deleting leaf node at {Path}", path);
+                                hub.Post(
+                                    DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                                        NodeDeletionRejectionReason.Unknown),
+                                    o => o.ResponseFor(request));
+                            });
+                        return;
                     }
 
-                    return response;
-                });
-            }
+                    if (!capturedRequest.Recursive)
+                    {
+                        hub.Post(
+                            DeleteNodeResponse.Fail(
+                                $"Node at '{path}' has children. Use recursive delete to remove it.",
+                                NodeDeletionRejectionReason.HasChildren),
+                            o => o.ResponseFor(request));
+                        return;
+                    }
 
-            // Return immediately — response will be posted from the callbacks above
-            return request.Processed();
-        }
-        catch (InvalidOperationException ex)
-        {
-            logger.LogWarning(ex, "Node deletion failed for path {Path}", request.Message.Path);
-            hub.Post(
-                DeleteNodeResponse.Fail(ex.Message, NodeDeletionRejectionReason.ValidationFailed),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error during node deletion at {Path}", request.Message.Path);
-            hub.Post(
-                DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}"),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                    // Recursive: delete children in parallel via IMeshService.DeleteNode.
+                    // Track outcome with an Interlocked counter; on FIRST failure, post the
+                    // parent's Fail response immediately. On ALL successes, delete self.
+                    var remaining = children.Count;
+                    var failureFlag = 0;
+                    string? firstFailedPath = null;
+
+                    foreach (var child in children)
+                    {
+                        var childPath = child.Path;
+                        meshService.DeleteNode(childPath).Subscribe(
+                            success =>
+                            {
+                                if (!success
+                                    && Interlocked.CompareExchange(ref failureFlag, 1, 0) == 0)
+                                {
+                                    Interlocked.CompareExchange(ref firstFailedPath, childPath, null);
+                                    hub.Post(
+                                        DeleteNodeResponse.Fail(
+                                            $"Cannot delete '{path}': child '{childPath}' deletion returned false.",
+                                            NodeDeletionRejectionReason.ChildDeletionFailed),
+                                        o => o.ResponseFor(request));
+                                }
+
+                                if (Interlocked.Decrement(ref remaining) == 0
+                                    && Interlocked.CompareExchange(ref failureFlag, 0, 0) == 0)
+                                {
+                                    // All children deleted successfully — now delete self.
+                                    meshService.DeleteNode(path).Subscribe(
+                                        ok =>
+                                        {
+                                            if (ok)
+                                            {
+                                                hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                                                    ?.Publish(MeshChangeEvent.Deleted(path));
+                                                hub.Post(DeleteNodeResponse.Ok(),
+                                                    o => o.ResponseFor(request));
+                                                logger.LogInformation(
+                                                    "Node deleted at {Path} by {DeletedBy}",
+                                                    path, capturedRequest.DeletedBy ?? "system");
+                                            }
+                                            else
+                                            {
+                                                hub.Post(
+                                                    DeleteNodeResponse.Fail(
+                                                        $"DeleteNode at {path} returned false after children succeeded",
+                                                        NodeDeletionRejectionReason.Unknown),
+                                                    o => o.ResponseFor(request));
+                                            }
+                                        },
+                                        ex =>
+                                        {
+                                            logger.LogError(ex,
+                                                "Error completing deletion of {Path}", path);
+                                            hub.Post(
+                                                DeleteNodeResponse.Fail(
+                                                    $"Unexpected error: {ex.Message}",
+                                                    NodeDeletionRejectionReason.Unknown),
+                                                o => o.ResponseFor(request));
+                                        });
+                                }
+                            },
+                            ex =>
+                            {
+                                if (Interlocked.CompareExchange(ref failureFlag, 1, 0) == 0)
+                                {
+                                    Interlocked.CompareExchange(ref firstFailedPath, childPath, null);
+                                    logger.LogWarning(ex,
+                                        "Child deletion failed for {ChildPath} under {Path}",
+                                        childPath, path);
+                                    hub.Post(
+                                        DeleteNodeResponse.Fail(
+                                            $"Cannot delete '{path}': child '{childPath}' threw: {ex.Message}",
+                                            NodeDeletionRejectionReason.ChildDeletionFailed),
+                                        o => o.ResponseFor(request));
+                                }
+                                Interlocked.Decrement(ref remaining);
+                            });
+                    }
+                },
+                ex =>
+                {
+                    if (ex is InvalidOperationException)
+                    {
+                        logger.LogWarning(ex, "Node deletion failed for path {Path}", path);
+                        hub.Post(
+                            DeleteNodeResponse.Fail(ex.Message, NodeDeletionRejectionReason.ValidationFailed),
+                            o => o.ResponseFor(request));
+                    }
+                    else
+                    {
+                        logger.LogError(ex, "Unexpected error during node deletion at {Path}", path);
+                        hub.Post(
+                            DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                                NodeDeletionRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                    }
+                });
+
+        return request.Processed();
     }
 
     /// <summary>
@@ -609,14 +706,15 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Runs all deletion validators from DI using the unified INodeValidator interface.
+    /// Sync-friendly observable variant of the deletion-validator runner. Iterates
+    /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
+    /// stops at the first failure); emits the first failure as a tuple or <c>null</c>
+    /// if all pass. No <c>await</c>.
     /// </summary>
-    private static async Task<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsAsync(
+    private static IObservable<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsObs(
         IMessageHub hub,
-        IMeshCatalog _,
         MeshNode node,
-        DeleteNodeRequest request,
-        CancellationToken ct)
+        DeleteNodeRequest request)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -627,19 +725,19 @@ public static class MeshExtensions
             AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
-        // Run unified validators from DI
-        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
-        foreach (var validator in validators)
-        {
-            // Check if validator handles Delete operations
-            if (validator.SupportedOperations.Count > 0 &&
-                !validator.SupportedOperations.Contains(NodeOperation.Delete))
-            {
-                continue;
-            }
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
+            .Where(v => v.SupportedOperations.Count == 0
+                        || v.SupportedOperations.Contains(NodeOperation.Delete))
+            .ToList();
 
-            var result = await validator.ValidateAsync(context, ct);
-            if (!result.IsValid)
+        if (validators.Count == 0)
+            return Observable.Return<(string?, NodeDeletionRejectionReason)?>(null);
+
+        return validators
+            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Concat()
+            .Where(result => !result.IsValid)
+            .Select(result =>
             {
                 var reason = result.Reason switch
                 {
@@ -648,11 +746,10 @@ public static class MeshExtensions
                     NodeRejectionReason.Unauthorized => NodeDeletionRejectionReason.ValidationFailed,
                     _ => NodeDeletionRejectionReason.ValidationFailed
                 };
-                return (result.ErrorMessage, reason);
-            }
-        }
-
-        return null; // All validators passed
+                return ((string?, NodeDeletionRejectionReason)?)(result.ErrorMessage, reason);
+            })
+            .Take(1)
+            .DefaultIfEmpty(null);
     }
 
     /// <summary>
@@ -772,13 +869,17 @@ public static class MeshExtensions
                         savedNode.Path, capturedRequest.UpdatedBy ?? "system");
 
                     // Post + RegisterCallback: response is sent only after workspace acks the
-                    // DataChangeRequest. Failures (DeliveryFailure / Status=Failed / unexpected ack
-                    // type) all surface as UpdateNodeResponse.Fail.
+                    // DataChangeRequest. We use the BASE RegisterCallback overload (cast the
+                    // delivery to non-generic IMessageDelivery) so the callback receives the
+                    // raw IMessageDelivery and we can pattern-match BOTH the typed response
+                    // and DeliveryFailure. The strongly-typed RegisterCallback<T> overload
+                    // would do an unconditional cast to IMessageDelivery<T> and throw at
+                    // runtime when delivery fails — losing the very signal we need.
                     var dcDelivery = hub.Post(
                         DataChangeRequest.Update([savedNode]),
                         o => o.WithTarget(new Address(savedNode.Path)))!;
 
-                    hub.RegisterCallback(dcDelivery, ack =>
+                    hub.RegisterCallback((IMessageDelivery)dcDelivery, ack =>
                     {
                         switch (ack)
                         {
