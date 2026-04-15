@@ -11,7 +11,7 @@ Tags:
   - "References"
 ---
 
-This document demonstrates unified references in the Software sample organization. For the complete Unified Path syntax reference, see [Unified Path](Doc/DataMesh/UnifiedPath).
+This document demonstrates unified references in the Software sample organization. For the complete Unified Path syntax reference, see [Unified Path](/Doc/DataMesh/UnifiedPath).
 
 It covers namespace hierarchy, data queries, content paths, and layout areas specific to the Software sample.
 
@@ -28,9 +28,7 @@ ACME/                                # Organization
 │   │   └── icon.svg
 │   ├── Code/                        # ProjectViews.cs
 │   └── TodoAgent.md                 # AI agent
-├── CustomerOnboarding/              # Project 1
-│   └── Todo/                        # Tasks for onboarding
-└── ProductLaunch/                   # Project 2
+└── ProductLaunch/                   # Project
     └── Todo/                        # Tasks for launch
 ```
 
@@ -47,7 +45,6 @@ ACME/                                # Organization
 
 | Path | Description |
 |------|-------------|
-| `ACME/CustomerOnboarding` | CustomerOnboarding project |
 | `ACME/ProductLaunch` | ProductLaunch project |
 
 ## NodeType Definitions
@@ -58,16 +55,6 @@ ACME/                                # Organization
 | `ACME/Project/TodoAgent` | AI agent definition |
 
 ## Task Instances
-
-**CustomerOnboarding Tasks:**
-
-| Path | Task |
-|------|------|
-| `ACME/CustomerOnboarding/Todo/ReviewKYC` | Review KYC documentation |
-| `ACME/CustomerOnboarding/Todo/CalculateRiskScore` | Calculate risk score |
-| `ACME/CustomerOnboarding/Todo/SanctionsScreening` | Sanctions screening |
-| `ACME/CustomerOnboarding/Todo/VerifyOwnership` | Verify ownership |
-| `ACME/CustomerOnboarding/Todo/CreateClientRecord` | Create client record |
 
 **ProductLaunch Tasks:**
 
@@ -81,31 +68,26 @@ ACME/                                # Organization
 
 # Query Syntax
 
-MeshWeaver uses a GitHub-style query syntax for searching nodes. For complete query syntax reference, see [Query Syntax](Doc/DataMesh/QuerySyntax).
+MeshWeaver uses a GitHub-style query syntax for searching nodes. For complete query syntax reference, see [Query Syntax](/Doc/DataMesh/QuerySyntax).
 
 ## Software Query Examples
 
-**All Tasks in a Project:**
+**All Tasks in ProductLaunch:**
 
 ```
-path:ACME/CustomerOnboarding/Todo nodeType:ACME/Project/Todo scope:subtree
+path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree
 ```
 
-@[ACME/CustomerOnboarding/Todo:nodeType:ACME/Project/Todo:scope:subtree]
+@[ACME/ProductLaunch/Todo:nodeType:ACME/Project/Todo:scope:subtree]
 
 **Tasks by Status** (In-progress tasks in ProductLaunch):
 ```
 path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo status:InProgress scope:subtree
 ```
 
-**Tasks by Category** (Legal tasks in CustomerOnboarding):
+**Tasks by Assignee** (Tasks assigned to Alice):
 ```
-path:ACME/CustomerOnboarding/Todo nodeType:ACME/Project/Todo category:Legal scope:subtree
-```
-
-**Tasks by Assignee** (Tasks assigned to Oliver):
-```
-nodeType:ACME/Project/Todo assignee:Oliver
+nodeType:ACME/Project/Todo assignee:Alice
 ```
 
 **All Todo Instances** (All tasks across all projects):
@@ -115,23 +97,7 @@ nodeType:ACME/Project/Todo
 
 # Data References
 
-See [Data Prefix](Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
-
-## Display All Tasks in CustomerOnboarding
-
-```
-@ACME/CustomerOnboarding/Todo
-```
-
-@ACME/CustomerOnboarding/Todo
-
-## Display Specific Task
-
-```
-@ACME/CustomerOnboarding/Todo/ReviewKYC
-```
-
-@ACME/CustomerOnboarding/Todo/ReviewKYC
+See [Data Prefix](/Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
 
 ## Display All Tasks in ProductLaunch
 
@@ -140,6 +106,14 @@ See [Data Prefix](Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data refe
 ```
 
 @ACME/ProductLaunch/Todo
+
+## Display Specific Task
+
+```
+@ACME/ProductLaunch/Todo/PricingStrategy
+```
+
+@ACME/ProductLaunch/Todo/PricingStrategy
 
 # Dimension References
 
@@ -207,27 +181,27 @@ Defined in `ACME/Project/Todo/_Source/Category.cs`:
 
 # Layout Area References
 
-Layout areas are defined in `ProjectViews.cs` and available for all projects. See [Area Prefix](Doc/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
+Layout areas are defined in `ProjectViews.cs` and available for all projects. See [Area Prefix](/Doc/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
 
 ## TodaysFocus - Urgent Tasks
 
 Shows overdue, due today, and in-progress tasks:
 
 ```
-@ACME/CustomerOnboarding/TodaysFocus
+@ACME/ProductLaunch/TodaysFocus
 ```
 
-@ACME/CustomerOnboarding/TodaysFocus
+@ACME/ProductLaunch/TodaysFocus
 
 ## AllTasks - Tasks by Status
 
 Complete task list grouped by status:
 
 ```
-@ACME/CustomerOnboarding/AllTasks
+@ACME/ProductLaunch/AllTasks
 ```
 
-@ACME/CustomerOnboarding/AllTasks
+@ACME/ProductLaunch/AllTasks
 
 ## TodosByCategory - Tasks by Category
 
@@ -244,10 +218,10 @@ Tasks grouped by category:
 Tasks assigned to the current user:
 
 ```
-@ACME/CustomerOnboarding/MyTasks
+@ACME/ProductLaunch/MyTasks
 ```
 
-@ACME/CustomerOnboarding/MyTasks
+@ACME/ProductLaunch/MyTasks
 
 ## Backlog - Unassigned Tasks
 
@@ -268,7 +242,7 @@ Individual task views:
 The default view showing full task information:
 
 ```
-@ACME/CustomerOnboarding/Todo/ReviewKYC/Details
+@ACME/ProductLaunch/Todo/PricingStrategy/Details
 ```
 
 ## Edit View
@@ -276,7 +250,7 @@ The default view showing full task information:
 Opens the task editor:
 
 ```
-@ACME/CustomerOnboarding/Todo/ReviewKYC/Edit
+@ACME/ProductLaunch/Todo/PricingStrategy/Edit
 ```
 
 ## Thumbnail View
@@ -284,7 +258,7 @@ Opens the task editor:
 Compact card view for catalog listings:
 
 ```
-@ACME/CustomerOnboarding/Todo/ReviewKYC/Thumbnail
+@ACME/ProductLaunch/Todo/PricingStrategy/Thumbnail
 ```
 
 # Navigation Links
@@ -292,33 +266,23 @@ Compact card view for catalog listings:
 ## Link to Project
 
 ```markdown
-[CustomerOnboarding](/ACME/CustomerOnboarding)
 [ProductLaunch](/ACME/ProductLaunch)
 ```
 
 ## Link to Specific Task
 
 ```markdown
-[Review KYC](/ACME/CustomerOnboarding/Todo/ReviewKYC)
 [Pricing Strategy](/ACME/ProductLaunch/Todo/PricingStrategy)
 ```
 
 ## Link to Layout Area
 
 ```markdown
-[Today's Focus](/ACME/CustomerOnboarding/TodaysFocus)
+[Today's Focus](/ACME/ProductLaunch/TodaysFocus)
 [All Tasks](/ACME/ProductLaunch/AllTasks)
 ```
 
 # Team Members
-
-## Software Employees
-
-| Name | Role | Typical Categories |
-|------|------|-------------------|
-| Oliver | Compliance | Legal, Compliance |
-| Paul | Risk Management | Risk, Operations |
-| Quinn | Customer Support | Support, Operations |
 
 ## Platform Team
 
