@@ -118,7 +118,12 @@ public class MeshOperations
     {
         logger.LogInformation("Get called with path={Path}", path);
 
+        if (string.IsNullOrWhiteSpace(path))
+            return "Error: path is required.";
+
         var resolvedPath = ResolvePath(path);
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return "Error: path is required.";
 
         try
         {
@@ -452,9 +457,17 @@ public class MeshOperations
     {
         logger.LogInformation("Patch called for path={Path}", path);
 
+        // Fail-fast on empty/garbage path — without this, QueryAsync on "path:" or "path:<garbage>"
+        // can hang forever (seen in AgentWriteFailureTests.NoTool_EverReturnsEmpty_OnAnyInput).
+        if (string.IsNullOrWhiteSpace(path))
+            return "Error: path is required.";
+
         try
         {
             var resolvedPath = ResolvePath(path);
+            if (string.IsNullOrWhiteSpace(resolvedPath))
+                return "Error: path is required.";
+
             var existing = await mesh.QueryAsync<MeshNode>($"path:{resolvedPath}").FirstOrDefaultAsync();
             if (existing == null)
                 return $"Error: node not found at {resolvedPath}";
