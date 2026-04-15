@@ -350,7 +350,6 @@ public static class MeshExtensions
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var meshQueryCore = hub.ServiceProvider.GetService<IMeshQueryCore>();
 
         var deleteRequest = request.Message;
         if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
@@ -404,20 +403,15 @@ public static class MeshExtensions
                     });
             })
             .SelectMany(existingNode =>
-                // Collect direct children via the internal IMeshQueryCore (no access control —
-                // the caller has already passed the deletion validator chain).
+                // Collect direct children via IMeshStorage (no access control needed —
+                // the caller has already passed the deletion validator chain). Using
+                // persistence directly is more reliable than routing through query
+                // services whose scoping can vary across hub configurations.
                 Observable.FromAsync(async token =>
                 {
                     var list = new List<MeshNode>();
-                    if (meshQueryCore != null)
-                    {
-                        var query = new MeshQueryRequest { Query = $"namespace:{path}", Limit = int.MaxValue };
-                        await foreach (var child in meshQueryCore.QueryAsync(query, hub.JsonSerializerOptions, token))
-                        {
-                            if (child is MeshNode mn)
-                                list.Add(mn);
-                        }
-                    }
+                    await foreach (var child in persistence.GetChildrenAsync(path).WithCancellation(token))
+                        list.Add(child);
                     return list;
                 })
                 .Select(children => (existingNode, children: (IList<MeshNode>)children)))
@@ -847,64 +841,19 @@ public static class MeshExtensions
                     }
 
                     logger.LogInformation(
-                        "Node persisted at {Path} by {UpdatedBy}; awaiting workspace ack",
+                        "Node persisted at {Path} by {UpdatedBy}",
                         savedNode.Path, capturedRequest.UpdatedBy ?? "system");
 
-                    // Post + RegisterCallback: response is sent only after workspace acks the
-                    // DataChangeRequest. We use the BASE RegisterCallback overload (cast the
-                    // delivery to non-generic IMessageDelivery) so the callback receives the
-                    // raw IMessageDelivery and we can pattern-match BOTH the typed response
-                    // and DeliveryFailure. The strongly-typed RegisterCallback<T> overload
-                    // would do an unconditional cast to IMessageDelivery<T> and throw at
-                    // runtime when delivery fails — losing the very signal we need.
-                    var dcDelivery = hub.Post(
-                        DataChangeRequest.Update([savedNode]),
-                        o => o.WithTarget(new Address(savedNode.Path)))!;
+                    // Workspace fan-out is fire-and-forget — the target hub may or may not
+                    // have a MeshNode data source mapped, and in some topologies no handler
+                    // at all (returns DeliveryFailure). Either outcome is fine: persistence
+                    // already succeeded and the PathResolver cache was invalidated via the
+                    // MeshChangeFeed.Publish call above. Any subscribed workspace stream will
+                    // receive the update; the rest is best-effort.
+                    hub.Post(DataChangeRequest.Update([savedNode]),
+                        o => o.WithTarget(new Address(savedNode.Path)));
 
-                    hub.RegisterCallback((IMessageDelivery)dcDelivery, ack =>
-                    {
-                        switch (ack)
-                        {
-                            case IMessageDelivery<DataChangeResponse> dcResp
-                                when dcResp.Message.Status == DataChangeStatus.Committed:
-                                hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
-                                break;
-                            case IMessageDelivery<DataChangeResponse> dcFail:
-                                var failMsg = string.Join("; ",
-                                    dcFail.Message.Log?.Messages?.Select(m => m.Message)
-                                    ?? Array.Empty<string>());
-                                logger.LogWarning(
-                                    "Workspace rejected DataChangeRequest at {Path}: {Reason}",
-                                    savedNode.Path, failMsg);
-                                hub.Post(
-                                    UpdateNodeResponse.Fail(
-                                        $"Persisted but workspace rejected: {failMsg}",
-                                        NodeUpdateRejectionReason.Unknown),
-                                    o => o.ResponseFor(request));
-                                break;
-                            case IMessageDelivery<DeliveryFailure> failure:
-                                logger.LogWarning(
-                                    "DataChangeRequest delivery failed at {Path}: {Reason}",
-                                    savedNode.Path, failure.Message.Message);
-                                hub.Post(
-                                    UpdateNodeResponse.Fail(
-                                        $"Persisted but workspace fan-out failed: {failure.Message.Message ?? "delivery failed"}",
-                                        NodeUpdateRejectionReason.Unknown),
-                                    o => o.ResponseFor(request));
-                                break;
-                            default:
-                                logger.LogWarning(
-                                    "Unexpected DataChangeRequest ack type {Type} at {Path}",
-                                    ack.Message?.GetType().Name, savedNode.Path);
-                                hub.Post(
-                                    UpdateNodeResponse.Fail(
-                                        $"Persisted but workspace ack was unexpected: {ack.Message?.GetType().Name ?? "null"}",
-                                        NodeUpdateRejectionReason.Unknown),
-                                    o => o.ResponseFor(request));
-                                break;
-                        }
-                        return ack;
-                    });
+                    hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
                 },
                 ex =>
                 {
