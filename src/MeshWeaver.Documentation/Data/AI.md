@@ -93,9 +93,9 @@ AI agents **remote control** applications rather than being embedded:
 When users ask to "show" or "display" data:
 
 ```
-User: "Show me the CustomerOnboarding project"
-Agent: [Calls NavigateTo('@ACME/CustomerOnboarding')]
-       "Here's the CustomerOnboarding project."
+User: "Show me the ProductLaunch project"
+Agent: [Calls NavigateTo('@ACME/ProductLaunch')]
+       "Here's the ProductLaunch project."
 ```
 
 Use `NavigateTo` instead of returning raw JSON.

@@ -19,25 +19,23 @@ The Software sample organization demonstrates MeshWeaver capabilities through re
 
 | Topic | Go here |
 |-------|---------|
-| Get up and running | [Getting Started](ACME/Documentation/GettingStarted) - Setup, navigation, first steps |
-| Understand the architecture | [Architecture](ACME/Documentation/Architecture) - MeshNodes, namespaces, message hubs |
-| Add AI to your app | [AI Agent Integration](ACME/Documentation/AIAgentIntegration) - Agents, MeshPlugin, NLP |
-| Reference paths and queries | [Unified References](ACME/Documentation/UnifiedReferences) - Paths, queries, layout areas |
+| Get up and running | [Getting Started](/ACME/Documentation/GettingStarted) - Setup, navigation, first steps |
+| Understand the architecture | [Architecture](/ACME/Documentation/Architecture) - MeshNodes, namespaces, message hubs |
+| Add AI to your app | [AI Agent Integration](/ACME/Documentation/AIAgentIntegration) - Agents, MeshPlugin, NLP |
+| Reference paths and queries | [Unified References](/ACME/Documentation/UnifiedReferences) - Paths, queries, layout areas |
 
 ---
 
 # The Software Organization
 
-Software is a sample organization with two projects sharing a common Todo application:
+Software is a sample organization with a project using a common Todo application:
 
 ```
 ACME/                           # Organization
 ├── Project/                    # Shared NodeTypes
 │   ├── Todo.json               # Task NodeType (reusable)
 │   └── TodoAgent.md            # AI agent
-├── CustomerOnboarding/         # Project 1: Insurance onboarding
-│   └── Todo/                   # ReviewKYC, CalculateRiskScore, ...
-└── ProductLaunch/              # Project 2: Marketing campaign
+└── ProductLaunch/              # Project: Marketing campaign
     └── Todo/                   # PricingStrategy, EmailCampaign, ...
 ```
 
@@ -54,7 +52,7 @@ Data is organized in a hierarchical namespace:
 
 ## NodeType Reuse
 
-The Todo NodeType (`ACME/Project/Todo`) is defined once and used by both projects:
+The Todo NodeType (`ACME/Project/Todo`) is defined once and used by projects:
 - Same data model, views, and behavior
 - Project-specific instances with relevant categories
 - Shared AI agent for task management
@@ -69,16 +67,6 @@ The TodoAgent demonstrates:
 ---
 
 # Sample Data
-
-## CustomerOnboarding Project
-
-Insurance client onboarding with compliance-focused tasks:
-
-| Task | Assignee | Category |
-|------|----------|----------|
-| Review KYC documentation | Oliver | Legal |
-| Calculate risk score | Paul | Risk |
-| Sanctions screening | Oliver | Compliance |
 
 ## ProductLaunch Project
 
@@ -95,6 +83,6 @@ Marketing campaign with cross-functional tasks:
 # Explore Further
 
 Navigate to `Software` in the portal to explore:
-- Both projects with their tasks
+- The project with its tasks
 - Different views: TodaysFocus, AllTasks, TodosByCategory
 - The AI chat agent for natural language interactions

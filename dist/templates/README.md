@@ -34,7 +34,7 @@ Requires Docker for PostgreSQL and Azure Storage emulation.
 ## Sample Data
 
 The `samples/Graph/Data/ACME/` directory contains sample organization data including:
-- Todo task management with projects (CustomerOnboarding, ProductLaunch)
+- Todo task management with projects (ProductLaunch)
 - Article content management
 - User and access control definitions
 - Markdown documentation

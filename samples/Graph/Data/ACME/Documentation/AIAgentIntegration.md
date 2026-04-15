@@ -57,13 +57,13 @@ The MeshPlugin is completely generic - it works with Todo items, projects, categ
 
 ## Example MeshPlugin Usage
 
-Here's how the AI agent might use the MeshPlugin to handle a user request in the Software CustomerOnboarding project:
+Here's how the AI agent might use the MeshPlugin to handle a user request in the ProductLaunch project:
 
-**User Request**: "Show me all compliance-related tasks"
+**User Request**: "Show me all marketing tasks"
 
 **Agent Process**:
-1. `Search("nodeType:ACME/Project/Todo category:Compliance")` → Finds compliance-related tasks
-2. `NavigateTo("@ACME/CustomerOnboarding/TodosByCategory")` → Displays results using the category view
+1. `Search("nodeType:ACME/Project/Todo category:Marketing")` → Finds marketing-related tasks
+2. `NavigateTo("@ACME/ProductLaunch/TodosByCategory")` → Displays results using the category view
 
 # Domain-Specific Agents
 
@@ -88,7 +88,6 @@ The agent is the Todo Agent, specialized in managing tasks for Software projects
 - Create and update tasks (using the Update tool)
 
 # Team Members
-Software employees: Oliver (Compliance), Paul (Risk Management), Quinn (Customer Support)
 Platform team: Alice, Bob, Carol, David, Emma, Roland, Samuel
 
 # Task Categories
@@ -100,35 +99,15 @@ Partnerships, Compliance, Risk, Operations
 
 The agent provides essential context that helps the AI understand the current environment:
 
-- **Team Members**: Knows who can be assigned tasks (Oliver, Paul, Quinn for Software; Alice, Bob, etc. for platform)
+- **Team Members**: Knows who can be assigned tasks (Alice, Bob, Carol, David, Emma)
 - **Categories**: Understands available categories for proper task classification
-- **Project Context**: Operates within the current project namespace (CustomerOnboarding or ProductLaunch)
+- **Project Context**: Operates within the current project namespace (ProductLaunch)
 - **Date Resolution**: Converts relative dates like "tomorrow" or "next Friday" into specific dates
 - **Priority Levels**: Maps user input to standard priorities (Low, Medium, High, Critical)
 
 # Natural Language Processing Examples
 
-The AI agent integration enables sophisticated natural language interactions. Here are examples from both Software projects:
-
-## CustomerOnboarding Project
-
-**Creating Compliance Tasks**:
-```
-User: "Create a compliance review task for Oliver, it's high priority"
-Agent: "Created 'Compliance review' assigned to Oliver with High priority in Legal category"
-```
-
-**Querying Task Status**:
-```
-User: "What tasks are overdue in the onboarding project?"
-Agent: [Displays TodaysFocus view showing overdue tasks]
-```
-
-**Reassigning Work**:
-```
-User: "Move the KYC review from Oliver to Paul"
-Agent: "Updated 'Review KYC documentation' - reassigned from Oliver to Paul"
-```
+The AI agent integration enables sophisticated natural language interactions. Here are examples from the ProductLaunch project:
 
 ## ProductLaunch Project
 
@@ -154,9 +133,9 @@ Agent: "Created 'Demo environment setup' in Engineering category with Medium pri
 
 The agent demonstrates sophisticated behavior by first retrieving available categories through the `MeshPlugin`, then matching user input to existing categories. This prevents data inconsistencies and provides a better user experience:
 
-1. **User Input**: "Add a legal review task for the contract"
+1. **User Input**: "Add a marketing review task for the campaign"
 2. **Category Discovery**: Agent calls `Get("@ACME/Project/Todo/schema:")` to see available categories
-3. **Intelligent Matching**: Agent matches "legal review" to the "Legal" category
+3. **Intelligent Matching**: Agent matches "marketing review" to the "Marketing" category
 4. **Todo Creation**: Agent calls `Update()` with properly structured Todo JSON
 
 # Architecture Benefits
@@ -191,9 +170,9 @@ In the Software sample, AI agents work alongside human team members:
 
 | Team Member | Role | AI Agent Support |
 |-------------|------|------------------|
-| **Oliver** | Compliance | TodoAgent assists with legal and compliance task management |
-| **Paul** | Risk Management | TodoAgent helps track risk assessment tasks |
-| **Quinn** | Customer Support | TodoAgent manages support tickets and follow-ups |
+| **Alice** | Marketing | TodoAgent assists with campaign task management |
+| **Bob** | Development | TodoAgent helps track engineering tasks |
+| **Emma** | Operations | TodoAgent manages operational tasks and follow-ups |
 
 # Layout Area Integration
 
@@ -208,7 +187,7 @@ CRITICAL: When users ask to view, show, list, or display tasks:
   3. DO NOT also output the raw data as text
 ```
 
-Available views in Software projects:
+Available views in the Software project:
 - **TodaysFocus**: Urgent and in-progress tasks
 - **AllTasks**: Tasks grouped by status
 - **TodosByCategory**: Tasks grouped by category
