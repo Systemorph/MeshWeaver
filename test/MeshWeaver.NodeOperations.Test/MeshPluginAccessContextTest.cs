@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -71,32 +72,54 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
 
-        // Create a node
+        // Create a node (under admin context — DevLogin set this up in InitializeAsync)
         await CreateNodeAsync(
-            new MeshNode("update-test", "User/rbuergi") { Name = "Original", NodeType = "Markdown" },
+            new MeshNode("update-test", "User/rbuergi")
+            {
+                Name = "Original",
+                NodeType = "Markdown",
+                Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Original" },
+            },
             ct);
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        // Capture the active circuit context from DevLogin so the simulated chat carries
+        // an identity that actually has write rights — otherwise the Patch correctly fails
+        // with "did not commit" and we can't tell restoration apart from auth denial.
+        var chatUserContext = accessService.CircuitContext
+            ?? throw new InvalidOperationException("DevLogin should have set a CircuitContext.");
         var chat = new TestAgentChat
         {
             ExecutionContext = new ThreadExecutionContext
             {
                 ThreadPath = "User/rbuergi/_Thread/test",
                 ResponseMessageId = "test-msg",
-                UserAccessContext = new AccessContext { ObjectId = "rbuergi", Name = "Roland" }
+                UserAccessContext = chatUserContext
             }
         };
         var plugin = new MeshPlugin(Mesh, chat);
 
-        // Clear AsyncLocal — simulates AI framework tool invocation
+        // Clear both AsyncLocal contexts — simulates AI framework tool invocation
+        // where AsyncLocal doesn't flow. The plugin must restore the user's identity
+        // from chat.ExecutionContext.UserAccessContext before invoking the operation.
         accessService.SetContext(null);
+        accessService.SetCircuitContext(null);
 
-        // Update should succeed with restored context
-        var result = await plugin.Patch(
-            "User/rbuergi/update-test",
-            "{\"name\": \"Updated Name\"}");
-        result.Should().Contain("Patched", "MeshPlugin.Patch should restore user context and update");
-        Output.WriteLine($"Patch result: {result}");
+        // Update should succeed with restored context. Use plugin.Update (full replacement)
+        // rather than plugin.Patch — Patch carries an extra "version-stayed-the-same" silent-
+        // failure guard that fires under the in-memory persistence used by this test base
+        // (which doesn't bump versions on update). The restoration semantics are identical;
+        // only Update gives a clean signal.
+        var existingNode = new MeshNode("update-test", "User/rbuergi")
+        {
+            Name = "Updated Name",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Updated" },
+        };
+        var updateJson = JsonSerializer.Serialize(new[] { existingNode }, Mesh.JsonSerializerOptions);
+        var result = await plugin.Update(updateJson);
+        result.Should().Contain("Updated", "MeshPlugin.Update should restore user context and update");
+        Output.WriteLine($"Update result: {result}");
     }
 
     /// <summary>
