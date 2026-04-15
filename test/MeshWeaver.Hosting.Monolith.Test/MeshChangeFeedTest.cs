@@ -26,7 +26,9 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
             .AddGraph();
 
     private IMeshChangeFeed ChangeFeed => Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
-    private IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+    // The base class also exposes PathResolver; this accessor intentionally re-declares it
+    // to resolve via the local Mesh hub rather than the base-class SP.
+    private new IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
     private CancellationToken Ct => new CancellationTokenSource(10_000).Token;
 
     private async Task<MeshNode> CreateTestNodeAsync(string id, string? ns = null)

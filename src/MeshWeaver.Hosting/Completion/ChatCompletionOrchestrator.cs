@@ -464,7 +464,8 @@ internal sealed class ChatCompletionOrchestrator(
 
             nodeAddress ??= currentNamespace;
             // Resolve satellite contexts (threads, comments) to their parent node.
-            nodeAddress = ResolveParentNodeNamespace(nodeAddress);
+            // ResolveParentNodeNamespace wants a non-null string — an empty slot means "no scope".
+            nodeAddress = ResolveParentNodeNamespace(nodeAddress ?? string.Empty);
 
             if (!string.IsNullOrEmpty(nodeAddress))
             {
