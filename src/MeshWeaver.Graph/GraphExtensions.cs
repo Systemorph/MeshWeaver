@@ -42,8 +42,7 @@ public static class GraphExtensions
                         sp.GetRequiredService<IMessageHub>(),
                         sp.GetService<IAutocompletePrefixRegistry>()));
                 }
-                services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider>(
-                    sp => sp.GetRequiredService<UnifiedReferenceAutocompleteProvider>()));
+                services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, UnifiedReferenceAutocompleteProvider>());
                 return services;
             });
 
