@@ -145,6 +145,7 @@
     <Project Path="test/MeshWeaver.Persistence.Test/MeshWeaver.Persistence.Test.csproj" />
     <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
   </Folder>
+  <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />
   <Folder Name="/tools/">
     <File Path="tools/generate-memex-template.cs" />
     <Project Path="tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj" />

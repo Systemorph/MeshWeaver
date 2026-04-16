@@ -21,7 +21,7 @@
     <GeneratorScript>$(MSBuildThisFileDirectory)..\generate-memex-template.cs</GeneratorScript>
   </PropertyGroup>
 
-  <Target Name="GenerateMemexTemplate" BeforeTargets="Build;Pack">
+  <Target Name="GenerateMemexTemplate" BeforeTargets="Pack">
     <Message Text="Regenerating Memex template (v$(Version)) from memex/ source..." Importance="high" />
     <Exec Command="dotnet run &quot;$(GeneratorScript)&quot; -- &quot;$(Version)&quot; &quot;$(RepoRoot)&quot;"
           WorkingDirectory="$(RepoRoot)" />

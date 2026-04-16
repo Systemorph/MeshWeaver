@@ -3,6 +3,7 @@
 #:property ImplicitUsings=enable
 
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 if (args.Length < 2)
@@ -61,15 +62,16 @@ CopySampleData(
     Path.Combine(outputPath, "samples/Graph/Data/ACME"),
     excludedNames);
 
-// Fix relative data path in appsettings.Development.json (memex/ is 2 levels deep, template is 1)
+// Fix relative data paths in appsettings.Development.json (memex/ is 2 levels deep, template is 1).
+// Only rewrite inside "BasePath": "..." values to avoid touching comments or unrelated strings.
 foreach (var appSettings in Directory.EnumerateFiles(outputPath, "appsettings.Development.json", SearchOption.AllDirectories))
 {
     var text = File.ReadAllText(appSettings);
-    if (text.Contains("../../samples/Graph"))
-    {
-        text = text.Replace("../../samples/Graph", "../samples/Graph");
-        File.WriteAllText(appSettings, text);
-    }
+    var rewritten = Regex.Replace(text,
+        @"(""BasePath""\s*:\s*"")\.\.\/\.\.\/(samples\/Graph)",
+        "$1../$2");
+    if (text != rewritten)
+        File.WriteAllText(appSettings, rewritten);
 }
 
 var rootVersions = LoadPackageVersions(Path.Combine(repoRoot, "Directory.Packages.props"));
@@ -139,13 +141,13 @@ void RewriteCsproj(string csprojPath, Dictionary<string, string> rootVersions)
 
         var normalized = include.Replace('\\', '/');
 
-        if (normalized.Contains("/src/MeshWeaver.", StringComparison.OrdinalIgnoreCase))
+        if (Regex.IsMatch(normalized, @"[/\\]src[/\\]MeshWeaver\.[\w.]+[/\\]", RegexOptions.IgnoreCase))
         {
             var pkgName = Path.GetFileNameWithoutExtension(include);
             pr.ReplaceWith(new XElement("PackageReference", new XAttribute("Include", pkgName)));
             changed = true;
         }
-        else if (normalized.Contains("/samples/", StringComparison.OrdinalIgnoreCase))
+        else if (Regex.IsMatch(normalized, @"[/\\]samples[/\\]", RegexOptions.IgnoreCase))
         {
             pr.Remove();
             changed = true;
