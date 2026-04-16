@@ -426,8 +426,8 @@ public static class ThreadMessageLayoutAreas
                 // Don't convert email addresses
                 if (path.Contains('@'))
                     return match.Value;
-                // Use @prefix in href — LinkUrlCleanupExtension will strip @ and resolve
-                return $"[`@{path}`](@{path})";
+                // Emit absolute href — @references from agents are always full paths
+                return $"[`@{path}`](/{path})";
             });
     }
 
