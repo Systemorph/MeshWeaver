@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageType>Template</PackageType>
+    <PackageId>MeshWeaver.MemexTemplate</PackageId>
+    <Title>MeshWeaver Memex Template</Title>
+    <Description>dotnet new template for a MeshWeaver Memex portal solution (Blazor Server monolith + .NET Aspire microservices, Graph + AI integration).</Description>
+    <PackageTags>dotnet-new;templates;meshweaver;memex;portal;blazor;aspire;ai</PackageTags>
+
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <PackageReadmeFile></PackageReadmeFile>
+
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</RepoRoot>
+    <TemplateRoot>$(RepoRoot)\dist\templates\</TemplateRoot>
+    <GeneratorScript>$(MSBuildThisFileDirectory)..\generate-memex-template.cs</GeneratorScript>
+  </PropertyGroup>
+
+  <Target Name="GenerateMemexTemplate" BeforeTargets="Build;Pack">
+    <Message Text="Regenerating Memex template (v$(Version)) from memex/ source..." Importance="high" />
+    <Exec Command="dotnet run &quot;$(GeneratorScript)&quot; -- &quot;$(Version)&quot; &quot;$(RepoRoot)&quot;"
+          WorkingDirectory="$(RepoRoot)" />
+  </Target>
+
+  <ItemGroup>
+    <None Remove="README.md" />
+    <Content Include="$(TemplateRoot)**\*"
+             Exclude="$(TemplateRoot)**\bin\**;$(TemplateRoot)**\obj\**"
+             PackagePath="content" />
+  </ItemGroup>
+
+</Project>
