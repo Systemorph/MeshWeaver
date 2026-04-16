@@ -46,7 +46,12 @@ public class MemexTemplateGeneratorTest : IDisposable
         await process.WaitForExitAsync();
 
         process.ExitCode.Should().Be(0, $"generator failed.\nstdout: {stdout}\nstderr: {stderr}");
+        _lastStdout = stdout;
+        _lastStderr = stderr;
     }
+
+    private string _lastStdout = "";
+    private string _lastStderr = "";
 
     [Fact]
     public async Task GeneratorProducesExpectedStructure()
@@ -76,12 +81,13 @@ public class MemexTemplateGeneratorTest : IDisposable
         await RunGenerator();
 
         var monolithCsproj = Path.Combine(_outputPath, "Memex.Portal.Monolith", "Memex.Portal.Monolith.csproj");
+        var csprojContent = File.ReadAllText(monolithCsproj);
         var doc = XDocument.Load(monolithCsproj);
 
         // Should have PackageReference for MeshWeaver.Hosting.Monolith (was ProjectReference to src/)
         doc.Descendants("PackageReference")
             .Any(e => e.Attribute("Include")?.Value == "MeshWeaver.Hosting.Monolith")
-            .Should().BeTrue("MeshWeaver.Hosting.Monolith should be rewritten from ProjectReference to PackageReference");
+            .Should().BeTrue($"MeshWeaver.Hosting.Monolith should be rewritten from ProjectReference to PackageReference.\nActual csproj content:\n{csprojContent}");
 
         // Should NOT have any ProjectReference pointing to ../../src/
         doc.Descendants("ProjectReference")
@@ -115,7 +121,9 @@ public class MemexTemplateGeneratorTest : IDisposable
                 e => e.Attribute("Version")!.Value);
 
         // MeshWeaver packages should use the generator version
-        packageVersions.Should().ContainKey("MeshWeaver.Hosting.Monolith");
+        var propsContent = File.ReadAllText(propsPath);
+        packageVersions.Should().ContainKey("MeshWeaver.Hosting.Monolith",
+            $"generated Directory.Packages.props should include MeshWeaver packages.\nstdout: {_lastStdout}\nstderr: {_lastStderr}\nProps content:\n{propsContent}");
         packageVersions["MeshWeaver.Hosting.Monolith"].Should().Be(version);
 
         // Third-party packages should have real versions from root Directory.Packages.props
