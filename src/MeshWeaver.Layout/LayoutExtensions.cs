@@ -222,13 +222,18 @@ public static class LayoutExtensions
                         // pipeline keeps flowing instead of crashing the circuit on decode.
                         var logger = stream.Hub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger("LayoutExtensions.GetStream");
+                        var rawPreview = evaluated.Value.ValueKind == JsonValueKind.Undefined
+                            ? "<undefined>"
+                            : evaluated.Value.GetRawText().Length > 200
+                                ? evaluated.Value.GetRawText()[..200] + "…"
+                                : evaluated.Value.GetRawText();
                         logger?.LogError(ex,
                             "Failed to deserialize layout-stream entry as {Type} at pointer {Pointer}. " +
-                            "Raw JSON: {Raw}",
+                            "ValueKind={ValueKind}, Length={Length}, Preview: {Raw}",
                             typeof(T).Name, referencePointer,
-                            evaluated.Value.ValueKind == JsonValueKind.Undefined
-                                ? "<undefined>"
-                                : evaluated.Value.GetRawText());
+                            evaluated.Value.ValueKind,
+                            evaluated.Value.ValueKind == JsonValueKind.Undefined ? 0 : evaluated.Value.GetRawText().Length,
+                            rawPreview);
                         return default!;
                     }
                 }
