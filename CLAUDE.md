@@ -6,6 +6,34 @@ This file provides guidance to AI agents when working with code in this reposito
 
 **NEVER commit or push automatically.** Always wait for the user to explicitly ask for a commit or push. Present changes for review first.
 
+## GitHub PR Operations
+
+The `gh` CLI token has **read + push** permissions but **cannot** merge PRs, resolve review threads, or request reviewers. For these operations:
+
+### Resolve review threads + merge via GraphQL
+```bash
+# 1. Find unresolved threads
+gh api graphql -f query='
+query($owner:String!, $repo:String!, $pr:Int!) {
+  repository(owner:$owner, name:$repo) {
+    pullRequest(number:$pr) {
+      reviewThreads(first:100) {
+        nodes { id isResolved }
+      }
+    }
+  }
+}' -f owner=Systemorph -f repo=MeshWeaver -F pr=PR_NUMBER \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | .id'
+
+# 2. Resolve each thread
+gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ clientMutationId }}' -f id=THREAD_ID
+
+# 3. Merge
+gh pr merge PR_NUMBER --merge
+```
+
+**If these fail with `FORBIDDEN`**, the token lacks write scope — do it from the GitHub UI or re-authenticate with `! gh auth login`.
+
 ## Documentation
 
 Documentation is embedded in `src/MeshWeaver.Documentation/` and served under the `Doc/` namespace at runtime.
