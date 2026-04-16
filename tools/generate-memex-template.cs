@@ -48,6 +48,30 @@ foreach (var (src, dest) in projectsToCopy)
     CopyDirectory(srcAbs, Path.Combine(outputPath, dest));
 }
 
+// --- Copy sample data (users + ACME) for Developer Login and sample org ---
+var excludedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    { "Roland", "Samuel", "Roland.json", "Samuel.json", "Roland_Access.json", "Samuel_Access.json" };
+
+CopySampleData(
+    Path.Combine(repoRoot, "samples/Graph/Data/User"),
+    Path.Combine(outputPath, "samples/Graph/Data/User"),
+    excludedNames);
+CopySampleData(
+    Path.Combine(repoRoot, "samples/Graph/Data/ACME"),
+    Path.Combine(outputPath, "samples/Graph/Data/ACME"),
+    excludedNames);
+
+// Fix relative data path in appsettings.Development.json (memex/ is 2 levels deep, template is 1)
+foreach (var appSettings in Directory.EnumerateFiles(outputPath, "appsettings.Development.json", SearchOption.AllDirectories))
+{
+    var text = File.ReadAllText(appSettings);
+    if (text.Contains("../../samples/Graph"))
+    {
+        text = text.Replace("../../samples/Graph", "../samples/Graph");
+        File.WriteAllText(appSettings, text);
+    }
+}
+
 var rootVersions = LoadPackageVersions(Path.Combine(repoRoot, "Directory.Packages.props"));
 
 foreach (var csproj in Directory.EnumerateFiles(outputPath, "*.csproj", SearchOption.AllDirectories))
@@ -69,6 +93,24 @@ WriteFile(Path.Combine(outputPath, ".template.config", "template.json"),  Resour
 var generated = Directory.GetFiles(outputPath, "*", SearchOption.AllDirectories).Length;
 Console.WriteLine($"Generated {generated} files in {outputPath}");
 return 0;
+
+void CopySampleData(string src, string dest, HashSet<string> excluded)
+{
+    if (!Directory.Exists(src)) return;
+    Directory.CreateDirectory(dest);
+    foreach (var dir in Directory.EnumerateDirectories(src))
+    {
+        var name = Path.GetFileName(dir);
+        if (excluded.Contains(name)) continue;
+        CopySampleData(dir, Path.Combine(dest, name), excluded);
+    }
+    foreach (var file in Directory.EnumerateFiles(src))
+    {
+        var name = Path.GetFileName(file);
+        if (excluded.Contains(name)) continue;
+        File.Copy(file, Path.Combine(dest, name), overwrite: true);
+    }
+}
 
 void CopyDirectory(string src, string dest)
 {

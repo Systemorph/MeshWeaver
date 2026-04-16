@@ -40,6 +40,12 @@ The documentation on deployment is accessible via src/MeshWeaver.Documentation/D
 
 Topics: Aspire CLI deployment, deployment modes (local/test/prod/monolith), secrets management, Azure Container Apps, PostgreSQL, Orleans clustering, infrastructure provisioning
 
+**Quick deploy commands** (run from repo root):
+- **Prod**: `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode prod`
+- **Test**: `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode test`
+
+Prerequisites: Azure CLI authenticated, Aspire CLI installed, Docker running. See the full deployment doc for details.
+
 ### Agents
 
 Built-in agent definitions are embedded in src/MeshWeaver.AI/Data/Agent/
