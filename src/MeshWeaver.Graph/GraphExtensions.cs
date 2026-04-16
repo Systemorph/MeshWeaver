@@ -32,7 +32,9 @@ public static class GraphExtensions
         public MessageHubConfiguration AddUnifiedReferenceAutocomplete()
             => configuration.WithServices(services =>
             {
-                // Register concrete type once with factory (handles nullable optional dependencies)
+                // Register once: concrete type with factory (handles nullable optional deps)
+                // then forward as IAutocompleteProvider. Manual dedup because M.E.DI 10.0.6
+                // rejects factory-based TryAddEnumerable (ImplementationType = interface).
                 if (services.All(d => d.ServiceType != typeof(UnifiedReferenceAutocompleteProvider)))
                 {
                     services.AddScoped(sp => new UnifiedReferenceAutocompleteProvider(
@@ -41,9 +43,9 @@ public static class GraphExtensions
                         sp.GetService<INavigationService>(),
                         sp.GetRequiredService<IMessageHub>(),
                         sp.GetService<IAutocompletePrefixRegistry>()));
+                    services.AddScoped<IAutocompleteProvider>(
+                        sp => sp.GetRequiredService<UnifiedReferenceAutocompleteProvider>());
                 }
-                services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider>(
-                    sp => sp.GetRequiredService<UnifiedReferenceAutocompleteProvider>()));
                 return services;
             });
 
