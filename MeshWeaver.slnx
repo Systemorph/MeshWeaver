@@ -146,6 +146,8 @@
     <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <File Path="tools/generate-memex-template.cs" />
+    <Project Path="tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj" />
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
     <Project Path="tools/MeshWeaver.Tools.CosmosImport/MeshWeaver.Tools.CosmosImport.csproj" />
   </Folder>

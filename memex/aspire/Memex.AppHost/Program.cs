@@ -102,22 +102,24 @@ var orleansTables = orleansStorage.AddTables("orleans-clustering");
 var orleans = builder.AddOrleans("memex-mesh")
     .WithClustering(orleansTables);
 
-// --- Application Insights ---
-var appInsights = builder.AddAzureApplicationInsights("appinsights")
-    .ConfigureInfrastructure(infra =>
-    {
-        var component = infra.GetProvisionableResources()
-            .OfType<Azure.Provisioning.ApplicationInsights.ApplicationInsightsComponent>()
-            .Single();
-        component.Location = new Azure.Core.AzureLocation("swedencentral");
-    });
+// --- Application Insights (skipped in pure local mode — no Azure subscription needed) ---
+var appInsights = useLocalDb
+    ? null
+    : builder.AddAzureApplicationInsights("appinsights")
+        .ConfigureInfrastructure(infra =>
+        {
+            var component = infra.GetProvisionableResources()
+                .OfType<Azure.Provisioning.ApplicationInsights.ApplicationInsightsComponent>()
+                .Single();
+            component.Location = new Azure.Core.AzureLocation("swedencentral");
+        });
 
 // --- Database Migration ---
 var dbMigration = builder
     .AddProject<Projects.Memex_Database_Migration>("db-migration")
     .WithEnvironment("Embedding__Model", embeddingModel);
 
-if (!useLocalDb)
+if (appInsights is not null)
 {
     dbMigration.WithReference(appInsights).WaitFor(appInsights);
 }
@@ -127,7 +129,6 @@ var portal = builder
     .AddProject<Projects.Memex_Portal_Distributed>(isDeployed ? $"memex-{mode}" : "memex-local")
     .WithExternalHttpEndpoints()
     .WithReference(orleans)
-    .WithReference(appInsights)
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
     .WithEnvironment("Embedding__ApiKey", embeddingKey)
@@ -167,6 +168,9 @@ var portal = builder
         app.Template.Scale.MinReplicas = 2;
         app.Template.Scale.MaxReplicas = 6;
     });
+
+if (appInsights is not null)
+    portal = portal.WithReference(appInsights);
 
 // --- Azure Blob Storage ---
 if (useLocalDb)

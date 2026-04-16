@@ -353,9 +353,8 @@ ASALocalRun/
 #sdk choice
 *.SdkResolver.*.proj
 
-# Build output (except templates)
-dist/*
-!dist/templates/
+# Build output
+dist/
 
 # Kernel cache files
 samples/Graph/Data/kernel/
