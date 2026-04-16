@@ -20,21 +20,43 @@ The AppHost supports multiple modes, passed as `--mode <mode>`:
 | `prod`      | Azure (memex)                | Azure (meshweavermemex)       | Azure     | memex-prod      |
 | `monolith`  | FileSystem (standalone)      | —                             | —         | memex-monolith  |
 
-# Deploying to Production
+# How to Deploy
 
-Deploy using the Aspire CLI:
+## Prerequisites
+
+1. **Azure CLI** authenticated (`az login`)
+2. **Aspire CLI** installed (`dotnet tool install -g aspire`)
+3. **Docker** running (required for building container images)
+4. **Secrets configured** in the AppHost project (see [Secrets Management](#secrets-management) below)
+
+## Deploy to Production
+
+From the repository root:
 
 ```bash
 aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode prod
 ```
 
-For test environment:
+This command:
+1. Builds the application (Release configuration, linux-x64)
+2. Pushes container images to Azure Container Registry
+3. Provisions/updates Azure Container Apps, PostgreSQL, Blob Storage, Orleans clustering, and Application Insights
+4. Deploys to **Sweden Central** with sticky sessions enabled for Blazor Server
+
+## Deploy to Test
 
 ```bash
 aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode test
 ```
 
-The `aspire deploy` command builds the application, pushes container images, and provisions/updates Azure resources as defined in the AppHost.
+Same process as prod but targets the test environment (separate PostgreSQL, Blob Storage, and Container Apps instances).
+
+## Verify Deployment
+
+After deployment completes, the Aspire CLI outputs the portal URL. Verify by:
+- Opening the portal URL in a browser
+- Checking the Aspire dashboard for service health
+- Reviewing Application Insights for startup telemetry
 
 # Running Locally
 
