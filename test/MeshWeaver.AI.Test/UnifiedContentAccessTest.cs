@@ -4,6 +4,7 @@ using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
@@ -426,6 +427,150 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
         var areas = dataResponse.Data as IList<LayoutAreaDefinition>;
         areas.Should().NotBeNull();
         areas.Should().Contain(a => a.Area == "TestArea");
+    }
+
+    #endregion
+
+    #region Slash-format and spaced-filename repro (PartnerRe / .docx symptom)
+
+    // The prod symptom was: AI agent calls Get("@/PartnerRe/AIConsulting/content/Diskussion Thomas Final Report.docx").
+    // MeshOperations.TryResolveUnifiedPathAsync splits the path into addressPart="PartnerRe/AIConsulting"
+    // and remainder="content/Diskussion Thomas Final Report.docx", then posts
+    //   GetDataRequest(new UnifiedReference("content/Diskussion Thomas Final Report.docx"))
+    // to the address. The user observed a 10-second AwaitResponse timeout — symptom said
+    // "no response received". These tests pin down whether the GetDataRequest handler returns at
+    // all for the slash-format default-collection lookup, with and without spaces.
+
+    [Fact]
+    public async Task GetDataRequest_ContentSlashFormat_FileInDefaultCollection_Responds()
+    {
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_SlashDefault_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        await File.WriteAllTextAsync(Path.Combine(testDir, "report.txt"), "default-collection slash format",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir, defaultCollection: true);
+            var client = GetClient();
+
+            // Slash format with NO collection segment — what the agent actually emits.
+            var response = await client.AwaitResponse(
+                new GetDataRequest(new UnifiedReference("content/report.txt")),
+                o => o.WithTarget(CreateHostAddress()),
+                TestContext.Current.CancellationToken);
+
+            response.Message.Error.Should().BeNull();
+            (response.Message.Data as string).Should().Contain("default-collection slash format");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir)) Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task GetDataRequest_ContentSlashFormat_SpacedFilename_Responds()
+    {
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_SlashSpaces_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        const string Spaced = "Diskussion Thomas Final Report.txt";
+        await File.WriteAllTextAsync(Path.Combine(testDir, Spaced), "spaced default-collection content",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir, defaultCollection: true);
+            var client = GetClient();
+
+            var response = await client.AwaitResponse(
+                new GetDataRequest(new UnifiedReference($"content/{Spaced}")),
+                o => o.WithTarget(CreateHostAddress()),
+                TestContext.Current.CancellationToken);
+
+            response.Message.Error.Should().BeNull();
+            (response.Message.Data as string).Should().Contain("spaced default-collection content");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir)) Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task GetDataRequest_ContentSlashFormat_NamedCollection_SpacedFilename_Responds()
+    {
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_SlashNamedSpaces_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        const string Spaced = "Input Markus Apr 15.txt";
+        await File.WriteAllTextAsync(Path.Combine(testDir, Spaced), "named-collection spaced content",
+            TestContext.Current.CancellationToken);
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir, defaultCollection: false);
+            var client = GetClient();
+
+            // Slash format WITH collection segment + spaces.
+            var response = await client.AwaitResponse(
+                new GetDataRequest(new UnifiedReference($"content/TestFiles/{Spaced}")),
+                o => o.WithTarget(CreateHostAddress()),
+                TestContext.Current.CancellationToken);
+
+            response.Message.Error.Should().BeNull();
+            (response.Message.Data as string).Should().Contain("named-collection spaced content");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir)) Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task GetDataRequest_ContentSlashFormat_MissingDefaultCollection_ReturnsErrorNotTimeout()
+    {
+        // The prod hub for /PartnerRe/AIConsulting may not have AddContentCollections() registered
+        // under the default "content" name. The handler must return a clear error response — not
+        // hang and force AwaitResponse to time out.
+        GetHost(); // baseline host with NO file content provider configured
+        var client = GetClient();
+
+        // Bound the wait so a hang fails fast (as opposed to the test running forever).
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+        var act = async () => await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference("content/Some File.docx")),
+            o => o.WithTarget(CreateHostAddress()),
+            cts.Token);
+
+        var response = await act();
+        response.Message.Error.Should().NotBeNullOrEmpty(
+            "the handler must respond with an error rather than letting AwaitResponse time out");
+    }
+
+    private IMessageHub GetHostWithFileProvider(string testDir, bool defaultCollection)
+    {
+        // For default-collection scenarios we register the collection as "content"; for named-collection
+        // scenarios we register it as "TestFiles". The default-content scenario also wires the legacy
+        // ContentProvider hook so `data:` lookups can still resolve files (matches existing tests).
+        if (hostWithFileProvider != null && currentTestDir == testDir) return hostWithFileProvider;
+        currentTestDir = testDir;
+        var collectionName = defaultCollection ? "content" : "TestFiles";
+        hostWithFileProvider = Mesh.GetHostedHub(CreateHostAddress(), config => config
+            .AddFileSystemContentCollection(collectionName, _ => testDir)
+            .AddData(data => data
+                .AddSource(source => source
+                    .WithType<TestPricing>(t => t
+                        .WithInitialData(_ => Task.FromResult(new List<TestPricing>
+                        {
+                            new() { Id = TestPricingId, Name = "Test Pricing", Status = "Active" }
+                        }.AsEnumerable()))))
+                .WithDefaultDataReference(workspace =>
+                    workspace.GetObservable<TestPricing>().Select(p => p.OrderBy(x => x.Id).FirstOrDefault()))
+                .WithContentProvider(collectionName))
+            .AddLayout(layout => layout.WithView("TestArea", TestAreaView)));
+        return hostWithFileProvider;
     }
 
     #endregion

@@ -427,7 +427,8 @@ public static class ThreadMessageLayoutAreas
                 if (path.Contains('@'))
                     return match.Value;
                 // Emit absolute href — @references from agents are always full paths
-                return $"[`@{path}`](/{path})";
+                var href = path.StartsWith('/') ? path : $"/{path}";
+                return $"[`@{path}`]({href})";
             });
     }
 
