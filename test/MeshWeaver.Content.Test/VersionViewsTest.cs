@@ -242,10 +242,12 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             nodeAddress, reference);
 
-        // Act: read the $Menu control from the layout stream
-        Output.WriteLine("Waiting for $Menu to render...");
+        // Act: read the $Menu:Node control from the layout stream. Built-in
+        // items (Edit, Versions, Delete, …) live in the "Node" context; the
+        // default unnamed $Menu area is reserved for app-specific additions.
+        Output.WriteLine("Waiting for $Menu:Node to render...");
         var menuControl = await stream
-            .GetControlStream(MenuControl.MenuArea)
+            .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
             .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync(x => x is not null);
 

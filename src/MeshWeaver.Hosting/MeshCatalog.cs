@@ -3,7 +3,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
@@ -33,8 +32,6 @@ internal sealed class MeshCatalog(
     public MeshConfiguration Configuration { get; } = configuration;
     internal IMeshStorage Persistence { get; } = persistenceService;
     internal Address MeshAddress => hub.Address;
-    private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
-    private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
     private readonly Lazy<IMessageHub> _persistenceHub = new(() => hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!);
     private IMessageHub PersistenceHub => _persistenceHub.Value;
     private readonly MeshQuery meshQuery = new(queryProviders, hub);
@@ -45,24 +42,15 @@ internal sealed class MeshCatalog(
     {
         var addressKey = address.Path;
 
-        // Check cache first
-        if (cache.TryGetValue(addressKey, out var ret))
-        {
-            return (MeshNode?)ret;
-        }
-
-        // Try exact match in configuration
+        // Try exact match in configuration (in-memory MeshConfiguration)
         if (Configuration.Nodes.TryGetValue(addressKey, out var node))
         {
             if (node.HubConfiguration == null && ConfigResolver != null)
-            {
                 node = await ConfigResolver.ResolveConfigurationAsync(node);
-            }
-            cache.Set(node.Path, node, cacheOptions);
             return node;
         }
 
-        // Try loading from persistence
+        // Try loading from persistence (Postgres)
         var persistenceNode = await Persistence.GetNodeAsync(addressKey);
 
         // Fallback to static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
@@ -70,20 +58,10 @@ internal sealed class MeshCatalog(
             .SelectMany(p => p.GetStaticNodes())
             .FirstOrDefault(n => string.Equals(n.Path, addressKey, StringComparison.OrdinalIgnoreCase));
 
-        if (persistenceNode != null)
-        {
-            // Enrich with HubConfiguration based on NodeType (NOT the address - that would cause circular dependency)
-            // EnrichWithNodeTypeAsync looks up HubConfiguration from compiled NodeType configs, triggering compilation if needed
-            if (ConfigResolver != null)
-            {
-                persistenceNode = await ConfigResolver.ResolveConfigurationAsync(persistenceNode);
-            }
+        if (persistenceNode != null && ConfigResolver != null)
+            persistenceNode = await ConfigResolver.ResolveConfigurationAsync(persistenceNode);
 
-            cache.Set(persistenceNode.Path, persistenceNode, cacheOptions);
-            return persistenceNode;
-        }
-
-        return null;
+        return persistenceNode;
     }
 
     public Task UpdateAsync(MeshNode node) =>
@@ -105,40 +83,16 @@ internal sealed class MeshCatalog(
     /// </summary>
     internal async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, CancellationToken ct = default)
     {
-        // 1. Check if node already exists in cache
-        if (cache.TryGetValue(node.Path, out var cachedValue) && cachedValue is MeshNode cachedNode)
-        {
-            throw new InvalidOperationException($"Node already exists at path: {node.Path}");
-        }
+        // Validate NodeType is registered (in-memory check only — no DB round-trip)
+        if (!string.IsNullOrEmpty(node.NodeType) && !Configuration.Nodes.ContainsKey(node.NodeType))
+            throw new InvalidOperationException($"NodeType '{node.NodeType}' is not registered");
 
-        // 2. Check if node exists in persistence
-        if (await Persistence.ExistsAsync(node.Path, ct))
-        {
-            throw new InvalidOperationException($"Node already exists at path: {node.Path}");
-        }
-
-        // 3. Validate NodeType exists (if specified) - check in MeshNodes or persistence
-        if (!string.IsNullOrEmpty(node.NodeType))
-        {
-            // NodeType is valid if it exists in Configuration.Nodes or in persistence
-            var nodeTypeExists = Configuration.Nodes.ContainsKey(node.NodeType)
-                || await Persistence.ExistsAsync(node.NodeType, ct);
-            if (!nodeTypeExists)
-            {
-                throw new InvalidOperationException($"NodeType '{node.NodeType}' is not registered");
-            }
-        }
-
-        // 4. Validate path structure
         if (!ValidatePath(node))
-        {
             throw new InvalidOperationException($"Invalid path structure for node: {node.Path}");
-        }
 
-        // 5. Create node with Transient state
         var transientNode = node with { State = MeshNodeState.Transient };
 
-        // 5a. Auto-set MainNode for satellite types: point to parent node, not self
+        // Auto-set MainNode for satellite types: point to parent node, not self
         if (!string.IsNullOrEmpty(transientNode.NodeType)
             && !string.IsNullOrEmpty(transientNode.Namespace)
             && Configuration.IsSatelliteNodeType(transientNode.NodeType)
@@ -147,20 +101,12 @@ internal sealed class MeshCatalog(
             transientNode = transientNode with { MainNode = transientNode.Namespace };
         }
 
-        // 6. Enrich with HubConfiguration based on NodeType
         if (ConfigResolver != null)
-        {
             transientNode = await ConfigResolver.ResolveConfigurationAsync(transientNode, ct);
-        }
 
-        // 7. Save to persistence
+        // Storage is the source of truth — no preflight ExistsAsync. If it conflicts, storage will throw.
         var savedNode = await Persistence.SaveNodeAsync(transientNode, ct);
-
-        // 8. Update cache with enriched transient node
-        cache.Set(savedNode.Path, savedNode, cacheOptions);
-
         logger?.LogInformation("Created transient node at path {Path}", savedNode.Path);
-
         return savedNode;
     }
 
@@ -188,30 +134,18 @@ internal sealed class MeshCatalog(
 
         // Enrich with HubConfiguration based on NodeType (same as cold start in GetNodeAsync)
         if (ConfigResolver != null)
-        {
             confirmedNode = await ConfigResolver.ResolveConfigurationAsync(confirmedNode, ct);
-        }
-
-        // Update cache with enriched node
-        cache.Set(confirmedNode.Path, confirmedNode, cacheOptions);
 
         logger?.LogInformation("Confirmed node at path {Path}", confirmedNode.Path);
-
         return confirmedNode;
     }
 
     /// <summary>
     /// IMeshCatalog.DeleteNodeAsync — internal, called by the DeleteNodeRequest handler.
-    /// Deletes directly from persistence and cache.
+    /// Deletes directly from persistence. Storage cascade handles descendants.
     /// </summary>
     async Task IMeshCatalog.DeleteNodeAsync(string path, bool recursive, CancellationToken ct)
     {
-        if (recursive)
-        {
-            await foreach (var descendant in Persistence.GetDescendantsAsync(path).WithCancellation(ct))
-                cache.Remove(descendant.Path);
-        }
-        cache.Remove(path);
         await Persistence.DeleteNodeAsync(path, recursive, ct);
         logger?.LogInformation("Deleted node at path {Path}, recursive: {Recursive}", path, recursive);
     }
@@ -241,30 +175,12 @@ internal sealed class MeshCatalog(
         return true;
     }
 
-    private static readonly MemoryCacheEntryOptions ResolveCacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
-
     /// <summary>
-    /// Invalidates path resolution cache entries affected by a node change.
-    /// Called after node create/delete to ensure routing uses fresh data.
-    /// Invalidates the exact path AND all ancestor paths (which may have
-    /// cached partial matches with remainder pointing to the changed node).
+    /// Path-cache invalidation hook. Currently a no-op because MeshCatalog holds no cache;
+    /// a downstream IPathResolver may keep one and subscribe to IDataChangeNotifier instead.
+    /// Kept for binary compatibility with existing callers.
     /// </summary>
-    public void InvalidatePathCache(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return;
-        path = path.TrimStart('/');
-
-        // Invalidate exact path
-        cache.Remove($"resolve:{path}");
-
-        // Invalidate all ancestor paths — they may have cached partial matches
-        var segments = path.Split('/');
-        for (var i = segments.Length - 1; i >= 1; i--)
-        {
-            var ancestorPath = string.Join("/", segments.Take(i));
-            cache.Remove($"resolve:{ancestorPath}");
-        }
-    }
+    public void InvalidatePathCache(string path) { }
 
     /// <inheritdoc />
     /// <summary>
@@ -310,18 +226,6 @@ internal sealed class MeshCatalog(
                 ? string.Join("/", segments.Skip(matchedSegmentCount))
                 : null;
             return new AddressResolution(matchedPath, remainder);
-        }
-
-        // 3. Fallback: check the in-memory cache (covers transient nodes not yet visible to persistence queries)
-        var firstSegment = segments[0];
-        if (cache.TryGetValue(firstSegment, out var cachedValue) && cachedValue is MeshNode cachedNode)
-        {
-            var remainder = segments.Length > 1
-                ? string.Join("/", segments.Skip(1))
-                : null;
-            logger?.LogDebug("ResolvePathAsync: cache fallback found node at path={Path} for input={Input}",
-                cachedNode.Path, path);
-            return new AddressResolution(cachedNode.Path, remainder);
         }
 
         logger?.LogDebug("ResolvePathAsync: no match found for path={Path}", path);

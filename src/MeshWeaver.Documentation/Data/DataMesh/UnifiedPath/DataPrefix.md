@@ -5,14 +5,16 @@ Description: Embed data collections and entities
 Icon: /static/DocContent/DataMesh/UnifiedPath/DataPrefix/icon.svg
 ---
 
-The `data:` prefix embeds data collections or individual entities from a node's data store.
+The `data/` prefix embeds data collections or individual entities from a node's data store.
 
 # Syntax
 
 ```
-@@{address}/data:{collection}[/{entityId}]
-@@{address}/data:
+@@{address}/data/{collection}[/{entityId}]
+@@{address}/data/
 ```
+
+> **Note:** The legacy colon syntax (`data:collection`) is still supported for backward compatibility.
 
 # Components
 

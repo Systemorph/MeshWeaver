@@ -3,6 +3,10 @@
 @using Microsoft.AspNetCore.Components.Forms
 @typeparam TValue
 
+@* Single wrapping container so Label + input share the same width/height.
+   Width/Height come from data binding (ViewModel.Width / ViewModel.Height). *@
+<div style="display: inline-flex; flex-direction: column; @ComputedStyle">
+
 @if (!string.IsNullOrEmpty(Label))
 {
     <label style="
@@ -19,8 +23,6 @@
     display: flex;
     align-items: center;
     position: relative;
-    margin-bottom: 1rem;
-    min-width: 250px;
     width: 100%;
     background: var(--neutral-fill-input-rest);
     border: calc(var(--stroke-width) * 1px) solid var(--neutral-stroke-rest);
@@ -39,13 +41,14 @@
     @{
         var appearanceClass = $"control {Appearance.ToString().ToLower()}-appearance";
 
-        // Match the FluentUI design system's ComboBox styling
+        // Match the FluentUI design system's ComboBox styling.
+        // Width/min-width are NOT hard-coded — size is controlled by the consumer
+        // via Style on the NumberFieldControl (or by the parent container).
         var inputStyle = @"
         background: transparent;
         border: none;
         box-shadow: none;
         outline: none;
-        min-width: 250px;
         width: 100%;
         padding: 0 calc((10 + (var(--design-unit) * 2 * var(--density))) * 1px);
         height: calc((var(--base-height-multiplier) + var(--density)) * var(--design-unit) * 1px);
@@ -75,4 +78,6 @@
             }
         </slot>
     </span>
+</div>
+
 </div>

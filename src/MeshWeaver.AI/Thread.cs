@@ -77,6 +77,21 @@ public record Thread
     public ImmutableList<string> Messages { get; init; } = [];
 
     /// <summary>
+    /// All user-message ids in <see cref="Messages"/>, in order. The client appends to both
+    /// <see cref="Messages"/> and this list on submit, so the server watcher can identify
+    /// user messages without cross-hub child-cell lookups.
+    /// </summary>
+    public ImmutableList<string> UserMessageIds { get; init; } = [];
+
+    /// <summary>
+    /// Ids of user messages already committed to an execution round (past or current).
+    /// A user message id appearing in <see cref="UserMessageIds"/> but NOT in this set is "queued"
+    /// and will be ingested by the server watcher when the next round opens.
+    /// Multiple queued messages are ingested together into a single round / single output cell.
+    /// </summary>
+    public ImmutableList<string> IngestedMessageIds { get; init; } = [];
+
+    /// <summary>
     /// Azure AI Foundry persistent thread ID. When set, conversation history is server-managed.
     /// </summary>
     public string? PersistentThreadId { get; init; }
@@ -231,4 +246,22 @@ public record ThreadMessage
     /// which documents were written and the version delta.
     /// </summary>
     public ImmutableList<NodeChangeEntry> UpdatedNodes { get; init; } = [];
+
+    /// <summary>
+    /// For user messages: the context path (e.g. the current nav context) to pass to the agent.
+    /// Null for assistant messages.
+    /// </summary>
+    public string? ContextPath { get; init; }
+
+    /// <summary>
+    /// For user messages: paths referenced as @-attachments.
+    /// Null/empty for assistant messages.
+    /// </summary>
+    public IReadOnlyList<string>? Attachments { get; init; }
+
+    /// <summary>
+    /// Signals that this user cell was updated as a resubmit.
+    /// The server watcher truncates the thread after this id and re-ingests.
+    /// </summary>
+    public bool IsResubmit { get; init; }
 }

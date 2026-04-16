@@ -21,6 +21,10 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private ElementReference _textFieldElement;
     private List<MeshNode> _results = new();
     private List<MeshNode>? _cachedResults;
+    private CancellationTokenSource? _loadCts;
+    private CancellationTokenSource? _debounceCts;
+    private int _inputKey;
+    private const int DebounceMs = 200;
 
     private MeshNode[]? BoundItems { get; set; }
     private bool HasItems => BoundItems is { Length: > 0 };
@@ -94,13 +98,37 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         StateHasChanged();
     }
 
+    /// <summary>
+    /// Capture input and fire debounced search — decoupled from rendering.
+    /// Input is uncontrolled (no value binding), so Blazor never pushes back to the DOM.
+    /// Re-renders from search results cannot interfere with typing.
+    /// </summary>
     private void OnSearchInput(ChangeEventArgs e)
     {
         _searchText = e.Value?.ToString() ?? "";
-        _ = LoadResultsAsync();
-        if (!_isSearchOpen)
-            _isSearchOpen = true;
-        StateHasChanged();
+        _isSearchOpen = true;
+
+        // In-memory filter path — cheap, no debounce.
+        if (HasItems && _cachedResults != null)
+        {
+            _results = FilterCached(_searchText.Trim());
+            _ = InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        // Debounce remote queries. Do NOT call StateHasChanged here — typing must never
+        // trigger a component re-render. LoadResultsAsync will render when results arrive.
+        _debounceCts?.Cancel();
+        var cts = _debounceCts = new CancellationTokenSource();
+        _ = DebouncedSearchAsync(cts.Token);
+    }
+
+    private async Task DebouncedSearchAsync(CancellationToken ct)
+    {
+        try { await Task.Delay(DebounceMs, ct); }
+        catch (TaskCanceledException) { return; }
+        if (ct.IsCancellationRequested) return;
+        await LoadResultsAsync();
     }
 
     private async Task LoadResultsAsync()
@@ -112,6 +140,10 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
             await InvokeAsync(StateHasChanged);
             return;
         }
+
+        // Cancel any in-flight query so only the latest keystroke wins
+        _loadCts?.Cancel();
+        var cts = _loadCts = new CancellationTokenSource();
 
         _isLoading = true;
         await InvokeAsync(StateHasChanged);
@@ -133,7 +165,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                         : $"{baseQuery} {userText}";
                     try
                     {
-                        return await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
+                        return await MeshQuery.QueryAsync<MeshNode>(fullQuery, ct: cts.Token).ToListAsync(cts.Token);
                     }
                     catch
                     {
@@ -142,14 +174,15 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                 });
 
                 var allResults = await Task.WhenAll(tasks);
+                cts.Token.ThrowIfCancellationRequested();
                 queryResults = allResults.SelectMany(batch => batch).ToList();
             }
 
-            // Merge Items + query results, deduplicate by Path (Items take precedence)
+            // Merge Items + query results, deduplicate by Path (case-insensitive; Items take precedence)
             var items = BoundItems ?? [];
             var merged = items.AsEnumerable()
                 .Concat(queryResults)
-                .GroupBy(n => n.Path)
+                .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
                 .ToList();
 
@@ -163,6 +196,11 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
             {
                 _results = merged;
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer search — don't touch _results
+            return;
         }
         catch
         {
@@ -195,6 +233,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         Value = node.Path;
         _isSearchOpen = false;
         _searchText = "";
+        _inputKey++; // force recreate of <input> to clear its DOM value
         // Directly update the data pointer — the debounced pipeline in
         // FormComponentBase uses Skip(1) which swallows single-selection updates.
         if (ViewModel?.Data is JsonPointerReference pointer)
@@ -207,6 +246,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         _selectedNode = null;
         Value = "";
         _searchText = "";
+        _inputKey++; // force recreate of <input> to clear its DOM value
         if (ViewModel?.Data is JsonPointerReference pointer)
             UpdatePointer("", pointer);
         StateHasChanged();

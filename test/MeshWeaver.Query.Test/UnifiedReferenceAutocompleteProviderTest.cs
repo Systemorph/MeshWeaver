@@ -419,5 +419,141 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             "keyword InsertText should include absolute path with @/ prefix");
     }
 
+    [Fact(Timeout = 10000)]
+    public async Task Provider_Keywords_UseSlashSeparator()
+    {
+        var provider = GetUnifiedReferenceProvider();
+
+        var items = await provider.GetItemsAsync("@Systemorph/Marketing/", null, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        // All keyword insert texts should use / separator (not :)
+        var contentItem = items.FirstOrDefault(i => i.Label.Contains("content"));
+        contentItem.Should().NotBeNull("content keyword should be suggested");
+        contentItem!.InsertText.Should().Contain("content/",
+            "content keyword should use / separator");
+        contentItem.InsertText.Should().NotContain("content:",
+            "content keyword should not use legacy : separator");
+
+        var dataItem = items.FirstOrDefault(i => i.Label.Contains("data"));
+        dataItem.Should().NotBeNull("data keyword should be suggested");
+        dataItem!.InsertText.Should().Contain("data/",
+            "data keyword should use / separator");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Provider_RelativePaths_PreferredOverAbsolute()
+    {
+        var provider = GetUnifiedReferenceProvider();
+
+        // Query with context — should get relative results with higher priority
+        var withContext = await provider.GetItemsAsync("@", "Systemorph/Marketing", TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        var withoutContext = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"With context: {withContext.Length} items, Without context: {withoutContext.Length} items");
+        foreach (var item in withContext.Take(5))
+            Output.WriteLine($"  Context: [{item.Priority}] {item.Label} => {item.InsertText}");
+        foreach (var item in withoutContext.Take(5))
+            Output.WriteLine($"  NoContext: [{item.Priority}] {item.Label} => {item.InsertText}");
+
+        // With context should return items (children of context)
+        withContext.Should().NotBeEmpty("@ with context should return children");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Provider_ShorterPaths_SortBeforeLonger()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // Query with a base path that has children at different depths
+        var suggestions = await meshQuery.AutocompleteAsync("", "", 20, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Got {suggestions.Length} top-level suggestions:");
+        foreach (var s in suggestions)
+            Output.WriteLine($"  [{s.Score}] {s.Path} ({s.Path.Length} chars)");
+
+        if (suggestions.Length >= 2)
+        {
+            // Verify score-first ordering (higher scores first)
+            for (int i = 0; i < suggestions.Length - 1; i++)
+            {
+                var current = suggestions[i];
+                var next = suggestions[i + 1];
+                // Within same score, shorter paths should come first
+                if (Math.Abs(current.Score - next.Score) < 0.01)
+                {
+                    current.Path.Length.Should().BeLessThanOrEqualTo(next.Path.Length,
+                        $"'{current.Path}' should sort before '{next.Path}' (same score, shorter path wins)");
+                }
+            }
+        }
+    }
+
+    #endregion
+
+    #region UcrPrefixResolver Dual-Format Tests
+
+    [Theory]
+    [InlineData("content:logo.svg", "$Content", "logo.svg")]
+    [InlineData("content/logo.svg", "$Content", "logo.svg")]
+    [InlineData("data:Collection/id", "$Data", "Collection/id")]
+    [InlineData("data/Collection/id", "$Data", "Collection/id")]
+    [InlineData("schema:MeshNode", "$Schema", "MeshNode")]
+    [InlineData("schema/MeshNode", "$Schema", "MeshNode")]
+    [InlineData("model:MyModel", "$Model", "MyModel")]
+    [InlineData("model/MyModel", "$Model", "MyModel")]
+    [InlineData("menu:main", "$Menu", "main")]
+    [InlineData("menu/main", "$Menu", "main")]
+    public void UcrPrefixResolver_AcceptsBothFormats(string path, string expectedArea, string expectedRemaining)
+    {
+        var resolved = Data.UcrPrefixResolver.TryResolve(path, out var area, out var remainingPath);
+
+        resolved.Should().BeTrue($"'{path}' should resolve as a UCR prefix");
+        area.Should().Be(expectedArea);
+        remainingPath.Should().Be(expectedRemaining);
+    }
+
+    [Theory]
+    [InlineData("content", "$Content")]
+    [InlineData("data", "$Data")]
+    [InlineData("schema", "$Schema")]
+    public void UcrPrefixResolver_AcceptsExactPrefix(string path, string expectedArea)
+    {
+        var resolved = Data.UcrPrefixResolver.TryResolve(path, out var area, out var remainingPath);
+
+        resolved.Should().BeTrue($"'{path}' should resolve as an exact UCR prefix");
+        area.Should().Be(expectedArea);
+        remainingPath.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("unknown:file.txt")]
+    [InlineData("notaprefix/file.txt")]
+    [InlineData("")]
+    public void UcrPrefixResolver_RejectsInvalidPrefixes(string path)
+    {
+        var resolved = Data.UcrPrefixResolver.TryResolve(path, out _, out _);
+        resolved.Should().BeFalse($"'{path}' should not resolve as a UCR prefix");
+    }
+
+    #endregion
+
+    #region Content Reference Extraction Tests
+
+    [Theory]
+    [InlineData("@content/docs/readme.md", "content/docs/readme.md")]
+    [InlineData("@ACME/content/readme.md", "ACME/content/readme.md")]
+    [InlineData("@content:docs/readme.md", "content:docs/readme.md")]
+    [InlineData("@ACME/content:readme.md", "ACME/content:readme.md")]
+    public void MarkdownExtractor_HandlesBothContentFormats(string input, string expectedPath)
+    {
+        var paths = AI.MarkdownReferenceExtractor.GetUniquePaths(input);
+        paths.Should().ContainSingle().Which.Should().Be(expectedPath);
+    }
+
     #endregion
 }

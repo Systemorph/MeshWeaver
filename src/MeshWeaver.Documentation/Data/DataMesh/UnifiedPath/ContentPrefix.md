@@ -5,32 +5,33 @@ Description: Embed files from content collections using any collection name
 Icon: /static/DocContent/DataMesh/UnifiedPath/ContentPrefix/icon.svg
 ---
 
-Any prefix that is **not a reserved keyword** is treated as a **content collection name**. This allows you to embed files from any configured content collection.
+Content collections store files (images, documents, markdown, etc.) associated with mesh nodes. Use the `content/` prefix to access files.
 
 # Reserved Keywords
 
-The following prefixes have special meaning and are **not** collection names:
-- `data:` - Access data entities
-- `schema:` - Access type schemas
-- `model:` - Access data models
-- `area:` - Access layout areas
+The following prefixes have special meaning:
+- `data/` - Access data entities
+- `schema/` - Access type schemas
+- `model/` - Access data models
+- `area/` - Access layout areas
+- `content/` - Access content files
+- `menu/` - Access menu structure
 
 # Collection Names
 
-Any **other prefix** is treated as a content collection name:
-
 | Syntax | Description |
 |--------|-------------|
-| `content:file.svg` | File from the "content" collection |
-| `assets:logo.png` | File from the "assets" collection |
-| `docs:readme.md` | File from the "docs" collection |
-| `images:photo.jpg` | File from the "images" collection |
+| `content/file.svg` | File from the "content" collection |
+| `assets/logo.png` | File from the "assets" collection |
+| `docs/readme.md` | File from the "docs" collection |
+
+> **Note:** The legacy colon syntax (`content:file.svg`) is still supported for backward compatibility.
 
 # Syntax
 
 ```
-@@{address}/{collectionName}:{path}
-@{address}/{collectionName}:{path}
+@@{address}/content/{path}
+@{address}/content/{path}
 ```
 
 # Configuring Collections
@@ -61,7 +62,7 @@ Embed an SVG logo from the "content" collection:
 
 **Syntax:**
 ```
-@@Doc/DataMesh/UnifiedPath/content:logo.svg
+@@Doc/DataMesh/UnifiedPath/content/logo.svg
 ```
 
 **Result:**
@@ -73,7 +74,7 @@ Embed an SVG logo from the "content" collection:
 If you have configured an "assets" collection, you can reference it:
 
 ```
-@@MyApp/assets:images/banner.png
+@@MyApp/assets/images/banner.png
 ```
 
 ## Example 3: Hyperlink to File
@@ -82,7 +83,7 @@ Use single `@` to create a navigation link:
 
 **Syntax:**
 ```
-@Doc/DataMesh/UnifiedPath/content:sample.md
+@Doc/DataMesh/UnifiedPath/content/sample.md
 ```
 
 **Result:**

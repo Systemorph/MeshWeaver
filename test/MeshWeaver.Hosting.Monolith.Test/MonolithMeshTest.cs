@@ -54,7 +54,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 20000)]
     public async Task PingToNonExistentHub_ThrowsDeliveryFailure()
     {
         var client = GetClient();

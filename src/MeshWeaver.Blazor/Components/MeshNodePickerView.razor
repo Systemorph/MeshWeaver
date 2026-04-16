@@ -26,10 +26,10 @@
     }
     else
     {
-        <input @ref="_textFieldElement"
+        <input @key="_inputKey"
+               @ref="_textFieldElement"
                type="text"
                class="mesh-node-picker-input"
-               value="@_searchText"
                @oninput="OnSearchInput"
                placeholder="@(Placeholder ?? "Search...")"
                disabled="@Disabled"

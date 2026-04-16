@@ -126,9 +126,29 @@
       "Bash(git ls-remote:*)",
       "Bash(git push:*)",
       "Bash(exit 0)",
-      "WebFetch(domain:gist.github.com)"
+      "WebFetch(domain:gist.github.com)",
+      "Bash(az containerapp:*)",
+      "Skill(update-config)",
+      "Bash(netstat -ano)",
+      "Bash(wait)",
+      "Bash(netstat:*)",
+      "Bash(docker inspect:*)",
+      "Bash(wait:*)",
+      "Bash(sleep:*)",
+      "Bash(*&&*)",
+      "Bash(*|*)",
+      "Bash(wmic process:*)",
+      "Bash(powershell:*)",
+      "WebFetch(domain:support.claude.com)",
+      "Bash(git:*)",
+      "Bash(docker cp:*)",
+      "Bash(pip install *)"
     ],
-    "deny": []
+    "deny": [],
+    "additionalDirectories": [
+      "/tmp/claude",
+      "C:\\Users\\RolandBuergi\\AppData\\Local\\Temp\\claude"
+    ]
   },
   "enableAllProjectMcpServers": true
 }

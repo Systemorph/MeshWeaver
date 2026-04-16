@@ -41,66 +41,23 @@ public static class ThreadMessageHandlers
     }
 
     /// <summary>
-    /// Handles ResubmitMessageRequest — keeps the user message, deletes old response nodes,
-    /// creates a new response cell, then starts execution.
+    /// Handles ResubmitMessageRequest — truncates the thread after the user message id,
+    /// drops it from IngestedMessageIds, optionally updates its text. The server-side
+    /// watcher in ThreadSubmission re-dispatches a new round.
+    /// Thin shim over <see cref="ThreadSubmission.ApplyResubmit"/> to keep one code path.
     /// </summary>
     internal static IMessageDelivery HandleResubmitMessage(
         IMessageHub hub,
         IMessageDelivery<ResubmitMessageRequest> delivery)
     {
         var request = delivery.Message;
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-
-        var responseMsgId = request.OutputMessageId ?? Guid.NewGuid().ToString("N")[..8];
-        var responsePath = $"{request.ThreadPath}/{responseMsgId}";
-
-        // Update Thread: truncate Messages + append new output ID, set executing.
-        string? contextPath = null;
-        hub.GetWorkspace().UpdateMeshNode(node =>
-        {
-            contextPath = node.MainNode != node.Path ? node.MainNode : null;
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            var msgIndex = thread.Messages.IndexOf(request.MessageId);
-            if (msgIndex < 0) return node;
-
-            return node with
-            {
-                Content = thread with
-                {
-                    Messages = thread.Messages.Take(msgIndex + 1).ToImmutableList().Add(responseMsgId),
-                    IsExecuting = true,
-                    ActiveMessageId = responseMsgId,
-                    ExecutionStatus = null,
-                    TokensUsed = 0,
-                    ExecutionStartedAt = DateTime.UtcNow,
-                    StreamingText = null,
-                    StreamingToolCalls = null
-                }
-            };
-        });
-
-        // Output cell is created by the click handler (same as GUI creates cells for submit)
-
-        // Push progress to output cell
-        hub.Post(new UpdateThreadMessageContent { Text = "Allocating agent..." },
-            o => o.WithTarget(new Address(responsePath)));
-
-        // Start execution directly — no waiting for cell creation
-        var executionHub = hub.GetHostedHub(
-            new Address($"{hub.Address}/_Exec"),
-            config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
-            HostedHubCreation.Always);
-
-        executionHub!.Post(new SubmitMessageRequest
-        {
-            ThreadPath = request.ThreadPath,
-            UserMessageText = request.UserMessageText,
-            UserMessageId = request.MessageId,
-            ResponseMessageId = responseMsgId,
-            ResponsePath = responsePath,
-            ContextPath = contextPath
-        }, o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
-
+        ThreadSubmission.ApplyResubmit(
+            hub,
+            request.ThreadPath,
+            request.MessageId,
+            newUserText: request.UserMessageText,
+            agentName: null,
+            modelName: null);
         return delivery.Processed();
     }
 }

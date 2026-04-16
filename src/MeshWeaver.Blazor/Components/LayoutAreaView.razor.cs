@@ -84,10 +84,10 @@ public partial class LayoutAreaView
                     Area, IsContentLoaded);
                 AreaStream.Dispose();
             }
-            if (DialogStream != null)
-                DialogStream.Dispose();
-            if (MenuStream != null)
-                MenuStream.Dispose();
+            DialogStream?.Dispose();
+            MenuStream?.Dispose();
+            NodeMenuStream?.Dispose();
+            MeshMenuStream?.Dispose();
         }
         else
         {
@@ -97,6 +97,8 @@ public partial class LayoutAreaView
         AreaStream = null;
         DialogStream = null;
         MenuStream = null;
+        NodeMenuStream = null;
+        MeshMenuStream = null;
         await base.DisposeAsync();
     }
 
@@ -105,10 +107,20 @@ public partial class LayoutAreaView
         AreaStream?.Dispose();
         DialogStream?.Dispose();
         MenuStream?.Dispose();
+        NodeMenuStream?.Dispose();
+        MeshMenuStream?.Dispose();
         AreaStream = null;
         DialogStream = null;
         MenuStream = null;
+        NodeMenuStream = null;
+        MeshMenuStream = null;
     }
+
+    // Must match NodeMenuItemsExtensions.NodeMenuContext / MeshMenuContext — duplicated here to avoid
+    // a Blazor → Graph layer dependency.
+    private const string NodeMenuContext = "Node";
+    private const string MeshMenuContext = "Mesh";
+
     private void BindStream()
     {
         if (AreaStream is null)
@@ -122,14 +134,22 @@ public partial class LayoutAreaView
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
             if (Top)
             {
-                MenuStream = SetupMenuAreaMonitoring(AreaStream!);
-                MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value)));
+                MenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.MenuArea);
+                MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, "")));
+
+                NodeMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(NodeMenuContext));
+                NodeMenuStream?.RegisterForDisposal(NodeMenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, NodeMenuContext)));
+
+                MeshMenuStream = SetupMenuAreaMonitoring(AreaStream!, MenuControl.GetMenuArea(MeshMenuContext));
+                MeshMenuStream?.RegisterForDisposal(MeshMenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value, MeshMenuContext)));
             }
         }
     }
 
     private ISynchronizationStream<JsonElement>? DialogStream { get; set; }
     private ISynchronizationStream<JsonElement>? MenuStream { get; set; }
+    private ISynchronizationStream<JsonElement>? NodeMenuStream { get; set; }
+    private ISynchronizationStream<JsonElement>? MeshMenuStream { get; set; }
 
     private ISynchronizationStream<JsonElement>? SetupDialogAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
     {
@@ -137,13 +157,13 @@ public partial class LayoutAreaView
             new JsonPointerReference(LayoutAreaReference.GetControlPointer(DialogControl.DialogArea)));
     }
 
-    private ISynchronizationStream<JsonElement>? SetupMenuAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
+    private ISynchronizationStream<JsonElement>? SetupMenuAreaMonitoring(ISynchronizationStream<JsonElement> areaStream, string area)
     {
         return areaStream.Reduce(
-            new JsonPointerReference(LayoutAreaReference.GetControlPointer(MenuControl.MenuArea)));
+            new JsonPointerReference(LayoutAreaReference.GetControlPointer(area)));
     }
 
-    private void OnMenuStreamChanged(JsonElement menuData)
+    private void OnMenuStreamChanged(JsonElement menuData, string context)
     {
         try
         {
@@ -154,17 +174,17 @@ public partial class LayoutAreaView
                     var menuControl = menuData.Deserialize<MenuControl>(Hub.JsonSerializerOptions);
                     if (menuControl?.Items != null)
                     {
-                        MenuItemsProvider.Update(menuControl.Items);
+                        MenuItemsProvider.Update(context, menuControl.Items);
                         return;
                     }
                 }
 
-                MenuItemsProvider.Update([]);
+                MenuItemsProvider.Update(context, []);
             }
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Error processing menu stream change");
+            Logger.LogWarning(ex, "Error processing menu stream change for context '{Context}'", context);
         }
     }
 

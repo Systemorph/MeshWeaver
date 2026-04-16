@@ -21,9 +21,14 @@
                 <div class="search-container">
                     <SearchBar />
                 </div>
-                @* Node menu (Cube icon) *@
+                @* Node menu (Cube icon) — per-node operations *@
                 <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
-                    @foreach (var menuItem in FlattenMenuItems(GetVisibleMenuItems()))
+                    @if (!string.IsNullOrEmpty(CurrentNodeName))
+                    {
+                        <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
+                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                    }
+                    @foreach (var menuItem in FlattenMenuItems(GetNodeMenuItems()))
                     {
                         var item = menuItem;
                         @if (item.Area == "_separator")
@@ -49,10 +54,56 @@
                         }
                     }
                 </FluentMenu>
-                <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth"
+                <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
                     Title="Node menu" aria-label="Node menu"
                     OnClick="@ToggleNodeMenu">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Cube())" Color="Color.FillInverse" />
+                </FluentButton>
+
+                @* Mesh menu — mesh-level operations (Create, Import, Export) *@
+                <FluentMenu Anchor="mesh-menu-anchor" Open="@isMeshMenuOpen" OpenChanged="@OnMeshMenuOpenChanged">
+                    @if (!string.IsNullOrEmpty(CurrentNodeName))
+                    {
+                        <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
+                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                    }
+                    @foreach (var menuItem in FlattenMenuItems(GetMeshMenuItems()))
+                    {
+                        var item = menuItem;
+                        @if (item.Area == "_separator")
+                        {
+                            <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                        }
+                        else
+                        {
+                            <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                @if (!string.IsNullOrEmpty(item.Icon))
+                                {
+                                    if (IsEmoji(item.Icon))
+                                    {
+                                        <span style="margin-right: 8px;">@item.Icon</span>
+                                    }
+                                    else
+                                    {
+                                        <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                    }
+                                }
+                                @item.Label
+                            </FluentMenuItem>
+                        }
+                    }
+                </FluentMenu>
+                <FluentButton Id="mesh-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                    Title="Mesh menu" aria-label="Mesh menu"
+                    OnClick="@ToggleMeshMenu">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Grid())" Color="Color.FillInverse" />
+                </FluentButton>
+
+                @* Settings — direct navigation *@
+                <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                    Title="Settings" aria-label="Settings"
+                    OnClick="@NavigateToSettings">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.FillInverse" />
                 </FluentButton>
                 @HeaderLinks
             </div>
@@ -112,24 +163,27 @@
                                   Collapsible="false"
                                   Resizable="@IsSidePanelVisible"
                                   Style="@(IsSidePanelVisible ? "" : "display:none")">
-            <div class="side-panel-wrapper">
-                <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
-                    <ChildContent>
-                        @if (sidePanelViewModel != null)
-                        {
-                            @* Resolved content — render via LayoutAreaView (same as main page) *@
-                            <LayoutAreaView @key="@SidePanelState.ContentPath"
-                                            ViewModel="@sidePanelViewModel"
-                                            Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
-                        }
-                        else
-                        {
-                            @* New chat — no thread yet *@
-                            <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
-                        }
-                    </ChildContent>
-                </SidePanel>
-            </div>
+            @if (IsSidePanelVisible)
+            {
+                <div class="side-panel-wrapper">
+                    <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
+                        <ChildContent>
+                            @if (sidePanelViewModel != null)
+                            {
+                                @* Resolved content — render via LayoutAreaView (same as main page) *@
+                                <LayoutAreaView @key="@SidePanelState.ContentPath"
+                                                ViewModel="@sidePanelViewModel"
+                                                Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
+                            }
+                            else
+                            {
+                                @* New chat — no thread yet *@
+                                <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
+                            }
+                        </ChildContent>
+                    </SidePanel>
+                </div>
+            }
         </FluentMultiSplitterPane>
     </FluentMultiSplitter>
 

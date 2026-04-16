@@ -22,12 +22,11 @@ public static class ExportLayoutArea
     /// <summary>
     /// Returns the Export menu item if the user has Export permission.
     /// </summary>
-    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, string? nodeName, Permission perms)
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
     {
         if (!perms.HasFlag(Permission.Export))
             return null;
-        var label = string.IsNullOrEmpty(nodeName) ? "Export" : $"Export {nodeName}";
-        return new(label, MeshNodeLayoutAreas.ExportArea,
+        return new("Export", MeshNodeLayoutAreas.ExportArea,
             RequiredPermission: Permission.Export, Order: 26,
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea));
     }

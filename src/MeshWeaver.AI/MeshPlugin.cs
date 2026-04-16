@@ -16,38 +16,71 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 {
     private readonly MeshOperations ops = new(hub) { OnNodeChange = change => chat.ForwardNodeChange?.Invoke(change) };
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
+    private readonly AccessService? accessService = hub.ServiceProvider.GetService<AccessService>();
 
-    [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes (schema:, model:, data:, content:, collection:, area:, layoutAreas:).")]
+    [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes: content/, data/, schema/, model/, collection/, area/.")]
     public Task<string> Get(
-        [Description("Path to data. Relative: @content:file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content:file.docx")] string path)
-        => ops.Get(ResolveContextPath(path));
+        [Description("Path to data. Relative: @content/file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content/file.docx. For spaces: \"@content/My File.docx\"")] string path)
+    {
+        RestoreAccessContext();
+        return ops.Get(ResolveContextPath(path));
+    }
 
     [Description("Searches the mesh using GitHub-style query syntax.")]
     public Task<string> Search(
         [Description("Query string (e.g., 'nodeType:Agent', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
-        => ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null);
+    {
+        RestoreAccessContext();
+        return ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null);
+    }
 
     [Description("Creates a new node in the mesh. ALWAYS set the 'name' property to a human-readable display name.")]
     public Task<string> Create(
         [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
-        => ops.Create(node);
+    {
+        RestoreAccessContext();
+        return ops.Create(node);
+    }
 
-    [Description("Full replacement update of existing nodes. Pass a JSON array of complete MeshNode objects (from Get). WARNING: all fields are replaced — missing fields become null.")]
+    [Description("Full replacement update of existing nodes. ALWAYS Get the node first, modify the returned object, then send it back here unchanged-except-for-edits. The 'content' field MUST be present and non-null — null content is rejected and the response will include the expected schema. Prefer Patch for small changes.")]
     public Task<string> Update(
-        [Description("JSON array of complete MeshNode objects")] string nodes)
-        => ops.Update(nodes);
+        [Description("JSON array of complete MeshNode objects fetched via Get and then modified")] string nodes)
+    {
+        RestoreAccessContext();
+        return ops.Update(nodes);
+    }
 
-    [Description("Partial update of a single node. Only the specified fields are changed; all other fields are preserved. Use this for simple changes like updating icon, name, or content without needing to Get the full node first.")]
+    [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless you intend to overwrite it — and never set 'content' to null (will be rejected with the schema). Prefer this over Update for small edits like icon/name/category.")]
     public Task<string> Patch(
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
-        [Description("JSON object with only the fields to update (e.g., {\"icon\": \"<svg>...</svg>\"} or {\"name\": \"New Name\", \"content\": {...}})")] string fields)
-        => ops.Patch(ResolveContextPath(path), fields);
+        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}. Include 'content' only if overwriting — and never as null.")] string fields)
+    {
+        RestoreAccessContext();
+        return ops.Patch(ResolveContextPath(path), fields);
+    }
 
     [Description("Deletes nodes from the mesh by path.")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete")] string paths)
-        => ops.Delete(paths);
+    {
+        RestoreAccessContext();
+        return ops.Delete(paths);
+    }
+
+    /// <summary>
+    /// Restores the user's AccessContext from <see cref="IAgentChat.ExecutionContext"/>.
+    /// AsyncLocal doesn't flow reliably through the AI framework's streaming + tool
+    /// invocation pipeline, so every plugin entry point must explicitly re-seed the
+    /// context before it hits downstream hub-backed operations. Idempotent when the
+    /// AccessContextAIFunction wrapper has already run.
+    /// </summary>
+    private void RestoreAccessContext()
+    {
+        var userCtx = chat.ExecutionContext?.UserAccessContext;
+        if (userCtx != null)
+            accessService?.SetContext(userCtx);
+    }
 
     [Description("Displays a node's visual layout in the chat UI.")]
     public string NavigateTo(
@@ -63,51 +96,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return $"Navigating to: {resolvedPath}";
     }
 
-    /// <summary>
-    /// Resolves a path relative to the current chat context.
-    /// Absolute paths (starting with @/ or /) are returned as-is.
-    /// Relative paths (e.g., @content:file.docx, @MyChild) are prepended with context path.
-    /// </summary>
-    private string ResolveContextPath(string path)
-    {
-        if (string.IsNullOrEmpty(path))
-            return path;
-
-        var raw = path.StartsWith("@") ? path[1..] : path;
-
-        // Absolute path — starts with /
-        if (raw.StartsWith("/"))
-            return "@" + raw[1..]; // strip the leading / and re-add @
-
-        // Already looks absolute (contains a colon with address before it, like OrgA/content:file)
-        // Check if this is a unified path with address prefix
-        var colonIndex = raw.IndexOf(':');
-        if (colonIndex > 0)
-        {
-            var beforeColon = raw[..colonIndex];
-            // If there's a slash before the colon, it has an address prefix already
-            if (beforeColon.Contains('/'))
-                return path; // already absolute
-        }
-        else if (raw.Contains('/'))
-        {
-            // No colon, has slashes — could be a multi-segment path like "OrgA/Doc"
-            // If it has 2+ segments, likely absolute already
-            return path;
-        }
-
-        // Relative path — prepend context
-        var contextPath = chat.Context?.Context;
-        if (string.IsNullOrEmpty(contextPath))
-            return path; // no context, return as-is
-
-        // For unified refs like "content:file.docx", prepend context as address
-        if (colonIndex > 0)
-            return $"@{contextPath}/{raw}";
-
-        // For simple names like "MyChild", prepend context
-        return $"@{contextPath}/{raw}";
-    }
+    private string ResolveContextPath(string path) => MeshOperations.ResolveContextPath(chat, path);
 
     /// <summary>
     /// Creates the standard tools for this plugin (read-only operations).
