@@ -445,12 +445,11 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// Returns the Edit menu item if the user has Update permission.
     /// </summary>
-    public static NodeMenuItemDefinition? GetEditMenuItem(string hubPath, string? nodeName, Permission perms)
+    public static NodeMenuItemDefinition? GetEditMenuItem(string hubPath, Permission perms)
     {
         if (!perms.HasFlag(Permission.Update))
             return null;
-        var label = string.IsNullOrEmpty(nodeName) ? "Edit" : $"Edit {nodeName}";
-        return new(label, EditArea,
+        return new("Edit", EditArea,
             RequiredPermission: Permission.Update, Order: -10, Href: BuildUrl(hubPath, EditArea));
     }
 
@@ -469,16 +468,6 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     public static NodeMenuItemDefinition GetThreadsMenuItem(string hubPath)
         => new("Threads", ThreadsArea, Order: 50, Href: BuildUrl(hubPath, ThreadsArea));
-
-    /// <summary>
-    /// Returns the Settings menu item if the user has Read permission.
-    /// </summary>
-    public static NodeMenuItemDefinition? GetSettingsMenuItem(string hubPath, Permission perms)
-    {
-        if (!perms.HasFlag(Permission.Read))
-            return null;
-        return new("Settings", SettingsArea, Order: 90, Href: BuildUrl(hubPath, SettingsArea));
-    }
 
     /// <summary>
     /// Gets the display name for a node type with count (e.g., "Project (5)").

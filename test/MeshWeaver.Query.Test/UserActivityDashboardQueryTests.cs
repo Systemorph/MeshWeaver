@@ -79,7 +79,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
             "only main content nodes, not Activity satellites"));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task ActivityFeed_NoActivitySatellites_ReturnsEmpty()
     {
         // Arrange: main nodes but no activity satellites

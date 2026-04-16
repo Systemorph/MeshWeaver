@@ -28,15 +28,23 @@ public class SourceMapHtmlRenderer : HtmlRenderer
     }
 
     /// <summary>
-    /// Renders a MarkdownDocument to HTML with source position annotations.
+    /// Renders markdown text to HTML with source position annotations.
     /// </summary>
     public static string RenderWithSourceMap(string markdown, MarkdownPipeline pipeline)
     {
         var doc = Markdig.Markdown.Parse(markdown, pipeline);
+        return RenderWithSourceMap(doc, pipeline);
+    }
+
+    /// <summary>
+    /// Renders a pre-parsed MarkdownDocument to HTML with source position annotations.
+    /// </summary>
+    public static string RenderWithSourceMap(MarkdownDocument document, MarkdownPipeline pipeline)
+    {
         using var sw = new StringWriter();
         var renderer = new SourceMapHtmlRenderer(sw);
         pipeline.Setup(renderer);
-        renderer.Render(doc);
+        renderer.Render(document);
         sw.Flush();
         return sw.ToString();
     }

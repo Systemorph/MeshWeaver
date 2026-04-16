@@ -212,8 +212,11 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
             try
             {
+                // Per-partition fan-out: each partition's storage already isolates data by schema,
+                // so we don't need to inject DefaultPath = partitionKey (which would add a lowercase
+                // path filter that doesn't match proper-cased actual paths like "User/...").
                 var scopedRequest = string.IsNullOrEmpty(effectivePath)
-                    ? enrichedRequest with { DefaultPath = partitionKey, Query = fanOutQuery }
+                    ? enrichedRequest with { Query = fanOutQuery }
                     : enrichedRequest;
 
                 var count = 0;
@@ -421,9 +424,11 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
             if (allProviders.Count == 1)
             {
-                var (key, prov) = allProviders[0];
+                var (_, prov) = allProviders[0];
+                // Don't inject DefaultPath — schema isolation already scopes data per partition,
+                // and lowercase partition keys don't match proper-cased actual paths.
                 var scopedReq = string.IsNullOrEmpty(effectivePath)
-                    ? request with { DefaultPath = key, Query = fanOutQuery }
+                    ? request with { Query = fanOutQuery }
                     : request;
                 return prov.ObserveQuery<T>(scopedReq, options).Subscribe(observer);
             }
@@ -432,7 +437,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                 .Select(entry =>
                 {
                     var scopedReq = string.IsNullOrEmpty(effectivePath)
-                        ? request with { DefaultPath = entry.Key, Query = fanOutQuery }
+                        ? request with { Query = fanOutQuery }
                         : request;
                     return entry.Provider.ObserveQuery<T>(scopedReq, options);
                 })

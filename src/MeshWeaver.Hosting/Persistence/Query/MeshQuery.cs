@@ -78,22 +78,31 @@ public class MeshQuery(
     {
         var all = new ConcurrentBag<QuerySuggestion>();
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
 
         await Task.WhenAll(providers.Select(async provider =>
         {
-            await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, limit, ct))
+            try
             {
-                // Skip satellite nodes — they have /_Prefix/ segments in their path
-                if (IsSatellitePath(suggestion.Path))
-                    continue;
-                if (seen.TryAdd(suggestion.Path, 0))
-                    all.Add(suggestion);
+                await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, limit, ct))
+                {
+                    // Skip satellite nodes — they have /_Prefix/ segments in their path
+                    if (IsSatellitePath(suggestion.Path))
+                        continue;
+                    if (seen.TryAdd(suggestion.Path, 0))
+                        all.Add(suggestion);
+                }
+            }
+            catch (OperationCanceledException) { /* expected on cancel */ }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "{Provider} autocomplete failed", provider.GetType().Name);
             }
         }));
 
         foreach (var suggestion in all
-            .OrderBy(s => s.Path.Length)
-            .ThenByDescending(s => s.Score)
+            .OrderByDescending(s => s.Score)
+            .ThenBy(s => s.Path.Length)
             .ThenBy(s => s.Name)
             .Take(limit))
         {
@@ -112,16 +121,29 @@ public class MeshQuery(
     {
         var all = new ConcurrentBag<QuerySuggestion>();
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
 
         await Task.WhenAll(providers.Select(async provider =>
         {
-            await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
+            try
             {
-                // Skip satellite nodes — they have /_Prefix/ segments in their path
-                if (IsSatellitePath(suggestion.Path))
-                    continue;
-                if (seen.TryAdd(suggestion.Path, 0))
-                    all.Add(suggestion);
+                await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
+                {
+                    // Skip satellite nodes — they have /_Prefix/ segments in their path
+                    if (IsSatellitePath(suggestion.Path))
+                        continue;
+                    if (seen.TryAdd(suggestion.Path, 0))
+                    {
+                        // Apply proximity boost based on contextPath
+                        var boosted = ApplyProximityBoost(suggestion, contextPath, prefix);
+                        all.Add(boosted);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { /* expected on cancel */ }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "{Provider} autocomplete failed", provider.GetType().Name);
             }
         }));
 
@@ -132,8 +154,8 @@ public class MeshQuery(
                 .ThenBy(s => s.Path.Length)
                 .ThenBy(s => s.Name),
             _ => all
-                .OrderBy(s => s.Path.Length)
-                .ThenByDescending(s => s.Score)
+                .OrderByDescending(s => s.Score)
+                .ThenBy(s => s.Path.Length)
                 .ThenBy(s => s.Name)
         };
 
@@ -141,6 +163,73 @@ public class MeshQuery(
         {
             yield return suggestion;
         }
+    }
+
+    /// <summary>
+    /// Applies proximity-based scoring boost to a suggestion based on its distance from contextPath.
+    /// Closer items get higher scores. Shorter paths win when scores are tied.
+    /// </summary>
+    private static QuerySuggestion ApplyProximityBoost(QuerySuggestion suggestion, string? contextPath, string? prefix)
+    {
+        if (string.IsNullOrEmpty(contextPath))
+            return suggestion;
+
+        var boost = 0.0;
+        var path = suggestion.Path;
+
+        // Direct child of context: highest boost
+        if (path.StartsWith(contextPath + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            var relative = path[(contextPath.Length + 1)..];
+            if (!relative.Contains('/'))
+                boost = 2000; // direct child
+            else
+                boost = 1500; // deeper descendant
+        }
+        // Sibling: shares parent
+        else if (!string.IsNullOrEmpty(contextPath))
+        {
+            var contextParent = contextPath.LastIndexOf('/');
+            if (contextParent > 0)
+            {
+                var parent = contextPath[..contextParent];
+                if (path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase))
+                    boost = 1000; // sibling or cousin
+            }
+        }
+
+        // Shared prefix segments bonus
+        if (boost == 0)
+        {
+            var contextSegments = contextPath.Split('/');
+            var pathSegments = path.Split('/');
+            var shared = 0;
+            for (var i = 0; i < Math.Min(contextSegments.Length, pathSegments.Length); i++)
+            {
+                if (contextSegments[i].Equals(pathSegments[i], StringComparison.OrdinalIgnoreCase))
+                    shared++;
+                else
+                    break;
+            }
+            if (shared >= 2)
+                boost = 500;
+        }
+
+        // Path length penalty: prefer shorter paths (fewer segments)
+        var segmentCount = path.Count(c => c == '/') + 1;
+        boost -= segmentCount * 50;
+
+        // Exact name match bonus
+        if (!string.IsNullOrEmpty(prefix))
+        {
+            var name = suggestion.Name;
+            if (name.Equals(prefix, StringComparison.OrdinalIgnoreCase))
+                boost += 1000;
+            else if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                boost += 500;
+        }
+
+        return suggestion with { Score = suggestion.Score + boost };
     }
 
     /// <summary>

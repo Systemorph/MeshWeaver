@@ -1,0 +1,22 @@
+{
+  "id": "Systemorph",
+  "namespace": "Brand",
+  "name": "Systemorph",
+  "nodeType": "CorporateIdentity",
+  "description": "Systemorph corporate identity for document exports.",
+  "icon": "/static/storage/content/Systemorph/logo_t.png",
+  "isPersistent": true,
+  "content": {
+    "$type": "CorporateIdentity",
+    "id": "Systemorph",
+    "name": "Systemorph",
+    "tagline": "Data for a thinking enterprise",
+    "logoPath": "/static/storage/content/Systemorph/logo.svg",
+    "primaryColor": "#0ea5e9",
+    "accentColor": "#6366f1",
+    "headerText": "Systemorph",
+    "footerText": "© Systemorph AG · systemorph.cloud",
+    "website": "https://systemorph.cloud",
+    "templatePath": "content:Systemorph/template.docx"
+  }
+}

@@ -1,22 +1,24 @@
 ---
 Name: Unified Path Syntax
 Category: Documentation
-Description: The address/prefix:path pattern explained
+Description: The address/prefix/path pattern explained
 Icon: /static/DocContent/DataMesh/UnifiedPath/Syntax/icon.svg
 ---
 
 Unified Path references use the pattern:
 
 ```
-{address}/{prefix}:{path}
+{address}/{prefix}/{path}
 ```
+
+> **Note:** The legacy `{prefix}:{path}` format (with colon) is still supported for backward compatibility.
 
 # Components
 
 | Component | Description | Example |
 |-----------|-------------|----------|
 | `address` | The MeshNode address (resolved via MeshCatalog) | `Doc/DataMesh` |
-| `prefix` | Content type selector | `content:`, `data:`, `area:`, `schema:`, `model:` |
+| `prefix` | Content type selector | `content/`, `data/`, `area/`, `schema/`, `model/` |
 | `path` | Resource path within the address | `docs/readme.md`, `Posts`, `Thumbnail` |
 
 # Address Resolution
@@ -32,11 +34,12 @@ The `address` portion is matched against nodes in the MeshCatalog using score-ba
 
 | Prefix | Purpose | Renders As |
 |--------|---------|------------|
-| `content:` | Static files (images, markdown, etc.) | File content inline |
-| `data:` | Data collections/entities | Data grid or entity view |
-| `area:` | Layout areas | Layout component |
-| `schema:` | Type schemas | JSON schema code block |
-| `model:` | Data model diagrams | Mermaid class diagram |
+| `content/` | Static files (images, markdown, etc.) | File content inline |
+| `data/` | Data collections/entities | Data grid or entity view |
+| `area/` | Layout areas | Layout component |
+| `schema/` | Type schemas | JSON schema code block |
+| `model/` | Data model diagrams | Mermaid class diagram |
+| `menu/` | Menu structure | Menu items |
 | *(none)* | Default area reference | Layout component |
 
 # Single @ vs Double @@

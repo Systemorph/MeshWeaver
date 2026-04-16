@@ -229,11 +229,10 @@ public class LayoutAreaMarkdownParser : BlockParser
 
     /// <summary>
     /// Reserved keywords for unified references.
-    /// When one of these appears as the third segment, it determines the reference type.
-    /// Supports both `address/keyword/path` and `address/keyword:path` formats.
-    /// Any prefix that is NOT in this set is treated as a content collection name.
+    /// When one of these appears as a path segment, it determines the reference type.
+    /// Supports both `address/keyword/path` (preferred) and `address/keyword:path` (legacy) formats.
     /// </summary>
-    private static readonly HashSet<string> ReservedKeywords = ["data", "area", "schema", "model"];
+    private static readonly HashSet<string> ReservedKeywords = ["data", "area", "schema", "model", "content", "collection", "menu"];
 
     /// <summary>
     /// Creates the appropriate block type based on the token content.
@@ -399,8 +398,7 @@ public class LayoutAreaMarkdownParser : BlockParser
                 {
                     // Check if the segment itself is a reserved keyword (no colon)
                     // e.g., "Systemorph/data" -> keyword is "data", no path
-                    // Note: only reserved keywords are recognized without colon,
-                    // content collections require colon syntax (e.g., "content:" or "assets:")
+                    // e.g., "Systemorph/content/file.svg" -> keyword is "content", path is "file.svg"
                     var segmentLower = segment.ToLowerInvariant();
                     if (ReservedKeywords.Contains(segmentLower))
                     {
@@ -439,7 +437,6 @@ public class LayoutAreaMarkdownParser : BlockParser
         else
         {
             // No reserved keyword - default to area
-            // Content collections require colon syntax (e.g., "content:" or "assets:")
             keyword = "area";
             remainingPath = partsNoEmpty.Length > 2
                 ? string.Join("/", partsNoEmpty.Skip(2))

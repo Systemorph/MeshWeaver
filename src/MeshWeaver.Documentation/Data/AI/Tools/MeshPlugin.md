@@ -25,9 +25,9 @@ Get supports Unified Path syntax with reserved prefixes for accessing specific r
 
 | Syntax | Returns |
 |--------|---------|
-| `Get('@path/schema:')` | JSON Schema for the node's content type |
-| `Get('@path/schema:TypeName')` | JSON Schema for a specific named type |
-| `Get('@path/model:')` | Full data model with all registered types |
+| `Get('@path/schema/')` | JSON Schema for the node's content type |
+| `Get('@path/schema/TypeName')` | JSON Schema for a specific named type |
+| `Get('@path/model/')` | Full data model with all registered types |
 
 For the complete Unified Path reference:
 
@@ -37,8 +37,8 @@ For the complete Unified Path reference:
 
 - `Get('@graph/org1')` — Get a specific organization node
 - `Get('@NodeType/*')` — List all available node types
-- `Get('@ACME/ProductLaunch/schema:')` — Get content type schema for ProductLaunch
-- `Get('@ACME/ProductLaunch/model:')` — Get the full data model
+- `Get('@ACME/ProductLaunch/schema/')` — Get content type schema for ProductLaunch
+- `Get('@ACME/ProductLaunch/model/')` — Get the full data model
 
 ## Search
 
@@ -113,16 +113,16 @@ The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-l
 
 Before creating a node, discover what content fields are expected by looking at an existing node of the same type, or at the target namespace:
 
-- `Get('@path/schema:')` — Returns the JSON Schema for the node's content type (e.g., `Get('@Cornerstone/schema:')`)
-- `Get('@path/schema:TypeName')` — Returns the JSON Schema for a specific named type
-- `Get('@path/model:')` — Returns the full data model with all registered types
+- `Get('@path/schema/')` — Returns the JSON Schema for the node's content type (e.g., `Get('@Cornerstone/schema/')`)
+- `Get('@path/schema/TypeName')` — Returns the JSON Schema for a specific named type
+- `Get('@path/model/')` — Returns the full data model with all registered types
 
 The `path` is any node path — the schema/model prefixes work on any address, not just NodeType paths.
 
 ### Workflow
 
 1. Find an existing node of the type you want to create, or the namespace where you want to create
-2. Retrieve its content schema: `Get('@path/schema:')`
+2. Retrieve its content schema: `Get('@path/schema/')`
 3. Construct the MeshNode JSON with all required fields
 4. Call Create with the JSON
 

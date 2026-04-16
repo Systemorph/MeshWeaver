@@ -127,8 +127,8 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
         items.Should().NotContain(i => i.Label == "readme.md", "non-matching files should be filtered out");
 
         var docxItem = items.First(i => i.Label == "sample.docx");
-        docxItem.InsertText.Should().Contain("content:");
-        docxItem.InsertText.Should().NotContain("content:content/", "should not have duplicate content prefix");
+        docxItem.InsertText.Should().Contain("content/");
+        docxItem.InsertText.Should().NotContain("content/content/", "should not have duplicate content prefix");
         docxItem.Description.Should().Contain("converts to markdown");
         docxItem.Kind.Should().Be(AutocompleteKind.File);
         docxItem.Priority.Should().BeGreaterThan(2000, "prefix match should get high priority");

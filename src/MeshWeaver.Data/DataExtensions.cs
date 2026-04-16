@@ -23,7 +23,9 @@ public static class DataExtensions
 {
     /// <summary>
     /// Parses a unified path into prefix and remaining path.
-    /// Format: prefix:path (e.g., "data:Collection/id", "content:logos/logo.svg")
+    /// Supports both formats:
+    ///   prefix:path (legacy, e.g., "data:Collection/id", "content:logos/logo.svg")
+    ///   prefix/path (preferred, e.g., "data/Collection/id", "content/logos/logo.svg")
     /// If no prefix is specified, defaults to "data".
     /// </summary>
     private static (string Prefix, string? RemainingPath) ParseUnifiedPath(string path)
@@ -31,16 +33,29 @@ public static class DataExtensions
         if (string.IsNullOrEmpty(path))
             return ("data", null);
 
+        // Legacy format: prefix:path
         var colonIndex = path.IndexOf(':');
-        if (colonIndex <= 0)
+        if (colonIndex > 0)
         {
-            // No prefix - default to "data"
-            return ("data", path);
+            var prefix = path[..colonIndex].ToLowerInvariant();
+            var remainingPath = colonIndex < path.Length - 1 ? path[(colonIndex + 1)..] : null;
+            return (prefix, remainingPath);
         }
 
-        var prefix = path[..colonIndex].ToLowerInvariant();
-        var remainingPath = colonIndex < path.Length - 1 ? path[(colonIndex + 1)..] : null;
-        return (prefix, remainingPath);
+        // New format: prefix/path — check if first segment is a known UCR prefix
+        var slashIndex = path.IndexOf('/');
+        if (slashIndex > 0)
+        {
+            var potentialPrefix = path[..slashIndex].ToLowerInvariant();
+            if (UcrPrefixResolver.PrefixToAreaMap.ContainsKey(potentialPrefix))
+            {
+                var remainingPath = slashIndex < path.Length - 1 ? path[(slashIndex + 1)..] : null;
+                return (potentialPrefix, remainingPath);
+            }
+        }
+
+        // No prefix - default to "data"
+        return ("data", path);
     }
 
     extension(MessageHubConfiguration config)
@@ -80,16 +95,20 @@ public static class DataExtensions
                 return Task.CompletedTask;
             })
             .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
-            .WithServices(sc => sc
-                .AddScoped<IWorkspace>(sp =>
+            .WithServices(sc =>
+            {
+                sc.AddScoped<IWorkspace>(sp =>
                 {
                     var hub = sp.GetRequiredService<IMessageHub>();
                     // Use factory pattern to lazily resolve logger to avoid circular dependency
                     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
                     return new Workspace(hub, loggerFactory.CreateLogger<Workspace>());
-                })
-                .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>()
-                .AddScoped<IDataValidator, RlsDataValidator>())
+                });
+                sc.AddScoped<IAutocompletePrefixRegistry, AutocompletePrefixRegistry>();
+                sc.AddScoped<IDataValidator, RlsDataValidator>();
+                sc.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, DataAutocompleteProvider>());
+                return sc;
+            })
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {
@@ -1757,7 +1776,8 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
         if (string.IsNullOrEmpty(query))
             return "";
         var text = query.TrimStart('@');
-        // For tag queries (content:file), extract part after tag
+
+        // For legacy tag queries (content:file), extract part after tag
         var colonIndex = text.IndexOf(':');
         if (colonIndex >= 0)
         {
@@ -1768,7 +1788,18 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
         }
         else
         {
-            // Plain query — keep last path segment
+            // Check for prefix/path format (e.g., "content/file.svg")
+            var firstSlash = text.IndexOf('/');
+            if (firstSlash > 0)
+            {
+                var potentialPrefix = text[..firstSlash].ToLowerInvariant();
+                if (UcrPrefixResolver.PrefixToAreaMap.ContainsKey(potentialPrefix))
+                {
+                    text = text[(firstSlash + 1)..];
+                }
+            }
+
+            // Keep last path segment
             var lastSlash = text.LastIndexOf('/');
             if (lastSlash >= 0)
                 text = text[(lastSlash + 1)..];

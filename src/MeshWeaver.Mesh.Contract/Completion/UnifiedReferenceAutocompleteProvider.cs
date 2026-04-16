@@ -21,7 +21,8 @@ internal class UnifiedReferenceAutocompleteProvider(
     IMeshCatalog? meshCatalog,
     IMeshService? meshQuery,
     INavigationService? navigationContext,
-    IMessageHub hub) : IAutocompleteProvider
+    IMessageHub hub,
+    IAutocompletePrefixRegistry? prefixRegistry = null) : IAutocompleteProvider
 {
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
 
@@ -54,6 +55,11 @@ internal class UnifiedReferenceAutocompleteProvider(
         // Strip the @ prefix(es) - handle both @ and @@
         var path = query.TrimStart('@');
 
+        // If the path starts with (or contains) a UCR prefix segment (content/, data/, schema/, etc.),
+        // skip — dedicated providers (ContentAutocompleteProvider, DataAutocompleteProvider) handle these.
+        if (StartsWithUcrPrefix(path))
+            yield break;
+
         // Determine effective context: prefer explicit contextPath, fall back to navigation context
         var effectiveContext = contextPath ?? navigationContext?.CurrentNamespace;
 
@@ -77,6 +83,24 @@ internal class UnifiedReferenceAutocompleteProvider(
         // No context — fall back to global absolute mode
         await foreach (var item in GetAbsoluteSuggestions(path, ct))
             yield return item;
+    }
+
+    /// <summary>
+    /// Returns true if the path starts with a UCR prefix segment (content/, data/, schema/, etc.)
+    /// or is exactly a UCR prefix name. These are handled by dedicated providers.
+    /// Uses the injected IAutocompletePrefixRegistry, which aggregates from all registered providers.
+    /// </summary>
+    private bool StartsWithUcrPrefix(string path)
+    {
+        if (string.IsNullOrEmpty(path) || prefixRegistry == null) return false;
+
+        // Strip leading / for absolute paths
+        var p = path.StartsWith("/") ? path[1..] : path;
+
+        var firstSlash = p.IndexOf('/');
+        var firstSegment = firstSlash > 0 ? p[..firstSlash] : p;
+
+        return prefixRegistry.IsRegistered(firstSegment);
     }
 
     /// <summary>
@@ -163,6 +187,14 @@ internal class UnifiedReferenceAutocompleteProvider(
                     Kind: AutocompleteKind.Other
                 );
             }
+        }
+
+        // Node delegation: ask the node at searchBase for its own completions
+        // (layout areas, data collections, content files)
+        if (endsWithSlash && !string.IsNullOrEmpty(searchBase))
+        {
+            await foreach (var item in GetNodeDelegatedCompletions(searchBase, relativePrefix, currentSegment, ct))
+                yield return item;
         }
     }
 
@@ -293,6 +325,13 @@ internal class UnifiedReferenceAutocompleteProvider(
                     );
                 }
             }
+        }
+
+        // Node delegation for absolute paths
+        if (endsWithSlash && completedSegments.Length >= 1)
+        {
+            await foreach (var item in GetNodeDelegatedCompletions(address, $"/{address}/", currentSegment, ct))
+                yield return item;
         }
     }
 
@@ -431,4 +470,40 @@ internal class UnifiedReferenceAutocompleteProvider(
         "content" => AutocompleteKind.File,
         _ => AutocompleteKind.Other
     };
+
+    /// <summary>
+    /// Asks the node at the given path for its own completions (layout areas, data collections, content files)
+    /// by sending an AutocompleteRequest to that node's hub.
+    /// </summary>
+    private async IAsyncEnumerable<AutocompleteItem> GetNodeDelegatedCompletions(
+        string nodePath,
+        string insertPrefix,
+        string currentSegment,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        AutocompleteResponse? response = null;
+        try
+        {
+            // Send AutocompleteRequest to the hub — the handler aggregates all local IAutocompleteProvider instances
+            var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
+            var delivery = await hub.AwaitResponse<AutocompleteResponse>(request, o => o, ct);
+            response = delivery.Message;
+        }
+        catch
+        {
+            // Hub may not have an AutocompleteRequest handler, or node may not exist
+        }
+
+        if (response?.Items == null)
+            yield break;
+
+        foreach (var item in response.Items)
+        {
+            // Re-map insert text to use the relative prefix if needed
+            yield return item with
+            {
+                Priority = item.Priority > 0 ? item.Priority : ItemPriority
+            };
+        }
+    }
 }

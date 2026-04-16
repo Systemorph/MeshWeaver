@@ -20,7 +20,7 @@ public static class ContentLayoutArea
     private static UiControl GetControl(string path, object content, bool isPresentationMode = false)
     {
         if (content is MarkdownElement md)
-            return new MarkdownControl(md.Content) { Html = md.PrerenderedHtml };
+            return new MarkdownControl(md.Content) { Html = md.PrerenderedHtml, CodeSubmissions = md.CodeSubmissions };
         if (content is string str)
         {
             return Path.GetExtension(path) switch

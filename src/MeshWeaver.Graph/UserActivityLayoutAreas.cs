@@ -154,7 +154,8 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(false)
             .WithMaxColumns(4)
             .WithItemLimit(50)
-            .WithMaxRows(2));
+            .WithMaxRows(2)
+            .WithReactiveMode(true));
 
         // Visible child nodes — security service automatically filters to viewer-visible nodes
         content = content.WithView(Controls.MeshSearch
@@ -166,7 +167,8 @@ public static class UserActivityLayoutAreas
             .WithItemLimit(50)
             .WithMaxRows(3)
             .WithMaxColumns(4)
-            .WithCollapsibleSections(true));
+            .WithCollapsibleSections(true)
+            .WithReactiveMode(true));
 
         profile = profile.WithView(content);
         return profile;
@@ -212,7 +214,8 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(false)
             .WithMaxColumns(2)
             .WithItemLimit(50)
-            .WithMaxRows(4));
+            .WithMaxRows(4)
+            .WithReactiveMode(true));
 
         return section;
     }
@@ -270,7 +273,8 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(false)
             .WithMaxColumns(1)
             .WithItemLimit(20)
-            .WithMaxRows(4);
+            .WithMaxRows(4)
+            .WithReactiveMode(true);
     }
 
     /// <summary>
@@ -281,13 +285,14 @@ public static class UserActivityLayoutAreas
     {
         return Controls.MeshSearch
             .WithTitle("Latest Threads")
-            .WithHiddenQuery($"nodeType:Thread namespace:*/_Thread sort:LastModified-desc")
+            .WithHiddenQuery($"nodeType:Thread namespace:*/_Thread content.createdBy:{nodeOwnerId} sort:LastModified-desc")
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithItemLimit(50)
             .WithMaxRows(2)
             .WithMaxColumns(4)
+            .WithReactiveMode(true)
             .WithCreateNodeType("Thread")
             .WithCreateNamespace(nodePath);
     }
@@ -308,6 +313,7 @@ public static class UserActivityLayoutAreas
             .WithMaxRows(3)
             .WithMaxColumns(4)
             .WithCollapsibleSections(true)
+            .WithReactiveMode(true)
             .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodePath)}");
     }
 

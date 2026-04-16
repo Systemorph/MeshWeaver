@@ -378,7 +378,7 @@ public partial class QueryParser
                     if (value.Contains('*'))
                     {
                         // Wildcard namespace: add as LIKE filter (e.g., namespace:*/_Thread)
-                        filterTokens.Add(new Token(TokenType.Comparison, null,
+                        filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
                             new QueryCondition("namespace", QueryOperator.Like, [value.Replace("*", "%")])));
                     }
                     else

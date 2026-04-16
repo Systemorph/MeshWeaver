@@ -36,18 +36,43 @@ public static class UcrPrefixResolver
         if (string.IsNullOrEmpty(path))
             return false;
 
+        // Legacy format: prefix:path (e.g., "content:logo.svg")
         var colonIndex = path.IndexOf(':');
-        if (colonIndex <= 0)
-            return false;
+        if (colonIndex > 0)
+        {
+            var colonPrefix = path[..colonIndex];
+            if (PrefixToAreaMap.TryGetValue(colonPrefix, out var colonArea))
+            {
+                area = colonArea;
+                var pathAfterColon = path[(colonIndex + 1)..];
+                remainingPath = string.IsNullOrEmpty(pathAfterColon) ? null : pathAfterColon;
+                return true;
+            }
+        }
 
-        var potentialPrefix = path[..colonIndex];
-        if (!PrefixToAreaMap.TryGetValue(potentialPrefix, out var specialArea))
-            return false;
+        // New format: prefix/path (e.g., "content/logo.svg")
+        var slashIndex = path.IndexOf('/');
+        if (slashIndex > 0)
+        {
+            var slashPrefix = path[..slashIndex];
+            if (PrefixToAreaMap.TryGetValue(slashPrefix, out var slashArea))
+            {
+                area = slashArea;
+                var pathAfterSlash = path[(slashIndex + 1)..];
+                remainingPath = string.IsNullOrEmpty(pathAfterSlash) ? null : pathAfterSlash;
+                return true;
+            }
+        }
 
-        area = specialArea;
-        var pathAfterPrefix = path[(colonIndex + 1)..];
-        remainingPath = string.IsNullOrEmpty(pathAfterPrefix) ? null : pathAfterPrefix;
-        return true;
+        // Exact match on prefix alone (e.g., just "content" or "data")
+        if (PrefixToAreaMap.TryGetValue(path, out var exactArea))
+        {
+            area = exactArea;
+            remainingPath = null;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

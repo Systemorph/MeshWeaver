@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Messaging;
 
@@ -6,11 +7,17 @@ namespace MeshWeaver.ContentCollections.Completion;
 
 /// <summary>
 /// Provides autocomplete items for content collections.
-/// Filters files by query relevance and scores them to compete fairly with postgres-backed results.
-/// Priority scale: exact name match 3000, prefix match 2800, contains 2000.
+/// Uses fzf-style fuzzy matching (FuzzyScorer) so a query matching ANY word in the filename
+/// scores high — e.g., "two" matches "one two three.docx", "thr" matches "three" word.
+/// Priority scale: word-boundary fuzzy matches score in the thousands; proximity boost +1000 for local content.
 /// </summary>
 public class ContentAutocompleteProvider(IContentService contentService) : IAutocompleteProvider
 {
+    private static readonly FuzzyScorer Scorer = new();
+
+    /// <inheritdoc />
+    public string? Prefix => "content";
+
     /// <inheritdoc />
     public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
         string query,
@@ -19,6 +26,10 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
     {
         // Strip @ prefix and any path before the query text
         var searchText = ExtractSearchText(query);
+
+        // Dedupe by insert text — same file can appear via multiple collections
+        // (parent/child hierarchy, mapped collections pointing to same storage path)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Iterate over all configured collections
         foreach (var config in contentService.GetAllCollectionConfigs())
@@ -29,7 +40,8 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
 
             await foreach (var item in EnumerateMatchingFilesAsync(collection, "/", searchText, contextPath))
             {
-                yield return item;
+                if (seen.Add(item.InsertText))
+                    yield return item;
             }
         }
     }
@@ -58,7 +70,7 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
                     continue; // Skip non-matching files when there's a query
 
                 var pathWithoutLeadingSlash = file.Path.TrimStart('/');
-                // For the default "content" collection, omit the collection name to avoid content:content/file
+                // For the default "content" collection, omit the collection name to avoid content/content/file
                 var contentPath = collection.Collection == "content"
                     ? pathWithoutLeadingSlash
                     : $"{collection.Collection}/{pathWithoutLeadingSlash}";
@@ -67,8 +79,18 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
                     ? $"{contentPath} (converts to markdown)"
                     : contentPath;
 
-                // Build insert text: use relative content: path when in context
+                // Build insert text: use relative content/ path when in context
                 var insertText = FormatInsertText(contentPath, collection.Address, contextPath);
+
+                // Proximity boost: content in same address as context gets a bonus
+                var addressStr = collection.Address?.ToString();
+                if (!string.IsNullOrEmpty(contextPath) &&
+                    !string.IsNullOrEmpty(addressStr) &&
+                    (contextPath.Equals(addressStr, StringComparison.OrdinalIgnoreCase) ||
+                     contextPath.StartsWith(addressStr + "/", StringComparison.OrdinalIgnoreCase)))
+                {
+                    score += 1000; // local content
+                }
 
                 yield return new AutocompleteItem(
                     Label: file.Name,
@@ -95,41 +117,44 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
     }
 
     /// <summary>
-    /// Scores a file name against the search text.
-    /// Returns priority values that compete with postgres ts_rank-based scores.
+    /// Scores a file name against the search text using fzf-style fuzzy matching.
+    /// Case-insensitive. Word-boundary matches (e.g., "thr" against "one two three.docx" → "three")
+    /// score high due to BonusAfterSeparator. Returns 0 if no match.
+    /// Scaled to thousands to compete with postgres ts_rank-based scores.
     /// </summary>
     private static int ScoreMatch(string fileName, string searchText)
     {
         if (string.IsNullOrEmpty(searchText))
             return 100; // Return all with low priority when no query
 
-        var nameLower = fileName.ToLowerInvariant();
-        var queryLower = searchText.ToLowerInvariant();
-        var nameWithoutExt = Path.GetFileNameWithoutExtension(nameLower);
-
-        // Exact match (with or without extension)
-        if (nameLower == queryLower || nameWithoutExt == queryLower)
+        // Exact filename match (including extension) is the strongest possible match —
+        // the user typed the full file name. Bypass fuzzy scoring so typing "sample.docx"
+        // doesn't score 0 just because "sample.docx" is longer than "sample".
+        if (string.Equals(fileName, searchText, StringComparison.OrdinalIgnoreCase))
             return 3000;
 
-        // Starts with query
-        if (nameLower.StartsWith(queryLower) || nameWithoutExt.StartsWith(queryLower))
-            return 2800;
+        // Drop extension for scoring so "report" matches "report.md" without penalty.
+        // Also drop the searchText extension if present — "sample.doc" should still match "sample.docx".
+        var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+        var searchWithoutExt = Path.GetFileNameWithoutExtension(searchText);
+        var effectiveSearch = string.IsNullOrEmpty(searchWithoutExt) ? searchText : searchWithoutExt;
 
-        // Contains query as substring
-        if (nameLower.Contains(queryLower))
-            return 2000;
+        if (string.Equals(nameWithoutExt, effectiveSearch, StringComparison.OrdinalIgnoreCase))
+            return 3000;
 
-        // Word-boundary match (query matches start of a word in the name)
-        var words = nameWithoutExt.Split([' ', '_', '-', '.'], StringSplitOptions.RemoveEmptyEntries);
-        if (words.Any(w => w.StartsWith(queryLower)))
-            return 1500;
+        // Use FuzzyScorer (case-insensitive, word-boundary aware)
+        var scored = Scorer.Score(new[] { nameWithoutExt }, effectiveSearch, s => s).FirstOrDefault();
+        if (scored == null || scored.Score <= 0)
+            return 0;
 
-        return 0; // No match
+        // FuzzyScorer typically returns scores in 10s-100s range. Scale to compete with
+        // node scoring (which is in thousands). Multiply by 30 keeps strong matches well above 1000.
+        return scored.Score * 30;
     }
 
     /// <summary>
     /// Formats the insert text for autocomplete.
-    /// Uses relative content: path when contextPath matches the collection address.
+    /// Uses relative content/ path when contextPath matches the collection address.
     /// Wraps in quotes if the path contains spaces.
     /// </summary>
     private static string FormatInsertText(string contentPath, Address? collectionAddress, string? contextPath)
@@ -143,15 +168,15 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
             (contextPath.Equals(addressStr, StringComparison.OrdinalIgnoreCase) ||
              contextPath.StartsWith(addressStr + "/", StringComparison.OrdinalIgnoreCase)))
         {
-            reference = $"@content:{contentPath}";
+            reference = $"@content/{contentPath}";
         }
         else if (!string.IsNullOrEmpty(addressStr))
         {
-            reference = $"@{addressStr}/content:{contentPath}";
+            reference = $"@{addressStr}/content/{contentPath}";
         }
         else
         {
-            reference = $"@content:{contentPath}";
+            reference = $"@content/{contentPath}";
         }
 
         // Wrap in quotes if path contains spaces
@@ -163,7 +188,7 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
 
     /// <summary>
     /// Extracts the search text from the raw query.
-    /// Strips @ prefix and any content: tag prefix, keeping just the filename portion.
+    /// Strips @ prefix and any content: or content/ tag prefix, keeping just the filename portion.
     /// </summary>
     private static string ExtractSearchText(string query)
     {
@@ -173,11 +198,31 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
         // Strip @ prefix
         var text = query.TrimStart('@');
 
-        // If it contains content: tag, extract the part after it
-        var contentIndex = text.IndexOf("content:", StringComparison.OrdinalIgnoreCase);
+        // Check for content: (legacy) or content/ (preferred) tag
+        var contentColonIndex = text.IndexOf("content:", StringComparison.OrdinalIgnoreCase);
+        var contentSlashIndex = text.IndexOf("content/", StringComparison.OrdinalIgnoreCase);
+
+        int contentIndex;
+        int skipLength;
+        if (contentColonIndex >= 0)
+        {
+            contentIndex = contentColonIndex;
+            skipLength = "content:".Length;
+        }
+        else if (contentSlashIndex >= 0)
+        {
+            contentIndex = contentSlashIndex;
+            skipLength = "content/".Length;
+        }
+        else
+        {
+            contentIndex = -1;
+            skipLength = 0;
+        }
+
         if (contentIndex >= 0)
         {
-            text = text[(contentIndex + "content:".Length)..];
+            text = text[(contentIndex + skipLength)..];
             // Strip collection prefix if present (e.g., "collection/filename")
             var lastSlash = text.LastIndexOf('/');
             if (lastSlash >= 0)
