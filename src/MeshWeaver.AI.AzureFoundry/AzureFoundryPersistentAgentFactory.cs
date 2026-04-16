@@ -89,13 +89,17 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
             "Creating persistent Azure AI agent for {AgentName} using model {ModelName} with {ToolCount} tools",
             name, model, tools.Count);
 
-        // Create the agent server-side and wrap as ChatClientAgent
+        // Create the agent server-side and wrap as ChatClientAgent.
+        // The entire PersistentAgentsClientExtensions class is obsolete — migration to the
+        // new Microsoft.Agents.AI.AzureAI SDK is tracked but requires a factory rewrite.
+#pragma warning disable CS0618
         var agent = await client.CreateAIAgentAsync(
             model: model,
             name: name,
             description: description,
             instructions: instructions,
             tools: tools);
+#pragma warning restore CS0618
 
         logger.LogInformation(
             "Successfully created persistent agent {AgentName} with server-side ID {AgentId}",
