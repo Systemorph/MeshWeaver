@@ -143,7 +143,7 @@ void RewriteCsproj(string csprojPath, Dictionary<string, string> rootVersions)
 
         if (Regex.IsMatch(normalized, @"[/\\]src[/\\]MeshWeaver\.[\w.]+[/\\]", RegexOptions.IgnoreCase))
         {
-            var pkgName = Path.GetFileNameWithoutExtension(include);
+            var pkgName = Path.GetFileNameWithoutExtension(normalized);
             pr.ReplaceWith(new XElement("PackageReference", new XAttribute("Include", pkgName)));
             changed = true;
         }
