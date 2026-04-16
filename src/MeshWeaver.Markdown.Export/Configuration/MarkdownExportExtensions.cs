@@ -47,11 +47,10 @@ public static class MarkdownExportExtensions
     /// the CorporateIdentity node type, the request/response hub handler, menu items,
     /// and the dialog layout areas.
     /// </summary>
-    /// <summary>
-    /// Registers the markdown export pipeline. Use the <paramref name="configure"/> callback
-    /// to pick the target content collection and sub-directory, and whether to overwrite
-    /// existing files.
-    /// </summary>
+    /// <remarks>
+    /// Use the <paramref name="configure"/> callback to pick the target content collection
+    /// and sub-directory, and whether to overwrite existing files.
+    /// </remarks>
     public static TBuilder AddMarkdownExport<TBuilder>(
         this TBuilder builder,
         Action<MarkdownExportConfig>? configure = null)

@@ -13,7 +13,7 @@ namespace MeshWeaver.Data.Completion;
 public class AutocompletePrefixRegistry(IServiceProvider serviceProvider) : IAutocompletePrefixRegistry
 {
     private HashSet<string>? _prefixes;
-    private readonly Lock _lock = new();
+    private readonly object _lock = new();
 
     private HashSet<string> Prefixes
     {

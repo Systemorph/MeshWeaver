@@ -151,12 +151,18 @@ public static class DeleteLayoutArea
                         return;
                     }
 
-                    // Fire-and-forget: post delete request, don't await (avoids deadlock)
+                    // Reactive delete — subscribe with onNext/onError to surface failures.
                     host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
-                        .DeleteNode(nodePath).Subscribe();
-
-                    // Empty the area in-place — no redirect. The user can navigate via menu/back.
-                    ctx.Host.UpdateArea(MeshNodeLayoutAreas.DeleteArea, null);
+                        .DeleteNode(nodePath).Subscribe(
+                            _ =>
+                            {
+                                // Empty the area in-place — no redirect. The user can navigate via menu/back.
+                                ctx.Host.UpdateArea(MeshNodeLayoutAreas.DeleteArea, null);
+                            },
+                            ex =>
+                            {
+                                ShowDialog(ctx, "Delete Failed", $"Could not delete node: {ex.Message}");
+                            });
                 })));
 
         return stack;

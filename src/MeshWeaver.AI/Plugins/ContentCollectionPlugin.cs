@@ -37,6 +37,17 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         // a plugin method: that blocks the hub scheduler. The callback fires on a non-hub
         // thread when the response arrives and resolves the TCS to unblock the caller.
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+        var registration = timeoutCts.Token.Register(() =>
+        {
+            if (cancellationToken.IsCancellationRequested)
+                tcs.TrySetCanceled(cancellationToken);
+            else
+                tcs.TrySetResult($"Error uploading to {resolvedPath}: the operation timed out waiting for a response.");
+        });
+        _ = tcs.Task.ContinueWith(_ => { registration.Dispose(); timeoutCts.Dispose(); }, TaskScheduler.Default);
+
         var delivery = hub.Post(
             new SaveContentRequest
             {

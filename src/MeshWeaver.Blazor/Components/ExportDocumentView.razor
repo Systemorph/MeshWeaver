@@ -125,17 +125,24 @@
     private ExportFormat _format = ExportFormat.Pdf;
     private string _formatLabel = "PDF";
 
+    private bool _initialized;
+
     protected override void BindData()
     {
         base.BindData();
         SourcePath = ViewModel?.SourcePath;
         NodeName = ViewModel?.NodeName;
         HasDescendants = ViewModel?.HasDescendants ?? false;
-        _title = NodeName ?? SourcePath ?? "Document";
 
-        _format = string.Equals(ViewModel?.DefaultFormat, "docx", StringComparison.OrdinalIgnoreCase)
-            ? ExportFormat.Docx : ExportFormat.Pdf;
-        _formatLabel = _format == ExportFormat.Pdf ? "PDF" : "DOCX";
+        // Only set defaults on first bind — avoid overwriting user edits on subsequent reactive updates.
+        if (!_initialized)
+        {
+            _title = NodeName ?? SourcePath ?? "Document";
+            _format = string.Equals(ViewModel?.DefaultFormat, "docx", StringComparison.OrdinalIgnoreCase)
+                ? ExportFormat.Docx : ExportFormat.Pdf;
+            _formatLabel = _format == ExportFormat.Pdf ? "PDF" : "DOCX";
+            _initialized = true;
+        }
     }
 
     private async Task ExportAsync()

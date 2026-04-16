@@ -131,8 +131,11 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
                 return new LogoImage(ms.ToArray(), InferMime(path));
             }
 
-            // Absolute URL — not supported for server-side embedding (no outgoing HTTP here by design).
-            logger.LogInformation("Logo path '{Path}' is an absolute URL; skipping.", path);
+            // Unsupported path shape — either an absolute URL or a relative path we can't resolve server-side.
+            if (Uri.TryCreate(path, UriKind.Absolute, out _))
+                logger.LogInformation("Logo path '{Path}' is an absolute URL; skipping.", path);
+            else
+                logger.LogInformation("Logo path '{Path}' is an unsupported relative path; skipping.", path);
             return null;
         }
         catch (Exception ex)

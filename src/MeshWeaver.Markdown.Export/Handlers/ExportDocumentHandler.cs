@@ -40,7 +40,7 @@ public static class ExportDocumentHandler
         try
         {
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = await meshService.QueryAsync<MeshNode>($"path:{request.SourcePath}").FirstOrDefaultAsync();
+            var node = await meshService.QueryAsync<MeshNode>($"path:{request.SourcePath}").FirstOrDefaultAsync(ct);
             if (node is null)
             {
                 hub.Post(new ExportDocumentResponse(
@@ -60,9 +60,20 @@ public static class ExportDocumentHandler
 
             if (request.Options.IncludeChildren)
             {
+                var maxDepth = request.Options.MaxDepth;
+                var rootDepth = request.SourcePath.Count(c => c == '/');
+
                 await foreach (var desc in meshService.QueryAsync<MeshNode>(
                     $"path:{request.SourcePath} scope:descendants").WithCancellation(ct))
                 {
+                    // Respect MaxDepth: skip nodes deeper than the allowed level (0 = unlimited).
+                    if (maxDepth > 0)
+                    {
+                        var descDepth = desc.Path.Count(c => c == '/') - rootDepth;
+                        if (descDepth > maxDepth)
+                            continue;
+                    }
+
                     var md = ExtractMarkdown(desc);
                     if (!string.IsNullOrWhiteSpace(md))
                         chapters.Add((desc.Name ?? desc.Id, md));

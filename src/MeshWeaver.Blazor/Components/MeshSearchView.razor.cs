@@ -661,7 +661,7 @@ public partial class MeshSearchView : IDisposable
                 Path = s.Path,
                 Category = s.NodeType ?? "Nodes",
                 IconUrl = s.Icon,
-                SortKey = (99999 - (int)s.Score).ToString("D5")
+                SortKey = (99999 - Math.Clamp((int)s.Score, 0, 99999)).ToString("D5")
             }).ToArray();
         }
         catch

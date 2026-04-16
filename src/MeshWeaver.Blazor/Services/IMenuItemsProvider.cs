@@ -34,7 +34,7 @@ public class MenuItemsProvider : IMenuItemsProvider, IDisposable
 {
     private const string DefaultKey = "";
 
-    private readonly ConcurrentDictionary<string, BehaviorSubject<IReadOnlyList<NodeMenuItemDefinition>>> _subjects = new();
+    private readonly ConcurrentDictionary<string, BehaviorSubject<IReadOnlyList<NodeMenuItemDefinition>>> _subjects = new(StringComparer.OrdinalIgnoreCase);
 
     public IObservable<IReadOnlyList<NodeMenuItemDefinition>> MenuItems => GetSubject(DefaultKey);
 

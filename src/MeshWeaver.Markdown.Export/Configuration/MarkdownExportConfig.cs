@@ -1,9 +1,8 @@
 namespace MeshWeaver.Markdown.Export.Configuration;
 
 /// <summary>
-/// Destination settings for generated export files. The handler writes the rendered
-/// PDF / DOCX into the named content collection under the given directory, and the
-/// client receives a link back (no byte streaming through the hub).
+/// Configuration for the markdown export pipeline. The current export flow renders
+/// the PDF / DOCX payload and returns it directly to the client for download.
 /// </summary>
 public class MarkdownExportConfig
 {
