@@ -37,13 +37,23 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Resolves @ prefix and quotes from path. Example: @graph/org1 -> graph/org1, "@content/My File.md" -> content/My File.md
+    /// Resolves @ prefix and quotes from path. Examples:
+    ///   @graph/org1 → graph/org1
+    ///   "@content/My File.md" → content/My File.md      (surrounding quotes)
+    ///   @/Org/content/"My File.docx" → /Org/content/My File.docx   (embedded around filename)
+    ///   @/Org/"content/My File.docx" → /Org/content/My File.docx   (embedded around segment)
+    /// Models often emit segment-quoted paths to "protect" spaced filenames; those quotes
+    /// are not legal mesh-path characters, so we strip every double quote regardless of
+    /// position. Without this, the file lookup goes after a literally-quoted name.
     /// </summary>
     public static string ResolvePath(string path)
     {
-        // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
-        if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
-            path = path[1..^1];
+        if (string.IsNullOrEmpty(path))
+            return path;
+
+        // Drop every double quote — mesh paths never contain them legitimately.
+        if (path.Contains('"'))
+            path = path.Replace("\"", string.Empty);
 
         if (path.StartsWith("@"))
             return path[1..];

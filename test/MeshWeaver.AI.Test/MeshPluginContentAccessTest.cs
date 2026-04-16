@@ -200,6 +200,74 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         response.Message.Error.Should().BeNull();
     }
 
+    /// <summary>
+    /// Repro for the prod symptom: agent emits an absolute path where the SPACED filename
+    /// portion is wrapped in double quotes (e.g. content/"My File.docx"). The full path
+    /// looks like @/Org/Sub/content/"Diskussion Thomas Final Report.docx".
+    /// MeshOperations.ResolvePath only strips SURROUNDING quotes, so embedded quotes
+    /// survive, the address part is parsed correctly but the file lookup goes after a
+    /// quoted-literal filename that doesn't exist.
+    /// </summary>
+    [Fact]
+    public async Task Get_AbsolutePath_QuotedSpacedFilename_ReturnsFileContent()
+    {
+        var nodePath = $"ContentTest_{_testId}_Q";
+        var contentDir = Path.Combine(ContentBasePath, nodePath);
+        Directory.CreateDirectory(contentDir);
+        const string SpacedFile = "Diskussion Thomas Final Report.txt";
+        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile),
+            "the actual report content", TestContext.Current.CancellationToken);
+
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode(nodePath) { Name = "Quoted Test", NodeType = "Markdown" },
+            TestContext.Current.CancellationToken);
+
+        var plugin = new MeshPlugin(Mesh, new MockAgentChat());
+
+        // Exact prod-shape path: absolute (@/) + spaced filename wrapped in quotes.
+        var path = $"@/{nodePath}/content/\"{SpacedFile}\"";
+        var result = await plugin.Get(path);
+
+        Output.WriteLine($"Path: {path}");
+        Output.WriteLine($"Result: {result}");
+
+        result.Should().NotStartWith("Error");
+        result.Should().NotStartWith("Not found");
+        result.Should().Contain("the actual report content");
+    }
+
+    /// <summary>
+    /// Same as above but quotes wrap the WHOLE relative portion after content/ —
+    /// i.e. content/"name" vs "content/name" — both shapes appear in agent output.
+    /// </summary>
+    [Fact]
+    public async Task Get_AbsolutePath_QuotesAroundContentSegment_ReturnsFileContent()
+    {
+        var nodePath = $"ContentTest_{_testId}_Q2";
+        var contentDir = Path.Combine(ContentBasePath, nodePath);
+        Directory.CreateDirectory(contentDir);
+        const string SpacedFile = "Input Markus Apr 15.txt";
+        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile),
+            "markus input notes", TestContext.Current.CancellationToken);
+
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode(nodePath) { Name = "Markus Test", NodeType = "Markdown" },
+            TestContext.Current.CancellationToken);
+
+        var plugin = new MeshPlugin(Mesh, new MockAgentChat());
+
+        // Quote wraps "content/<file>" together rather than just <file>.
+        var path = $"@/{nodePath}/\"content/{SpacedFile}\"";
+        var result = await plugin.Get(path);
+
+        Output.WriteLine($"Path: {path}");
+        Output.WriteLine($"Result: {result}");
+
+        result.Should().NotStartWith("Error");
+        result.Should().NotStartWith("Not found");
+        result.Should().Contain("markus input notes");
+    }
+
     private class MockAgentChat : IAgentChat
     {
         public AgentContext? Context { get; set; }
