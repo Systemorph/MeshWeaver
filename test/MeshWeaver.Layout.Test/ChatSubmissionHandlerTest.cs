@@ -260,6 +260,48 @@ public class ChatSubmissionHandlerTest
         Assert.Equal(2, handler.SubmissionCount);
     }
 
+    /// <summary>
+    /// Reproduces the prod "twice generating response" symptom: ThreadChatView.SubmitMessageCore
+    /// calls ForceRelease immediately after Submit so the input stays enabled for queueing.
+    /// A double-click (or Enter+button race) then re-enters TryBeginSubmit with the SAME text
+    /// — the state is already Idle, so the second call wrongly succeeds, the second user cell
+    /// is created, and the server watcher dispatches a second round.
+    /// </summary>
+    [Fact]
+    public void DoubleClick_SameTextWithinDebounce_RejectsSecondSubmission()
+    {
+        var (handler, _) = CreateWithControllableTimeout();
+
+        // 1st click: accepted
+        Assert.True(handler.TryBeginSubmit("Hello"));
+        Assert.Equal(1, handler.SubmissionCount);
+
+        // SubmitMessageCore force-releases immediately so the user can keep typing.
+        handler.ForceRelease();
+
+        // 2nd click of the same text within the dedup window — must be rejected.
+        Assert.False(handler.TryBeginSubmit("Hello"),
+            "duplicate Send within the debounce window should be ignored");
+        Assert.Equal(1, handler.SubmissionCount);
+    }
+
+    /// <summary>
+    /// Genuinely different text after force-release must still go through — that's the
+    /// queueing UX (user types another message while the previous is processing).
+    /// </summary>
+    [Fact]
+    public void ForceRelease_ThenDifferentText_SecondSubmissionAccepted()
+    {
+        var (handler, _) = CreateWithControllableTimeout();
+
+        Assert.True(handler.TryBeginSubmit("Hello"));
+        handler.ForceRelease();
+
+        Assert.True(handler.TryBeginSubmit("How are you"),
+            "different text after force-release is a real second submission, must go through");
+        Assert.Equal(2, handler.SubmissionCount);
+    }
+
     [Fact]
     public void ConcurrentSubmitAttempts_OnlyOneSucceeds()
     {
