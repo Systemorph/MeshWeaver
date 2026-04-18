@@ -394,6 +394,62 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.Messages.Should().HaveCount(4);
     }
 
+    // ─── Single submit must produce exactly one response cell ───
+
+    /// <summary>
+    /// Repro for the prod symptom: ONE submit produces TWO "Generating response" rounds.
+    /// Hypothesis: the user-cell creation emits a workspace stream event that re-fires the
+    /// server watcher BEFORE DispatchRound's IsExecuting=true commit lands. The watcher sees
+    /// IsExecuting=false + the user msg still unprocessed, dispatches a second round, second
+    /// response cell is created.
+    /// </summary>
+    [Fact]
+    public async Task Submit_SingleSubmit_ProducesExactlyOneResponseCell()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadPath = await SeedEmptyThreadAsync(ct);
+        var client = GetClient();
+
+        ThreadSubmission.Submit(new SubmitContext
+        {
+            Hub = client,
+            ThreadPath = threadPath,
+            UserText = "exactly once",
+            CreatedBy = "rbuergi@systemorph.com",
+            AuthorName = "Tester"
+        });
+
+        // Wait for the round to settle.
+        var settled = await WaitForThreadAsync(
+            threadPath,
+            t => !t.IsExecuting && t.IngestedMessageIds.Count == 1,
+            timeoutMs: 10_000, ct);
+
+        // Give any racing second-dispatch a chance to land.
+        await Task.Delay(500, ct);
+
+        var final = await ReadThreadAsync(threadPath, ct);
+
+        // The thread should record exactly: [user, response]. If a second round dispatched,
+        // Messages would contain a second response cell id.
+        final.Messages.Should().HaveCount(2,
+            $"one submit must produce exactly one user + one response cell, got Messages=[{string.Join(",", final.Messages)}]");
+        final.IngestedMessageIds.Should().HaveCount(1);
+        final.UserMessageIds.Should().HaveCount(1);
+
+        // Cross-check at the node level: count actual ThreadMessage assistant cells.
+        var msgNodes = new List<MeshNode>();
+        await foreach (var n in MeshQuery.QueryAsync<MeshNode>(
+            $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}", null, ct))
+            msgNodes.Add(n);
+        var responseCells = msgNodes
+            .Where(n => (n.Content as ThreadMessage)?.Role == "assistant")
+            .ToList();
+        responseCells.Should().HaveCount(1,
+            $"exactly one response cell node should exist, got {responseCells.Count}: " +
+            string.Join(",", responseCells.Select(c => c.Id)));
+    }
+
     // ─── Helpers ───
 
     private async Task<string> SeedEmptyThreadAsync(CancellationToken ct)

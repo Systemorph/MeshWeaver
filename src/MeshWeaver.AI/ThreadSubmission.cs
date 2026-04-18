@@ -594,6 +594,7 @@ internal static class ThreadSubmissionServer
                 if (Interlocked.CompareExchange(ref dispatching, 1, 0) != 0)
                     return;
 
+                var releaseGuard = true;
                 try
                 {
                     var threadNode = nodes.FirstOrDefault(n => n.Path == threadPath);
@@ -602,15 +603,19 @@ internal static class ThreadSubmissionServer
                     // Queue-don't-cancel: if the thread is executing, do nothing. The queued
                     // user messages stay in UserMessageIds; as soon as IsExecuting flips to
                     // false (current round completed naturally), we dispatch the next round.
-                    // This matches Claude Code / Anthropic's recommended pattern — the Messages
-                    // API doesn't support mid-stream injection and cancelling during a tool_use
-                    // produces orphaned blocks that need synthetic tool_result recovery.
                     if (thread.IsExecuting) return;
 
                     var dispatch = ThreadSubmission.PlanNextRound(thread);
                     if (dispatch is null) return;
 
-                    DispatchRound(threadHub, threadNode, dispatch, logger);
+                    // Hold the reentrancy guard until the response cell is created and
+                    // IsExecuting=true is committed. Otherwise the user-cell creation emit (or
+                    // a back-to-back AppendUserMessageRequest) re-fires the watcher before the
+                    // commit lands, sees IsExecuting=false + the same unprocessed messages, and
+                    // dispatches a SECOND round → duplicate response cell.
+                    releaseGuard = false;
+                    DispatchRound(threadHub, threadNode, dispatch, logger,
+                        onCompleted: () => Interlocked.Exchange(ref dispatching, 0));
                 }
                 catch (Exception ex)
                 {
@@ -618,7 +623,7 @@ internal static class ThreadSubmissionServer
                 }
                 finally
                 {
-                    Interlocked.Exchange(ref dispatching, 0);
+                    if (releaseGuard) Interlocked.Exchange(ref dispatching, 0);
                 }
             });
 
@@ -634,7 +639,8 @@ internal static class ThreadSubmissionServer
         IMessageHub hub,
         MeshNode threadNode,
         RoundDispatch dispatch,
-        ILogger<AgentChatClient>? logger)
+        ILogger<AgentChatClient>? logger,
+        Action? onCompleted = null)
     {
         var threadPath = hub.Address.Path;
         var responseMsgId = dispatch.ResponseMessageId;
@@ -677,6 +683,7 @@ internal static class ThreadSubmissionServer
         {
             logger?.LogWarning("[ThreadSubmission] Post of CreateNodeRequest returned null for response cell {ResponseMsgId} on {ThreadPath}",
                 responseMsgId, threadPath);
+            onCompleted?.Invoke();
             return;
         }
 
@@ -687,6 +694,7 @@ internal static class ThreadSubmissionServer
                 var err = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "unknown";
                 logger?.LogWarning("[ThreadSubmission] Response cell creation failed for {ResponseMsgId} on {ThreadPath}: {Error}",
                     responseMsgId, threadPath, err);
+                onCompleted?.Invoke();
                 return response;
             }
 
@@ -724,6 +732,11 @@ internal static class ThreadSubmissionServer
             hub.Post(
                 new UpdateThreadMessageContent { Text = "Allocating agent..." },
                 o => o.WithTarget(new Address(responsePath)));
+
+            // The watcher's reentrancy guard is held by the caller until this point — release
+            // it now that IsExecuting=true is committed. Subsequent watcher emits will see the
+            // executing flag and skip until this round completes.
+            onCompleted?.Invoke();
 
             // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
             var executionHub = hub.GetHostedHub(
