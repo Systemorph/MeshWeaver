@@ -127,7 +127,11 @@ public static class ThreadMessageLayoutAreas
                     ToolCalls = msg.ToolCalls ?? current.ToolCalls,
                     UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
                     AgentName = msg.AgentName ?? current.AgentName,
-                    ModelName = msg.ModelName ?? current.ModelName
+                    ModelName = msg.ModelName ?? current.ModelName,
+                    InputTokens = msg.InputTokens ?? current.InputTokens,
+                    OutputTokens = msg.OutputTokens ?? current.OutputTokens,
+                    TotalTokens = msg.TotalTokens ?? current.TotalTokens,
+                    CompletedAt = msg.CompletedAt ?? current.CompletedAt
                 }
             };
         });
@@ -352,27 +356,54 @@ public static class ThreadMessageLayoutAreas
             .WithStyle(isUser ? "align-items: flex-end;" : "")
             .WithView(bubble);
 
-        // For assistant messages: show delegation sub-threads as clickable links
+        // Reactive metadata row for assistant cells: model · duration · tokens.
+        // Re-renders whenever CompletedAt or token fields change on the underlying message.
         if (!isUser)
         {
-            var messagePath = $"{threadPath}/{messageId}";
             container = container.WithView((h, c) =>
             {
-                var meshService = h.Hub.ServiceProvider.GetService<IMeshService>();
-                if (meshService == null) return Observable.Return<UiControl?>(null);
+                var stream = h.Workspace.GetStream(new MeshNodeReference());
+                if (stream is null) return Observable.Return<UiControl?>(null);
 
-                return Observable.FromAsync(async () =>
-                {
-                    try
-                    {
-                        var subs = await meshService
-                            .QueryAsync<MeshNode>($"namespace:{messagePath} nodeType:{ThreadNodeType.NodeType}")
-                            .ToListAsync();
-                        if (subs.Count == 0) return (UiControl?)null;
-                        return (UiControl?)BuildDelegationLinks(subs);
-                    }
-                    catch { return (UiControl?)null; }
-                });
+                return stream
+                    .Select(change => change.Value?.Content as ThreadMessage)
+                    .Where(m => m is not null)
+                    .Select(m => (
+                        Started: m!.Timestamp,
+                        Completed: m.CompletedAt,
+                        Model: m.ModelName,
+                        In: m.InputTokens,
+                        Out: m.OutputTokens,
+                        Total: m.TotalTokens))
+                    .DistinctUntilChanged()
+                    .Select(meta => BuildAssistantMetaRow(meta.Started, meta.Completed, meta.Model,
+                        meta.In, meta.Out, meta.Total));
+            });
+        }
+
+        // For assistant messages: embed each delegation sub-thread as a live LayoutAreaControl
+        // pointing at the sub-thread's compact Streaming area. The Blazor renderer opens its
+        // own subscription against the sub-thread hub — parent execution never awaits the
+        // sub-thread's stream. Re-emits whenever the message's ToolCalls list changes (a new
+        // delegation appears, or its DelegationPath gets stamped after the call returns).
+        if (!isUser)
+        {
+            container = container.WithView((h, c) =>
+            {
+                var stream = h.Workspace.GetStream(new MeshNodeReference());
+                if (stream is null) return Observable.Return<UiControl?>(null);
+
+                return stream
+                    .Select(change => (change.Value?.Content as ThreadMessage)?.ToolCalls
+                        ?? System.Collections.Immutable.ImmutableList<ToolCallEntry>.Empty)
+                    .Select(tcs => tcs
+                        .Where(tc => !string.IsNullOrEmpty(tc.DelegationPath))
+                        .Select(tc => tc.DelegationPath!)
+                        .Distinct()
+                        .ToList())
+                    .Select(paths => (paths, key: string.Join("|", paths)))
+                    .DistinctUntilChanged(p => p.key)
+                    .Select(p => BuildEmbeddedSubThreadAreas(p.paths));
             });
         }
 
@@ -381,27 +412,66 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
-    /// Builds simple navigation links for delegation sub-threads.
-    /// Each sub-thread is rendered as a clickable link showing its name.
+    /// Builds the muted one-line metadata row shown below an assistant cell:
+    /// <c>HH:mm:ss · model · 1.8s · 1,247 in / 392 out (1,639 total)</c>. Returns
+    /// null when there's nothing to show (e.g. response still streaming and no model
+    /// yet known).
     /// </summary>
-    private static UiControl BuildDelegationLinks(IReadOnlyList<MeshNode> subThreads)
+    private static UiControl? BuildAssistantMetaRow(
+        DateTime started, DateTime? completed, string? model,
+        int? input, int? output, int? total)
     {
-        var sb = new System.Text.StringBuilder();
-        sb.Append("<div style=\"margin: 4px 0 8px 0;\">");
-
-        foreach (var st in subThreads)
+        var parts = new List<string>();
+        parts.Add(started.ToLocalTime().ToString("HH:mm:ss"));
+        if (!string.IsNullOrEmpty(model))
+            parts.Add(System.Web.HttpUtility.HtmlEncode(model));
+        if (completed.HasValue)
         {
-            var name = System.Web.HttpUtility.HtmlEncode(
-                st.Name?.Length > 80 ? st.Name[..77] + "..." : st.Name ?? st.Id);
-            var href = $"/{st.Path}";
+            var dur = completed.Value - started;
+            parts.Add(dur.TotalSeconds < 1
+                ? $"{dur.TotalMilliseconds:F0}ms"
+                : $"{dur.TotalSeconds:F1}s");
+        }
+        if (input.HasValue || output.HasValue || total.HasValue)
+        {
+            var inS = input?.ToString("N0") ?? "?";
+            var outS = output?.ToString("N0") ?? "?";
+            var totS = total?.ToString("N0");
+            var tokens = totS is null
+                ? $"{inS} in / {outS} out"
+                : $"{inS} in / {outS} out ({totS} total)";
+            parts.Add(tokens);
+        }
+        if (parts.Count == 0) return null;
 
-            sb.Append($"<a href=\"{href}\" style=\"display: flex; align-items: center; gap: 6px; padding: 2px 0; " +
-                       $"font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none;\">" +
-                       $"<span style=\"font-size: 10px;\">&#8618;</span> {name}</a>");
+        var line = string.Join(" &middot; ", parts);
+        return Controls.Html(
+            $"<div style=\"font-size:0.72rem; color:var(--neutral-foreground-hint); margin:2px 0 6px 4px;\">{line}</div>");
+    }
+
+    /// <summary>
+    /// Builds an embedded stack of <see cref="LayoutAreaControl"/>s pointing at the
+    /// sub-thread's compact <c>Streaming</c> view. Each control opens its own
+    /// subscription against the sub-thread hub — the parent's execution loop never
+    /// reads or awaits the sub-thread's stream. Returns null when there are no
+    /// delegations.
+    /// </summary>
+    private static UiControl? BuildEmbeddedSubThreadAreas(IReadOnlyList<string> subThreadPaths)
+    {
+        if (subThreadPaths.Count == 0) return null;
+
+        var stack = Controls.Stack
+            .WithStyle("gap: 6px; margin: 6px 0 4px 8px; padding-left: 8px; " +
+                       "border-left: 2px solid var(--accent-fill-rest);");
+
+        foreach (var path in subThreadPaths)
+        {
+            var area = new LayoutAreaControl(path, new LayoutAreaReference("Streaming"))
+                .WithSpinnerType(SpinnerType.Skeleton);
+            stack = stack.WithView(area);
         }
 
-        sb.Append("</div>");
-        return Controls.Html(sb.ToString());
+        return stack;
     }
 
     /// <summary>

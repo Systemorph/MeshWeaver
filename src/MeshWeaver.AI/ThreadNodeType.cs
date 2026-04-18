@@ -47,6 +47,13 @@ public static class ThreadNodeType
     public const string HistoryArea = "History";
 
     /// <summary>
+    /// Layout area shown above the chat: parent-thread origin link (when this thread
+    /// is a delegation), aggregated list of nodes modified by this thread's execution
+    /// with version-before / version-after, and click-through to the version compare view.
+    /// </summary>
+    public const string HeaderArea = "Header";
+
+    /// <summary>
     /// Generates a human-readable speaking ID from message text.
     /// Takes the first few words, lowercases, replaces non-alphanumeric with hyphens,
     /// and appends a short unique suffix.

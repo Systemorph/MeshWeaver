@@ -960,6 +960,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .WithSpinnerType(SpinnerType.Skeleton);
     }
 
+    /// <summary>
+    /// Creates a LayoutAreaControl pointing to the thread's Header layout area
+    /// (parent-thread back-link + aggregated UpdatedNodes summary). Null when the
+    /// thread doesn't exist yet.
+    /// </summary>
+    private LayoutAreaControl? GetHeaderCell()
+    {
+        if (string.IsNullOrEmpty(threadPath))
+            return null;
+        return new LayoutAreaControl(
+            threadPath,
+            new LayoutAreaReference(ThreadNodeType.HeaderArea))
+            .WithSpinnerType(SpinnerType.Skeleton);
+    }
+
     private static string TruncateText(string text, int maxLength)
     {
         if (string.IsNullOrEmpty(text) || text.Length <= maxLength)

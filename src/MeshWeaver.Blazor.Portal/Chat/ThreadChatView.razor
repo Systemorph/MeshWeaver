@@ -32,6 +32,13 @@ else
     @if (!ViewModel.HideEmptyState)
     {
         <div class="thread-chat-messages" @ref="messagesContainer">
+            @{
+                var header = GetHeaderCell();
+            }
+            @if (header != null)
+            {
+                <LayoutAreaView @key="@($"hdr-{threadPath}")" ViewModel="@header" Stream="@Stream" Area="@($"hdr-{threadPath}")" />
+            }
             @if (ThreadMessages.Count > 0)
             {
                 @foreach (var msgId in ThreadMessages)

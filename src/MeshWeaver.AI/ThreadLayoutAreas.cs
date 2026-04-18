@@ -45,6 +45,7 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.ThreadChatArea, ThreadChatView)
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
+                .WithView(ThreadNodeType.HeaderArea, HeaderView)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
 
@@ -517,5 +518,147 @@ public static class ThreadLayoutAreas
             .WithNamespace(nodePath)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCreateNodeType("Thread");
+    }
+
+    /// <summary>
+    /// Header area shown above the chat. Renders, when applicable:
+    ///   • A back-link to the parent thread (if this is a delegation sub-thread —
+    ///     detected by path nesting under another thread's response message id).
+    ///   • A summary of nodes modified during this thread's runs, aggregated across
+    ///     every <see cref="ThreadMessage.UpdatedNodes"/> entry, with version-before/
+    ///     version-after. Each entry links to the node's Versions area where the
+    ///     existing compare/restore UI lives.
+    /// Pure subscription on the thread MeshNode; no awaits, no QueryAsync.
+    /// </summary>
+    public static IObservable<UiControl?> HeaderView(LayoutAreaHost host, RenderingContext _)
+    {
+        var threadPath = host.Hub.Address.ToString();
+        var parentLink = TryBuildParentLink(threadPath);
+
+        var stream = host.Workspace.GetStream(new MeshNodeReference());
+        if (stream is null)
+            return Observable.Return<UiControl?>(parentLink);
+
+        // Walk this thread's message ids, fetch each satellite via GetDataRequest, accumulate
+        // their UpdatedNodes, then render the aggregated summary alongside the parent link.
+        return stream
+            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty)
+            .Select(ids => (ids, key: string.Join("|", ids)))
+            .DistinctUntilChanged(p => p.key)
+            .Select(p => CollectUpdatedNodes(host.Hub, threadPath, p.ids))
+            .Switch()
+            .Select(updates => BuildHeader(parentLink, updates));
+    }
+
+    /// <summary>
+    /// Walks <paramref name="messageIds"/>, requests each satellite ThreadMessage via
+    /// GetDataRequest (Post + RegisterCallback wrapped as an Observable), accumulates
+    /// their UpdatedNodes, and emits the aggregated list once all responses arrive.
+    /// </summary>
+    private static IObservable<ImmutableList<NodeChangeEntry>> CollectUpdatedNodes(
+        IMessageHub hub, string threadPath, ImmutableList<string> messageIds)
+    {
+        if (messageIds.IsEmpty) return Observable.Return(ImmutableList<NodeChangeEntry>.Empty);
+
+        var subjects = messageIds.Select(id =>
+        {
+            var subject = new System.Reactive.Subjects.AsyncSubject<ImmutableList<NodeChangeEntry>>();
+            var del = hub.Post(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address($"{threadPath}/{id}")));
+            if (del is null)
+            {
+                subject.OnNext(ImmutableList<NodeChangeEntry>.Empty);
+                subject.OnCompleted();
+            }
+            else
+            {
+                hub.RegisterCallback((IMessageDelivery)del, resp =>
+                {
+                    var msg = resp is IMessageDelivery<GetDataResponse> gdr
+                        ? (gdr.Message.Data as MeshNode)?.Content as ThreadMessage
+                        : null;
+                    subject.OnNext(msg?.UpdatedNodes ?? ImmutableList<NodeChangeEntry>.Empty);
+                    subject.OnCompleted();
+                    return resp;
+                });
+            }
+            return subject.AsObservable();
+        }).ToList();
+
+        return Observable.CombineLatest(subjects)
+            .Select(parts => ThreadExecution.AggregateNodeChanges(
+                parts.SelectMany(p => p).ToImmutableList()))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<ImmutableList<NodeChangeEntry>, Exception>(_ =>
+                Observable.Return(ImmutableList<NodeChangeEntry>.Empty));
+    }
+
+    private static UiControl? TryBuildParentLink(string threadPath)
+    {
+        // Sub-thread paths nest under a parent response message:
+        //   {parentThreadPath}/{parentResponseMsgId}/{thisThreadId}
+        // If we can find a ".../<8-hex-id>/<id>" pattern we treat this as a delegation.
+        var segments = threadPath.Split('/');
+        if (segments.Length < 3) return null;
+        var parentMsgId = segments[^2];
+        if (parentMsgId.Length != 8) return null;
+        var parentThreadPath = string.Join('/', segments[..^2]);
+        if (string.IsNullOrEmpty(parentThreadPath)) return null;
+
+        var encoded = System.Web.HttpUtility.HtmlEncode(parentThreadPath);
+        var html =
+            $"<a href=\"/{encoded}\" style=\"display:inline-flex; align-items:center; gap:6px; " +
+            $"font-size:0.78rem; color:var(--accent-fill-rest); text-decoration:none; " +
+            $"padding:4px 10px; border:1px solid var(--neutral-stroke-rest); border-radius:14px;\">" +
+            $"<span>&#8592;</span> Delegated from <code style=\"font-size:0.72rem;\">{encoded}</code></a>";
+        return Controls.Html(html);
+    }
+
+    private static UiControl? BuildHeader(UiControl? parentLink, ImmutableList<NodeChangeEntry> updates)
+    {
+        if (parentLink is null && updates.IsEmpty) return null;
+
+        var stack = Controls.Stack
+            .WithStyle("gap:6px; padding:8px 12px; margin-bottom:8px; " +
+                       "background:var(--neutral-layer-1); border:1px solid var(--neutral-stroke-rest); " +
+                       "border-radius:8px;");
+
+        if (parentLink is not null)
+            stack = stack.WithView(parentLink);
+
+        if (!updates.IsEmpty)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("<div style=\"font-size:0.78rem; color:var(--neutral-foreground-hint); margin-top:2px;\">");
+            sb.Append("<div style=\"font-weight:600; margin-bottom:4px;\">Modified nodes</div>");
+            foreach (var entry in updates)
+            {
+                var path = System.Web.HttpUtility.HtmlEncode(entry.Path);
+                var versionLabel = (entry.VersionBefore, entry.VersionAfter) switch
+                {
+                    (null, { } v) => $"new \u2192 v{v}",
+                    ({ } v, null) => $"v{v} \u2192 deleted",
+                    ({ } a, { } b) when a == b => $"v{b}",
+                    ({ } a, { } b) => $"v{a} \u2192 v{b}",
+                    _ => entry.Operation ?? ""
+                };
+                // Link to the node's Versions area (existing compare/restore view).
+                // Append from/to as query params so VersionLayoutArea can deep-link the
+                // compare view if it knows how to honour them; otherwise a no-op.
+                var queryParts = new List<string>();
+                if (entry.VersionBefore.HasValue) queryParts.Add($"from={entry.VersionBefore.Value}");
+                if (entry.VersionAfter.HasValue) queryParts.Add($"to={entry.VersionAfter.Value}");
+                var qs = queryParts.Count > 0 ? "?" + string.Join("&", queryParts) : "";
+                sb.Append(
+                    $"<div style=\"display:flex; gap:8px; padding:2px 0;\">" +
+                    $"<a href=\"/{path}/Versions{qs}\" style=\"color:var(--accent-fill-rest); text-decoration:none;\">{path}</a>" +
+                    $"<span>{versionLabel}</span></div>");
+            }
+            sb.Append("</div>");
+            stack = stack.WithView(Controls.Html(sb.ToString()));
+        }
+
+        return stack;
     }
 }

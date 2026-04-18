@@ -75,18 +75,113 @@ public static class ThreadSubmission
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Submits a user message into an existing thread. Fire-and-forget; the caller
-    /// observes the new user cell appear through the thread's remote MeshNode stream.
+    /// Submits a user message into an existing thread. Posts a single
+    /// <see cref="AppendUserMessageRequest"/> to the thread hub — the handler
+    /// runs <see cref="ThreadInput.AppendUserInput"/> locally (one atomic
+    /// <c>workspace.UpdateMeshNode</c>), and the server watcher then creates the
+    /// satellite cell and dispatches the round. No separate CreateNodeRequest from
+    /// the client — that was the duplicate-dispatch source in the legacy flow.
     /// </summary>
     public static void Submit(SubmitContext ctx)
-        => ThreadSubmissionClient.Submit(ctx);
+    {
+        if (string.IsNullOrEmpty(ctx.ThreadPath))
+        {
+            ctx.OnError?.Invoke("Submit requires ThreadPath. Use CreateThreadAndSubmit for new threads.");
+            return;
+        }
+
+        var delivery = ctx.Hub.Post(
+            new AppendUserMessageRequest
+            {
+                ThreadPath = ctx.ThreadPath!,
+                UserMessageId = Guid.NewGuid().ToString("N")[..8], // ignored by handler — kept for back-compat shape
+                UserText = ctx.UserText,
+                AgentName = ctx.AgentName,
+                ModelName = ctx.ModelName,
+                ContextPath = ctx.ContextPath,
+                Attachments = ctx.Attachments
+            },
+            o => o.WithTarget(new Address(ctx.ThreadPath!)));
+
+        if (delivery == null)
+        {
+            ctx.OnError?.Invoke("Hub.Post returned null");
+            return;
+        }
+
+        ctx.Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+        {
+            if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
+                ctx.OnError?.Invoke($"Submit failed: {fail.Message.Error ?? "unknown"}");
+            return response;
+        });
+    }
 
     /// <summary>
-    /// Creates a new thread node and submits the first user message. <see cref="SubmitContext.OnThreadCreated"/>
-    /// fires when the thread node is confirmed so the caller can navigate immediately.
+    /// Creates a new thread node, then submits the first user message via
+    /// <see cref="AppendUserMessageRequest"/> on the new thread.
+    /// <see cref="SubmitContext.OnThreadCreated"/> fires when the thread is confirmed.
     /// </summary>
     public static void CreateThreadAndSubmit(SubmitContext ctx)
-        => ThreadSubmissionClient.CreateThreadAndSubmit(ctx);
+    {
+        if (string.IsNullOrEmpty(ctx.Namespace))
+        {
+            ctx.OnError?.Invoke("CreateThreadAndSubmit requires Namespace.");
+            return;
+        }
+
+        var threadNode = ThreadNodeType.BuildThreadNode(ctx.Namespace!, ctx.UserText, ctx.CreatedBy);
+        var fallbackPath = threadNode.Path!;
+
+        var delivery = ctx.Hub.Post(
+            new CreateNodeRequest(threadNode),
+            o => o.WithTarget(new Address(ctx.Namespace!)));
+
+        if (delivery == null)
+        {
+            ctx.OnError?.Invoke("Hub.Post returned null");
+            return;
+        }
+
+        ctx.Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+        {
+            if (response is not IMessageDelivery<CreateNodeResponse> { Message.Success: true } cnr)
+            {
+                var err = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "unknown";
+                ctx.OnError?.Invoke($"Thread creation failed: {err}");
+                return response;
+            }
+
+            var createdNode = cnr.Message.Node ?? threadNode;
+            var createdPath = createdNode.Path ?? fallbackPath;
+            ctx.OnThreadCreated?.Invoke(createdNode);
+
+            var append = ctx.Hub.Post(
+                new AppendUserMessageRequest
+                {
+                    ThreadPath = createdPath,
+                    UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                    UserText = ctx.UserText,
+                    AgentName = ctx.AgentName,
+                    ModelName = ctx.ModelName,
+                    ContextPath = ctx.ContextPath,
+                    Attachments = ctx.Attachments
+                },
+                o => o.WithTarget(new Address(createdPath)));
+
+            if (append != null)
+            {
+                ctx.Hub.RegisterCallback((IMessageDelivery)append, appendResp =>
+                {
+                    if (appendResp is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
+                        ctx.OnError?.Invoke($"Append after thread create failed: {fail.Message.Error ?? "unknown"}");
+                    return appendResp;
+                });
+            }
+
+            return response;
+        });
+    }
 
     /// <summary>
     /// Resubmits an existing user message: truncates <c>Messages</c> and <c>IngestedMessageIds</c>
@@ -94,7 +189,37 @@ public static class ThreadSubmission
     /// creates a new output cell.
     /// </summary>
     public static void Resubmit(ResubmitContext ctx)
-        => ThreadSubmissionClient.Resubmit(ctx);
+    {
+        if (string.IsNullOrEmpty(ctx.ThreadPath) || string.IsNullOrEmpty(ctx.UserMessageIdToReplay))
+        {
+            ctx.OnError?.Invoke("Resubmit requires ThreadPath and UserMessageIdToReplay.");
+            return;
+        }
+
+        var delivery = ctx.Hub.Post(
+            new ResubmitUserMessageRequest
+            {
+                ThreadPath = ctx.ThreadPath,
+                UserMessageId = ctx.UserMessageIdToReplay,
+                NewUserText = ctx.NewUserText,
+                AgentName = ctx.AgentName,
+                ModelName = ctx.ModelName
+            },
+            o => o.WithTarget(new Address(ctx.ThreadPath)));
+
+        if (delivery == null)
+        {
+            ctx.OnError?.Invoke("Hub.Post returned null");
+            return;
+        }
+
+        ctx.Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+        {
+            if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
+                ctx.OnError?.Invoke($"Resubmit failed: {fail.Message.Error ?? "unknown"}");
+            return response;
+        });
+    }
 
     // ═════════════════════════════════════════════════════════════════════
     // Server-side API — invoked from thread hub initialization
@@ -113,40 +238,36 @@ public static class ThreadSubmission
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Thread-hub handler: registers a new user message id on the thread, stores Pending*,
-    /// and lets the watcher dispatch. Runs on the thread hub's scheduler — only one
-    /// AppendUserMessageRequest is processed at a time, so the state update is atomic
-    /// and patch-safe.
+    /// Thread-hub handler kept as a back-compat shim: re-routes legacy
+    /// <see cref="AppendUserMessageRequest"/> through the new <see cref="ThreadInput.AppendUserInput"/>
+    /// path. New callers should write directly to the thread's MeshNode via ThreadInput
+    /// instead of posting this request.
     /// </summary>
     public static IMessageDelivery HandleAppendUserMessage(
         IMessageHub hub,
         IMessageDelivery<AppendUserMessageRequest> delivery)
     {
         var req = delivery.Message;
-        hub.GetWorkspace().UpdateMeshNode(node =>
+        try
         {
-            var t = node.Content as MeshThread ?? new MeshThread();
-            var msgs = t.Messages.Contains(req.UserMessageId) ? t.Messages : t.Messages.Add(req.UserMessageId);
-            var userIds = t.UserMessageIds.Contains(req.UserMessageId) ? t.UserMessageIds : t.UserMessageIds.Add(req.UserMessageId);
-            // Accumulate queued text into PendingUserMessage. DispatchRound reads and clears it.
-            var pending = string.IsNullOrEmpty(t.PendingUserMessage)
-                ? req.UserText
-                : $"{t.PendingUserMessage}\n\n---\n\n{req.UserText}";
-            return node with
-            {
-                Content = t with
-                {
-                    Messages = msgs,
-                    UserMessageIds = userIds,
-                    PendingUserMessage = pending,
-                    PendingAgentName = req.AgentName ?? t.PendingAgentName,
-                    PendingModelName = req.ModelName ?? t.PendingModelName,
-                    PendingContextPath = req.ContextPath ?? t.PendingContextPath,
-                    PendingAttachments = req.Attachments?.ToImmutableList() ?? t.PendingAttachments
-                }
-            };
-        });
-        hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+            var msg = ThreadInput.CreateUserMessage(
+                req.UserText,
+                createdBy: delivery.AccessContext?.ObjectId,
+                authorName: null,
+                agentName: req.AgentName,
+                modelName: req.ModelName,
+                contextPath: req.ContextPath,
+                attachments: req.Attachments);
+            // Note: this shim ignores req.UserMessageId — the new flow allocates its own.
+            // Tests + the legacy client posted the id eagerly; the new flow only uses
+            // server-allocated ids so we don't honour the request's id here.
+            ThreadInput.AppendUserInput(hub.GetWorkspace(), req.ThreadPath, msg);
+            hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new AppendUserMessageResponse { Success = false, Error = ex.Message }, o => o.ResponseFor(delivery));
+        }
         return delivery.Processed();
     }
 
@@ -341,235 +462,6 @@ public sealed record RoundDispatch(
     IReadOnlyList<string>? Attachments);
 
 /// <summary>
-/// Client-side submission logic. All methods are void / fire-and-forget.
-/// The client only posts CreateNodeRequest — the server watcher does all Thread-state bookkeeping
-/// (append to Messages/UserMessageIds, set Pending*, dispatch). This avoids remote-stream write
-/// races that produce out-of-bounds JSON patches.
-/// </summary>
-internal static class ThreadSubmissionClient
-{
-    private static string NewId() => Guid.NewGuid().ToString("N")[..8];
-
-    public static void Submit(SubmitContext ctx)
-    {
-        if (string.IsNullOrEmpty(ctx.ThreadPath))
-        {
-            ctx.OnError?.Invoke("Submit requires ThreadPath. Use CreateThreadAndSubmit for new threads.");
-            return;
-        }
-
-        var userMsgId = NewId();
-        var threadAddr = new Address(ctx.ThreadPath);
-        var userCell = BuildUserCell(userMsgId, ctx.ThreadPath, ctx);
-
-        void ReportFailure(string reason)
-        {
-            PostFailureRecord(ctx.Hub, ctx.ThreadPath!, userMsgId, ctx.UserText, reason);
-            ctx.OnError?.Invoke(reason);
-        }
-
-        // 1) Create the user cell.
-        var createDelivery = ctx.Hub.Post(
-            new CreateNodeRequest(userCell),
-            o => o.WithTarget(threadAddr));
-
-        if (createDelivery != null)
-        {
-            ctx.Hub.RegisterCallback((IMessageDelivery)createDelivery, response =>
-            {
-                if (response is IMessageDelivery<CreateNodeResponse> { Message.Success: false } fail)
-                    ReportFailure($"User cell creation failed: {fail.Message.Error ?? "unknown"}");
-                return response;
-            });
-        }
-
-        // 2) Tell the thread hub to register the id and queue it.
-        var appendDelivery = ctx.Hub.Post(
-            new AppendUserMessageRequest
-            {
-                ThreadPath = ctx.ThreadPath,
-                UserMessageId = userMsgId,
-                UserText = ctx.UserText,
-                AgentName = ctx.AgentName,
-                ModelName = ctx.ModelName,
-                ContextPath = ctx.ContextPath,
-                Attachments = ctx.Attachments
-            },
-            o => o.WithTarget(threadAddr));
-
-        if (appendDelivery != null)
-        {
-            ctx.Hub.RegisterCallback((IMessageDelivery)appendDelivery, response =>
-            {
-                if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
-                    ReportFailure($"Append failed: {fail.Message.Error ?? "unknown"}");
-                return response;
-            });
-        }
-    }
-
-    public static void CreateThreadAndSubmit(SubmitContext ctx)
-    {
-        if (string.IsNullOrEmpty(ctx.Namespace))
-        {
-            ctx.OnError?.Invoke("CreateThreadAndSubmit requires Namespace.");
-            return;
-        }
-
-        var userMsgId = NewId();
-
-        // Build an empty thread node. The server watcher will populate Messages/UserMessageIds
-        // once the user cell is created.
-        var threadNode = ThreadNodeType.BuildThreadNode(ctx.Namespace, ctx.UserText, ctx.CreatedBy);
-        var threadPath = threadNode.Path!;
-        var userCell = BuildUserCell(userMsgId, threadPath, ctx);
-
-        var delivery = ctx.Hub.Post(
-            new CreateNodeRequest(threadNode),
-            o => o.WithTarget(new Address(ctx.Namespace)));
-
-        if (delivery == null)
-        {
-            ctx.OnError?.Invoke("Hub.Post returned null");
-            return;
-        }
-
-        ctx.Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-        {
-            if (response is not IMessageDelivery<CreateNodeResponse> { Message.Success: true } cnr)
-            {
-                var err = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "unknown";
-                ctx.OnError?.Invoke($"Thread creation failed: {err}");
-                return response;
-            }
-
-            var createdNode = cnr.Message.Node ?? threadNode;
-            var createdPath = createdNode.Path ?? threadPath;
-            ctx.OnThreadCreated?.Invoke(createdNode);
-
-            var threadAddr = new Address(createdPath);
-
-            // Create the user cell on the new thread.
-            var cellDelivery = ctx.Hub.Post(
-                new CreateNodeRequest(userCell),
-                o => o.WithTarget(threadAddr));
-
-            if (cellDelivery is not null)
-            {
-                ctx.Hub.RegisterCallback((IMessageDelivery)cellDelivery, cellResp =>
-                {
-                    if (cellResp is IMessageDelivery<CreateNodeResponse> { Message.Success: false } cellFail)
-                        ctx.OnError?.Invoke($"User cell creation failed: {cellFail.Message.Error ?? "unknown"}");
-                    return cellResp;
-                });
-            }
-
-            // Tell the thread hub to register the id + queue it.
-            var appendDelivery = ctx.Hub.Post(
-                new AppendUserMessageRequest
-                {
-                    ThreadPath = createdPath,
-                    UserMessageId = userMsgId,
-                    UserText = ctx.UserText,
-                    AgentName = ctx.AgentName,
-                    ModelName = ctx.ModelName,
-                    ContextPath = ctx.ContextPath,
-                    Attachments = ctx.Attachments
-                },
-                o => o.WithTarget(threadAddr));
-
-            if (appendDelivery is not null)
-            {
-                ctx.Hub.RegisterCallback((IMessageDelivery)appendDelivery, appendResp =>
-                {
-                    if (appendResp is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
-                        ctx.OnError?.Invoke($"Append failed: {fail.Message.Error ?? "unknown"}");
-                    return appendResp;
-                });
-            }
-
-            return response;
-        });
-    }
-
-    public static void Resubmit(ResubmitContext ctx)
-    {
-        if (string.IsNullOrEmpty(ctx.ThreadPath) || string.IsNullOrEmpty(ctx.UserMessageIdToReplay))
-        {
-            ctx.OnError?.Invoke("Resubmit requires ThreadPath and UserMessageIdToReplay.");
-            return;
-        }
-
-        var delivery = ctx.Hub.Post(
-            new ResubmitUserMessageRequest
-            {
-                ThreadPath = ctx.ThreadPath,
-                UserMessageId = ctx.UserMessageIdToReplay,
-                NewUserText = ctx.NewUserText,
-                AgentName = ctx.AgentName,
-                ModelName = ctx.ModelName
-            },
-            o => o.WithTarget(new Address(ctx.ThreadPath)));
-
-        if (delivery == null)
-        {
-            ctx.OnError?.Invoke("Hub.Post returned null");
-            return;
-        }
-
-        ctx.Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-        {
-            if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
-                ctx.OnError?.Invoke($"Resubmit failed: {fail.Message.Error ?? "unknown"}");
-            return response;
-        });
-    }
-
-    /// <summary>
-    /// Fire-and-forget post of a <see cref="RecordSubmissionFailureRequest"/> so the thread
-    /// shows the failure as an error response cell. If this post also fails, we've exhausted
-    /// recovery — swallow silently (the OnError callback is still invoked separately).
-    /// </summary>
-    private static void PostFailureRecord(
-        IMessageHub hub, string threadPath, string userMsgId, string userText, string error)
-    {
-        try
-        {
-            hub.Post(
-                new RecordSubmissionFailureRequest
-                {
-                    ThreadPath = threadPath,
-                    UserMessageId = userMsgId,
-                    UserText = userText,
-                    ErrorMessage = error
-                },
-                o => o.WithTarget(new Address(threadPath)));
-        }
-        catch { /* swallow — caller's OnError will still fire */ }
-    }
-
-    private static MeshNode BuildUserCell(string userMsgId, string threadPath, SubmitContext ctx)
-        => new(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = ctx.ContextPath ?? threadPath,
-            Content = new ThreadMessage
-            {
-                Role = "user",
-                AuthorName = ctx.AuthorName,
-                Text = ctx.UserText,
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput,
-                CreatedBy = ctx.CreatedBy,
-                AgentName = ctx.AgentName,
-                ModelName = ctx.ModelName,
-                ContextPath = ctx.ContextPath,
-                Attachments = ctx.Attachments
-            }
-        };
-}
-
-/// <summary>
 /// Server-side watcher: observes thread state changes and dispatches execution rounds.
 /// Installed once on thread hub initialization. Non-blocking; uses only Post + RegisterCallback
 /// and workspace stream subscriptions.
@@ -583,39 +475,42 @@ internal static class ThreadSubmissionServer
         var threadPath = threadHub.Address.Path;
 
         // Reentrancy guard: 0=idle, 1=dispatching.
-        // Combined with the thread's IsExecuting flag, prevents double-dispatch
-        // between "start dispatching" and "IsExecuting=true visible on stream".
+        // Held until IsExecuting=true is observed back through the same stream, so a
+        // re-emission triggered by our own response-cell write or PendingUserMessages
+        // patch can't double-dispatch.
         var dispatching = 0;
 
-        var sub = workspace.GetStream<MeshNode>()
-            ?.Subscribe(nodes =>
+        // Subscribe to this thread's own MeshNode (via MeshNodeReference) instead of the
+        // collection-wide stream — fewer wakeups, and the patches we observe are exactly
+        // the writes against this thread.
+        var sub = workspace.GetStream(new MeshNodeReference())
+            ?.Subscribe(change =>
             {
-                if (nodes == null) return;
+                var threadNode = change.Value;
+                if (threadNode?.Content is not MeshThread thread) return;
+
+                // IsExecuting=true is visible — we held the guard waiting for this commit.
+                if (thread.IsExecuting && dispatching == 1)
+                {
+                    Interlocked.Exchange(ref dispatching, 0);
+                    return;
+                }
+                if (thread.IsExecuting) return;
+
                 if (Interlocked.CompareExchange(ref dispatching, 1, 0) != 0)
                     return;
 
                 var releaseGuard = true;
                 try
                 {
-                    var threadNode = nodes.FirstOrDefault(n => n.Path == threadPath);
-                    if (threadNode?.Content is not MeshThread thread) return;
-
-                    // Queue-don't-cancel: if the thread is executing, do nothing. The queued
-                    // user messages stay in UserMessageIds; as soon as IsExecuting flips to
-                    // false (current round completed naturally), we dispatch the next round.
-                    if (thread.IsExecuting) return;
-
                     var dispatch = ThreadSubmission.PlanNextRound(thread);
                     if (dispatch is null) return;
 
-                    // Hold the reentrancy guard until the response cell is created and
-                    // IsExecuting=true is committed. Otherwise the user-cell creation emit (or
-                    // a back-to-back AppendUserMessageRequest) re-fires the watcher before the
-                    // commit lands, sees IsExecuting=false + the same unprocessed messages, and
-                    // dispatches a SECOND round → duplicate response cell.
+                    // Hold the guard. It will be released when we observe IsExecuting=true
+                    // back on this same stream above (or on hard failure inside DispatchRound).
                     releaseGuard = false;
                     DispatchRound(threadHub, threadNode, dispatch, logger,
-                        onCompleted: () => Interlocked.Exchange(ref dispatching, 0));
+                        onFailure: () => Interlocked.Exchange(ref dispatching, 0));
                 }
                 catch (Exception ex)
                 {
@@ -634,23 +529,23 @@ internal static class ThreadSubmissionServer
     /// Creates the output cell, writes the committed round to the thread node, and
     /// fires off agent execution on the _Exec hosted hub. Non-blocking — all
     /// Hub.Post + RegisterCallback; the workspace write is a synchronous fire-and-forget.
+    ///
+    /// Step 0 (new): for each unprocessed user id present in <see cref="MeshThread.PendingUserMessages"/>,
+    /// create the satellite ThreadMessage cell. The client only writes the thread node;
+    /// the server materializes the per-message satellite nodes here.
     /// </summary>
     private static void DispatchRound(
         IMessageHub hub,
         MeshNode threadNode,
         RoundDispatch dispatch,
         ILogger<AgentChatClient>? logger,
-        Action? onCompleted = null)
+        Action? onFailure = null)
     {
         var threadPath = hub.Address.Path;
         var responseMsgId = dispatch.ResponseMessageId;
         var responsePath = $"{threadPath}/{responseMsgId}";
         var thread = threadNode.Content as MeshThread ?? new MeshThread();
         var mainEntity = threadNode.MainNode ?? dispatch.ContextPath ?? threadPath;
-
-        // PendingUserMessage contains the concatenated text of all user messages queued by
-        // AppendUserMessageRequest handlers since the last dispatch.
-        var combinedUserText = thread.PendingUserMessage ?? "";
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var userCtx = accessService?.Context ?? accessService?.CircuitContext;
@@ -659,107 +554,165 @@ internal static class ThreadSubmissionServer
             userCtx = new AccessContext { ObjectId = thread.CreatedBy, Name = thread.CreatedBy };
         }
 
-        // Step 1: create the assistant output cell (CreateNodeRequest → RegisterCallback).
-        var responseCell = new MeshNode(responseMsgId, threadPath)
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // Step 0: materialize user satellite cells from PendingUserMessages.
+        // Only ids present in dispatch.UserMessageIds AND PendingUserMessages need creation
+        // here — legacy paths (PendingUserMessage string) create cells elsewhere.
+        var pendingForRound = dispatch.UserMessageIds
+            .Where(id => thread.PendingUserMessages.ContainsKey(id))
+            .Select(id => (Id: id, Msg: thread.PendingUserMessages[id]))
+            .ToImmutableList();
+
+        var combinedUserText = pendingForRound.Count > 0
+            ? string.Join("\n\n---\n\n", pendingForRound.Select(p => p.Msg.Text))
+            : (thread.PendingUserMessage ?? "");
+
+        void AfterUserCellsReady()
         {
-            NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = mainEntity,
-            Content = new ThreadMessage
+            // Step 1: create the assistant output cell (CreateNodeRequest → RegisterCallback).
+            var responseCell = new MeshNode(responseMsgId, threadPath)
             {
-                Role = "assistant",
-                Text = "",
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse,
-                AgentName = dispatch.AgentName,
-                ModelName = dispatch.ModelName
+                NodeType = ThreadMessageNodeType.NodeType,
+                MainNode = mainEntity,
+                Content = new ThreadMessage
+                {
+                    Role = "assistant",
+                    Text = "",
+                    Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.AgentResponse,
+                    AgentName = dispatch.AgentName,
+                    ModelName = dispatch.ModelName
+                }
+            };
+
+            var createDelivery = hub.Post(
+                new CreateNodeRequest(responseCell),
+                o => userCtx != null
+                    ? o.WithAccessContext(userCtx).WithTarget(hub.Address)
+                    : o.WithTarget(hub.Address));
+
+            if (createDelivery == null)
+            {
+                logger?.LogWarning("[ThreadSubmission] Post of CreateNodeRequest returned null for response cell {ResponseMsgId} on {ThreadPath}",
+                    responseMsgId, threadPath);
+                onFailure?.Invoke();
+                return;
             }
-        };
 
-        var createDelivery = hub.Post(
-            new CreateNodeRequest(responseCell),
-            o => userCtx != null ? o.WithAccessContext(userCtx).WithTarget(hub.Address) : o.WithTarget(hub.Address));
+            hub.RegisterCallback((IMessageDelivery)createDelivery, response =>
+            {
+                if (response is not IMessageDelivery<CreateNodeResponse> { Message.Success: true })
+                {
+                    var err = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "unknown";
+                    logger?.LogWarning("[ThreadSubmission] Response cell creation failed for {ResponseMsgId} on {ThreadPath}: {Error}",
+                        responseMsgId, threadPath, err);
+                    onFailure?.Invoke();
+                    return response;
+                }
 
-        if (createDelivery == null)
+                // Step 2: commit the round to the thread state (one atomic UpdateMeshNode).
+                // Idempotency: if IsExecuting is already true (rare race with another emit),
+                // do nothing — the previous dispatch holds the round.
+                hub.GetWorkspace().UpdateMeshNode(node =>
+                {
+                    var t = node.Content as MeshThread ?? new MeshThread();
+                    if (t.IsExecuting) return node;
+
+                    var msgs = t.Messages.Contains(responseMsgId) ? t.Messages : t.Messages.Add(responseMsgId);
+                    var ingested = t.IngestedMessageIds;
+                    foreach (var uid in dispatch.UserMessageIds)
+                        if (!ingested.Contains(uid)) ingested = ingested.Add(uid);
+
+                    // Drop consumed PendingUserMessages entries — their satellites now exist.
+                    var pending = t.PendingUserMessages;
+                    foreach (var (uid, _) in pendingForRound)
+                        pending = pending.Remove(uid);
+
+                    return node with
+                    {
+                        Content = t with
+                        {
+                            Messages = msgs,
+                            IngestedMessageIds = ingested,
+                            IsExecuting = true,
+                            ActiveMessageId = responseMsgId,
+                            ExecutionStartedAt = DateTime.UtcNow,
+                            TokensUsed = 0,
+                            ExecutionStatus = null,
+                            PendingUserMessage = null,
+                            PendingUserMessages = pending,
+                            PendingContextPath = dispatch.ContextPath,
+                            PendingAttachments = dispatch.Attachments?.ToImmutableList()
+                        }
+                    };
+                });
+
+                hub.Post(
+                    new UpdateThreadMessageContent { Text = "Allocating agent..." },
+                    o => o.WithTarget(new Address(responsePath)));
+
+                // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
+                var executionHub = hub.GetHostedHub(
+                    new Address($"{hub.Address}/_Exec"),
+                    config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
+                    HostedHubCreation.Always);
+
+                executionHub!.Post(
+                    new SubmitMessageRequest
+                    {
+                        ThreadPath = threadPath,
+                        UserMessageText = combinedUserText,
+                        UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
+                        ResponseMessageId = responseMsgId,
+                        ResponsePath = responsePath,
+                        AgentName = dispatch.AgentName,
+                        ModelName = dispatch.ModelName,
+                        ContextPath = dispatch.ContextPath,
+                        Attachments = dispatch.Attachments
+                    },
+                    o => userCtx != null ? o.WithAccessContext(userCtx) : o);
+
+                return response;
+            });
+        }
+
+        if (pendingForRound.Count == 0)
         {
-            logger?.LogWarning("[ThreadSubmission] Post of CreateNodeRequest returned null for response cell {ResponseMsgId} on {ThreadPath}",
-                responseMsgId, threadPath);
-            onCompleted?.Invoke();
+            AfterUserCellsReady();
             return;
         }
 
-        hub.RegisterCallback((IMessageDelivery)createDelivery, response =>
+        // Materialize satellite cells in parallel, then proceed. We swallow per-cell errors
+        // (cell may already exist from a prior crashed attempt — that's recoverable) and only
+        // wait for one notification per cell before continuing.
+        var creationStreams = pendingForRound.Select(p =>
         {
-            if (response is not IMessageDelivery<CreateNodeResponse> { Message.Success: true })
+            var cell = new MeshNode(p.Id, threadPath)
             {
-                var err = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "unknown";
-                logger?.LogWarning("[ThreadSubmission] Response cell creation failed for {ResponseMsgId} on {ThreadPath}: {Error}",
-                    responseMsgId, threadPath, err);
-                onCompleted?.Invoke();
-                return response;
-            }
-
-            // Step 2: commit the round to the thread state (one atomic UpdateMeshNode).
-            hub.GetWorkspace().UpdateMeshNode(node =>
-            {
-                var t = node.Content as MeshThread ?? new MeshThread();
-                var msgs = t.Messages.Contains(responseMsgId) ? t.Messages : t.Messages.Add(responseMsgId);
-                var ingested = t.IngestedMessageIds;
-                foreach (var uid in dispatch.UserMessageIds)
+                NodeType = ThreadMessageNodeType.NodeType,
+                MainNode = mainEntity,
+                Content = p.Msg
+            };
+            return meshService.CreateNode(cell)
+                .Take(1)
+                .Select(_ => true)
+                .Catch<bool, Exception>(ex =>
                 {
-                    if (!ingested.Contains(uid))
-                        ingested = ingested.Add(uid);
-                }
-                return node with
+                    logger?.LogDebug(ex, "[ThreadSubmission] User cell create returned error (may already exist) for {Path}",
+                        $"{threadPath}/{p.Id}");
+                    return Observable.Return(true);
+                });
+        }).ToList();
+
+        Observable.CombineLatest(creationStreams)
+            .Take(1)
+            .Subscribe(
+                _ => AfterUserCellsReady(),
+                ex =>
                 {
-                    Content = t with
-                    {
-                        Messages = msgs,
-                        IngestedMessageIds = ingested,
-                        IsExecuting = true,
-                        ActiveMessageId = responseMsgId,
-                        ExecutionStartedAt = DateTime.UtcNow,
-                        TokensUsed = 0,
-                        ExecutionStatus = null,
-                        // Clear PendingUserMessage — the round's text is already captured in combinedUserText.
-                        // Next AppendUserMessageRequest starts accumulating fresh for the next round.
-                        PendingUserMessage = null,
-                        PendingContextPath = dispatch.ContextPath,
-                        PendingAttachments = dispatch.Attachments?.ToImmutableList()
-                    }
-                };
-            });
-
-            hub.Post(
-                new UpdateThreadMessageContent { Text = "Allocating agent..." },
-                o => o.WithTarget(new Address(responsePath)));
-
-            // The watcher's reentrancy guard is held by the caller until this point — release
-            // it now that IsExecuting=true is committed. Subsequent watcher emits will see the
-            // executing flag and skip until this round completes.
-            onCompleted?.Invoke();
-
-            // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
-            var executionHub = hub.GetHostedHub(
-                new Address($"{hub.Address}/_Exec"),
-                config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
-                HostedHubCreation.Always);
-
-            executionHub!.Post(
-                new SubmitMessageRequest
-                {
-                    ThreadPath = threadPath,
-                    UserMessageText = combinedUserText,
-                    UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
-                    ResponseMessageId = responseMsgId,
-                    ResponsePath = responsePath,
-                    AgentName = dispatch.AgentName,
-                    ModelName = dispatch.ModelName,
-                    ContextPath = dispatch.ContextPath,
-                    Attachments = dispatch.Attachments
-                },
-                o => userCtx != null ? o.WithAccessContext(userCtx) : o);
-
-            return response;
-        });
+                    logger?.LogWarning(ex, "[ThreadSubmission] User cell materialization failed for {ThreadPath}", threadPath);
+                    onFailure?.Invoke();
+                });
     }
 }

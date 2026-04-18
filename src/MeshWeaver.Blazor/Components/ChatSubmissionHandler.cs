@@ -77,10 +77,14 @@ public class ChatSubmissionHandler : IDisposable
         if (State != SubmissionState.Idle)
             return false;
 
-        // Debounce: ThreadChatView force-releases immediately after Submit so the input stays
-        // enabled for queueing. Without this guard, a double-click / Enter+Send race produces
-        // two user cells, and the server watcher then dispatches two execution rounds.
-        // Dedup is text-based: a real second message (different text) goes through.
+        // UX-only debounce: ThreadChatView force-releases immediately after Submit so the
+        // input stays enabled for queueing while the previous round is processed by the
+        // server. Without this guard, a double-click / Enter+Send race appends the same
+        // message twice (the server watcher batches them into one round, but the user
+        // sees two duplicate cells). The duplicate-EXECUTION race that this guard used
+        // to mask is now fixed in ThreadSubmissionServer (atomic single-write append +
+        // hardened reentrancy guard); this remains only as a UX safeguard against
+        // accidental double-clicks of the same exact text.
         if (LastSubmittedText == text
             && _lastAcceptedAt.HasValue
             && (_now() - _lastAcceptedAt.Value) < _dedupWindow)

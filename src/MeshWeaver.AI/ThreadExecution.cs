@@ -429,11 +429,15 @@ public static class ThreadExecution
     /// Async handler on the _Exec hosted hub.
     /// Prepares agent and await-streams the response.
     /// Uses UpdateMeshNode on a remote stream to push text to the response node.
-    /// </summary>
-    /// <summary>
-    /// Fully reactive execution handler — zero await, zero QueryAsync.
-    /// Subscribes to chatClient.Initialize() observable, then runs streaming in the callback.
-    /// The AI API streaming (GetStreamingResponseAsync) runs via hub.InvokeAsync for async I/O.
+    ///
+    /// User input received while a round is in progress is held in
+    /// <see cref="MeshThread.PendingUserMessages"/>. The submission watcher dispatches
+    /// a NEW round (with its own response cell) as soon as this one completes — so
+    /// follow-up typed input is naturally queued without cancelling the current
+    /// model turn. Mid-iteration drain (injecting new user input into the same
+    /// response without round-boundary tear-down) would require manually orchestrating
+    /// the tool loop instead of relying on Microsoft.Extensions.AI's auto-invocation;
+    /// that's intentionally NOT done here.
     /// </summary>
     internal static IMessageDelivery ExecuteMessageAsync(
         IMessageHub hub,
@@ -690,6 +694,9 @@ public static class ThreadExecution
                     var ct = executionCts.Token;
                     var responseText = new StringBuilder();
                     capturedResponseText = responseText;
+                    int? inputTokens = null;
+                    int? outputTokens = null;
+                    int? totalTokens = null;
                     try
                     {
                     logger.LogInformation("[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath} (on thread pool)", DateTime.UtcNow, threadPath);
@@ -734,6 +741,18 @@ public static class ThreadExecution
                                 Timestamp = DateTime.UtcNow
                             });
                         }
+                    }
+                    else if (content is UsageContent usage)
+                    {
+                        // Aggregate token usage across stream chunks. Providers vary —
+                        // some report once at the end, others on every chunk; sum either way.
+                        var d = usage.Details;
+                        if (d?.InputTokenCount is { } it)
+                            inputTokens = (inputTokens ?? 0) + (int)it;
+                        if (d?.OutputTokenCount is { } ot)
+                            outputTokens = (outputTokens ?? 0) + (int)ot;
+                        if (d?.TotalTokenCount is { } tt)
+                            totalTokens = (totalTokens ?? 0) + (int)tt;
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
@@ -808,13 +827,27 @@ public static class ThreadExecution
                 }
             }
 
-                    // Final update — aggregate node changes (merges sub-thread changes with min/max versions)
+                    // Final update — aggregate node changes (merges sub-thread changes with min/max versions),
+                    // include token usage + completion timestamp so the cell can show duration / tokens.
                     var aggregatedChanges = AggregateNodeChanges(nodeChangeLog);
-                    logger.LogInformation("[ThreadExec] EXECUTION_COMPLETE: {Time:HH:mm:ss.fff} threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}",
-                        DateTime.UtcNow, threadPath, responseText.Length, toolCallLog.Count);
+                    if (totalTokens is null && (inputTokens.HasValue || outputTokens.HasValue))
+                        totalTokens = (inputTokens ?? 0) + (outputTokens ?? 0);
+                    logger.LogInformation("[ThreadExec] EXECUTION_COMPLETE: {Time:HH:mm:ss.fff} threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}, tokens={In}/{Out}/{Total}",
+                        DateTime.UtcNow, threadPath, responseText.Length, toolCallLog.Count,
+                        inputTokens, outputTokens, totalTokens);
                     var finalText = responseText.ToString();
-                    PushToResponseMessage(finalText, toolCallLog, aggregatedChanges,
-                        request.AgentName, request.ModelName);
+                    parentHub.Post(new UpdateThreadMessageContent
+                    {
+                        Text = finalText,
+                        ToolCalls = toolCallLog,
+                        UpdatedNodes = aggregatedChanges,
+                        AgentName = request.AgentName,
+                        ModelName = request.ModelName,
+                        InputTokens = inputTokens,
+                        OutputTokens = outputTokens,
+                        TotalTokens = totalTokens,
+                        CompletedAt = DateTime.UtcNow
+                    }, o => o.WithTarget(new Address(responsePath)));
                     // Clear streaming state
                     UpdateThreadExecution(t => t with
                     {

@@ -14,4 +14,12 @@ public record UpdateThreadMessageContent
     public ImmutableList<NodeChangeEntry>? UpdatedNodes { get; init; }
     public string? AgentName { get; init; }
     public string? ModelName { get; init; }
+
+    /// <summary>Token usage from the model provider. Set on the final update of a round.</summary>
+    public int? InputTokens { get; init; }
+    public int? OutputTokens { get; init; }
+    public int? TotalTokens { get; init; }
+
+    /// <summary>Wall-clock completion timestamp. Set on the final update of a round.</summary>
+    public DateTime? CompletedAt { get; init; }
 }
