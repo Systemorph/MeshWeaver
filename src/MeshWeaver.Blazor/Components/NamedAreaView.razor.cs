@@ -44,30 +44,57 @@ public partial class NamedAreaView
             .Subscribe(
                 x =>
                 {
-                    InvokeAsync(() =>
+                    if (IsViewDisposed) return;
+                    try
                     {
-                        var control = x as UiControl;
-                        if (RootControl is null && control is null || RootControl != null && RootControl.Equals(control))
-                            return;
-                        RootControl = control;
-                        if (RootControl is not null)
+                        InvokeAsync(() =>
                         {
-                            DataBind(RootControl.PageTitle, y => y.PageTitle);
-                            DataBind(RootControl.Meta, y => y.MetaAttributes);
-                        }
-                        Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
-                            AreaToBeRendered, control?.GetType().Name ?? "null");
-                        RequestStateChange();
-                    });
+                            if (IsViewDisposed) return;
+                            try
+                            {
+                                var control = x as UiControl;
+                                if (RootControl is null && control is null || RootControl != null && RootControl.Equals(control))
+                                    return;
+                                RootControl = control;
+                                if (RootControl is not null)
+                                {
+                                    DataBind(RootControl.PageTitle, y => y.PageTitle);
+                                    DataBind(RootControl.Meta, y => y.MetaAttributes);
+                                }
+                                Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
+                                    AreaToBeRendered, control?.GetType().Name ?? "null");
+                                RequestStateChange();
+                            }
+                            catch (ObjectDisposedException) { /* renderer gone */ }
+                        });
+                    }
+                    catch (ObjectDisposedException) { /* renderer gone */ }
                 },
                 error =>
                 {
-                    Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
-                    InvokeAsync(() =>
+                    // ObjectDisposedException is a benign teardown artifact — the area stream's
+                    // upstream hub or workspace was disposed during navigation/component swap.
+                    // Don't surface it as a user-visible "Error loading area" markdown.
+                    if (IsViewDisposed || error is ObjectDisposedException)
                     {
-                        RootControl = new MarkdownControl($"**Error loading area:** {error.Message}");
-                        RequestStateChange();
-                    });
+                        Logger.LogDebug(error, "Suppressed teardown error in control stream for area {Area}", AreaToBeRendered);
+                        return;
+                    }
+                    Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
+                    try
+                    {
+                        InvokeAsync(() =>
+                        {
+                            if (IsViewDisposed) return;
+                            try
+                            {
+                                RootControl = new MarkdownControl($"**Error loading area:** {error.Message}");
+                                RequestStateChange();
+                            }
+                            catch (ObjectDisposedException) { /* renderer gone */ }
+                        });
+                    }
+                    catch (ObjectDisposedException) { /* renderer gone */ }
                 },
                 () =>
                 {
