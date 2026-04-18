@@ -58,6 +58,7 @@ artifacts/
 **/Properties/launchSettings.json
 !**/*.Host/Properties/launchSettings.json
 !**/*.AppHost/Properties/launchSettings.json
+!memex/aspire/Memex.Database.Migration/Properties/launchSettings.json
 
 # StyleCop
 StyleCopReport.xml
