@@ -381,31 +381,10 @@ public static class ThreadMessageLayoutAreas
             });
         }
 
-        // For assistant messages: embed each delegation sub-thread as a live LayoutAreaControl
-        // pointing at the sub-thread's compact Streaming area. The Blazor renderer opens its
-        // own subscription against the sub-thread hub — parent execution never awaits the
-        // sub-thread's stream. Re-emits whenever the message's ToolCalls list changes (a new
-        // delegation appears, or its DelegationPath gets stamped after the call returns).
-        if (!isUser)
-        {
-            container = container.WithView((h, c) =>
-            {
-                var stream = h.Workspace.GetStream(new MeshNodeReference());
-                if (stream is null) return Observable.Return<UiControl?>(null);
-
-                return stream
-                    .Select(change => (change.Value?.Content as ThreadMessage)?.ToolCalls
-                        ?? System.Collections.Immutable.ImmutableList<ToolCallEntry>.Empty)
-                    .Select(tcs => tcs
-                        .Where(tc => !string.IsNullOrEmpty(tc.DelegationPath))
-                        .Select(tc => tc.DelegationPath!)
-                        .Distinct()
-                        .ToList())
-                    .Select(paths => (paths, key: string.Join("|", paths)))
-                    .DistinctUntilChanged(p => p.key)
-                    .Select(p => BuildEmbeddedSubThreadAreas(p.paths));
-            });
-        }
+        // Delegation sub-threads are already shown inline inside the bubble (via the bubble's
+        // tool-calls data binding). An extra embedded LayoutAreaControl here produced a
+        // duplicate line with the same "Delegating to …" chip — redundant, so removed.
+        // To see full sub-thread progress, click through the delegation chip inside the bubble.
 
         container = container.WithView(actionRow);
         return container;

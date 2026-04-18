@@ -101,6 +101,21 @@ else
     <!-- Footer: input — pinned at bottom, never scrolls -->
     <div class="thread-chat-footer">
         <div class="thread-chat-input-area">
+        @if (showSubmissionProgress)
+        {
+            <!-- During thread creation (compact/embedded flow on User Activity etc.) we hide
+                 the editor entirely and show a prominent "Allocating agent..." panel with a
+                 spinner. When OnThreadCreated fires the page navigates to the new thread. -->
+            <div class="thread-allocating-panel">
+                <FluentProgressRing Style="width: 28px; height: 28px;" />
+                <div class="thread-allocating-text">
+                    <div class="thread-allocating-title">Allocating agent…</div>
+                    <div class="thread-allocating-subtitle">Creating conversation and redirecting</div>
+                </div>
+            </div>
+        }
+        else
+        {
         <!-- Attachment chip collection -->
         <ReferenceChipCollection
             Attachments="@attachments"
@@ -177,33 +192,27 @@ else
                 </FluentButton>
             }
         </div>
+        }
     </div>
     </div>
 }
 
-@if (showSubmissionProgress)
-{
-    <div class="thread-submission-overlay">
-        <div class="thread-submission-dialog">
-            <span class="thread-exec-star" style="font-size: 1.5rem;">&#10041;</span>
-            <span>Creating conversation...</span>
-        </div>
-    </div>
-}
 </div>
 
 <style>
-    .thread-submission-overlay {
-        position: absolute; inset: 0; z-index: 100;
-        display: flex; align-items: center; justify-content: center;
-        background: rgba(0,0,0,0.15); backdrop-filter: blur(2px);
-        border-radius: inherit;
+    .thread-allocating-panel {
+        display: flex; align-items: center; gap: 14px;
+        padding: 18px 22px; border-radius: 12px;
+        background: var(--neutral-layer-2);
+        border: 1px solid var(--neutral-stroke-rest);
     }
-    .thread-submission-dialog {
-        display: flex; align-items: center; gap: 12px;
-        padding: 16px 28px; border-radius: 12px;
-        background: var(--neutral-layer-1); box-shadow: 0 8px 32px rgba(0,0,0,0.2);
-        font-size: 0.95rem; font-weight: 500;
+    .thread-allocating-text { display: flex; flex-direction: column; gap: 2px; }
+    .thread-allocating-title {
+        font-weight: 600; font-size: 0.95rem;
+        color: var(--accent-fill-rest);
+    }
+    .thread-allocating-subtitle {
+        font-size: 0.8rem; color: var(--neutral-foreground-hint);
     }
     @@keyframes thread-pending-pulse {
         0%, 100% { opacity: 0.6; }

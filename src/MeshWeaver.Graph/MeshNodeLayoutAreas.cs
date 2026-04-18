@@ -259,10 +259,12 @@ public static class MeshNodeLayoutAreas
         var title = node?.Name ?? node?.Id ?? host.Hub.Address.ToString();
         var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node);
 
-        // Build title with icon
+        // Build title with icon.
+        // Extra top margin separates the icon+title row from whatever sits above it
+        // (e.g. the parent back-link / breadcrumb rendered by the surrounding page).
         var titleContent = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 16px;");
+            .WithStyle("align-items: center; gap: 20px; margin-top: 16px;");
 
         // Add icon/image if available
         if (!string.IsNullOrEmpty(iconValue))
@@ -323,7 +325,9 @@ public static class MeshNodeLayoutAreas
         }
         else
         {
-            titleContent = titleContent.WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
+            titleContent = titleContent.WithView(Controls.Html(
+                $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;\">" +
+                $"{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
         }
 
         return Controls.Stack

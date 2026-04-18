@@ -539,15 +539,21 @@ public static class ThreadLayoutAreas
         if (stream is null)
             return Observable.Return<UiControl?>(parentLink);
 
-        // Walk this thread's message ids, fetch each satellite via GetDataRequest, accumulate
-        // their UpdatedNodes, then render the aggregated summary alongside the parent link.
-        return stream
+        // Emit an immediate starting value so the LayoutAreaView never shows a skeleton
+        // for this area — the header is ancillary and should never block the chat view.
+        // Subsequent emissions fold in the aggregated UpdatedNodes summary.
+        var initial = Observable.Return<UiControl?>(BuildHeader(parentLink, ImmutableList<NodeChangeEntry>.Empty));
+
+        var aggregated = stream
             .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty)
+            .Where(ids => ids.Count > 0)
             .Select(ids => (ids, key: string.Join("|", ids)))
             .DistinctUntilChanged(p => p.key)
             .Select(p => CollectUpdatedNodes(host.Hub, threadPath, p.ids))
             .Switch()
             .Select(updates => BuildHeader(parentLink, updates));
+
+        return initial.Concat(aggregated);
     }
 
     /// <summary>

@@ -963,7 +963,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <summary>
     /// Creates a LayoutAreaControl pointing to the thread's Header layout area
     /// (parent-thread back-link + aggregated UpdatedNodes summary). Null when the
-    /// thread doesn't exist yet.
+    /// thread doesn't exist yet. Uses <see cref="SpinnerType.None"/> — the header
+    /// is ancillary; showing a skeleton for it looks like a phantom message cell.
     /// </summary>
     private LayoutAreaControl? GetHeaderCell()
     {
@@ -972,7 +973,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return new LayoutAreaControl(
             threadPath,
             new LayoutAreaReference(ThreadNodeType.HeaderArea))
-            .WithSpinnerType(SpinnerType.Skeleton);
+            .WithSpinnerType(SpinnerType.None);
     }
 
     private static string TruncateText(string text, int maxLength)
