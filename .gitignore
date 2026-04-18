@@ -367,5 +367,5 @@ samples/Graph/Data/VUser/
 # User activity data
 **/_useractivity/
 
-# Claude Code scheduled tasks lock file
-.claude/scheduled_tasks.lock
+# Claude Code per-user local state (settings.local.json, plans/, scheduled_tasks.lock, etc.)
+.claude/
