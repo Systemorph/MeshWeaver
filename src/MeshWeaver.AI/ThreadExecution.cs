@@ -704,6 +704,7 @@ public static class ThreadExecution
                     // and delegations where the streaming loop is blocked.
                     using var heartbeatSubscription = parentHub.BeginAsyncOperation();
                     var lastUpdate = DateTimeOffset.MinValue;
+                    var lastPushedTextLength = 0;
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
 
@@ -809,6 +810,9 @@ public static class ThreadExecution
 
                 // Push streaming content at ~1/3sec — reduced frequency to avoid
                 // overloading the grain scheduler (messages expire if queue backs up).
+                // Push as a TEXT DELTA: we send only the new characters since the last
+                // push (tracked by lastPushedTextLength). The response cell appends it,
+                // so we never ship the whole growing string every tick.
                 if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(3000))
                 {
                     // Stamp delegation paths on any unmatched delegation tool calls
@@ -821,8 +825,22 @@ public static class ThreadExecution
                         return e;
                     }).ToImmutableList();
 
-                    PushToResponseMessage(responseText.ToString(), toolCallLog, nodeChangeLog,
-                        request.AgentName, request.ModelName);
+                    var delta = responseText.Length > lastPushedTextLength
+                        ? responseText.ToString(lastPushedTextLength, responseText.Length - lastPushedTextLength)
+                        : null;
+                    // First push replaces the "Generating response…" placeholder; subsequent
+                    // pushes append deltas only.
+                    var isFirstPush = lastPushedTextLength == 0;
+                    lastPushedTextLength = responseText.Length;
+                    parentHub.Post(new UpdateThreadMessageContent
+                    {
+                        Text = isFirstPush ? responseText.ToString() : null,
+                        TextDelta = isFirstPush ? null : delta,
+                        ToolCalls = toolCallLog,
+                        UpdatedNodes = nodeChangeLog,
+                        AgentName = request.AgentName,
+                        ModelName = request.ModelName
+                    }, o => o.WithTarget(new Address(responsePath)));
                     lastUpdate = DateTimeOffset.UtcNow;
                 }
             }

@@ -119,11 +119,16 @@ public static class ThreadMessageLayoutAreas
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
             var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
+            // Prefer incremental append (TextDelta). Full Text replacement is only used
+            // for final/terminal writes (completion, error, cancel markers).
+            var newText = msg.Text ?? (msg.TextDelta is { Length: > 0 } d
+                ? (current.Text ?? "") + d
+                : current.Text);
             return node with
             {
                 Content = current with
                 {
-                    Text = msg.Text ?? current.Text,
+                    Text = newText,
                     ToolCalls = msg.ToolCalls ?? current.ToolCalls,
                     UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
                     AgentName = msg.AgentName ?? current.AgentName,

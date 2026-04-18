@@ -9,7 +9,18 @@ namespace MeshWeaver.AI;
 /// </summary>
 public record UpdateThreadMessageContent
 {
+    /// <summary>
+    /// Incremental text chunk to APPEND to the current message Text. The preferred shape
+    /// for streaming — each chunk just carries the new bytes since the previous update.
+    /// </summary>
+    public string? TextDelta { get; init; }
+
+    /// <summary>
+    /// Full text replacement. Only set for final-state writes (completion text, error text,
+    /// cancel markers). Streaming should use <see cref="TextDelta"/> instead.
+    /// </summary>
     public string? Text { get; init; }
+
     public ImmutableList<ToolCallEntry>? ToolCalls { get; init; }
     public ImmutableList<NodeChangeEntry>? UpdatedNodes { get; init; }
     public string? AgentName { get; init; }
