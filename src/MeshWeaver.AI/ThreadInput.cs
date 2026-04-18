@@ -66,16 +66,24 @@ public static class ThreadInput
 
         var msgId = NewId();
 
-        // Update the single MeshNode in this hub's data source. Using the no-address overload
-        // (FirstOrDefault) avoids a pre-existing path-vs-id key mismatch in the address-aware
-        // overload. This call expects to run on the thread's own hub (e.g., from the
-        // AppendUserMessageRequest handler) where there's exactly one node in the collection.
+        // Append the message to PendingUserMessages + UserMessageIds only.
+        //
+        // We deliberately do NOT add to Thread.Messages here — the GUI renders one
+        // LayoutAreaControl per id in Messages, and rendering a control before its
+        // satellite ThreadMessage node has been created on the hub triggers
+        // "Cannot access a disposed object" + spurious area-stream errors. The
+        // server-side submission watcher creates the satellite cell first via
+        // IMeshService.CreateNode and only after CreateNode confirms success does
+        // it add the id into Messages (in the same atomic update that flips
+        // IsExecuting=true alongside the response cell id).
+        //
+        // Using the no-address overload (FirstOrDefault) avoids a pre-existing
+        // path-vs-id key mismatch in the address-aware overload. This call expects
+        // to run on the thread's own hub (e.g., from the AppendUserMessageRequest
+        // handler) where there's exactly one node in the collection.
         workspace.UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
-            var msgs = thread.Messages.Contains(msgId)
-                ? thread.Messages
-                : thread.Messages.Add(msgId);
             var userIds = thread.UserMessageIds.Contains(msgId)
                 ? thread.UserMessageIds
                 : thread.UserMessageIds.Add(msgId);
@@ -84,7 +92,6 @@ public static class ThreadInput
             {
                 Content = thread with
                 {
-                    Messages = msgs,
                     UserMessageIds = userIds,
                     PendingUserMessages = pending,
                     PendingAgentName = message.AgentName ?? thread.PendingAgentName,

@@ -483,7 +483,14 @@ internal static class ThreadSubmissionServer
         // Subscribe to this thread's own MeshNode (via MeshNodeReference) instead of the
         // collection-wide stream — fewer wakeups, and the patches we observe are exactly
         // the writes against this thread.
+        //
+        // Throttle by a small window so a burst of rapid AppendUserMessageRequest patches
+        // (user submits 3 messages in quick succession, or the GUI batches submits) coalesce
+        // into a SINGLE dispatch with all the queued user ids in one round / one response
+        // cell. Without throttling each patch individually wins the reentrancy guard and
+        // produces one round per submit.
         var sub = workspace.GetStream(new MeshNodeReference())
+            ?.Throttle(TimeSpan.FromMilliseconds(50))
             ?.Subscribe(change =>
             {
                 var threadNode = change.Value;
@@ -612,19 +619,34 @@ internal static class ThreadSubmissionServer
                 }
 
                 // Step 2: commit the round to the thread state (one atomic UpdateMeshNode).
-                // Idempotency: if IsExecuting is already true (rare race with another emit),
-                // do nothing — the previous dispatch holds the round.
+                // Both the user satellite cells (created above in the materialization step)
+                // and the response satellite cell (just confirmed in the CreateNodeRequest
+                // callback above) exist on the hub now. Only NOW do we add their ids into
+                // Messages — the GUI iterates Messages to render LayoutAreaControls, so
+                // every id it sees has a backing satellite.
+                //
+                // The IsExecuting check is the idempotency guard — every other watcher
+                // emission in this round skips, so this body runs exactly once per round.
                 hub.GetWorkspace().UpdateMeshNode(node =>
                 {
                     var t = node.Content as MeshThread ?? new MeshThread();
                     if (t.IsExecuting) return node;
 
-                    var msgs = t.Messages.Contains(responseMsgId) ? t.Messages : t.Messages.Add(responseMsgId);
-                    var ingested = t.IngestedMessageIds;
+                    // User ids in dispatch order, then the response id last.
+                    // Contains check covers the resubmit case where u1 was already in
+                    // Messages from a prior round — ApplyResubmit removed u1 from
+                    // IngestedMessageIds (so the watcher re-dispatches it) but kept it
+                    // in Messages, so a blind AddRange would duplicate it.
+                    var msgs = t.Messages;
                     foreach (var uid in dispatch.UserMessageIds)
-                        if (!ingested.Contains(uid)) ingested = ingested.Add(uid);
+                        if (!msgs.Contains(uid)) msgs = msgs.Add(uid);
+                    msgs = msgs.Add(responseMsgId);
 
-                    // Drop consumed PendingUserMessages entries — their satellites now exist.
+                    var ingested = t.IngestedMessageIds.AddRange(
+                        dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
+
+                    // Drop consumed PendingUserMessages entries — their satellites now exist
+                    // and their ids are now in Messages.
                     var pending = t.PendingUserMessages;
                     foreach (var (uid, _) in pendingForRound)
                         pending = pending.Remove(uid);
