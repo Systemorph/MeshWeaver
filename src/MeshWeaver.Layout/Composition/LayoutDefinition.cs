@@ -81,6 +81,22 @@ public record LayoutDefinition(IMessageHub Hub)
                 "Named renderers: [{Named}], predicate renderers: {Count}",
                 context.Area, host.Hub.Address,
                 string.Join(", ", NamedRenderers.Keys), AsyncRenderers.Count);
+
+            // Surface a visible "area not found" placeholder so the client doesn't spin forever
+            // waiting for an Update that no renderer is going to produce.
+            var availableAreas = NamedRenderers.Keys.OrderBy(k => k).ToArray();
+            var availableLine = availableAreas.Length == 0
+                ? "_no named areas registered on this hub_"
+                : "Available named areas: " + string.Join(", ", availableAreas.Select(a => $"`{a}`"));
+            var notFound = new MarkdownControl(
+                $"**Area not found**\n\nNo renderer is registered for area `{context.Area}` on hub `{host.Hub.Address}`.\n\n{availableLine}");
+            result = result with
+            {
+                Store = result.Store.Update(LayoutAreaReference.Areas,
+                    coll => coll.SetItem(context.Area, notFound)),
+                Updates = result.Updates.Append(
+                    new EntityUpdate(LayoutAreaReference.Areas, context.Area, notFound))
+            };
         }
 
         return result;
