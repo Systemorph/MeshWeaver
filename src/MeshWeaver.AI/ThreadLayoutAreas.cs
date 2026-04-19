@@ -634,37 +634,123 @@ public static class ThreadLayoutAreas
             stack = stack.WithView(parentLink);
 
         if (!updates.IsEmpty)
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append("<div style=\"font-size:0.78rem; color:var(--neutral-foreground-hint); margin-top:2px;\">");
-            sb.Append("<div style=\"font-weight:600; margin-bottom:4px;\">Modified nodes</div>");
-            foreach (var entry in updates)
-            {
-                var path = System.Web.HttpUtility.HtmlEncode(entry.Path);
-                var versionLabel = (entry.VersionBefore, entry.VersionAfter) switch
-                {
-                    (null, { } v) => $"new \u2192 v{v}",
-                    ({ } v, null) => $"v{v} \u2192 deleted",
-                    ({ } a, { } b) when a == b => $"v{b}",
-                    ({ } a, { } b) => $"v{a} \u2192 v{b}",
-                    _ => entry.Operation ?? ""
-                };
-                // Link to the node's Versions area (existing compare/restore view).
-                // Append from/to as query params so VersionLayoutArea can deep-link the
-                // compare view if it knows how to honour them; otherwise a no-op.
-                var queryParts = new List<string>();
-                if (entry.VersionBefore.HasValue) queryParts.Add($"from={entry.VersionBefore.Value}");
-                if (entry.VersionAfter.HasValue) queryParts.Add($"to={entry.VersionAfter.Value}");
-                var qs = queryParts.Count > 0 ? "?" + string.Join("&", queryParts) : "";
-                sb.Append(
-                    $"<div style=\"display:flex; gap:8px; padding:2px 0;\">" +
-                    $"<a href=\"/{path}/Versions{qs}\" style=\"color:var(--accent-fill-rest); text-decoration:none;\">{path}</a>" +
-                    $"<span>{versionLabel}</span></div>");
-            }
-            sb.Append("</div>");
-            stack = stack.WithView(Controls.Html(sb.ToString()));
-        }
+            stack = stack.WithView(Controls.Html(BuildModifiedNodesHtml(updates)));
 
         return stack;
+    }
+
+    /// <summary>
+    /// Git-like collapsible panel for the aggregated UpdatedNodes list:
+    /// - Collapsed by default; summary shows the count.
+    /// - Each row is full width: clickable node path (current version) + clickable
+    ///   old-version + new-version chips + row-level details menu offering Diff and
+    ///   Restore-to-old / Restore-to-new actions (hidden until the row is expanded).
+    /// </summary>
+    private static string BuildModifiedNodesHtml(ImmutableList<NodeChangeEntry> updates)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<details class=\"thread-mod-nodes\" style=\"margin-top:2px;\">");
+        sb.Append($"<summary style=\"font-size:0.8rem; font-weight:600; color:var(--neutral-foreground-hint); cursor:pointer; padding:4px 0; list-style:none;\">");
+        sb.Append($"<span style=\"display:inline-block; width:10px; transition:transform 0.15s;\" class=\"thread-mod-chevron\">&#9656;</span> ");
+        sb.Append($"Modified nodes ({updates.Count})");
+        sb.Append("</summary>");
+
+        sb.Append("<div style=\"display:flex; flex-direction:column; width:100%; margin-top:6px; gap:2px;\">");
+
+        foreach (var entry in updates)
+        {
+            var path = entry.Path;
+            var pathEnc = System.Web.HttpUtility.HtmlEncode(path);
+            var op = entry.Operation ?? "";
+
+            sb.Append(
+                "<div style=\"display:flex; align-items:center; width:100%; gap:10px; " +
+                "padding:6px 8px; border-radius:6px; background:var(--neutral-layer-2); " +
+                "font-size:0.78rem; color:var(--neutral-foreground-rest); flex-wrap:wrap;\">");
+
+            // Clickable node path → current version (node overview)
+            sb.Append(
+                $"<a href=\"/{pathEnc}\" title=\"Open {pathEnc} (current version)\" " +
+                $"style=\"flex:1 1 auto; min-width:0; color:var(--accent-fill-rest); text-decoration:none; " +
+                $"overflow:hidden; text-overflow:ellipsis; white-space:nowrap;\">{pathEnc}</a>");
+
+            // Version chips: old → new, each clickable
+            sb.Append("<span style=\"display:inline-flex; align-items:center; gap:4px; flex-shrink:0;\">");
+            if (entry.VersionBefore is { } vb)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/Versions?version={vb}\" title=\"View v{vb}\" " +
+                    $"style=\"padding:1px 6px; border-radius:10px; background:var(--neutral-layer-3); " +
+                    $"color:var(--neutral-foreground-rest); text-decoration:none; font-family:monospace; " +
+                    $"font-size:0.72rem;\">v{vb}</a>");
+            else if (op.Equals("Created", StringComparison.OrdinalIgnoreCase))
+                sb.Append("<span style=\"font-size:0.72rem; color:var(--neutral-foreground-hint);\">new</span>");
+
+            if (entry.VersionBefore.HasValue && entry.VersionAfter.HasValue)
+                sb.Append("<span style=\"color:var(--neutral-foreground-hint);\">&#8594;</span>");
+            else if (!entry.VersionBefore.HasValue && entry.VersionAfter.HasValue)
+                sb.Append("<span style=\"color:var(--neutral-foreground-hint);\">&#8594;</span>");
+
+            if (entry.VersionAfter is { } va)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/Versions?version={va}\" title=\"View v{va}\" " +
+                    $"style=\"padding:1px 6px; border-radius:10px; background:var(--accent-fill-rest); " +
+                    $"color:var(--accent-foreground-rest); text-decoration:none; font-family:monospace; " +
+                    $"font-size:0.72rem; font-weight:600;\">v{va}</a>");
+            else if (op.Equals("Deleted", StringComparison.OrdinalIgnoreCase))
+                sb.Append("<span style=\"font-size:0.72rem; color:var(--neutral-foreground-hint); font-style:italic;\">deleted</span>");
+            sb.Append("</span>");
+
+            // Per-row ⋯ menu with Diff / Restore actions — hidden until the row's details opens.
+            sb.Append("<details style=\"flex-shrink:0; position:relative;\">");
+            sb.Append(
+                "<summary title=\"Actions\" style=\"cursor:pointer; list-style:none; " +
+                "padding:2px 8px; border-radius:6px; color:var(--neutral-foreground-hint); " +
+                "font-size:0.9rem; line-height:1;\">&#8943;</summary>");
+            sb.Append(
+                "<div style=\"position:absolute; right:0; top:100%; z-index:10; min-width:180px; " +
+                "display:flex; flex-direction:column; gap:1px; margin-top:4px; padding:4px; " +
+                "background:var(--neutral-layer-3); border:1px solid var(--neutral-stroke-rest); " +
+                "border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.15);\">");
+
+            // Diff (old vs new)
+            if (entry.VersionBefore.HasValue && entry.VersionAfter.HasValue)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/Versions?from={entry.VersionBefore.Value}&to={entry.VersionAfter.Value}\" " +
+                    $"style=\"padding:6px 10px; border-radius:4px; text-decoration:none; " +
+                    $"color:var(--neutral-foreground-rest); font-size:0.78rem;\">" +
+                    $"Diff v{entry.VersionBefore.Value} \u2194 v{entry.VersionAfter.Value}</a>");
+
+            // Restore to old
+            if (entry.VersionBefore.HasValue)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/Versions?restore={entry.VersionBefore.Value}\" " +
+                    $"style=\"padding:6px 10px; border-radius:4px; text-decoration:none; " +
+                    $"color:var(--neutral-foreground-rest); font-size:0.78rem;\">" +
+                    $"Restore to v{entry.VersionBefore.Value}</a>");
+
+            // Restore to new (useful after manual edits override the agent's change)
+            if (entry.VersionAfter.HasValue)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/Versions?restore={entry.VersionAfter.Value}\" " +
+                    $"style=\"padding:6px 10px; border-radius:4px; text-decoration:none; " +
+                    $"color:var(--neutral-foreground-rest); font-size:0.78rem;\">" +
+                    $"Restore to v{entry.VersionAfter.Value}</a>");
+
+            // Fallback: open Versions area
+            sb.Append(
+                $"<a href=\"/{pathEnc}/Versions\" " +
+                $"style=\"padding:6px 10px; border-radius:4px; text-decoration:none; " +
+                $"color:var(--accent-fill-rest); font-size:0.78rem; border-top:1px solid var(--neutral-stroke-rest); margin-top:2px;\">" +
+                $"All versions&hellip;</a>");
+
+            sb.Append("</div>"); // menu
+            sb.Append("</details>"); // row menu
+
+            sb.Append("</div>"); // row
+        }
+
+        sb.Append("</div>"); // list
+        sb.Append("</details>"); // outer details
+        return sb.ToString();
     }
 }
