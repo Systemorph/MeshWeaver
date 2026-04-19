@@ -129,6 +129,11 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
         if (string.IsNullOrEmpty(path))
             path = rawArgs.Split('\n').FirstOrDefault()?.Trim();
 
+        // Agents write references as "@/Foo/Bar" — strip the "@" so href="/{path}"
+        // renders as "/Foo/Bar" and not "/@/Foo/Bar".
+        if (!string.IsNullOrEmpty(path) && path.StartsWith('@'))
+            path = path[1..].TrimStart('/');
+
         return call.Name switch
         {
             "Get" or "get_node" => new ToolCallDisplay("Reading", path, false),

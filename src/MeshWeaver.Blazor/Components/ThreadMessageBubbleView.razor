@@ -84,13 +84,13 @@
                                     @if (change.VersionBefore.HasValue && change.VersionAfter.HasValue)
                                     {
                                         <a class="thread-msg-tool-action" title="Compare v@(change.VersionBefore) with v@(change.VersionAfter)"
-                                           href="/@display.Path/Versions?from=@(change.VersionBefore)&to=@(change.VersionAfter)"
+                                           href="/@display.Path/VersionDiff?from=@(change.VersionBefore)&to=@(change.VersionAfter)"
                                            @onclick:stopPropagation>Diff</a>
                                     }
                                     @if (change.VersionBefore.HasValue)
                                     {
                                         <a class="thread-msg-tool-action thread-msg-tool-action-muted" title="Revert to v@(change.VersionBefore)"
-                                           href="/@display.Path/Versions?restore=@(change.VersionBefore)"
+                                           href="/@display.Path/VersionDiff?version=@(change.VersionBefore)"
                                            @onclick:stopPropagation>Revert v@(change.VersionBefore)</a>
                                     }
                                 }

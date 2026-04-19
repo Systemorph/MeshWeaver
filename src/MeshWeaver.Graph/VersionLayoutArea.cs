@@ -102,21 +102,18 @@ public static class VersionLayoutArea
     }
 
     /// <summary>
-    /// Renders the diff view comparing a historical version to the current version.
-    /// Reads ?version= query parameter to determine which version to compare.
+    /// Renders the diff view for a node. Supports two modes:
+    ///   <list type="bullet">
+    ///     <item><c>?from=X&amp;to=Y</c> — compare two historical versions.</item>
+    ///     <item><c>?version=X</c> — compare a historical version to the current node.</item>
+    ///   </list>
+    /// Emits the diff once — the Monaco diff editor is expensive to re-create, so we
+    /// avoid re-emitting on every node-stream tick.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> VersionDiff(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var versionStr = host.GetQueryStringParamValue("version");
-
-        if (!long.TryParse(versionStr, out var targetVersion))
-        {
-            return Observable.Return<UiControl?>(
-                Controls.Html("<p>Invalid version parameter.</p>"));
-        }
-
         var versionQuery = host.Hub.ServiceProvider.GetService<IVersionQuery>();
         if (versionQuery == null)
         {
@@ -124,67 +121,110 @@ public static class VersionLayoutArea
                 Controls.Html("<p>Version history is not available.</p>"));
         }
 
+        var options = host.Hub.JsonSerializerOptions;
+        var fromStr = host.GetQueryStringParamValue("from");
+        var toStr = host.GetQueryStringParamValue("to");
+
+        // Mode 1: from=X&to=Y — compare two historical versions.
+        if (long.TryParse(fromStr, out var fromVersion) && long.TryParse(toStr, out var toVersion))
+        {
+            return Observable.FromAsync(async () =>
+            {
+                var fromNode = await versionQuery.GetVersionAsync(hubPath, fromVersion, options);
+                var toNode = await versionQuery.GetVersionAsync(hubPath, toVersion, options);
+                if (fromNode == null)
+                    return (UiControl?)Controls.Html($"<p>Version {fromVersion} not found.</p>");
+                if (toNode == null)
+                    return (UiControl?)Controls.Html($"<p>Version {toVersion} not found.</p>");
+
+                return (UiControl?)BuildDiffStack(host, hubPath, fromNode, toNode, options,
+                    $"Version {fromVersion}", $"Version {toVersion}",
+                    $"Comparing Version {fromVersion} to Version {toVersion}",
+                    restoreVersion: fromVersion);
+            });
+        }
+
+        // Mode 2: version=X — compare historical version to current.
+        var versionStr = host.GetQueryStringParamValue("version");
+        if (!long.TryParse(versionStr, out var targetVersion))
+        {
+            return Observable.Return<UiControl?>(
+                Controls.Html("<p>Invalid version parameter. Use <code>?version=X</code> or <code>?from=X&to=Y</code>.</p>"));
+        }
+
         var nodeStream = host.Workspace.GetStream<MeshNode>()
             ?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
+        // Take the first emission that actually contains the node — avoid re-creating
+        // the Monaco diff editor on every subsequent stream tick.
+        return nodeStream
+            .Where(nodes => nodes.Any(n => n.Path == hubPath))
+            .Take(1)
+            .SelectMany(async nodes =>
+            {
+                var currentNode = nodes.First(n => n.Path == hubPath);
+                var historicalNode = await versionQuery.GetVersionAsync(hubPath, targetVersion, options);
+
+                if (historicalNode == null)
+                    return (UiControl?)Controls.Html($"<p>Version {targetVersion} not found.</p>");
+
+                return (UiControl?)BuildDiffStack(host, hubPath, historicalNode, currentNode, options,
+                    $"Version {targetVersion}", "Current",
+                    $"Comparing Version {targetVersion} to Current",
+                    restoreVersion: targetVersion);
+            });
+    }
+
+    private static UiControl BuildDiffStack(
+        LayoutAreaHost host, string hubPath,
+        MeshNode originalNode, MeshNode modifiedNode,
+        JsonSerializerOptions options,
+        string originalLabel, string modifiedLabel,
+        string title, long restoreVersion)
+    {
+        var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
+
+        var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.VersionsArea);
+        stack = stack.WithView(
+            Controls.Stack.WithOrientation(Orientation.Horizontal)
+                .WithStyle("align-items: center; gap: 8px; margin-bottom: 16px;")
+                .WithView(Controls.Button("Back to Versions")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithIconStart(FluentIcons.ArrowLeft())
+                    .WithNavigateToHref(backHref)));
+
+        stack = stack.WithView(Controls.Html(
+            $"<h2 style=\"margin: 0 0 16px 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
+
+        var originalContent = ExtractDiffContent(originalNode, options);
+        var modifiedContent = ExtractDiffContent(modifiedNode, options);
+        var language = IsMarkdownContent(originalNode) || IsMarkdownContent(modifiedNode)
+            ? "markdown"
+            : "json";
+
+        stack = stack.WithView(new DiffEditorControl
         {
-            var currentNode = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var options = host.Hub.JsonSerializerOptions;
-            var historicalNode = await versionQuery.GetVersionAsync(hubPath, targetVersion, options);
-
-            if (historicalNode == null)
-            {
-                return (UiControl?)Controls.Html($"<p>Version {targetVersion} not found.</p>");
-            }
-
-            var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
-
-            // Back button
-            var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.VersionsArea);
-            stack = stack.WithView(
-                Controls.Stack.WithOrientation(Orientation.Horizontal)
-                    .WithStyle("align-items: center; gap: 8px; margin-bottom: 16px;")
-                    .WithView(Controls.Button("Back to Versions")
-                        .WithAppearance(Appearance.Lightweight)
-                        .WithIconStart(FluentIcons.ArrowLeft())
-                        .WithNavigateToHref(backHref)));
-
-            stack = stack.WithView(Controls.Html(
-                $"<h2 style=\"margin: 0 0 16px 0;\">Comparing Version {targetVersion} to Current</h2>"));
-
-            // Determine content type and extract text for diff
-            var originalContent = ExtractDiffContent(historicalNode, options);
-            var modifiedContent = ExtractDiffContent(currentNode, options);
-            var language = IsMarkdownContent(historicalNode) ? "markdown" : "json";
-
-            var diffControl = new DiffEditorControl
-            {
-                OriginalContent = originalContent,
-                ModifiedContent = modifiedContent,
-                OriginalLabel = $"Version {targetVersion}",
-                ModifiedLabel = "Current",
-                Language = language,
-                Height = "500px"
-            };
-
-            stack = stack.WithView(diffControl);
-
-            // Restore button
-            stack = stack.WithView(
-                Controls.Stack.WithStyle("margin-top: 16px;")
-                    .WithView(Controls.Button($"Restore Version {targetVersion}")
-                        .WithAppearance(Appearance.Accent)
-                        .WithIconStart(FluentIcons.ArrowUndo())
-                        .WithClickAction(ctx =>
-                        {
-                            ctx.Hub.Post(new RollbackNodeRequest(hubPath, targetVersion));
-                            return Task.CompletedTask;
-                        })));
-
-            return (UiControl?)stack;
+            OriginalContent = originalContent,
+            ModifiedContent = modifiedContent,
+            OriginalLabel = originalLabel,
+            ModifiedLabel = modifiedLabel,
+            Language = language,
+            Height = "600px"
         });
+
+        stack = stack.WithView(
+            Controls.Stack.WithStyle("margin-top: 16px;")
+                .WithView(Controls.Button($"Restore Version {restoreVersion}")
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.ArrowUndo())
+                    .WithClickAction(ctx =>
+                    {
+                        ctx.Hub.Post(new RollbackNodeRequest(hubPath, restoreVersion));
+                        return Task.CompletedTask;
+                    })));
+
+        return stack;
     }
 
     /// <summary>

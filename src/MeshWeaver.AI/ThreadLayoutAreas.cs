@@ -782,28 +782,28 @@ public static class ThreadLayoutAreas
             else
                 sb.Append("<span></span>");
 
-            // Column 5: Diff (old ↔ new)
+            // Column 5: Diff (old ↔ new) — points to VersionDiff with from/to params.
             if (entry.VersionBefore.HasValue && entry.VersionAfter.HasValue)
                 sb.Append(
-                    $"<a href=\"/{pathEnc}/Versions?from={entry.VersionBefore.Value}&to={entry.VersionAfter.Value}\" " +
+                    $"<a href=\"/{pathEnc}/VersionDiff?from={entry.VersionBefore.Value}&to={entry.VersionAfter.Value}\" " +
                     $"class=\"thread-mod-action thread-mod-action-mobile-hide\" " +
                     $"title=\"Compare v{entry.VersionBefore.Value} to v{entry.VersionAfter.Value}\">Diff</a>");
             else
                 sb.Append("<span class=\"thread-mod-action-mobile-hide\"></span>");
 
-            // Column 6: Restore to old
+            // Column 6: Restore to old — opens VersionDiff (which has the Restore button).
             if (entry.VersionBefore.HasValue)
                 sb.Append(
-                    $"<a href=\"/{pathEnc}/Versions?restore={entry.VersionBefore.Value}\" " +
+                    $"<a href=\"/{pathEnc}/VersionDiff?version={entry.VersionBefore.Value}\" " +
                     $"class=\"thread-mod-action thread-mod-action-muted thread-mod-action-mobile-hide\" " +
                     $"title=\"Revert to v{entry.VersionBefore.Value}\">Restore v{entry.VersionBefore.Value}</a>");
             else
                 sb.Append("<span class=\"thread-mod-action-mobile-hide\"></span>");
 
-            // Column 7: Restore to new
+            // Column 7: Restore to new — opens VersionDiff (which has the Restore button).
             if (entry.VersionAfter.HasValue)
                 sb.Append(
-                    $"<a href=\"/{pathEnc}/Versions?restore={entry.VersionAfter.Value}\" " +
+                    $"<a href=\"/{pathEnc}/VersionDiff?version={entry.VersionAfter.Value}\" " +
                     $"class=\"thread-mod-action thread-mod-action-muted thread-mod-action-mobile-hide\" " +
                     $"title=\"Restore v{entry.VersionAfter.Value}\">Restore v{entry.VersionAfter.Value}</a>");
             else
