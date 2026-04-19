@@ -17,4 +17,7 @@ public record User : AccessObject
 
     /// <summary>Profile role (e.g. Developer, Manager, Designer).</summary>
     public string? Role { get; init; }
+
+    /// <summary>Ordered list of node paths the user has pinned to their dashboard.</summary>
+    public IReadOnlyList<string> PinnedPaths { get; init; } = [];
 }
