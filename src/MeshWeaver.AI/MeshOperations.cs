@@ -882,6 +882,45 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Recycles the hub at <paramref name="path"/> by posting a
+    /// <see cref="DisposeRequest"/>. The next access re-initialises the hub — which
+    /// means a fresh NodeType compile and fresh data loads. Useful after fixing a
+    /// broken NodeType or when something is stuck in an inconsistent cached state.
+    /// Returns a JSON <c>{status, path}</c> envelope. The caller should wait ~100ms
+    /// before re-accessing so the grain teardown completes.
+    /// </summary>
+    public Task<string> Recycle(string path)
+    {
+        logger.LogInformation("Recycle called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        var resolvedPath = ResolvePath(path);
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        try
+        {
+            hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(resolvedPath)));
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Recycled", path = resolvedPath, message = "DisposeRequest posted. Wait ~100ms before the next access so the grain teardown completes." },
+                hub.JsonSerializerOptions));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error recycling {Path}", resolvedPath);
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", path = resolvedPath, message = ex.Message },
+                hub.JsonSerializerOptions));
+        }
+    }
+
+    /// <summary>
     /// Returns compilation diagnostics for a NodeType or an instance of one.
     /// The response is JSON with <c>status</c> (<c>Error</c> / <c>Ok</c> /
     /// <c>Unknown</c>) and, when relevant, the error text from the last compile.

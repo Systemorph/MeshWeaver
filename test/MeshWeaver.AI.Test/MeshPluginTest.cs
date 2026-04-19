@@ -97,8 +97,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateAllTools();
 
         tools.Should().NotBeNull();
-        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete, GetDiagnostics
-        tools.Should().HaveCount(8);
+        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete, GetDiagnostics, Recycle
+        tools.Should().HaveCount(9);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
@@ -109,6 +109,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("Patch");
         toolNames.Should().Contain("Delete");
         toolNames.Should().Contain("GetDiagnostics");
+        toolNames.Should().Contain("Recycle");
     }
 
     #endregion

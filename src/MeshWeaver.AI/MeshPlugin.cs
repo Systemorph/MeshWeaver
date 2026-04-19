@@ -76,6 +76,14 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return ops.GetDiagnostics(ResolveContextPath(path));
     }
 
+    [Description("Recycles the hub at the given path by posting DisposeRequest. Forces a fresh hub initialization on the next access — use this after fixing a broken NodeType, after editing the `sources` list, or whenever a grain is stuck. Returns {status:'Recycled', path}. Wait ~100ms before the next access so the grain teardown completes.")]
+    public Task<string> Recycle(
+        [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
+    {
+        RestoreAccessContext();
+        return ops.Recycle(ResolveContextPath(path));
+    }
+
     /// <summary>
     /// Restores the user's AccessContext from <see cref="IAgentChat.ExecutionContext"/>.
     /// AsyncLocal doesn't flow reliably through the AI framework's streaming + tool
@@ -135,6 +143,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Patch),
             AIFunctionFactory.Create(Delete),
             AIFunctionFactory.Create(GetDiagnostics),
+            AIFunctionFactory.Create(Recycle),
         ];
     }
 }
