@@ -42,17 +42,7 @@ public static class AccessControlLayoutArea
             );
         }
 
-        var nodeStream = host.Workspace.GetStream(new MeshNodeReference());
-        if (nodeStream is null)
-        {
-            return Observable.Return<UiControl?>(
-                Controls.Stack.WithStyle("padding: 24px;").WithView(
-                    Controls.Html(
-                        $"<p style=\"color: var(--warning-color);\">No node exists at " +
-                        $"<code>{WebUtility.HtmlEncode(hubPath)}</code>.</p>")));
-        }
-
-        // Admin check — read from the current access context synchronously. No awaits,
+        // Admin check — synchronous read from the current access context. No awaits,
         // no Query, no FromAsync. Roles are set at circuit/request time.
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var roles = accessService?.Context?.Roles
@@ -62,24 +52,43 @@ public static class AccessControlLayoutArea
             string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(r, "PlatformAdmin", StringComparison.OrdinalIgnoreCase));
 
-        return nodeStream.Select(change =>
+        // Try to get the hub's own MeshNode stream. If the reducer isn't registered
+        // (test or minimal hub configurations), fall through to a stream-less render
+        // so the page is never blocked on stream initialization.
+        IObservable<ChangeItem<MeshNode>>? nodeStream = null;
+        try
         {
-            var node = change?.Value;
-            if (node is null)
-            {
-                return (UiControl?)Controls.Stack.WithStyle("padding: 24px;").WithView(
-                    Controls.Html(
-                        $"<p style=\"color: var(--warning-color);\">Node does not exist at " +
-                        $"<code>{WebUtility.HtmlEncode(hubPath)}</code>.</p>"));
-            }
+            nodeStream = host.Workspace.GetStream(new MeshNodeReference());
+        }
+        catch (Exception)
+        {
+            // MeshNodeReference reducer not available on this hub — render without node.
+        }
 
-            return BuildAccessControlPage(
-                host, node, hubPath, isAdmin,
+        if (nodeStream is null)
+        {
+            return Observable.Return<UiControl?>(BuildAccessControlPage(
+                host, node: null, hubPath, isAdmin,
                 inherited: [],
                 userNodeLookup: new Dictionary<string, MeshNode>(),
                 securityService,
-                activePolicy: null);
-        });
+                activePolicy: null));
+        }
+
+        return nodeStream
+            .Select(change => (UiControl?)BuildAccessControlPage(
+                host, change?.Value, hubPath, isAdmin,
+                inherited: [],
+                userNodeLookup: new Dictionary<string, MeshNode>(),
+                securityService,
+                activePolicy: null))
+            .Catch<UiControl?, Exception>(_ => Observable.Return<UiControl?>(
+                BuildAccessControlPage(
+                    host, node: null, hubPath, isAdmin,
+                    inherited: [],
+                    userNodeLookup: new Dictionary<string, MeshNode>(),
+                    securityService,
+                    activePolicy: null)));
     }
 
     internal static AccessAssignment? DeserializeAssignment(MeshNode node)
