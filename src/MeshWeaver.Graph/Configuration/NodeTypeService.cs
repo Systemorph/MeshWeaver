@@ -537,6 +537,62 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     }
 
     /// <summary>
+    /// Turns the NodeType's <see cref="NodeTypeDefinition.Sources"/> list into concrete
+    /// storage paths to probe for Code nodes. Lines understood:
+    /// <list type="bullet">
+    ///   <item><c>"_Source"</c> (or any value without <c>/</c>) — rebased onto <paramref name="nodeTypePath"/>.</item>
+    ///   <item><c>"namespace:X"</c> / <c>"path:X"</c> — the X part is used as a storage path.</item>
+    ///   <item><c>"@X"</c> / <c>"@@X"</c> — shorthand for the path X.</item>
+    ///   <item><c>$self</c> inside any entry — expanded to <paramref name="nodeTypePath"/>.</item>
+    /// </list>
+    /// If the list is null or empty, defaults to <c>"{nodeTypePath}/_Source"</c>.
+    /// Query-syntax decoration like <c>scope:subtree</c> and <c>nodeType:Code</c> is
+    /// stripped — this helper is only concerned with the path segment, since we feed
+    /// <see cref="IMeshStorage.GetDescendantsAsync"/> below.
+    /// </summary>
+    private static IReadOnlyList<string> ResolveSourcePaths(
+        IReadOnlyList<string>? sources,
+        string nodeTypePath)
+    {
+        if (sources == null || sources.Count == 0)
+            return [$"{nodeTypePath}/_Source"];
+
+        var result = new List<string>(sources.Count);
+        foreach (var raw in sources)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var expanded = raw.Replace("$self", nodeTypePath).Trim();
+
+            // Strip the @/@@ shorthand.
+            if (expanded.StartsWith("@@")) expanded = expanded[2..].TrimStart();
+            else if (expanded.StartsWith("@")) expanded = expanded[1..].TrimStart();
+            if (expanded.Length == 0) continue;
+
+            // Pull out the value of the first recognised qualifier (namespace:/path:), if any.
+            var value = expanded;
+            foreach (var qualifier in new[] { "namespace:", "path:" })
+            {
+                var idx = value.IndexOf(qualifier, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) continue;
+                var valueStart = idx + qualifier.Length;
+                var valueEnd = valueStart;
+                while (valueEnd < value.Length && !char.IsWhiteSpace(value[valueEnd]))
+                    valueEnd++;
+                value = value[valueStart..valueEnd];
+                break;
+            }
+
+            // If the value is a single segment (no /), treat as self-relative folder.
+            if (value.Length > 0 && !value.Contains('/'))
+                value = $"{nodeTypePath}/{value}";
+
+            if (value.Length > 0)
+                result.Add(value);
+        }
+        return result.Count > 0 ? result : [$"{nodeTypePath}/_Source"];
+    }
+
+    /// <summary>
     /// Gathers all inputs needed for compilation from persistence.
     /// Returns a NodeTypeRelease with all compilation inputs and the MeshNode.
     /// </summary>
@@ -565,15 +621,41 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return (null, null);
         }
 
-        // Get CodeConfigurations from child MeshNodes under /_Source path directly
+        // Collect Code nodes from the configured sources. Default: the sibling "_Source"
+        // subtree. `GetDescendantsAsync` is used (not `GetChildrenAsync`) because Code
+        // nodes are commonly persisted with `MainNode` set to their parent folder —
+        // `GetChildrenAsync` excludes those as "satellites".
         var codeFiles = new List<string>();
-        await foreach (var codeNode in meshStorage.GetChildrenAsync($"{nodeTypePath}/_Source"))
+        var codeFilePaths = new List<string>();
+        var seenCodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        async IAsyncEnumerable<MeshNode> CollectFromPathAsync(string path)
         {
-            if (codeNode.Content is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
+            // A single-node fetch (path:X)
+            var single = await meshStorage.GetNodeAsync(path, ct);
+            if (single != null) yield return single;
+            // And all descendants under the same path (namespace:X scope:subtree)
+            await foreach (var descendant in meshStorage.GetDescendantsAsync(path))
+                yield return descendant;
+        }
+
+        var sourcePaths = ResolveSourcePaths(definition.Sources, nodeTypePath);
+        foreach (var sourcePath in sourcePaths)
+        {
+            await foreach (var candidate in CollectFromPathAsync(sourcePath))
             {
+                if (candidate.NodeType != CodeNodeType.NodeType) continue;
+                if (candidate.Content is not CodeConfiguration codeConfig) continue;
+                if (string.IsNullOrEmpty(codeConfig.Code)) continue;
+                if (candidate.Path is { Length: > 0 } p && !seenCodePaths.Add(p)) continue;
                 codeFiles.Add(codeConfig.Code);
+                if (candidate.Path != null) codeFilePaths.Add(candidate.Path);
             }
         }
+
+        logger.LogInformation(
+            "NodeType '{NodeTypePath}' source discovery: {Count} Code nodes from [{Paths}]",
+            nodeTypePath, codeFiles.Count, string.Join(", ", codeFilePaths));
 
         // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
         if (compilationService != null)
