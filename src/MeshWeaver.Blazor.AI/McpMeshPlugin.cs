@@ -69,6 +69,18 @@ public class McpMeshPlugin
         var resolvedPath = MeshOperations.ResolvePath(path);
         return $"{baseUrl}/node/{Uri.EscapeDataString(resolvedPath)}";
     }
+
+    [McpServerTool]
+    [Description("Returns compilation diagnostics for a NodeType (or any instance of one). Status is 'Ok' when the type compiled cleanly, 'Error' with details when it failed, 'Compiling' while a compile is in progress (with elapsedMs), or 'Unknown' when no compile has happened yet. Use after creating/updating a NodeType to verify it actually compiles — a NodeType that doesn't compile is not 'done'.")]
+    public Task<string> GetDiagnostics(
+        [Description("Path to a NodeType (e.g., @Systemorph/SocialMedia/Profile) or to any instance of one")] string path)
+        => ops.GetDiagnostics(path);
+
+    [McpServerTool]
+    [Description("Recycles the hub at the given path by posting DisposeRequest. Forces a fresh hub initialization on the next access — use after fixing a broken NodeType, after editing the `sources` list, or whenever a grain is stuck in a cached bad state. Returns {status:'Recycled', path}. Wait ~100ms before the next access so the grain teardown completes.")]
+    public Task<string> Recycle(
+        [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
+        => ops.Recycle(path);
 }
 
 /// <summary>

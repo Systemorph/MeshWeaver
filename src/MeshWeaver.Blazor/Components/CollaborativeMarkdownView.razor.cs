@@ -356,40 +356,27 @@ public partial class CollaborativeMarkdownView
         StateHasChanged();
     }
 
-    // Post content update to hub and return success/failure
-    private async Task<bool> PostContentUpdateAsync(string newContent)
+    // Post content update by syncing the full MeshNode via the remote stream and
+    // editing its Content field directly — this preserves Name/Icon/Description/etc.
+    // Using a partial MeshNode + DataChangeRequest fails key-mapping validation on the
+    // hosting hub ("No key mapping is defined for type MeshNode").
+    private Task<bool> PostContentUpdateAsync(string newContent)
     {
-        if (string.IsNullOrEmpty(BoundHubAddress))
-            return false;
-
-        // Split path into Id + Namespace so the workspace matches the existing node by key (Id).
-        var path = BoundNodePath ?? "";
-        var lastSlash = path.LastIndexOf('/');
-        var (id, ns) = lastSlash > 0
-            ? (path[(lastSlash + 1)..], path[..lastSlash])
-            : (path, (string?)null);
-
-        var nodeUpdate = new MeshNode(id, ns)
-        {
-            NodeType = "Markdown",
-            Content = new MarkdownContent { Content = newContent }
-        };
+        if (string.IsNullOrEmpty(BoundHubAddress) || string.IsNullOrEmpty(BoundNodePath))
+            return Task.FromResult(false);
 
         try
         {
-            var response = await Hub.AwaitResponse(
-                new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
-                o => o.WithTarget(new Address(BoundHubAddress)),
-                default);
-
-            if (response.Message is DataChangeResponse dcr && dcr.Status != DataChangeStatus.Committed)
-                return false;
-
-            return true;
+            var workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
+            workspace.UpdateMeshNode(
+                node => node with { Content = new MarkdownContent { Content = newContent } },
+                new Address(BoundHubAddress),
+                BoundNodePath);
+            return Task.FromResult(true);
         }
         catch
         {
-            return false;
+            return Task.FromResult(false);
         }
     }
 

@@ -18,7 +18,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Query.Test;
+namespace MeshWeaver.Autocomplete.Test;
 
 /// <summary>
 /// Tests for MeshNodeAutocomplete functionality including:

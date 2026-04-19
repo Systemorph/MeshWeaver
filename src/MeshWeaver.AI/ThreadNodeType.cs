@@ -19,6 +19,14 @@ public static class ThreadNodeType
     public const string NodeType = "Thread";
 
     /// <summary>
+    /// Default Icon for Thread instances. Must match <see cref="CreateMeshNode"/>.
+    /// Applied explicitly in <see cref="BuildThreadNode"/>/<see cref="BuildThreadWithMessages"/>
+    /// because thread creation goes via <c>CreateNodeRequest</c> on arbitrary parent hubs,
+    /// some of which don't have <c>INodeTypeService</c> registered to auto-copy the icon.
+    /// </summary>
+    public const string DefaultIcon = "/static/NodeTypeIcons/chat.svg";
+
+    /// <summary>
     /// Satellite partition name for threads (like _Comment for comments).
     /// Threads are created at {contextPath}/_Thread/{speakingId}.
     /// </summary>
@@ -45,6 +53,13 @@ public static class ThreadNodeType
     /// Layout area for delegation sub-thread history.
     /// </summary>
     public const string HistoryArea = "History";
+
+    /// <summary>
+    /// Layout area shown above the chat: parent-thread origin link (when this thread
+    /// is a delegation), aggregated list of nodes modified by this thread's execution
+    /// with version-before / version-after, and click-through to the version compare view.
+    /// </summary>
+    public const string HeaderArea = "Header";
 
     /// <summary>
     /// Generates a human-readable speaking ID from message text.
@@ -91,6 +106,7 @@ public static class ThreadNodeType
         {
             Name = name,
             NodeType = NodeType,
+            Icon = DefaultIcon,
             MainNode = contextPath,
             Content = new Thread { CreatedBy = createdBy }
         };
@@ -124,6 +140,7 @@ public static class ThreadNodeType
         {
             Name = name,
             NodeType = NodeType,
+            Icon = DefaultIcon,
             MainNode = contextPath,
             Content = new Thread
             {
@@ -175,7 +192,7 @@ public static class ThreadNodeType
         Func<MessageHubConfiguration, MessageHubConfiguration>? hubConfiguration = null) => new(NodeType)
         {
             Name = "Thread",
-            Icon = "/static/NodeTypeIcons/chat.svg",
+            Icon = DefaultIcon,
             IsSatelliteType = true,
             ExcludeFromContext = ImmutableHashSet.Create("search"),
             AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,

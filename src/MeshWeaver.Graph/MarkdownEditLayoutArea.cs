@@ -51,7 +51,8 @@ public static class MarkdownEditLayoutArea
         string initialContent,
         bool trackChanges)
     {
-        var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, MarkdownLayoutAreas.OverviewArea);
+        // Back to the node's default area (no hardcoded "/Overview")
+        var backHref = $"/{hubPath}";
 
         var container = Controls.Stack
             .WithWidth("100%")

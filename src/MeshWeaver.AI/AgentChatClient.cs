@@ -652,6 +652,15 @@ public class AgentChatClient : IAgentChat
                             AuthorName = currentAgentName ?? "Assistant"
                         };
                     }
+                    else if (content is UsageContent)
+                    {
+                        // Forward token-usage content so ThreadExecution can record
+                        // InputTokens / OutputTokens / TotalTokens on the response cell.
+                        yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                        {
+                            AuthorName = currentAgentName ?? "Assistant"
+                        };
+                    }
                 }
             }
 
@@ -717,6 +726,13 @@ public class AgentChatClient : IAgentChat
                         {
                             logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
                                 currentAgentName, functionCall.Name);
+                            yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                            {
+                                AuthorName = currentAgentName ?? "Assistant"
+                            };
+                        }
+                        else if (content is UsageContent)
+                        {
                             yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
                             {
                                 AuthorName = currentAgentName ?? "Assistant"

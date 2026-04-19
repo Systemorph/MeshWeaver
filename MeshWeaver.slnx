@@ -143,6 +143,7 @@
     <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
     <Project Path="test/MeshWeaver.PathResolution.Test/MeshWeaver.PathResolution.Test.csproj" />
     <Project Path="test/MeshWeaver.Persistence.Test/MeshWeaver.Persistence.Test.csproj" />
+    <Project Path="test/MeshWeaver.Autocomplete.Test/MeshWeaver.Autocomplete.Test.csproj" />
     <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
   </Folder>
   <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />

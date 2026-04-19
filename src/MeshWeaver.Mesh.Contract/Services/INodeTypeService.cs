@@ -35,4 +35,49 @@ public interface INodeTypeService
     /// Returns null if no access rules are defined in the hub config.
     /// </summary>
     INodeTypeAccessRule? GetAccessRule(string nodeTypePath) => null;
+
+    /// <summary>
+    /// Returns the last compilation error recorded for the given NodeType path,
+    /// or <c>null</c> if compilation has not failed. The error text includes the
+    /// formatted Roslyn diagnostics as produced by
+    /// <c>MeshNodeCompilationService</c>.
+    /// </summary>
+    /// <remarks>
+    /// Used by MCP <c>Get</c> / <c>GetDiagnostics</c> so callers (e.g. the Coder
+    /// agent) can verify that a NodeType they just created or updated actually
+    /// compiles. The error is cached by <c>NodeTypeService</c> each time a compile
+    /// fails and cleared when it succeeds.
+    /// </remarks>
+    string? GetCompilationError(string nodeTypePath) => null;
+
+    /// <summary>
+    /// Returns <c>true</c> if compilation for the given NodeType path is currently
+    /// running (the task has been kicked off but not yet completed). Consumers can use
+    /// this to render a "Compiling…" progress indicator so the user sees activity
+    /// rather than a blank layout while they wait.
+    /// </summary>
+    bool IsCompiling(string nodeTypePath) => false;
+
+    /// <summary>
+    /// When compilation for <paramref name="nodeTypePath"/> is running, returns when
+    /// it started (UTC). Otherwise <c>null</c>. Paired with <see cref="IsCompiling"/>
+    /// to show elapsed-time feedback in progress overlays.
+    /// </summary>
+    DateTimeOffset? GetCompilationStartedAt(string nodeTypePath) => null;
+
+    /// <summary>
+    /// Flushes all cached state (compilation errors, cached tasks, cached hub
+    /// configurations, etc.) for the given NodeType path, forcing a fresh compile
+    /// on the next access. Paired with <c>DisposeRequest</c> to fully reset a
+    /// stuck NodeType — disposing the hub alone is not enough because the
+    /// service-level caches survive hub teardown.
+    /// </summary>
+    void InvalidateCache(string nodeTypePath) { }
+
+    /// <summary>
+    /// Snapshot of NodeType paths currently being compiled. Used by the portal
+    /// to render a "Compiling…" progress indicator while a navigation request is
+    /// blocked waiting on a compile.
+    /// </summary>
+    IReadOnlyCollection<string> GetCompilingPaths() => Array.Empty<string>();
 }

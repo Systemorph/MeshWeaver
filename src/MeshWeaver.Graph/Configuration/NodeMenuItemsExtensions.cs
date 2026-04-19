@@ -106,6 +106,12 @@ public static class NodeMenuItemsExtensions
 
         yield return MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath);
 
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewerId = accessService?.Context?.ObjectId
+                       ?? accessService?.CircuitContext?.ObjectId;
+        var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
+        if (pin != null) yield return pin;
+
         var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
         if (versions != null) yield return versions;
 
@@ -114,6 +120,9 @@ public static class NodeMenuItemsExtensions
 
         var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
         if (move != null) yield return move;
+
+        var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
+        if (recycle != null) yield return recycle;
 
         var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
         if (delete != null) yield return delete;

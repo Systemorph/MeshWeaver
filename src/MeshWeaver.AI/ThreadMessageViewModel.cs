@@ -16,6 +16,12 @@ public record ThreadMessageViewModel
     public string? Timestamp { get; init; }
     public string Text { get; init; } = "";
     public ImmutableList<ToolCallEntry> ToolCalls { get; init; } = [];
+    /// <summary>
+    /// Nodes this message's execution created / updated / deleted. The bubble cross-
+    /// references tool-call target paths against this list to render inline Diff and
+    /// Restore links next to each "Creating / Updating / Deleting X" chip.
+    /// </summary>
+    public ImmutableList<NodeChangeEntry> UpdatedNodes { get; init; } = [];
 
     public static ThreadMessageViewModel FromMessage(ThreadMessage msg) => new()
     {
@@ -24,7 +30,8 @@ public record ThreadMessageViewModel
         ModelName = msg.ModelName,
         Timestamp = msg.Timestamp.ToString("HH:mm:ss"),
         Text = msg.Text ?? "",
-        ToolCalls = msg.ToolCalls
+        ToolCalls = msg.ToolCalls,
+        UpdatedNodes = msg.UpdatedNodes
     };
 
     public virtual bool Equals(ThreadMessageViewModel? other)
@@ -35,7 +42,8 @@ public record ThreadMessageViewModel
                && AuthorName == other.AuthorName
                && ModelName == other.ModelName
                && Text == other.Text
-               && ToolCalls.SequenceEqual(other.ToolCalls);
+               && ToolCalls.SequenceEqual(other.ToolCalls)
+               && UpdatedNodes.SequenceEqual(other.UpdatedNodes);
     }
 
     public override int GetHashCode()
@@ -44,6 +52,7 @@ public record ThreadMessageViewModel
         hash.Add(Role);
         hash.Add(Text);
         hash.Add(ToolCalls.Count);
+        hash.Add(UpdatedNodes.Count);
         return hash.ToHashCode();
     }
 }

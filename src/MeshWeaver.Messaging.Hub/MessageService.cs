@@ -128,8 +128,11 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
-        logger.LogWarning("An exception occurred processing {MessageType} (ID: {MessageId}) in {Address}",
-            delivery.Message.GetType().Name, delivery.Id, Address);
+        var error = delivery.Properties.TryGetValue("Error", out var e) ? e?.ToString() : null;
+        logger.LogWarning(
+            "Message delivery failed for {MessageType} (ID: {MessageId}) in {Address}: {Error}",
+            delivery.Message.GetType().Name, delivery.Id, Address,
+            error ?? "(no error details)");
 
         // Don't post DeliveryFailure during shutdown - recipients are likely also disposing
         // and the messages just clog the pipeline
@@ -141,7 +144,7 @@ public class MessageService : IMessageService
         {
             try
             {
-                var message = delivery.Properties.TryGetValue("Error", out var error) ? error.ToString() : $"Message delivery failed in address {Address}";
+                var message = error ?? $"Message delivery failed in address {Address}";
                 Post(new DeliveryFailure(delivery, message), new PostOptions(Address).ResponseFor(delivery));
             }
             catch (Exception ex)

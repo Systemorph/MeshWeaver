@@ -80,7 +80,10 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
 
         return new AccessContext
         {
-            ObjectId = response.UserName ?? response.UserEmail!,
+            // ObjectId must be the mesh User.Id (e.g. "rbuergi"), not the display name.
+            // RLS compares context.Node.Path against `User/{ObjectId}` for self-scope access —
+            // using UserName ("Roland Buergi") here would mismatch the `User/rbuergi/...` path.
+            ObjectId = response.UserId ?? response.UserEmail!,
             Name = response.UserName ?? "",
             Email = response.UserEmail!,
             IsApiToken = true,

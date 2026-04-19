@@ -119,15 +119,24 @@ public static class ThreadMessageLayoutAreas
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
             var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
+            // Prefer incremental append (TextDelta). Full Text replacement is only used
+            // for final/terminal writes (completion, error, cancel markers).
+            var newText = msg.Text ?? (msg.TextDelta is { Length: > 0 } d
+                ? (current.Text ?? "") + d
+                : current.Text);
             return node with
             {
                 Content = current with
                 {
-                    Text = msg.Text ?? current.Text,
+                    Text = newText,
                     ToolCalls = msg.ToolCalls ?? current.ToolCalls,
                     UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
                     AgentName = msg.AgentName ?? current.AgentName,
-                    ModelName = msg.ModelName ?? current.ModelName
+                    ModelName = msg.ModelName ?? current.ModelName,
+                    InputTokens = msg.InputTokens ?? current.InputTokens,
+                    OutputTokens = msg.OutputTokens ?? current.OutputTokens,
+                    TotalTokens = msg.TotalTokens ?? current.TotalTokens,
+                    CompletedAt = msg.CompletedAt ?? current.CompletedAt
                 }
             };
         });
@@ -290,6 +299,7 @@ public static class ThreadMessageLayoutAreas
             .WithTimestamp(msg.Timestamp)
             .WithText(new JsonPointerReference($"{dataPointer}/text"))
             .WithToolCalls(new JsonPointerReference($"{dataPointer}/toolCalls"))
+            .WithUpdatedNodes(new JsonPointerReference($"{dataPointer}/updatedNodes"))
             .WithThreadPath(threadPath)
             .WithMessageId(messageId);
 
@@ -352,56 +362,115 @@ public static class ThreadMessageLayoutAreas
             .WithStyle(isUser ? "align-items: flex-end;" : "")
             .WithView(bubble);
 
-        // For assistant messages: show delegation sub-threads as clickable links
+        // Reactive metadata row for assistant cells: model · duration · tokens.
+        // Re-renders whenever CompletedAt or token fields change on the underlying message.
         if (!isUser)
         {
-            var messagePath = $"{threadPath}/{messageId}";
             container = container.WithView((h, c) =>
             {
-                var meshService = h.Hub.ServiceProvider.GetService<IMeshService>();
-                if (meshService == null) return Observable.Return<UiControl?>(null);
+                var stream = h.Workspace.GetStream(new MeshNodeReference());
+                if (stream is null) return Observable.Return<UiControl?>(null);
 
-                return Observable.FromAsync(async () =>
-                {
-                    try
-                    {
-                        var subs = await meshService
-                            .QueryAsync<MeshNode>($"namespace:{messagePath} nodeType:{ThreadNodeType.NodeType}")
-                            .ToListAsync();
-                        if (subs.Count == 0) return (UiControl?)null;
-                        return (UiControl?)BuildDelegationLinks(subs);
-                    }
-                    catch { return (UiControl?)null; }
-                });
+                return stream
+                    .Select(change => change.Value?.Content as ThreadMessage)
+                    .Where(m => m is not null)
+                    .Select(m => (
+                        Started: m!.Timestamp,
+                        Completed: m.CompletedAt,
+                        Model: m.ModelName,
+                        In: m.InputTokens,
+                        Out: m.OutputTokens,
+                        Total: m.TotalTokens))
+                    .DistinctUntilChanged()
+                    .Select(meta => BuildAssistantMetaRow(meta.Started, meta.Completed, meta.Model,
+                        meta.In, meta.Out, meta.Total));
             });
         }
+
+        // Delegation sub-threads are already shown inline inside the bubble (via the bubble's
+        // tool-calls data binding). An extra embedded LayoutAreaControl here produced a
+        // duplicate line with the same "Delegating to …" chip — redundant, so removed.
+        // To see full sub-thread progress, click through the delegation chip inside the bubble.
 
         container = container.WithView(actionRow);
         return container;
     }
 
     /// <summary>
-    /// Builds simple navigation links for delegation sub-threads.
-    /// Each sub-thread is rendered as a clickable link showing its name.
+    /// Formats a TimeSpan as compact h/m/s: e.g. "120ms", "1.8s", "42s", "1m 23s",
+    /// "1h 5m 30s". Zero components are dropped.
     /// </summary>
-    private static UiControl BuildDelegationLinks(IReadOnlyList<MeshNode> subThreads)
+    private static string FormatDurationHms(TimeSpan d)
     {
-        var sb = new System.Text.StringBuilder();
-        sb.Append("<div style=\"margin: 4px 0 8px 0;\">");
+        if (d.TotalMilliseconds < 1000) return $"{d.TotalMilliseconds:F0}ms";
+        if (d.TotalSeconds < 10) return $"{d.TotalSeconds:F1}s";
+        var parts = new List<string>();
+        var h = (int)d.TotalHours;
+        if (h > 0) parts.Add($"{h}h");
+        var m = d.Minutes;
+        if (m > 0 || h > 0) parts.Add($"{m}m");
+        parts.Add($"{d.Seconds}s");
+        return string.Join(' ', parts);
+    }
 
-        foreach (var st in subThreads)
+    /// <summary>
+    /// Builds the muted one-line metadata row shown below an assistant cell:
+    /// <c>HH:mm:ss · model · 1.8s · 1,247 in / 392 out (1,639 total)</c>. Returns
+    /// null when there's nothing to show (e.g. response still streaming and no model
+    /// yet known).
+    /// </summary>
+    private static UiControl? BuildAssistantMetaRow(
+        DateTime started, DateTime? completed, string? model,
+        int? input, int? output, int? total)
+    {
+        var parts = new List<string>();
+        parts.Add(started.ToLocalTime().ToString("HH:mm:ss"));
+        if (!string.IsNullOrEmpty(model))
+            parts.Add(System.Web.HttpUtility.HtmlEncode(model));
+        if (completed.HasValue)
         {
-            var name = System.Web.HttpUtility.HtmlEncode(
-                st.Name?.Length > 80 ? st.Name[..77] + "..." : st.Name ?? st.Id);
-            var href = $"/{st.Path}";
+            parts.Add(FormatDurationHms(completed.Value - started));
+        }
+        if (input.HasValue || output.HasValue || total.HasValue)
+        {
+            var inS = input?.ToString("N0") ?? "?";
+            var outS = output?.ToString("N0") ?? "?";
+            var totS = total?.ToString("N0");
+            var tokens = totS is null
+                ? $"{inS} in / {outS} out"
+                : $"{inS} in / {outS} out ({totS} total)";
+            parts.Add(tokens);
+        }
+        if (parts.Count == 0) return null;
 
-            sb.Append($"<a href=\"{href}\" style=\"display: flex; align-items: center; gap: 6px; padding: 2px 0; " +
-                       $"font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none;\">" +
-                       $"<span style=\"font-size: 10px;\">&#8618;</span> {name}</a>");
+        var line = string.Join(" &middot; ", parts);
+        return Controls.Html(
+            $"<div style=\"font-size:0.72rem; color:var(--neutral-foreground-hint); margin:2px 0 6px 4px;\">{line}</div>");
+    }
+
+    /// <summary>
+    /// Builds an embedded stack of <see cref="LayoutAreaControl"/>s pointing at the
+    /// sub-thread's compact <c>Streaming</c> view. Each control opens its own
+    /// subscription against the sub-thread hub — the parent's execution loop never
+    /// reads or awaits the sub-thread's stream. Returns null when there are no
+    /// delegations.
+    /// </summary>
+    private static UiControl? BuildEmbeddedSubThreadAreas(IReadOnlyList<string> subThreadPaths)
+    {
+        if (subThreadPaths.Count == 0) return null;
+
+        var stack = Controls.Stack
+            .WithStyle("gap: 6px; margin: 6px 0 4px 8px; padding-left: 8px; " +
+                       "border-left: 2px solid var(--accent-fill-rest);");
+
+        foreach (var path in subThreadPaths)
+        {
+            var area = new LayoutAreaControl(path, new LayoutAreaReference("Streaming"))
+                .WithSpinnerType(SpinnerType.Skeleton);
+            stack = stack.WithView(area);
         }
 
-        sb.Append("</div>");
-        return Controls.Html(sb.ToString());
+        return stack;
     }
 
     /// <summary>
@@ -426,8 +495,9 @@ public static class ThreadMessageLayoutAreas
                 // Don't convert email addresses
                 if (path.Contains('@'))
                     return match.Value;
-                // Use @prefix in href — LinkUrlCleanupExtension will strip @ and resolve
-                return $"[`@{path}`](@{path})";
+                // Emit absolute href — @references from agents are always full paths
+                var href = path.StartsWith('/') ? path : $"/{path}";
+                return $"[`@{path}`]({href})";
             });
     }
 

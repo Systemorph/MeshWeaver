@@ -83,7 +83,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
         {
-            ObjectId = response.UserEmail!,
+            ObjectId = response.UserId ?? response.UserEmail!,
             Name = response.UserName ?? "",
             Email = response.UserEmail!,
         });

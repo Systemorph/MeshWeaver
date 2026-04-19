@@ -479,9 +479,109 @@ public class NavigationServiceTest
 
     #endregion
 
+    #region Satellite Node Tests
+
+    [Fact]
+    public async Task OnLocationChanged_SatelliteNode_CurrentNamespacePointsAtMainNode()
+    {
+        // User browses to a thread under PartnerRe/AIConsulting. The thread node's MainNode
+        // points back at the parent that owns it, so CurrentNamespace — which downstream
+        // chat/autocomplete/attachment code uses to resolve relative paths — must surface
+        // the main node, not the satellite path.
+        var service = CreateService();
+        const string SatellitePath = "PartnerRe/AIConsulting/_Thread/abc-123";
+        const string MainNode = "PartnerRe/AIConsulting";
+
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
+            .Returns(new AddressResolution(SatellitePath, null));
+
+        var threadNode = new MeshNode("abc-123", "PartnerRe/AIConsulting/_Thread")
+        {
+            NodeType = "Thread",
+            MainNode = MainNode
+        };
+        _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncObjects(threadNode));
+
+        await service.InitializeAsync();
+
+        service.CurrentNamespace.Should().Be(MainNode);
+        service.Context!.Namespace.Should().Be(SatellitePath);
+        service.Context.PrimaryPath.Should().Be(MainNode);
+        service.Context.IsSatellite.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task OnLocationChanged_RegularNode_CurrentNamespaceMatchesNamespace()
+    {
+        // For a non-satellite node, CurrentNamespace and Namespace are the same.
+        // PrimaryPath falls back to Namespace when Node is null, so this also covers
+        // the no-node-found path (existing tests rely on this fallback).
+        var service = CreateService();
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
+            .Returns(new AddressResolution("PartnerRe/AIConsulting", null));
+
+        var mainNode = new MeshNode("AIConsulting", "PartnerRe")
+        {
+            NodeType = "Group"
+            // MainNode defaults to Path → "PartnerRe/AIConsulting"
+        };
+        _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncObjects(mainNode));
+
+        await service.InitializeAsync();
+
+        service.CurrentNamespace.Should().Be("PartnerRe/AIConsulting");
+        service.Context!.PrimaryPath.Should().Be("PartnerRe/AIConsulting");
+        service.Context.IsSatellite.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task OnLocationChanged_SatelliteNode_LoadsCreatableTypesForMainNode()
+    {
+        // The creatable-types background load also keys off PrimaryPath so menus on
+        // satellite pages reflect what can be created on the parent node.
+        var service = CreateService();
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
+            .Returns(new AddressResolution("PartnerRe/AIConsulting/_Thread/abc-123", null));
+
+        var threadNode = new MeshNode("abc-123", "PartnerRe/AIConsulting/_Thread")
+        {
+            NodeType = "Thread",
+            MainNode = "PartnerRe/AIConsulting"
+        };
+        _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
+            .Returns(ToAsyncObjects(threadNode));
+
+        _nodeTypeService
+            .GetCreatableTypesAsync("PartnerRe/AIConsulting", Arg.Any<CancellationToken>())
+            .Returns(ToAsyncEnumerable(new CreatableTypeInfo("PartnerRe/AIConsulting/Story")));
+
+        CreatableTypesSnapshot? lastSnapshot = null;
+        service.CreatableTypes.Subscribe(s => lastSnapshot = s);
+
+        await service.InitializeAsync();
+        await Task.Delay(150, TestContext.Current.CancellationToken);
+
+        _nodeTypeService.Received().GetCreatableTypesAsync(
+            "PartnerRe/AIConsulting", Arg.Any<CancellationToken>());
+        lastSnapshot!.Items.Should().Contain(t => t.NodeTypePath == "PartnerRe/AIConsulting/Story");
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private static async IAsyncEnumerable<CreatableTypeInfo> ToAsyncEnumerable(params CreatableTypeInfo[] items)
+    {
+        foreach (var item in items)
+        {
+            yield return item;
+        }
+        await Task.CompletedTask;
+    }
+
+    private static async IAsyncEnumerable<object> ToAsyncObjects(params object[] items)
     {
         foreach (var item in items)
         {

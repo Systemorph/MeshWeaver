@@ -16,10 +16,27 @@
     }
     else if (!IsInteractive || IsLoading)
     {
-        @* Pre-render (no cached HTML) or interactive still resolving *@
+        @* Pre-render (no cached HTML) or interactive still resolving.
+           While navigation is blocked, peek at NodeTypeService to show a richer
+           progress message: "Looking up" → "Compiling <path> (<N>s)" so the user
+           sees what the hub is actually busy with. *@
         <div class="resolving-container">
             <FluentProgressRing style="width: 40px; height: 40px;" />
-            <p>Looking up <strong>@Path</strong>...</p>
+            @if (CompilingPath is not null)
+            {
+                <p>
+                    Compiling <strong>@CompilingPath</strong>
+                    @if (CompilingSeconds > 0)
+                    {
+                        <text> (@CompilingSeconds s)</text>
+                    }
+                    ...
+                </p>
+            }
+            else
+            {
+                <p>Looking up <strong>@Path</strong>...</p>
+            }
         </div>
     }
     else if (NavigationService.Context is null)

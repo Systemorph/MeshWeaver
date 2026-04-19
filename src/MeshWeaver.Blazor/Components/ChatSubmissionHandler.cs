@@ -16,9 +16,12 @@ public class ChatSubmissionHandler : IDisposable
     }
 
     private readonly TimeSpan _timeout;
+    private readonly TimeSpan _dedupWindow;
+    private readonly Func<DateTime> _now;
     private readonly Func<TimeSpan, Action, IDisposable> _scheduleTimeout;
     private IDisposable? _timeoutDisposable;
     private bool _disposed;
+    private DateTime? _lastAcceptedAt;
 
     /// <summary>
     /// Current state of the submission handler.
@@ -47,10 +50,14 @@ public class ChatSubmissionHandler : IDisposable
     /// <param name="scheduleTimeout">Optional scheduler for testing. If null, uses Task.Delay.</param>
     public ChatSubmissionHandler(
         TimeSpan? timeout = null,
-        Func<TimeSpan, Action, IDisposable>? scheduleTimeout = null)
+        Func<TimeSpan, Action, IDisposable>? scheduleTimeout = null,
+        TimeSpan? dedupWindow = null,
+        Func<DateTime>? now = null)
     {
         _timeout = timeout ?? TimeSpan.FromSeconds(30);
         _scheduleTimeout = scheduleTimeout ?? DefaultScheduleTimeout;
+        _dedupWindow = dedupWindow ?? TimeSpan.FromMilliseconds(500);
+        _now = now ?? (() => DateTime.UtcNow);
     }
 
     /// <summary>
@@ -70,8 +77,22 @@ public class ChatSubmissionHandler : IDisposable
         if (State != SubmissionState.Idle)
             return false;
 
+        // UX-only debounce: ThreadChatView force-releases immediately after Submit so the
+        // input stays enabled for queueing while the previous round is processed by the
+        // server. Without this guard, a double-click / Enter+Send race appends the same
+        // message twice (the server watcher batches them into one round, but the user
+        // sees two duplicate cells). The duplicate-EXECUTION race that this guard used
+        // to mask is now fixed in ThreadSubmissionServer (atomic single-write append +
+        // hardened reentrancy guard); this remains only as a UX safeguard against
+        // accidental double-clicks of the same exact text.
+        if (LastSubmittedText == text
+            && _lastAcceptedAt.HasValue
+            && (_now() - _lastAcceptedAt.Value) < _dedupWindow)
+            return false;
+
         State = SubmissionState.Submitting;
         LastSubmittedText = text;
+        _lastAcceptedAt = _now();
         SubmissionCount++;
 
         return true;

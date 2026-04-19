@@ -22,6 +22,7 @@ public class MeshOperations
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
     private readonly IMeshService mesh;
+    private readonly INodeTypeService? nodeTypeService;
 
     /// <summary>
     /// Callback invoked when a node is created, updated, or patched.
@@ -34,16 +35,49 @@ public class MeshOperations
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
         this.mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        this.nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
     }
 
     /// <summary>
-    /// Resolves @ prefix and quotes from path. Example: @graph/org1 -> graph/org1, "@content/My File.md" -> content/My File.md
+    /// Looks up the cached compilation error for the owning NodeType of <paramref name="node"/>.
+    /// - If <paramref name="node"/> is a NodeType definition, checks its own path.
+    /// - Otherwise checks the NodeType's path.
+    /// Returns <c>null</c> if no error is recorded.
+    /// </summary>
+    private string? LookupCompilationError(MeshNode node)
+    {
+        if (nodeTypeService == null) return null;
+        var nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
+            ? node.Path
+            : node.NodeType;
+        return !string.IsNullOrEmpty(nodeTypePath)
+            ? nodeTypeService.GetCompilationError(nodeTypePath)
+            : null;
+    }
+
+    /// <summary>
+    /// Resolves @ prefix and normalises agent-emitted formatting noise.
+    /// Models / autocomplete frequently wrap spaced filenames in quotes ("foo bar.docx",
+    /// 'foo bar.docx'), put quotes around different segments, or include surrounding
+    /// whitespace. None of those characters are legal mesh-path content, so we strip
+    /// them regardless of position. Examples:
+    ///   @graph/org1                                  → graph/org1
+    ///   "@content/My File.md"                        → content/My File.md
+    ///   @/Org/content/"My File.docx"                 → /Org/content/My File.docx
+    ///   @/Org/"content/My File.docx"                 → /Org/content/My File.docx
+    ///   @"/Org/content/My File.docx"                 → /Org/content/My File.docx
+    ///   @/Org/content/'My File.docx'                 → /Org/content/My File.docx
+    ///   "   @/Org/content/My File.docx   "           → /Org/content/My File.docx
     /// </summary>
     public static string ResolvePath(string path)
     {
-        // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
-        if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
-            path = path[1..^1];
+        if (string.IsNullOrEmpty(path))
+            return path;
+
+        // Strip surrounding/inner whitespace and quote characters in one pass.
+        path = path.Trim();
+        if (path.IndexOfAny(['"', '\'']) >= 0)
+            path = path.Replace("\"", string.Empty).Replace("'", string.Empty);
 
         if (path.StartsWith("@"))
             return path[1..];
@@ -155,6 +189,11 @@ public class MeshOperations
             await foreach (var node in mesh.QueryAsync<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
             {
+                var compileError = LookupCompilationError(node);
+                if (compileError != null)
+                    return JsonSerializer.Serialize(
+                        new { node, compilationError = compileError },
+                        hub.JsonSerializerOptions);
                 return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
             }
 
@@ -840,5 +879,137 @@ public class MeshOperations
             logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
             return Task.FromResult<string?>(null);
         }
+    }
+
+    /// <summary>
+    /// Recycles the hub at <paramref name="path"/> by posting a
+    /// <see cref="DisposeRequest"/>. The next access re-initialises the hub — which
+    /// means a fresh NodeType compile and fresh data loads. Useful after fixing a
+    /// broken NodeType or when something is stuck in an inconsistent cached state.
+    /// Returns a JSON <c>{status, path}</c> envelope. The caller should wait ~100ms
+    /// before re-accessing so the grain teardown completes.
+    /// </summary>
+    public Task<string> Recycle(string path)
+    {
+        logger.LogInformation("Recycle called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        var resolvedPath = ResolvePath(path);
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        try
+        {
+            // 1. Flush LOCAL NodeTypeService caches so a fresh compile runs on next access.
+            //    Disposing the hub alone is not enough — NodeTypeService._compilationErrors
+            //    and _compilationTasks survive hub teardown and would keep serving stale
+            //    errors.
+            nodeTypeService?.InvalidateCache(resolvedPath);
+
+            // 2. Broadcast the invalidation across silos via IMeshChangeFeed. Every silo's
+            //    NodeTypeService subscribes to this feed and calls InvalidateCache locally
+            //    when it sees an event for a tracked NodeType path.
+            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+            if (changeFeed != null)
+            {
+                var segments = resolvedPath.Split('/');
+                var id = segments.Length > 0 ? segments[^1] : resolvedPath;
+                var ns = segments.Length > 1 ? string.Join("/", segments[..^1]) : "";
+                changeFeed.Publish(new MeshChangeEvent(
+                    Namespace: ns,
+                    Id: id,
+                    Path: resolvedPath,
+                    Kind: MeshChangeKind.Updated,
+                    NodeType: MeshNode.NodeTypePath,
+                    Version: 0,
+                    Timestamp: DateTimeOffset.UtcNow));
+            }
+
+            // 3. Dispose the hub so the next request re-initialises with fresh config.
+            hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(resolvedPath)));
+            return Task.FromResult(JsonSerializer.Serialize(
+                new
+                {
+                    status = "Recycled",
+                    path = resolvedPath,
+                    message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. Wait ~100ms before the next access."
+                },
+                hub.JsonSerializerOptions));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error recycling {Path}", resolvedPath);
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", path = resolvedPath, message = ex.Message },
+                hub.JsonSerializerOptions));
+        }
+    }
+
+    /// <summary>
+    /// Returns compilation diagnostics for a NodeType or an instance of one.
+    /// The response is JSON with <c>status</c> (<c>Error</c> / <c>Ok</c> /
+    /// <c>Unknown</c>) and, when relevant, the error text from the last compile.
+    /// Used by the Coder agent's self-verification loop after creating / updating
+    /// a NodeType.
+    /// </summary>
+    public async Task<string> GetDiagnostics(string path)
+    {
+        logger.LogInformation("GetDiagnostics called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions);
+
+        var resolvedPath = ResolvePath(path);
+        if (nodeTypeService == null)
+            return JsonSerializer.Serialize(
+                new { status = "Unknown", message = "INodeTypeService not registered on this hub" },
+                hub.JsonSerializerOptions);
+
+        // Resolve the owning NodeType path: either the path itself (if it IS a NodeType)
+        // or the NodeType of the instance at that path.
+        string? nodeTypePath = null;
+        await foreach (var node in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
+        {
+            nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
+                ? node.Path
+                : node.NodeType;
+            break;
+        }
+
+        if (string.IsNullOrEmpty(nodeTypePath))
+            return JsonSerializer.Serialize(
+                new { status = "Unknown", message = $"Not found: {resolvedPath}" },
+                hub.JsonSerializerOptions);
+
+        // Compiling has priority over any prior error — the error we're seeing is stale
+        // and a fresh result is on its way. Tell the caller to wait and retry.
+        if (nodeTypeService.IsCompiling(nodeTypePath))
+        {
+            var startedAt = nodeTypeService.GetCompilationStartedAt(nodeTypePath);
+            var elapsedMs = startedAt is null
+                ? (long?)null
+                : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
+            return JsonSerializer.Serialize(
+                new { status = "Compiling", nodeTypePath, elapsedMs },
+                hub.JsonSerializerOptions);
+        }
+
+        var err = nodeTypeService.GetCompilationError(nodeTypePath);
+        if (string.IsNullOrEmpty(err))
+            return JsonSerializer.Serialize(
+                new { status = "Ok", nodeTypePath },
+                hub.JsonSerializerOptions);
+
+        return JsonSerializer.Serialize(
+            new { status = "Error", nodeTypePath, error = err },
+            hub.JsonSerializerOptions);
     }
 }

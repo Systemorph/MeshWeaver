@@ -28,6 +28,71 @@ internal class MeshNodeCompilationService(
     private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
+
+    /// <summary>
+    /// Resolve one Sources entry into one-or-more concrete queries, ready to hand
+    /// to <see cref="IMeshService.QueryAsync{T}"/>. Rules:
+    /// <list type="bullet">
+    ///   <item><c>$self</c> expands to <paramref name="selfPath"/>.</item>
+    ///   <item>A leading <c>@@</c> or <c>@</c> marks a shorthand that yields both a
+    ///     <c>path:X</c> exact match and a <c>namespace:X scope:subtree</c> folder
+    ///     match (de-duplicated downstream by the caller).</item>
+    ///   <item>A <c>namespace:X</c> value that is a single relative segment (no
+    ///     <c>/</c>, no absolute root) is rebased onto <paramref name="selfPath"/>,
+    ///     so the default <c>namespace:_Source</c> reads as "my own _Source folder".</item>
+    ///   <item>Every emitted query is ANDed with <c>nodeType:Code</c> so non-code
+    ///     children can never leak into the compilation.</item>
+    /// </list>
+    /// </summary>
+    private static IEnumerable<string> ExpandSourceQuery(string rawQuery, string selfPath)
+    {
+        var expanded = rawQuery.Replace("$self", selfPath).Trim();
+
+        var isAt = expanded.StartsWith("@@") || expanded.StartsWith("@");
+        if (isAt)
+        {
+            var stripped = expanded.TrimStart('@').TrimStart();
+            if (stripped.Length == 0) yield break;
+            if (stripped.Contains(':'))
+            {
+                // "@namespace:X scope:subtree" — already qualified, pass through.
+                yield return WithCodeTypeFilter(stripped);
+                yield break;
+            }
+            yield return WithCodeTypeFilter($"path:{stripped}");
+            yield return WithCodeTypeFilter($"namespace:{stripped} scope:subtree");
+            yield break;
+        }
+
+        // Rebase relative "namespace:X" values onto selfPath. A value without '/' is
+        // assumed to be a subfolder of the NodeType (the default "_Source" case).
+        var rebased = RebaseRelativeNamespace(expanded, selfPath);
+        yield return WithCodeTypeFilter(rebased);
+    }
+
+    private static string RebaseRelativeNamespace(string query, string selfPath)
+    {
+        const string nsKey = "namespace:";
+        var idx = query.IndexOf(nsKey, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return query;
+
+        var valueStart = idx + nsKey.Length;
+        var valueEnd = valueStart;
+        while (valueEnd < query.Length && !char.IsWhiteSpace(query[valueEnd]))
+            valueEnd++;
+        var value = query.Substring(valueStart, valueEnd - valueStart);
+
+        // Relative iff it contains no path separator (e.g. "_Source").
+        if (value.Length == 0 || value.Contains('/')) return query;
+
+        var rebased = $"{selfPath}/{value}";
+        return query.Substring(0, valueStart) + rebased + query.Substring(valueEnd);
+    }
+
+    private static string WithCodeTypeFilter(string query) =>
+        query.Contains("nodeType:", StringComparison.OrdinalIgnoreCase)
+            ? query
+            : $"{query} nodeType:{CodeNodeType.NodeType}";
     private readonly List<MetadataReference> _references = GetDefaultReferences();
 
     private static List<MetadataReference> GetDefaultReferences()
@@ -220,23 +285,67 @@ internal class MeshNodeCompilationService(
             return dllPath;
         }
 
-        // Get CodeConfiguration from child MeshNodes under the _Source path
-        // For NodeType nodes (where Content is NodeTypeDefinition), use the node's own path
-        // For instance nodes, use the NodeType's path (e.g., "Person/_Source" for Alice with NodeType="Person")
-        // Collect ALL CodeConfiguration files and combine them
+        // Resolve the owning NodeTypeDefinition once — used both for source discovery
+        // (Sources / _Source convention) and for Configuration / ContentCollections.
+        // - If this node IS a NodeType, "self" is its own path and we read its Content.
+        // - If this node is an instance, "self" is the NodeType's path and we fetch it.
         var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
+        NodeTypeDefinition? ntDef = null;
+        string selfPath;
+        if (node.Content is NodeTypeDefinition selfDef)
+        {
+            ntDef = selfDef;
+            selfPath = node.Path;
+        }
+        else
+        {
+            selfPath = node.NodeType;
+            if (meshQuery != null)
+            {
+                await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}", ct: ct).WithCancellation(ct))
+                {
+                    if (nodeTypeNode?.Content is NodeTypeDefinition fetched)
+                        ntDef = fetched;
+                    break;
+                }
+            }
+        }
+
+        // Collect Code nodes from each configured source query.
+        // Default: "_Source" subtree directly under the NodeType (implicitly self-relative).
+        var sourceQueries = ntDef?.Sources is { Count: > 0 } configured
+            ? configured
+            : (IReadOnlyList<string>)["namespace:_Source scope:subtree"];
+
         var codeFiles = new List<CodeConfiguration>();
-        var codeParentPath = node.Content is NodeTypeDefinition
-            ? $"{node.Path}/_Source"    // NodeType node - use its own _Source path
-            : $"{node.NodeType}/_Source"; // Instance node - use NodeType's _Source path
+        var matchedCodePaths = new List<string>();
+        var executedQueries = new List<string>();
         if (meshQuery != null)
         {
-            var codeQuery = $"namespace:{codeParentPath} scope:subtree";
-            await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(codeQuery, ct: ct).WithCancellation(ct))
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var rawQuery in sourceQueries)
             {
-                if (codeNode.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
+                if (string.IsNullOrWhiteSpace(rawQuery)) continue;
+
+                foreach (var finalQuery in ExpandSourceQuery(rawQuery, selfPath))
                 {
-                    codeFiles.Add(cf);
+                    executedQueries.Add(finalQuery);
+                    var matchesForThisQuery = 0;
+                    await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(finalQuery, ct: ct).WithCancellation(ct))
+                    {
+                        if (codeNode.Content is CodeConfiguration cf
+                            && !string.IsNullOrWhiteSpace(cf.Code)
+                            && seen.Add(codeNode.Path ?? cf.Code!))
+                        {
+                            codeFiles.Add(cf);
+                            if (!string.IsNullOrEmpty(codeNode.Path))
+                                matchedCodePaths.Add(codeNode.Path);
+                            matchesForThisQuery++;
+                        }
+                    }
+                    logger.LogInformation(
+                        "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
+                        node.Path, finalQuery, matchesForThisQuery);
                 }
             }
         }
@@ -260,31 +369,8 @@ internal class MeshNodeCompilationService(
             _ => new CodeConfiguration { Code = string.Join("\n\n", codeFiles.Select(cf => cf.Code)) }
         };
 
-        // Get Configuration and ContentCollections from the NodeTypeDefinition content
-        // Configuration is the source code that gets compiled into HubConfiguration
-        // For NodeType nodes (where node.Content is NodeTypeDefinition), use the node's own content
-        // For instance nodes, look up the NodeType node to get its Configuration
-        string? configuration = null;
-        List<ContentCollectionConfig>? contentCollections = null;
-        if (node.Content is NodeTypeDefinition selfDef)
-        {
-            // Node is itself a NodeType definition - use its own Configuration
-            configuration = selfDef.Configuration;
-            contentCollections = selfDef.ContentCollections;
-        }
-        else if (meshQuery != null)
-        {
-            // Instance node - look up the NodeType to get its Configuration
-            await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}", ct: ct).WithCancellation(ct))
-            {
-                if (nodeTypeNode?.Content is NodeTypeDefinition ntd)
-                {
-                    configuration = ntd.Configuration;
-                    contentCollections = ntd.ContentCollections;
-                }
-                break;
-            }
-        }
+        var configuration = ntDef?.Configuration;
+        var contentCollections = ntDef?.ContentCollections;
 
         try
         {
@@ -310,11 +396,38 @@ internal class MeshNodeCompilationService(
             logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
             return $"memory://{nodeName}";
         }
+        catch (CompilationException ex)
+        {
+            // Re-throw enriched with the actual queries that ran + which Code nodes matched,
+            // so the error overlay can tell the user *why* references are missing (usually:
+            // 0 Code nodes matched the configured sources).
+            var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
+            logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}", node.Path, diag);
+            throw new CompilationException(
+                ex.NodePath,
+                $"{ex.Message}\n\n--- Source discovery ---\n{diag}",
+                ex);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogError(ex, "Failed to compile assembly for node {NodePath}", node.Path);
             throw;
         }
+    }
+
+    private static string BuildSourceDiscoveryReport(IReadOnlyList<string> executedQueries, IReadOnlyList<string> matchedCodePaths)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Executed source queries ({executedQueries.Count}):");
+        foreach (var q in executedQueries)
+            sb.AppendLine($"  - {q}");
+        sb.AppendLine($"Matched Code nodes ({matchedCodePaths.Count}):");
+        if (matchedCodePaths.Count == 0)
+            sb.AppendLine("  (none) — the configuration lambda cannot reference types because no source files were included. Check that your _Source Code nodes exist and that the NodeType's `sources` list points at them.");
+        else
+            foreach (var p in matchedCodePaths)
+                sb.AppendLine($"  - {p}");
+        return sb.ToString();
     }
 
     /// <inheritdoc />

@@ -68,6 +68,22 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return ops.Delete(paths);
     }
 
+    [Description("Returns compilation diagnostics for a NodeType or an instance of one. Status is 'Ok' when the type compiled cleanly, 'Error' with a detailed message when it failed, or 'Unknown' when no compile has happened yet. Use this after creating/updating a NodeType to verify it actually compiles — a NodeType that doesn't compile is not 'done'.")]
+    public Task<string> GetDiagnostics(
+        [Description("Path to a NodeType (e.g., @Systemorph/SocialMedia/Profile) or to any instance of one")] string path)
+    {
+        RestoreAccessContext();
+        return ops.GetDiagnostics(ResolveContextPath(path));
+    }
+
+    [Description("Recycles the hub at the given path by posting DisposeRequest. Forces a fresh hub initialization on the next access — use this after fixing a broken NodeType, after editing the `sources` list, or whenever a grain is stuck. Returns {status:'Recycled', path}. Wait ~100ms before the next access so the grain teardown completes.")]
+    public Task<string> Recycle(
+        [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
+    {
+        RestoreAccessContext();
+        return ops.Recycle(ResolveContextPath(path));
+    }
+
     /// <summary>
     /// Restores the user's AccessContext from <see cref="IAgentChat.ExecutionContext"/>.
     /// AsyncLocal doesn't flow reliably through the AI framework's streaming + tool
@@ -108,6 +124,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Get),
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo),
+            AIFunctionFactory.Create(GetDiagnostics),
         ];
     }
 
@@ -125,6 +142,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Update),
             AIFunctionFactory.Create(Patch),
             AIFunctionFactory.Create(Delete),
+            AIFunctionFactory.Create(GetDiagnostics),
+            AIFunctionFactory.Create(Recycle),
         ];
     }
 }

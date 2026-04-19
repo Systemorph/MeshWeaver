@@ -407,7 +407,7 @@
         _ = AutoSaveContentAsync(content);
     }
 
-    private async Task<bool> AutoSaveContentAsync(string content)
+    private Task<bool> AutoSaveContentAsync(string content)
     {
         if (ValuePointer != null)
         {
@@ -415,35 +415,25 @@
         }
 
         if (string.IsNullOrEmpty(BoundAutoSaveAddress) || string.IsNullOrEmpty(BoundNodePath))
-            return true;
+            return Task.FromResult(true);
 
         try
         {
-            var nodeUpdate = new MeshWeaver.Mesh.MeshNode(BoundNodePath)
-            {
-                NodeType = "Markdown",
-                Content = new MarkdownContent { Content = content }
-            };
-
-            var response = await Hub.AwaitResponse(
-                new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
-                o => o.WithTarget(new Address(BoundAutoSaveAddress)),
-                default);
-
-            if (response.Message is DataChangeResponse dcr && dcr.Status != DataChangeStatus.Committed)
-            {
-                Logger.LogWarning("Auto-save rejected for node {Path}: {Message}",
-                    BoundNodePath, dcr.Log.Messages.LastOrDefault()?.Message);
-                return false;
-            }
-
+            // Sync the full MeshNode via the remote stream and patch Content only —
+            // preserves Name/Icon/Description and avoids the key-mapping failure that
+            // DataChangeRequest + partial MeshNode triggers on the hosting hub.
+            var workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
+            workspace.UpdateMeshNode(
+                node => node with { Content = new MarkdownContent { Content = content } },
+                new Address(BoundAutoSaveAddress),
+                BoundNodePath);
             Logger.LogDebug("Auto-saved content to {Address} for node {Path}", BoundAutoSaveAddress, BoundNodePath);
-            return true;
+            return Task.FromResult(true);
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to auto-save content to {Address}", BoundAutoSaveAddress);
-            return false;
+            return Task.FromResult(false);
         }
     }
 

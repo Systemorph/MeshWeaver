@@ -1,3 +1,4 @@
+using System.Net;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -11,6 +12,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -40,76 +42,53 @@ public static class AccessControlLayoutArea
             );
         }
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
-            ?? Observable.Return<MeshNode[]>([]);
+        // Admin check — synchronous read from the current access context. No awaits,
+        // no Query, no FromAsync. Roles are set at circuit/request time.
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var roles = accessService?.Context?.Roles
+            ?? accessService?.CircuitContext?.Roles
+            ?? [];
+        var isAdmin = roles.Any(r =>
+            string.Equals(r, "Admin", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(r, "PlatformAdmin", StringComparison.OrdinalIgnoreCase));
+
+        // Try to get the hub's own MeshNode stream. If the reducer isn't registered
+        // (test or minimal hub configurations), fall through to a stream-less render
+        // so the page is never blocked on stream initialization.
+        IObservable<ChangeItem<MeshNode>>? nodeStream = null;
+        try
+        {
+            nodeStream = host.Workspace.GetStream(new MeshNodeReference());
+        }
+        catch (Exception)
+        {
+            // MeshNodeReference reducer not available on this hub — render without node.
+        }
+
+        if (nodeStream is null)
+        {
+            return Observable.Return<UiControl?>(BuildAccessControlPage(
+                host, node: null, hubPath, isAdmin,
+                inherited: [],
+                userNodeLookup: new Dictionary<string, MeshNode>(),
+                securityService,
+                activePolicy: null));
+        }
 
         return nodeStream
-            .SelectMany(async nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
-                var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
-
-                // Restrict to the current partition — the first path segment — so the query
-                // never fans out across partitions. Ancestors above the partition root
-                // (i.e. global/admin assignments) are excluded here by design.
-                var partitionRoot = hubPath.Split('/', 2)[0];
-
-                // Load ancestor assignments within the current partition only.
-                var inherited = new List<(AccessAssignment Assignment, string SourcePath, MeshNode Node)>();
-                if (meshQuery != null && !string.IsNullOrEmpty(partitionRoot))
-                {
-                    try
-                    {
-                        var ancestorAssignments = await meshQuery
-                            .QueryAsync<MeshNode>(
-                                $"namespace:{partitionRoot} path:{hubPath} nodeType:AccessAssignment scope:ancestors")
-                            .ToListAsync();
-
-                        foreach (var assignmentNode in ancestorAssignments)
-                        {
-                            var assignment = DeserializeAssignment(assignmentNode);
-                            if (assignment != null)
-                                inherited.Add((assignment, assignmentNode.Namespace ?? "", assignmentNode));
-                        }
-                    }
-                    catch
-                    {
-                        // Query may fail if index not ready
-                    }
-                }
-
-                // Pre-fetch user nodes for icons. Each user path is targeted (exact path) —
-                // no scope or fan-out. The query router uses the first segment to pick a
-                // partition (User, Group, etc.) so this stays O(1) per subject.
-                var userNodeLookup = new Dictionary<string, MeshNode>();
-                if (meshQuery != null)
-                {
-                    var userPaths = inherited.Select(x => x.Assignment.AccessObject).Distinct();
-                    foreach (var userPath in userPaths)
-                    {
-                        if (string.IsNullOrEmpty(userPath)) continue;
-                        try
-                        {
-                            var userNode = await meshQuery.QueryAsync<MeshNode>(
-                                $"path:{userPath}").FirstOrDefaultAsync();
-                            if (userNode != null)
-                                userNodeLookup[userPath] = userNode;
-                        }
-                        catch { }
-                    }
-                }
-
-                // Load partition access policy for this namespace
-                PartitionAccessPolicy? activePolicy = null;
-                if (securityService != null)
-                {
-                    try { activePolicy = await securityService.GetPolicyAsync(hubPath); }
-                    catch { }
-                }
-
-                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited, userNodeLookup, securityService, activePolicy);
-            });
+            .Select(change => (UiControl?)BuildAccessControlPage(
+                host, change?.Value, hubPath, isAdmin,
+                inherited: [],
+                userNodeLookup: new Dictionary<string, MeshNode>(),
+                securityService,
+                activePolicy: null))
+            .Catch<UiControl?, Exception>(_ => Observable.Return<UiControl?>(
+                BuildAccessControlPage(
+                    host, node: null, hubPath, isAdmin,
+                    inherited: [],
+                    userNodeLookup: new Dictionary<string, MeshNode>(),
+                    securityService,
+                    activePolicy: null)));
     }
 
     internal static AccessAssignment? DeserializeAssignment(MeshNode node)

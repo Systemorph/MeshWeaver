@@ -25,6 +25,18 @@ public class DelegationTest
 {
     private const string AgentBResponseText = "This is the specialized response from Agent B.";
 
+    /// <summary>
+    /// Test helper: convert a Task-returning body into an IAsyncEnumerable{string} by
+    /// yielding the final string as a single chunk. Lets tests keep their existing
+    /// Task-based delegation logic while the production tool signature is streaming.
+    /// </summary>
+    private static async IAsyncEnumerable<string> ToStream(
+        Func<CancellationToken, Task<string>> body,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        yield return await body(ct);
+    }
+
     #region Fake Chat Client Infrastructure
 
     /// <summary>
@@ -197,45 +209,22 @@ public class DelegationTest
         var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
             agentAConfig,
             [agentAConfig, agentBConfig],
-            executeAsync: async (agentName, task, context, ct) =>
+            executeAsync: (agentName, task, context, ct) => ToStream(async innerCt =>
             {
                 capturedAgentName = agentName;
                 capturedTask = task;
-
                 var targetId = agentName.Split('/').Last();
                 if (!allAgents.TryGetValue(targetId, out var targetAgent))
-                {
-                    return new DelegationResult
-                    {
-                        AgentName = agentName,
-                        Task = task,
-                        Result = $"Agent '{agentName}' not found",
-                        Success = false
-                    };
-                }
-
-                // Create isolated session for the child agent (same as production code)
+                    return $"Agent '{agentName}' not found";
                 childSession = await targetAgent.CreateSessionAsync();
-
-                // Run the child agent
-                var response = await targetAgent.RunAsync(task, childSession, cancellationToken: ct);
-
-                // Extract text from response
-                var resultText = string.Join("\n", response.Messages
+                var response = await targetAgent.RunAsync(task, childSession, cancellationToken: innerCt);
+                return string.Join("\n", response.Messages
                     .Where(m => m.Role == ChatRole.Assistant)
                     .SelectMany(m => m.Contents)
                     .OfType<TextContent>()
                     .Select(t => t.Text)
                     .Where(t => !string.IsNullOrEmpty(t)));
-
-                return new DelegationResult
-                {
-                    AgentName = targetId,
-                    Task = task,
-                    Result = resultText,
-                    Success = true
-                };
-            });
+            }, ct));
 
         // Create agent A (the delegator) with a chat client that triggers the delegation tool
         var agentAClient = new DelegatingFakeChatClient(
@@ -318,28 +307,19 @@ public class DelegationTest
         var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
             agentAConfig,
             [agentAConfig, agentBConfig],
-            executeAsync: async (agentName, task, context, ct) =>
+            executeAsync: (agentName, task, context, ct) => ToStream(async innerCt =>
             {
                 var targetId = agentName.Split('/').Last();
                 var targetAgent = allAgents[targetId];
                 var session = await targetAgent.CreateSessionAsync();
-                var response = await targetAgent.RunAsync(task, session, cancellationToken: ct);
-
-                var resultText = string.Join("\n", response.Messages
+                var response = await targetAgent.RunAsync(task, session, cancellationToken: innerCt);
+                return string.Join("\n", response.Messages
                     .Where(m => m.Role == ChatRole.Assistant)
                     .SelectMany(m => m.Contents)
                     .OfType<TextContent>()
                     .Select(t => t.Text)
                     .Where(t => !string.IsNullOrEmpty(t)));
-
-                return new DelegationResult
-                {
-                    AgentName = targetId,
-                    Task = task,
-                    Result = resultText,
-                    Success = true
-                };
-            });
+            }, ct));
 
         var agentAClient = new DelegatingFakeChatClient(
             toolName: "delegate_to_agent",
@@ -407,31 +387,15 @@ public class DelegationTest
         var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
             agentAConfig,
             [agentAConfig],
-            executeAsync: async (agentName, task, context, ct) =>
+            executeAsync: (agentName, task, context, ct) => ToStream(async innerCt =>
             {
                 delegationExecuted = true;
                 var targetId = agentName.Split('/').Last();
-                if (!allAgents.TryGetValue(targetId, out var targetAgent))
-                {
-                    return new DelegationResult
-                    {
-                        AgentName = agentName,
-                        Task = task,
-                        Result = $"Agent '{agentName}' not found",
-                        Success = false
-                    };
-                }
-
-                // Should not reach here
+                if (!allAgents.TryGetValue(targetId, out var _))
+                    return $"Agent '{agentName}' not found";
                 await Task.CompletedTask;
-                return new DelegationResult
-                {
-                    AgentName = targetId,
-                    Task = task,
-                    Result = "unexpected",
-                    Success = true
-                };
-            });
+                return "unexpected";
+            }, ct));
 
         var agentAClient = new DelegatingFakeChatClient(
             toolName: "delegate_to_agent",

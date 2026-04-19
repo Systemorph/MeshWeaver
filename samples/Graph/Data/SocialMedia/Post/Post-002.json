@@ -1,0 +1,21 @@
+{
+  "id": "Post-002",
+  "namespace": "SocialMedia/Post",
+  "path": "SocialMedia/Post/Post-002",
+  "name": "Three rules for building reactive UIs that scale",
+  "nodeType": "SocialMedia/Post",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SocialMediaPost",
+    "title": "Three rules for building reactive UIs that scale",
+    "body": "1. Never await in a hub handler.\n2. State changes flow through immutable streams.\n3. Click handlers are projections, not orchestrations.\n\nThis took us a while to internalize \u2014 worth a thread.",
+    "profilePath": "SocialMedia/Profile/Roland-LinkedIn",
+    "platform": "LinkedIn",
+    "scheduledAt": "2026-04-12T08:30:00+02:00",
+    "publishedAt": "2026-04-12T08:31:18+02:00",
+    "impressions": 6890,
+    "likes": 312,
+    "comments": 41
+  }
+}
