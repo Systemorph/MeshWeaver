@@ -396,6 +396,23 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
+    /// Formats a TimeSpan as compact h/m/s: e.g. "120ms", "1.8s", "42s", "1m 23s",
+    /// "1h 5m 30s". Zero components are dropped.
+    /// </summary>
+    private static string FormatDurationHms(TimeSpan d)
+    {
+        if (d.TotalMilliseconds < 1000) return $"{d.TotalMilliseconds:F0}ms";
+        if (d.TotalSeconds < 10) return $"{d.TotalSeconds:F1}s";
+        var parts = new List<string>();
+        var h = (int)d.TotalHours;
+        if (h > 0) parts.Add($"{h}h");
+        var m = d.Minutes;
+        if (m > 0 || h > 0) parts.Add($"{m}m");
+        parts.Add($"{d.Seconds}s");
+        return string.Join(' ', parts);
+    }
+
+    /// <summary>
     /// Builds the muted one-line metadata row shown below an assistant cell:
     /// <c>HH:mm:ss · model · 1.8s · 1,247 in / 392 out (1,639 total)</c>. Returns
     /// null when there's nothing to show (e.g. response still streaming and no model
@@ -411,10 +428,7 @@ public static class ThreadMessageLayoutAreas
             parts.Add(System.Web.HttpUtility.HtmlEncode(model));
         if (completed.HasValue)
         {
-            var dur = completed.Value - started;
-            parts.Add(dur.TotalSeconds < 1
-                ? $"{dur.TotalMilliseconds:F0}ms"
-                : $"{dur.TotalSeconds:F1}s");
+            parts.Add(FormatDurationHms(completed.Value - started));
         }
         if (input.HasValue || output.HasValue || total.HasValue)
         {
