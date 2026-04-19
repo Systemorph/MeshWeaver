@@ -73,4 +73,11 @@ public interface INodeTypeService
     /// service-level caches survive hub teardown.
     /// </summary>
     void InvalidateCache(string nodeTypePath) { }
+
+    /// <summary>
+    /// Snapshot of NodeType paths currently being compiled. Used by the portal
+    /// to render a "Compiling…" progress indicator while a navigation request is
+    /// blocked waiting on a compile.
+    /// </summary>
+    IReadOnlyCollection<string> GetCompilingPaths() => Array.Empty<string>();
 }
