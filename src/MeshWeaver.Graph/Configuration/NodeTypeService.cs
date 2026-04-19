@@ -678,34 +678,38 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
 
         // Collect Code nodes from the configured sources. Default: the sibling "_Source"
-        // subtree. `GetDescendantsAsync` is used (not `GetChildrenAsync`) because Code
-        // nodes are commonly persisted with `MainNode` set to their parent folder —
-        // `GetChildrenAsync` excludes those as "satellites".
+        // subtree. We use the IMeshQueryProvider pipeline (via local QueryAsync) rather
+        // than meshStorage.GetDescendantsAsync, because the storage layer explicitly
+        // EXCLUDES satellite nodes (MeshNode.MainNode != Path) from descendant browsing —
+        // and our Code nodes are always persisted as satellites with MainNode set to
+        // their parent _Source folder. The query provider has no such filter, so it
+        // returns every matching Code node.
         var codeFiles = new List<string>();
         var codeFilePaths = new List<string>();
         var seenCodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        async IAsyncEnumerable<MeshNode> CollectFromPathAsync(string path)
-        {
-            // A single-node fetch (path:X)
-            var single = await meshStorage.GetNodeAsync(path, ct);
-            if (single != null) yield return single;
-            // And all descendants under the same path (namespace:X scope:subtree)
-            await foreach (var descendant in meshStorage.GetDescendantsAsync(path))
-                yield return descendant;
-        }
-
         var sourcePaths = ResolveSourcePaths(definition.Sources, nodeTypePath);
         foreach (var sourcePath in sourcePaths)
         {
-            await foreach (var candidate in CollectFromPathAsync(sourcePath))
+            // Combine path-exact + namespace-subtree so a single-file shorthand and a
+            // folder both resolve. Satellite-safe.
+            var queries = new[]
             {
-                if (candidate.NodeType != CodeNodeType.NodeType) continue;
-                if (candidate.Content is not CodeConfiguration codeConfig) continue;
-                if (string.IsNullOrEmpty(codeConfig.Code)) continue;
-                if (candidate.Path is { Length: > 0 } p && !seenCodePaths.Add(p)) continue;
-                codeFiles.Add(codeConfig.Code);
-                if (candidate.Path != null) codeFilePaths.Add(candidate.Path);
+                $"path:{sourcePath} nodeType:{CodeNodeType.NodeType}",
+                $"namespace:{sourcePath} scope:subtree nodeType:{CodeNodeType.NodeType}"
+            };
+
+            foreach (var q in queries)
+            {
+                await foreach (var candidate in QueryAsync<MeshNode>(q, ct))
+                {
+                    if (candidate.NodeType != CodeNodeType.NodeType) continue;
+                    if (candidate.Content is not CodeConfiguration codeConfig) continue;
+                    if (string.IsNullOrEmpty(codeConfig.Code)) continue;
+                    if (candidate.Path is { Length: > 0 } p && !seenCodePaths.Add(p)) continue;
+                    codeFiles.Add(codeConfig.Code);
+                    if (candidate.Path != null) codeFilePaths.Add(candidate.Path);
+                }
             }
         }
 
