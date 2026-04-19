@@ -37,20 +37,21 @@ internal interface IMeshStorage
     IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath);
 
     /// <summary>
-    /// Creates or updates a node.
+    /// Creates or updates a node. Returns an observable that emits the saved node on success
+    /// or signals OnError on failure. Subscribe to drive — do not await.
     /// </summary>
     /// <param name="node">The node to save</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The saved node</returns>
-    Task<MeshNode> SaveNodeAsync(MeshNode node, CancellationToken ct = default);
+    /// <returns>Observable emitting the saved node (OnNext + OnCompleted) or OnError</returns>
+    IObservable<MeshNode> SaveNode(MeshNode node);
 
     /// <summary>
-    /// Deletes a node and optionally its descendants.
+    /// Deletes a node and optionally its descendants. Returns an observable that emits the
+    /// pre-delete node state on success or OnError on failure. Subscribe to drive — do not await.
     /// </summary>
     /// <param name="path">The node path</param>
     /// <param name="recursive">If true, also delete all descendants</param>
-    /// <param name="ct">Cancellation token</param>
-    Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default);
+    /// <returns>Observable emitting the deleted node's pre-delete state, or OnError</returns>
+    IObservable<MeshNode> DeleteNode(string path, bool recursive = false);
 
     /// <summary>
     /// Moves a node and all its descendants to a new path.
@@ -58,10 +59,9 @@ internal interface IMeshStorage
     /// </summary>
     /// <param name="sourcePath">The current node path</param>
     /// <param name="targetPath">The new node path</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The moved node at the new path</returns>
+    /// <returns>Observable emitting the moved node at the new path, or OnError</returns>
     /// <exception cref="InvalidOperationException">If source doesn't exist or target already exists</exception>
-    Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, CancellationToken ct = default);
+    IObservable<MeshNode> MoveNode(string sourcePath, string targetPath);
 
     /// <summary>
     /// Searches nodes by query text within their Name or Content.
@@ -108,16 +108,15 @@ internal interface IMeshStorage
     /// Adds a comment to a node.
     /// </summary>
     /// <param name="comment">The comment to add</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The saved comment</returns>
-    Task<Comment> AddCommentAsync(Comment comment, CancellationToken ct = default);
+    /// <returns>Observable emitting the saved comment, or OnError</returns>
+    IObservable<Comment> AddComment(Comment comment);
 
     /// <summary>
     /// Deletes a comment by ID.
     /// </summary>
     /// <param name="commentId">The comment ID to delete</param>
-    /// <param name="ct">Cancellation token</param>
-    Task DeleteCommentAsync(string commentId, CancellationToken ct = default);
+    /// <returns>Observable emitting the deleted comment id on completion, or OnError</returns>
+    IObservable<string> DeleteComment(string commentId);
 
     /// <summary>
     /// Gets a single comment by ID.
@@ -147,16 +146,16 @@ internal interface IMeshStorage
     /// <param name="nodePath">The node path</param>
     /// <param name="subPath">Optional sub-path within partition</param>
     /// <param name="objects">Objects to save</param>
-    /// <param name="ct">Cancellation token</param>
-    Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, CancellationToken ct = default);
+    /// <returns>Observable that signals completion or OnError</returns>
+    IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects);
 
     /// <summary>
     /// Deletes all objects from a node's partition folder (or sub-path).
     /// </summary>
     /// <param name="nodePath">The node path</param>
     /// <param name="subPath">Optional sub-path within partition</param>
-    /// <param name="ct">Cancellation token</param>
-    Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+    /// <returns>Observable that signals completion or OnError</returns>
+    IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null);
 
     /// <summary>
     /// Gets the newest modification timestamp across all objects in a partition (or sub-path).
