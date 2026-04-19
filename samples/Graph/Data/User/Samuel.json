@@ -8,6 +8,7 @@
   "content": {
     "$type": "User",
     "email": "sglauser@systemorph.com",
-    "bio": "Software engineer and MeshWeaver contributor."
+    "bio": "Software engineer and MeshWeaver contributor.",
+    "pinnedPaths": ["Doc"]
   }
 }

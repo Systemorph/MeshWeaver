@@ -8,6 +8,7 @@
   "content": {
     "$type": "User",
     "email": "david.lee@meshweaver.io",
-    "bio": "Software engineer and project contributor."
+    "bio": "Software engineer and project contributor.",
+    "pinnedPaths": ["Doc"]
   }
 }
