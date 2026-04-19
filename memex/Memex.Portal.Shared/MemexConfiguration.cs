@@ -381,7 +381,11 @@ public static class MemexConfiguration
                         config = config.AddContentCollection(_ => nodeContentConfig);
                     }
 
-                    return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
+                    return config
+                        .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
+                        .AddDefaultLayoutAreas()
+                        .AddThreadsLayoutArea()
+                        .AddApiTokensSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();

@@ -65,6 +65,17 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Registers only the <see cref="HeartBeatEvent"/> handler. Use on hubs that
+    /// should swallow heartbeats silently (e.g. per-node hubs spawned from a
+    /// NodeType's configuration) without pulling in the full node-operation
+    /// handler set. Without this handler the message service logs a warning per
+    /// heartbeat, so targets that receive heartbeats but don't need to keep an
+    /// Orleans grain alive should still register it as a no-op.
+    /// </summary>
+    public static MessageHubConfiguration WithHeartBeatHandler(this MessageHubConfiguration config)
+        => config.WithHandler<HeartBeatEvent>(HandleHeartBeat);
+
+    /// <summary>
     /// Handles HeartBeatEvent: signals the Orleans grain to delay deactivation.
     /// Walks up the parent hub chain because GrainKeepAliveCallback is set on the
     /// grain's top-level hub, not on child hubs (threads, messages, _Exec).
