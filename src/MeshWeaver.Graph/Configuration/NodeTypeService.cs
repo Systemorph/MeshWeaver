@@ -58,6 +58,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Cached access rules extracted from hub configurations
     private readonly ConcurrentDictionary<string, INodeTypeAccessRule> _accessRules = new();
 
+    // Subscription to the cross-silo change feed — disposed with the service.
+    private readonly IDisposable? _changeFeedSubscription;
+
     public NodeTypeService(
         IMessageHub hub,
         IEnumerable<IMeshQueryProvider> queryProviders,
@@ -66,7 +69,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         ILogger<NodeTypeService> logger,
         ICompilationCacheService cacheService,
         IOptions<CompilationCacheOptions> cacheOptions,
-        MeshNodeCompilationService? compilationService = null)
+        MeshNodeCompilationService? compilationService = null,
+        IMeshChangeFeed? changeFeed = null)
     {
         this.hub = hub;
         this.queryProviders = queryProviders;
@@ -79,6 +83,29 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         // Initialize cache from pre-registered nodes in MeshConfiguration
         InitializeFromMeshConfiguration();
+
+        // Subscribe to the mesh change feed so cache invalidations reach every silo.
+        // In monolith this is in-process; in Orleans it's a broadcast channel.
+        // We invalidate whenever a known NodeType's path is seen in an event — covers both:
+        //   (a) a NodeType definition was updated / deleted elsewhere, and
+        //   (b) Recycle published a synthetic Updated event to force a reset.
+        if (changeFeed != null)
+        {
+            _changeFeedSubscription = changeFeed.Subscribe(evt =>
+            {
+                if (string.IsNullOrEmpty(evt.Path)) return;
+                if (_hubConfigurations.ContainsKey(evt.Path)
+                    || _compilationTasks.ContainsKey(evt.Path)
+                    || _compilationErrors.ContainsKey(evt.Path)
+                    || string.Equals(evt.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+                {
+                    logger.LogInformation(
+                        "Cross-silo cache invalidation for {NodeTypePath} via MeshChangeFeed ({Kind})",
+                        evt.Path, evt.Kind);
+                    InvalidateCache(evt.Path);
+                }
+            });
+        }
     }
 
     /// <summary>
@@ -238,12 +265,21 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return _hubConfigurations.GetValueOrDefault(nodeTypePath);
     }
 
-    internal void InvalidateCache(string nodeTypePath)
+    /// <summary>
+    /// Invalidates all cached state for <paramref name="nodeTypePath"/>. Public surface so
+    /// MCP's Recycle tool (and other front-ends) can flush a stuck NodeType — disposing
+    /// the hub alone is not enough, because `_compilationErrors` / `_compilationTasks`
+    /// live on this singleton service and survive hub teardown.
+    /// </summary>
+    public void InvalidateCache(string nodeTypePath)
     {
         logger.LogDebug("Invalidating cache for {NodeTypePath}", nodeTypePath);
 
-        // Remove from all caches
+        // Remove from all caches — including the sticky error + in-progress markers
+        // (previously forgotten, which meant a stuck error kept showing after Recycle).
         _compilationTasks.TryRemove(nodeTypePath, out _);
+        _compilationErrors.TryRemove(nodeTypePath, out _);
+        _compilingInProgress.TryRemove(nodeTypePath, out _);
         _releaseKeys.TryRemove(nodeTypePath, out _);
         _hubConfigurations.TryRemove(nodeTypePath, out _);
         _creatableTypesRules.TryRemove(nodeTypePath, out _);
@@ -1072,6 +1108,7 @@ $@"> **⚠ {header}**
 
     public void Dispose()
     {
+        _changeFeedSubscription?.Dispose();
         foreach (var subscription in _subscriptions.Values)
         {
             subscription.Dispose();
