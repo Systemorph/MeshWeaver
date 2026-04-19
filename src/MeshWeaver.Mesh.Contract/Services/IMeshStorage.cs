@@ -46,12 +46,13 @@ internal interface IMeshStorage
 
     /// <summary>
     /// Deletes a node and optionally its descendants. Returns an observable that emits the
-    /// pre-delete node state on success or OnError on failure. Subscribe to drive — do not await.
+    /// deleted path on success or OnError on failure. Subscribe to drive — do not await.
+    /// Atomic at the storage layer; no pre-read (avoids TOCTOU).
     /// </summary>
     /// <param name="path">The node path</param>
     /// <param name="recursive">If true, also delete all descendants</param>
-    /// <returns>Observable emitting the deleted node's pre-delete state, or OnError</returns>
-    IObservable<MeshNode> DeleteNode(string path, bool recursive = false);
+    /// <returns>Observable emitting the deleted path, or OnError</returns>
+    IObservable<string> DeleteNode(string path, bool recursive = false);
 
     /// <summary>
     /// Moves a node and all its descendants to a new path.
