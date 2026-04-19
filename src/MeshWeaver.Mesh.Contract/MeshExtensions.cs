@@ -657,25 +657,27 @@ public static class MeshExtensions
         IMeshStorage persistence,
         ILogger logger)
     {
+        // Post the response FIRST, while the hub is still alive. Under Orleans (and
+        // during monolith disposal) the storage-level delete can tear this hub down
+        // before we'd otherwise get a chance to reply — the caller would then wait
+        // forever on its RegisterCallback. Validators have already passed, so this
+        // is the commit point; if the storage write itself fails we can only log.
+        hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+
         Observable.FromAsync(token => persistence.DeleteNodeAsync(path, recursive: false, token))
             .Subscribe(
                 _ =>
                 {
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()
                         ?.Publish(MeshChangeEvent.Deleted(path));
-                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
                     logger.LogInformation(
                         "Node deleted at {Path} by {DeletedBy}",
                         path, capturedRequest.DeletedBy ?? "system");
                 },
                 ex =>
-                {
-                    logger.LogError(ex, "Error deleting node at {Path}", path);
-                    hub.Post(
-                        DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}",
-                            NodeDeletionRejectionReason.Unknown),
-                        o => o.ResponseFor(request));
-                });
+                    logger.LogError(ex,
+                        "Storage delete failed for {Path} after Ok response was already sent — response cannot be walked back",
+                        path));
     }
 
     /// <summary>
