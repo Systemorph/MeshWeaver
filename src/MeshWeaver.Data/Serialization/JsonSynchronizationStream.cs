@@ -11,6 +11,18 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Serialization;
 
+/// <summary>
+/// Thrown by <c>ApplyAdd</c>/<c>ApplyReplace</c>/<c>ApplyRemove</c> when a patch's array
+/// index doesn't match the locally cached snapshot (drift between the owner's cached
+/// JSON view and the authoritative entity store). The upstream <c>ToDataChanged</c>
+/// catches this and falls back to emitting a <see cref="ChangeType.Full"/> snapshot
+/// so subscribers can resync.
+/// </summary>
+public sealed class StaleStreamStateException : InvalidOperationException
+{
+    public StaleStreamStateException(string message) : base(message) { }
+}
+
 public static class JsonSynchronizationStream
 {
     private static ILogger GetLogger(IServiceProvider serviceProvider)
@@ -295,9 +307,33 @@ public static class JsonSynchronizationStream
                     }
                     var patch = x.Updates.ToJsonPatch(stream.Host.JsonSerializerOptions, stream.Reference as WorkspaceReference);
                     var patchJson = JsonSerializer.Serialize(patch, stream.Host.JsonSerializerOptions);
-                    // Apply patch with correct RFC 6901 unescaping
-                    // The json-everything library doesn't properly unescape ~1 -> / in property names
-                    (currentJson, _) = ApplyPatchWithCorrectUnescaping(patchJson, currentJson.Value, stream.Host.JsonSerializerOptions);
+                    try
+                    {
+                        // Apply patch with correct RFC 6901 unescaping
+                        // The json-everything library doesn't properly unescape ~1 -> / in property names
+                        (currentJson, _) = ApplyPatchWithCorrectUnescaping(patchJson, currentJson.Value, stream.Host.JsonSerializerOptions);
+                    }
+                    catch (StaleStreamStateException stale)
+                    {
+                        // The cached JSON drifted from the authoritative entity store
+                        // (concurrent updates whose Updates were computed against an older
+                        // snapshot). Regenerate from the current value and emit a Full
+                        // so every subscriber resyncs cleanly.
+                        logger.LogWarning(stale,
+                            "Stale JSON snapshot for stream {StreamId}; regenerating Full from current value.",
+                            stream.ClientId);
+                        currentJson = JsonSerializer.SerializeToElement(
+                            x.Value, x.Value?.GetType() ?? typeof(object),
+                            stream.Host.JsonSerializerOptions);
+                        stream.Set(currentJson);
+                        return (TChange?)Activator.CreateInstance(
+                            typeof(TChange),
+                            stream.ClientId,
+                            x.Version,
+                            new RawJson(currentJson.Value.ToString() ?? string.Empty),
+                            ChangeType.Full,
+                            x.ChangedBy ?? string.Empty);
+                    }
                     stream.Set(currentJson);
                     return (TChange?)Activator.CreateInstance
                     (
@@ -466,7 +502,13 @@ public static class JsonSynchronizationStream
         else if (parent is JsonArray arr)
         {
             if (key == "-") arr.Add(value);
-            else if (int.TryParse(key, out var index)) arr.Insert(index, value);
+            else if (int.TryParse(key, out var index))
+            {
+                if (index < 0 || index > arr.Count)
+                    throw new StaleStreamStateException(
+                        $"Stale patch: add at index {index} but array has {arr.Count} elements.");
+                arr.Insert(index, value);
+            }
         }
     }
 
@@ -481,7 +523,12 @@ public static class JsonSynchronizationStream
         if (parent is JsonObject obj)
             obj[key] = value;
         else if (parent is JsonArray arr && int.TryParse(key, out var index))
+        {
+            if (index < 0 || index >= arr.Count)
+                throw new StaleStreamStateException(
+                    $"Stale patch: replace at index {index} but array has {arr.Count} elements.");
             arr[index] = value;
+        }
     }
 
     private static void ApplyRemove(JsonNode root, string[] segments)
@@ -493,7 +540,12 @@ public static class JsonSynchronizationStream
         if (parent is JsonObject obj)
             obj.Remove(segments[^1]);
         else if (parent is JsonArray arr && int.TryParse(segments[^1], out var index))
+        {
+            if (index < 0 || index >= arr.Count)
+                throw new StaleStreamStateException(
+                    $"Stale patch: remove at index {index} but array has {arr.Count} elements.");
             arr.RemoveAt(index);
+        }
     }
 
     /// <summary>
