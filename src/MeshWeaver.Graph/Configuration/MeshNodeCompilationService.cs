@@ -318,6 +318,8 @@ internal class MeshNodeCompilationService(
             : (IReadOnlyList<string>)["namespace:_Source scope:subtree"];
 
         var codeFiles = new List<CodeConfiguration>();
+        var matchedCodePaths = new List<string>();
+        var executedQueries = new List<string>();
         if (meshQuery != null)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -327,6 +329,8 @@ internal class MeshNodeCompilationService(
 
                 foreach (var finalQuery in ExpandSourceQuery(rawQuery, selfPath))
                 {
+                    executedQueries.Add(finalQuery);
+                    var matchesForThisQuery = 0;
                     await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(finalQuery, ct: ct).WithCancellation(ct))
                     {
                         if (codeNode.Content is CodeConfiguration cf
@@ -334,8 +338,14 @@ internal class MeshNodeCompilationService(
                             && seen.Add(codeNode.Path ?? cf.Code!))
                         {
                             codeFiles.Add(cf);
+                            if (!string.IsNullOrEmpty(codeNode.Path))
+                                matchedCodePaths.Add(codeNode.Path);
+                            matchesForThisQuery++;
                         }
                     }
+                    logger.LogInformation(
+                        "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
+                        node.Path, finalQuery, matchesForThisQuery);
                 }
             }
         }
@@ -386,11 +396,38 @@ internal class MeshNodeCompilationService(
             logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
             return $"memory://{nodeName}";
         }
+        catch (CompilationException ex)
+        {
+            // Re-throw enriched with the actual queries that ran + which Code nodes matched,
+            // so the error overlay can tell the user *why* references are missing (usually:
+            // 0 Code nodes matched the configured sources).
+            var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
+            logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}", node.Path, diag);
+            throw new CompilationException(
+                ex.NodePath,
+                $"{ex.Message}\n\n--- Source discovery ---\n{diag}",
+                ex);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogError(ex, "Failed to compile assembly for node {NodePath}", node.Path);
             throw;
         }
+    }
+
+    private static string BuildSourceDiscoveryReport(IReadOnlyList<string> executedQueries, IReadOnlyList<string> matchedCodePaths)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Executed source queries ({executedQueries.Count}):");
+        foreach (var q in executedQueries)
+            sb.AppendLine($"  - {q}");
+        sb.AppendLine($"Matched Code nodes ({matchedCodePaths.Count}):");
+        if (matchedCodePaths.Count == 0)
+            sb.AppendLine("  (none) — the configuration lambda cannot reference types because no source files were included. Check that your _Source Code nodes exist and that the NodeType's `sources` list points at them.");
+        else
+            foreach (var p in matchedCodePaths)
+                sb.AppendLine($"  - {p}");
+        return sb.ToString();
     }
 
     /// <inheritdoc />

@@ -50,6 +50,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Compilation errors by nodeTypePath - tracks last compilation failure for error reporting
     private readonly ConcurrentDictionary<string, string> _compilationErrors = new();
 
+    // NodeType paths whose compilation is currently running. Populated the moment a compile
+    // task is kicked off; cleaned up when it finishes (success OR failure). Used by
+    // GetDiagnostics / progress overlays so callers can show "Compiling…" while they wait.
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _compilingInProgress = new();
+
     // Cached access rules extracted from hub configurations
     private readonly ConcurrentDictionary<string, INodeTypeAccessRule> _accessRules = new();
 
@@ -152,15 +157,42 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return _compilationErrors.GetValueOrDefault(nodeTypePath);
     }
 
+    /// <summary>
+    /// Returns <c>true</c> if compilation for the given NodeType path is currently running
+    /// (started but not yet completed). Use this to render a "Compiling…" progress overlay
+    /// so the user sees activity instead of a blank layout while they wait.
+    /// </summary>
+    public bool IsCompiling(string nodeTypePath) =>
+        _compilingInProgress.ContainsKey(nodeTypePath);
+
+    /// <summary>
+    /// When compilation for <paramref name="nodeTypePath"/> is running, returns when it
+    /// started (UTC); otherwise <c>null</c>. Consumers can display the elapsed time in a
+    /// progress overlay.
+    /// </summary>
+    public DateTimeOffset? GetCompilationStartedAt(string nodeTypePath) =>
+        _compilingInProgress.TryGetValue(nodeTypePath, out var start) ? start : null;
+
     private Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
+        var wasNewCompile = false;
         // Use ConcurrentDictionary.GetOrAdd with a Task to ensure only one compilation runs per key.
         // On failure, remove from dictionary to allow retry on next access.
         var task = _compilationTasks.GetOrAdd(nodeTypePath, path =>
-            CompileWithReleaseAsync(path, ct));
+        {
+            // Only the first caller to miss the cache kicks off a compile — mark it started.
+            wasNewCompile = true;
+            _compilingInProgress[path] = DateTimeOffset.UtcNow;
+            return CompileWithReleaseAsync(path, ct);
+        });
 
         return task.ContinueWith(t =>
         {
+            // Clear the in-progress marker whether we win the race or not; the task we
+            // awaited on is finished, so the state ceases to be "running" for this caller.
+            if (wasNewCompile)
+                _compilingInProgress.TryRemove(nodeTypePath, out _);
+
             // On failure, remove from cache to allow retry and return null
             if (t.IsFaulted || t.IsCanceled)
             {

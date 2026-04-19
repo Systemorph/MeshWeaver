@@ -919,6 +919,19 @@ public class MeshOperations
                 new { status = "Unknown", message = $"Not found: {resolvedPath}" },
                 hub.JsonSerializerOptions);
 
+        // Compiling has priority over any prior error — the error we're seeing is stale
+        // and a fresh result is on its way. Tell the caller to wait and retry.
+        if (nodeTypeService.IsCompiling(nodeTypePath))
+        {
+            var startedAt = nodeTypeService.GetCompilationStartedAt(nodeTypePath);
+            var elapsedMs = startedAt is null
+                ? (long?)null
+                : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
+            return JsonSerializer.Serialize(
+                new { status = "Compiling", nodeTypePath, elapsedMs },
+                hub.JsonSerializerOptions);
+        }
+
         var err = nodeTypeService.GetCompilationError(nodeTypePath);
         if (string.IsNullOrEmpty(err))
             return JsonSerializer.Serialize(
