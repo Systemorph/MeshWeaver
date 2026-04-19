@@ -200,6 +200,10 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     public DateTimeOffset? GetCompilationStartedAt(string nodeTypePath) =>
         _compilingInProgress.TryGetValue(nodeTypePath, out var start) ? start : null;
 
+    /// <inheritdoc />
+    public IReadOnlyCollection<string> GetCompilingPaths() =>
+        _compilingInProgress.Keys.ToArray();
+
     private Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
         var wasNewCompile = false;
