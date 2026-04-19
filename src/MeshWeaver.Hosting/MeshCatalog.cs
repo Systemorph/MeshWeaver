@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Hosting.Persistence.Query;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -64,9 +65,6 @@ internal sealed class MeshCatalog(
         return persistenceNode;
     }
 
-    public Task UpdateAsync(MeshNode node) =>
-        Persistence.SaveNodeAsync(node);
-
     // IMeshCatalog — delegate to HubNodePersistence
     private HubNodePersistence NodePersistence => new(hub, this);
 
@@ -79,16 +77,18 @@ internal sealed class MeshCatalog(
 
     /// <summary>
     /// Creates a new node in Transient state without confirming it.
-    /// This is internal - used by handlers that need direct node creation after validation.
+    /// Returns an observable emitting the saved node, or OnError on failure.
+    /// Subscribe to drive — do not await.
     /// </summary>
-    internal async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, CancellationToken ct = default)
+    internal IObservable<MeshNode> CreateTransientNode(MeshNode node)
     {
-        // Validate NodeType is registered (in-memory check only — no DB round-trip)
         if (!string.IsNullOrEmpty(node.NodeType) && !Configuration.Nodes.ContainsKey(node.NodeType))
-            throw new InvalidOperationException($"NodeType '{node.NodeType}' is not registered");
+            return Observable.Throw<MeshNode>(
+                new InvalidOperationException($"NodeType '{node.NodeType}' is not registered"));
 
         if (!ValidatePath(node))
-            throw new InvalidOperationException($"Invalid path structure for node: {node.Path}");
+            return Observable.Throw<MeshNode>(
+                new InvalidOperationException($"Invalid path structure for node: {node.Path}"));
 
         var transientNode = node with { State = MeshNodeState.Transient };
 
@@ -101,53 +101,13 @@ internal sealed class MeshCatalog(
             transientNode = transientNode with { MainNode = transientNode.Namespace };
         }
 
-        if (ConfigResolver != null)
-            transientNode = await ConfigResolver.ResolveConfigurationAsync(transientNode, ct);
+        var resolvedObs = ConfigResolver != null
+            ? Observable.FromAsync(ct => ConfigResolver.ResolveConfigurationAsync(transientNode, ct))
+            : Observable.Return(transientNode);
 
-        // Storage is the source of truth — no preflight ExistsAsync. If it conflicts, storage will throw.
-        var savedNode = await Persistence.SaveNodeAsync(transientNode, ct);
-        logger?.LogInformation("Created transient node at path {Path}", savedNode.Path);
-        return savedNode;
-    }
-
-    /// <summary>
-    /// Confirms a transient node, updating its state to Active.
-    /// This is internal - used by handlers after validation.
-    /// </summary>
-    internal async Task<MeshNode> ConfirmNodeAsync(string path, CancellationToken ct = default)
-    {
-        // Get the current node
-        var node = await Persistence.GetNodeAsync(path, ct);
-        if (node == null)
-        {
-            throw new InvalidOperationException($"Node not found at path: {path}");
-        }
-
-        if (node.State != MeshNodeState.Transient)
-        {
-            throw new InvalidOperationException($"Node at path '{path}' is not in Transient state (current state: {node.State})");
-        }
-
-        // Update to Confirmed state
-        var confirmedNode = node with { State = MeshNodeState.Active };
-        await Persistence.SaveNodeAsync(confirmedNode, ct);
-
-        // Enrich with HubConfiguration based on NodeType (same as cold start in GetNodeAsync)
-        if (ConfigResolver != null)
-            confirmedNode = await ConfigResolver.ResolveConfigurationAsync(confirmedNode, ct);
-
-        logger?.LogInformation("Confirmed node at path {Path}", confirmedNode.Path);
-        return confirmedNode;
-    }
-
-    /// <summary>
-    /// IMeshCatalog.DeleteNodeAsync — internal, called by the DeleteNodeRequest handler.
-    /// Deletes directly from persistence. Storage cascade handles descendants.
-    /// </summary>
-    async Task IMeshCatalog.DeleteNodeAsync(string path, bool recursive, CancellationToken ct)
-    {
-        await Persistence.DeleteNodeAsync(path, recursive, ct);
-        logger?.LogInformation("Deleted node at path {Path}, recursive: {Recursive}", path, recursive);
+        return resolvedObs
+            .SelectMany(resolved => Persistence.SaveNode(resolved))
+            .Do(saved => logger?.LogInformation("Created transient node at path {Path}", saved.Path));
     }
 
     private static bool ValidatePath(MeshNode node)

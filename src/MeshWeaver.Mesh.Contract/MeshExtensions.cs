@@ -164,7 +164,7 @@ public static class MeshExtensions
                             Content = node.Content ?? existingNode.Content
                         };
                         var saveObs = persistence != null
-                            ? Observable.FromAsync(token => persistence.SaveNodeAsync(confirmedNode, token))
+                            ? persistence.SaveNode(confirmedNode)
                             : Observable.Return(confirmedNode);
                         return saveObs.Select(savedConfirmed => (mode: "confirm", node: savedConfirmed));
                     }
@@ -248,7 +248,7 @@ public static class MeshExtensions
                             return enrichedObs.SelectMany(enriched =>
                             {
                                 var saveObs = persistence != null
-                                    ? Observable.FromAsync(token => persistence.SaveNodeAsync(enriched, token))
+                                    ? persistence.SaveNode(enriched)
                                     : Observable.Return(enriched);
                                 return saveObs.Select(saved => (mode: "create", node: saved));
                             });
@@ -617,8 +617,7 @@ public static class MeshExtensions
                     return handleObs;
 
                 var saveExtras = additional
-                    .Select(extra => Observable.FromAsync(token =>
-                            persistence.SaveNodeAsync(extra with { State = MeshNodeState.Active }, token))
+                    .Select(extra => persistence.SaveNode(extra with { State = MeshNodeState.Active })
                         .Do(saved =>
                         {
                             hub.Post(DataChangeRequest.Update([saved]),
@@ -664,7 +663,7 @@ public static class MeshExtensions
         // is the commit point; if the storage write itself fails we can only log.
         hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
 
-        Observable.FromAsync(token => persistence.DeleteNodeAsync(path, recursive: false, token))
+        persistence.DeleteNode(path, recursive: false)
             .Subscribe(
                 _ =>
                 {
@@ -817,7 +816,7 @@ public static class MeshExtensions
                             HubConfiguration = existingNode.HubConfiguration
                         };
 
-                        return Observable.FromAsync(token => persistence.SaveNodeAsync(nodeToSave, token));
+                        return persistence.SaveNode(nodeToSave);
                     });
             })
             .Subscribe(
@@ -992,17 +991,27 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 4. Move the node
-            var movedNode = await persistence.MoveNodeAsync(moveRequest.SourcePath, moveRequest.TargetPath, ct);
-            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-            changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
-            changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
+            // 4. Move the node — subscribe and post response in the callback.
+            persistence.MoveNode(moveRequest.SourcePath, moveRequest.TargetPath)
+                .Subscribe(
+                    movedNode =>
+                    {
+                        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+                        changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
+                        changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
+                        hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
+                        logger.LogInformation("Node moved from {Source} to {Target}",
+                            moveRequest.SourcePath, moveRequest.TargetPath);
+                    },
+                    ex =>
+                    {
+                        logger.LogError(ex, "Error moving node from {Source} to {Target}",
+                            moveRequest.SourcePath, moveRequest.TargetPath);
+                        hub.Post(
+                            MoveNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                            o => o.ResponseFor(request));
+                    });
 
-            // 5. Return success
-            hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
-
-            logger.LogInformation("Node moved from {Source} to {Target}",
-                moveRequest.SourcePath, moveRequest.TargetPath);
             return request.Processed();
         }
         catch (Exception ex)
