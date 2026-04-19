@@ -58,6 +58,7 @@ artifacts/
 **/Properties/launchSettings.json
 !**/*.Host/Properties/launchSettings.json
 !**/*.AppHost/Properties/launchSettings.json
+!memex/aspire/Memex.Database.Migration/Properties/launchSettings.json
 
 # StyleCop
 StyleCopReport.xml
@@ -367,8 +368,5 @@ samples/Graph/Data/VUser/
 # User activity data
 **/_useractivity/
 
-# Claude Code personal settings
-.claude/settings.local.json
-
-# Claude Code scheduled tasks lock file
-.claude/scheduled_tasks.lock
+# Claude Code per-user local state (settings.local.json, plans/, scheduled_tasks.lock, etc.)
+.claude/

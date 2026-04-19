@@ -65,6 +65,17 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Registers only the <see cref="HeartBeatEvent"/> handler. Use on hubs that
+    /// should swallow heartbeats silently (e.g. per-node hubs spawned from a
+    /// NodeType's configuration) without pulling in the full node-operation
+    /// handler set. Without this handler the message service logs a warning per
+    /// heartbeat, so targets that receive heartbeats but don't need to keep an
+    /// Orleans grain alive should still register it as a no-op.
+    /// </summary>
+    public static MessageHubConfiguration WithHeartBeatHandler(this MessageHubConfiguration config)
+        => config.WithHandler<HeartBeatEvent>(HandleHeartBeat);
+
+    /// <summary>
     /// Handles HeartBeatEvent: signals the Orleans grain to delay deactivation.
     /// Walks up the parent hub chain because GrainKeepAliveCallback is set on the
     /// grain's top-level hub, not on child hubs (threads, messages, _Exec).
@@ -164,7 +175,7 @@ public static class MeshExtensions
                             Content = node.Content ?? existingNode.Content
                         };
                         var saveObs = persistence != null
-                            ? Observable.FromAsync(token => persistence.SaveNodeAsync(confirmedNode, token))
+                            ? persistence.SaveNode(confirmedNode)
                             : Observable.Return(confirmedNode);
                         return saveObs.Select(savedConfirmed => (mode: "confirm", node: savedConfirmed));
                     }
@@ -248,7 +259,7 @@ public static class MeshExtensions
                             return enrichedObs.SelectMany(enriched =>
                             {
                                 var saveObs = persistence != null
-                                    ? Observable.FromAsync(token => persistence.SaveNodeAsync(enriched, token))
+                                    ? persistence.SaveNode(enriched)
                                     : Observable.Return(enriched);
                                 return saveObs.Select(saved => (mode: "create", node: saved));
                             });
@@ -617,8 +628,7 @@ public static class MeshExtensions
                     return handleObs;
 
                 var saveExtras = additional
-                    .Select(extra => Observable.FromAsync(token =>
-                            persistence.SaveNodeAsync(extra with { State = MeshNodeState.Active }, token))
+                    .Select(extra => persistence.SaveNode(extra with { State = MeshNodeState.Active })
                         .Do(saved =>
                         {
                             hub.Post(DataChangeRequest.Update([saved]),
@@ -657,22 +667,32 @@ public static class MeshExtensions
         IMeshStorage persistence,
         ILogger logger)
     {
-        Observable.FromAsync(token => persistence.DeleteNodeAsync(path, recursive: false, token))
+        // Post the response AFTER the storage delete actually commits so callers see a
+        // consistent view: an awaited DeleteNode returns only once the node is gone from
+        // persistence. Without this, race conditions occur — e.g. tests (and UI flows)
+        // that query right after the delete can still observe the pre-delete node.
+        //
+        // The previous "reply first" approach guarded against Orleans/monolith hub
+        // teardown during self-deletion. HandleDeleteNodeRequest runs on the mesh hub,
+        // and a child-node delete does not tear down that hub — so the teardown concern
+        // does not apply here. If a true self-teardown case emerges we post Fail from
+        // OnError and the caller still unblocks.
+        persistence.DeleteNode(path, recursive: false)
             .Subscribe(
                 _ =>
                 {
+                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()
                         ?.Publish(MeshChangeEvent.Deleted(path));
-                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
                     logger.LogInformation(
                         "Node deleted at {Path} by {DeletedBy}",
                         path, capturedRequest.DeletedBy ?? "system");
                 },
                 ex =>
                 {
-                    logger.LogError(ex, "Error deleting node at {Path}", path);
+                    logger.LogError(ex, "Storage delete failed for {Path}", path);
                     hub.Post(
-                        DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                        DeleteNodeResponse.Fail($"Storage delete failed: {ex.Message}",
                             NodeDeletionRejectionReason.Unknown),
                         o => o.ResponseFor(request));
                 });
@@ -815,7 +835,7 @@ public static class MeshExtensions
                             HubConfiguration = existingNode.HubConfiguration
                         };
 
-                        return Observable.FromAsync(token => persistence.SaveNodeAsync(nodeToSave, token));
+                        return persistence.SaveNode(nodeToSave);
                     });
             })
             .Subscribe(
@@ -990,17 +1010,27 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 4. Move the node
-            var movedNode = await persistence.MoveNodeAsync(moveRequest.SourcePath, moveRequest.TargetPath, ct);
-            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-            changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
-            changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
+            // 4. Move the node — subscribe and post response in the callback.
+            persistence.MoveNode(moveRequest.SourcePath, moveRequest.TargetPath)
+                .Subscribe(
+                    movedNode =>
+                    {
+                        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+                        changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
+                        changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
+                        hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
+                        logger.LogInformation("Node moved from {Source} to {Target}",
+                            moveRequest.SourcePath, moveRequest.TargetPath);
+                    },
+                    ex =>
+                    {
+                        logger.LogError(ex, "Error moving node from {Source} to {Target}",
+                            moveRequest.SourcePath, moveRequest.TargetPath);
+                        hub.Post(
+                            MoveNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                            o => o.ResponseFor(request));
+                    });
 
-            // 5. Return success
-            hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
-
-            logger.LogInformation("Node moved from {Source} to {Target}",
-                moveRequest.SourcePath, moveRequest.TargetPath);
             return request.Processed();
         }
         catch (Exception ex)

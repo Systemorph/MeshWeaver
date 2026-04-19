@@ -52,6 +52,13 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     /// </summary>
     public object? ToolCalls { get; init; }
 
+    /// <summary>
+    /// Data-bound list of nodes created/updated/deleted by this message's execution.
+    /// The bubble cross-references tool-call target paths against this list to show
+    /// inline Diff + Restore links on Create/Update/Delete/Patch tool chips.
+    /// </summary>
+    public object? UpdatedNodes { get; init; }
+
     /// <summary>Model name used for this response (e.g., "claude-sonnet-4-6").</summary>
     public string? ModelName { get; init; }
 
@@ -68,4 +75,5 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     public ThreadMessageBubbleControl WithMessageId(string? id) => this with { MessageId = id };
     public ThreadMessageBubbleControl WithThreadPath(string? path) => this with { ThreadPath = path };
     public ThreadMessageBubbleControl WithToolCalls(object? toolCalls) => this with { ToolCalls = toolCalls };
+    public ThreadMessageBubbleControl WithUpdatedNodes(object? updatedNodes) => this with { UpdatedNodes = updatedNodes };
 }

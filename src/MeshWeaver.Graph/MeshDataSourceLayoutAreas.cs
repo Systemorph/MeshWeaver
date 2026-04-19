@@ -378,7 +378,13 @@ public static class MeshDataSourceLayoutAreas
                     LastSyncedAt = DateTimeOffset.UtcNow
                 };
                 var updatedNode = sourceNode with { Content = updatedConfig };
-                await persistence.SaveNodeAsync(updatedNode);
+                persistence.SaveNode(updatedNode).Subscribe(
+                    saved => logger?.LogInformation(
+                        "Marked data source {Path} as installed to {Target}",
+                        saved.Path, updatedConfig.InstalledTo),
+                    ex => logger?.LogError(ex,
+                        "Failed to mark data source {Path} as installed",
+                        updatedNode.Path));
             }
 
             var resultDialog = Controls.Dialog(

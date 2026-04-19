@@ -1,0 +1,19 @@
+{
+  "id": "Profile",
+  "namespace": "SocialMedia",
+  "name": "Social Media Profile",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A social media profile owned by a user (LinkedIn, X, Instagram, ...)",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Profile",
+    "namespace": "SocialMedia",
+    "displayName": "Social Media Profile",
+    "iconName": "Person",
+    "description": "A social media profile owned by a user",
+    "configuration": "config => config.WithContentType<SocialMediaProfile>().AddData(data => data.AddSource(source => source.WithType<Platform>(t => t.WithInitialData(Platform.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddSocialMediaProfileLayoutAreas().WithDefaultArea(\"Detail\"))"
+  }
+}

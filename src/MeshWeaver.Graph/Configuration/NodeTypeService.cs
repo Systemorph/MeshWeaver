@@ -50,8 +50,16 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Compilation errors by nodeTypePath - tracks last compilation failure for error reporting
     private readonly ConcurrentDictionary<string, string> _compilationErrors = new();
 
+    // NodeType paths whose compilation is currently running. Populated the moment a compile
+    // task is kicked off; cleaned up when it finishes (success OR failure). Used by
+    // GetDiagnostics / progress overlays so callers can show "Compiling…" while they wait.
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _compilingInProgress = new();
+
     // Cached access rules extracted from hub configurations
     private readonly ConcurrentDictionary<string, INodeTypeAccessRule> _accessRules = new();
+
+    // Subscription to the cross-silo change feed — disposed with the service.
+    private readonly IDisposable? _changeFeedSubscription;
 
     public NodeTypeService(
         IMessageHub hub,
@@ -61,7 +69,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         ILogger<NodeTypeService> logger,
         ICompilationCacheService cacheService,
         IOptions<CompilationCacheOptions> cacheOptions,
-        MeshNodeCompilationService? compilationService = null)
+        MeshNodeCompilationService? compilationService = null,
+        IMeshChangeFeed? changeFeed = null)
     {
         this.hub = hub;
         this.queryProviders = queryProviders;
@@ -74,6 +83,45 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         // Initialize cache from pre-registered nodes in MeshConfiguration
         InitializeFromMeshConfiguration();
+
+        // Subscribe to the mesh change feed so cache invalidations reach every silo.
+        // Defensive: wrap in try/catch because a construction-time throw here would
+        // take down *every* silo's DI and deadlock the whole cluster — the feed impl
+        // might not be ready, might throw on early subscription, etc. Log and move on.
+        if (changeFeed != null)
+        {
+            try
+            {
+                _changeFeedSubscription = changeFeed.Subscribe(evt =>
+                {
+                    try
+                    {
+                        if (string.IsNullOrEmpty(evt.Path)) return;
+                        if (_hubConfigurations.ContainsKey(evt.Path)
+                            || _compilationTasks.ContainsKey(evt.Path)
+                            || _compilationErrors.ContainsKey(evt.Path)
+                            || string.Equals(evt.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+                        {
+                            logger.LogInformation(
+                                "Cross-silo cache invalidation for {NodeTypePath} via MeshChangeFeed ({Kind})",
+                                evt.Path, evt.Kind);
+                            InvalidateCache(evt.Path);
+                        }
+                    }
+                    catch (Exception handlerEx)
+                    {
+                        logger.LogWarning(handlerEx,
+                            "MeshChangeFeed handler faulted while processing event for {Path}",
+                            evt.Path);
+                    }
+                });
+            }
+            catch (Exception subscribeEx)
+            {
+                logger.LogWarning(subscribeEx,
+                    "Failed to subscribe to IMeshChangeFeed — cross-silo cache invalidation disabled");
+            }
+        }
     }
 
     /// <summary>
@@ -152,15 +200,46 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return _compilationErrors.GetValueOrDefault(nodeTypePath);
     }
 
+    /// <summary>
+    /// Returns <c>true</c> if compilation for the given NodeType path is currently running
+    /// (started but not yet completed). Use this to render a "Compiling…" progress overlay
+    /// so the user sees activity instead of a blank layout while they wait.
+    /// </summary>
+    public bool IsCompiling(string nodeTypePath) =>
+        _compilingInProgress.ContainsKey(nodeTypePath);
+
+    /// <summary>
+    /// When compilation for <paramref name="nodeTypePath"/> is running, returns when it
+    /// started (UTC); otherwise <c>null</c>. Consumers can display the elapsed time in a
+    /// progress overlay.
+    /// </summary>
+    public DateTimeOffset? GetCompilationStartedAt(string nodeTypePath) =>
+        _compilingInProgress.TryGetValue(nodeTypePath, out var start) ? start : null;
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<string> GetCompilingPaths() =>
+        _compilingInProgress.Keys.ToArray();
+
     private Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
+        var wasNewCompile = false;
         // Use ConcurrentDictionary.GetOrAdd with a Task to ensure only one compilation runs per key.
         // On failure, remove from dictionary to allow retry on next access.
         var task = _compilationTasks.GetOrAdd(nodeTypePath, path =>
-            CompileWithReleaseAsync(path, ct));
+        {
+            // Only the first caller to miss the cache kicks off a compile — mark it started.
+            wasNewCompile = true;
+            _compilingInProgress[path] = DateTimeOffset.UtcNow;
+            return CompileWithReleaseAsync(path, ct);
+        });
 
         return task.ContinueWith(t =>
         {
+            // Clear the in-progress marker whether we win the race or not; the task we
+            // awaited on is finished, so the state ceases to be "running" for this caller.
+            if (wasNewCompile)
+                _compilingInProgress.TryRemove(nodeTypePath, out _);
+
             // On failure, remove from cache to allow retry and return null
             if (t.IsFaulted || t.IsCanceled)
             {
@@ -206,12 +285,21 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return _hubConfigurations.GetValueOrDefault(nodeTypePath);
     }
 
-    internal void InvalidateCache(string nodeTypePath)
+    /// <summary>
+    /// Invalidates all cached state for <paramref name="nodeTypePath"/>. Public surface so
+    /// MCP's Recycle tool (and other front-ends) can flush a stuck NodeType — disposing
+    /// the hub alone is not enough, because `_compilationErrors` / `_compilationTasks`
+    /// live on this singleton service and survive hub teardown.
+    /// </summary>
+    public void InvalidateCache(string nodeTypePath)
     {
         logger.LogDebug("Invalidating cache for {NodeTypePath}", nodeTypePath);
 
-        // Remove from all caches
+        // Remove from all caches — including the sticky error + in-progress markers
+        // (previously forgotten, which meant a stuck error kept showing after Recycle).
         _compilationTasks.TryRemove(nodeTypePath, out _);
+        _compilationErrors.TryRemove(nodeTypePath, out _);
+        _compilingInProgress.TryRemove(nodeTypePath, out _);
         _releaseKeys.TryRemove(nodeTypePath, out _);
         _hubConfigurations.TryRemove(nodeTypePath, out _);
         _creatableTypesRules.TryRemove(nodeTypePath, out _);
@@ -505,6 +593,62 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     }
 
     /// <summary>
+    /// Turns the NodeType's <see cref="NodeTypeDefinition.Sources"/> list into concrete
+    /// storage paths to probe for Code nodes. Lines understood:
+    /// <list type="bullet">
+    ///   <item><c>"_Source"</c> (or any value without <c>/</c>) — rebased onto <paramref name="nodeTypePath"/>.</item>
+    ///   <item><c>"namespace:X"</c> / <c>"path:X"</c> — the X part is used as a storage path.</item>
+    ///   <item><c>"@X"</c> / <c>"@@X"</c> — shorthand for the path X.</item>
+    ///   <item><c>$self</c> inside any entry — expanded to <paramref name="nodeTypePath"/>.</item>
+    /// </list>
+    /// If the list is null or empty, defaults to <c>"{nodeTypePath}/_Source"</c>.
+    /// Query-syntax decoration like <c>scope:subtree</c> and <c>nodeType:Code</c> is
+    /// stripped — this helper is only concerned with the path segment, since we feed
+    /// <see cref="IMeshStorage.GetDescendantsAsync"/> below.
+    /// </summary>
+    private static IReadOnlyList<string> ResolveSourcePaths(
+        IReadOnlyList<string>? sources,
+        string nodeTypePath)
+    {
+        if (sources == null || sources.Count == 0)
+            return [$"{nodeTypePath}/_Source"];
+
+        var result = new List<string>(sources.Count);
+        foreach (var raw in sources)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var expanded = raw.Replace("$self", nodeTypePath).Trim();
+
+            // Strip the @/@@ shorthand.
+            if (expanded.StartsWith("@@")) expanded = expanded[2..].TrimStart();
+            else if (expanded.StartsWith("@")) expanded = expanded[1..].TrimStart();
+            if (expanded.Length == 0) continue;
+
+            // Pull out the value of the first recognised qualifier (namespace:/path:), if any.
+            var value = expanded;
+            foreach (var qualifier in new[] { "namespace:", "path:" })
+            {
+                var idx = value.IndexOf(qualifier, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) continue;
+                var valueStart = idx + qualifier.Length;
+                var valueEnd = valueStart;
+                while (valueEnd < value.Length && !char.IsWhiteSpace(value[valueEnd]))
+                    valueEnd++;
+                value = value[valueStart..valueEnd];
+                break;
+            }
+
+            // If the value is a single segment (no /), treat as self-relative folder.
+            if (value.Length > 0 && !value.Contains('/'))
+                value = $"{nodeTypePath}/{value}";
+
+            if (value.Length > 0)
+                result.Add(value);
+        }
+        return result.Count > 0 ? result : [$"{nodeTypePath}/_Source"];
+    }
+
+    /// <summary>
     /// Gathers all inputs needed for compilation from persistence.
     /// Returns a NodeTypeRelease with all compilation inputs and the MeshNode.
     /// </summary>
@@ -533,15 +677,43 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return (null, null);
         }
 
-        // Get CodeConfigurations from child MeshNodes under /_Source path directly
+        // Collect Code nodes from the configured sources. Default: the sibling "_Source"
+        // subtree. `GetAllDescendantsAsync` (not `GetDescendantsAsync`) is used because
+        // Code nodes are persisted as satellites — CreateNodeRequest auto-sets
+        // MainNode to the parent namespace for any NodeType registered as satellite.
+        // The regular `GetDescendantsAsync` in InMemoryPersistenceService excludes
+        // satellites from browsing; the `All` variant includes them.
+        // We also check the parent path as a single-node fetch so `path:X` shorthand
+        // with a leaf Code node path works.
         var codeFiles = new List<string>();
-        await foreach (var codeNode in meshStorage.GetChildrenAsync($"{nodeTypePath}/_Source"))
+        var codeFilePaths = new List<string>();
+        var seenCodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var sourcePaths = ResolveSourcePaths(definition.Sources, nodeTypePath);
+        foreach (var sourcePath in sourcePaths)
         {
-            if (codeNode.Content is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
-            {
-                codeFiles.Add(codeConfig.Code);
-            }
+            // Path-exact fetch first (handles `path:X` / `@X` pointing at a single Code node).
+            var single = await meshStorage.GetNodeAsync(sourcePath, ct);
+            if (single != null) AddIfCodeNode(single);
+
+            // Then all descendants INCLUDING satellites — that's the Code-file case.
+            await foreach (var descendant in meshStorage.GetAllDescendantsAsync(sourcePath))
+                AddIfCodeNode(descendant);
         }
+
+        void AddIfCodeNode(MeshNode candidate)
+        {
+            if (candidate.NodeType != CodeNodeType.NodeType) return;
+            if (candidate.Content is not CodeConfiguration codeConfig) return;
+            if (string.IsNullOrEmpty(codeConfig.Code)) return;
+            if (candidate.Path is { Length: > 0 } p && !seenCodePaths.Add(p)) return;
+            codeFiles.Add(codeConfig.Code);
+            if (candidate.Path != null) codeFilePaths.Add(candidate.Path);
+        }
+
+        logger.LogInformation(
+            "NodeType '{NodeTypePath}' source discovery: {Count} Code nodes from [{Paths}]",
+            nodeTypePath, codeFiles.Count, string.Join(", ", codeFilePaths));
 
         // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
         if (compilationService != null)
@@ -680,15 +852,37 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     /// <summary>
     /// Creates a hub configuration that shows a compilation error in the Overview area.
+    /// Renders as markdown so it respects the current theme (readable in both light and
+    /// dark modes) and gets code-block formatting for the Roslyn diagnostics.
     /// </summary>
     private static Func<MessageHubConfiguration, MessageHubConfiguration> CreateCompilationErrorConfiguration(string errorMessage)
     {
         return config => config.AddLayout(layout =>
             layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
-                Observable.Return<UiControl?>(
-                    Controls.Stack
-                        .WithView(Controls.Html(
-                            $"<div style=\"color:#d32f2f;background:#fce4ec;padding:16px;border:1px solid #d32f2f;border-radius:4px;font-family:monospace;white-space:pre-wrap\">{WebUtility.HtmlEncode(errorMessage)}</div>")))));
+                Observable.Return<UiControl?>(BuildCompilationErrorMarkdown(errorMessage))));
+    }
+
+    private static UiControl BuildCompilationErrorMarkdown(string errorMessage)
+    {
+        // Split "Compilation failed for 'X':\n<diagnostics>" into header + body so the
+        // diagnostics land in a fenced code block — much easier to read than one long
+        // HTML blob, and uses the theme's code/text colours.
+        var newlineIdx = errorMessage.IndexOf('\n');
+        var header = newlineIdx >= 0 ? errorMessage[..newlineIdx].TrimEnd(':') : errorMessage;
+        var body = newlineIdx >= 0 ? errorMessage[(newlineIdx + 1)..].TrimEnd() : string.Empty;
+
+        var markdown =
+$@"> **⚠ {header}**
+>
+> Fix the source code or the NodeType's `sources` list, then use the **Recycle** menu to flush the cached grain (or call `GetDiagnostics` via MCP to re-check).
+
+```text
+{body}
+```";
+
+        return Controls.Stack
+            .WithStyle("padding: 16px;")
+            .WithView(Controls.Markdown(markdown));
     }
 
     #region Creatable Types
@@ -936,6 +1130,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     public void Dispose()
     {
+        _changeFeedSubscription?.Dispose();
         foreach (var subscription in _subscriptions.Values)
         {
             subscription.Dispose();

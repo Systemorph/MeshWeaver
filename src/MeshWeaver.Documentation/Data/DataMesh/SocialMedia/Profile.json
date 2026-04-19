@@ -1,0 +1,18 @@
+{
+  "id": "Profile",
+  "namespace": "Doc/DataMesh/SocialMedia",
+  "name": "Social Media Profile",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A social media profile owned by a user (LinkedIn, X, Instagram, ...)",
+  "icon": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><defs><linearGradient id='g2' x1='0' y1='0' x2='1' y2='1'><stop offset='0%' stop-color='#e1306c'/><stop offset='100%' stop-color='#8a2a7c'/></linearGradient></defs><rect width='24' height='24' rx='5' fill='url(#g2)'/><circle cx='12' cy='9' r='3' fill='#fff'/><path d='M6 19c1.5-3.5 4-5 6-5s4.5 1.5 6 5' stroke='#fff' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Profile",
+    "namespace": "Doc/DataMesh/SocialMedia",
+    "displayName": "Social Media Profile",
+    "description": "A social media profile owned by a user",
+    "configuration": "config => config.WithContentType<SocialMediaProfile>().AddData(data => data.AddSource(source => source.WithType<Platform>(t => t.WithInitialData(Platform.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddSocialMediaProfileLayoutAreas().WithDefaultArea(\"Detail\"))"
+  }
+}

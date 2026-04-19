@@ -15,7 +15,7 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Query.Test;
+namespace MeshWeaver.Autocomplete.Test;
 
 /// <summary>
 /// Tests that AutocompleteAsync returns Icon data and performs proper text matching.

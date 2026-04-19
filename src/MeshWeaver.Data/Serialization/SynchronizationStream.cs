@@ -370,9 +370,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         else
         {
             logger.LogDebug("[SYNC_STREAM] Processing Patch change for {StreamId}", StreamId);
-            (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
             try
             {
+                (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
                 var changeItem = this.ToChangeItem(Current!.Value!,
                     currentJson.Value,
                     patch,
@@ -389,6 +389,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     null);
 
                 SetCurrent(hub, changeItem);
+            }
+            catch (StaleStreamStateException stale)
+            {
+                // Local JSON cache drifted from the owner's view. Drop our cached snapshot
+                // and request a fresh Full from the owner via a new SubscribeRequest.
+                logger.LogWarning(stale,
+                    "[SYNC_STREAM] Stale patch for {StreamId}; requesting fresh snapshot from {Owner}.",
+                    StreamId, StreamIdentity.Owner);
+                Set<JsonElement?>(null);
+                if (Reference is WorkspaceReference wsRef)
+                {
+                    Host.Post(new SubscribeRequest(StreamId, wsRef) { Subscriber = Configuration.Subscriber! },
+                        o => o.WithTarget(StreamIdentity.Owner));
+                }
             }
             catch (Exception ex)
             {

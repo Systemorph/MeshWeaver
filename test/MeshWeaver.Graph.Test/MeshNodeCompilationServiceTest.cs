@@ -657,4 +657,361 @@ public record Contact
         result.NodeTypeConfigurations.Should().NotBeEmpty("Should extract HubConfiguration from compiled assembly");
         result.NodeTypeConfigurations.First().HubConfiguration.Should().NotBeNull();
     }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_SourcesDefaultsToSelfRelativeUnderscoreSource()
+    {
+        // The default (no Sources set) is "namespace:_Source scope:subtree", which
+        // is auto-rebased onto the NodeType's own path. This is the common case.
+        var persistence = new InMemoryPersistenceService();
+
+        var definition = new NodeTypeDefinition(); // no Sources
+        await SetupNodeType(persistence, "DefaultRel", definition, new CodeConfiguration
+        {
+            Code = @"
+public record DefaultRelType
+{
+    public string Id { get; init; } = string.Empty;
+}"
+        });
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("org/default-rel/inst") with
+        {
+            Name = "Instance",
+            NodeType = "type/DefaultRel",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+
+        assemblyPath.Should().NotBeNull();
+        Assembly.LoadFrom(assemblyPath!).GetType("DefaultRelType").Should().NotBeNull(
+            "default 'namespace:_Source' should auto-rebase onto the NodeType's own path");
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_SourcesWithSelfMacro_ExpandsToOwnPath()
+    {
+        // $self must resolve to the owning NodeType's path so JSON doesn't need
+        // to hardcode its own namespace.
+        var persistence = new InMemoryPersistenceService();
+
+        var definition = new NodeTypeDefinition
+        {
+            Sources = ["namespace:$self/_Source scope:subtree"]
+        };
+        await SetupNodeType(persistence, "SelfMacro", definition, new CodeConfiguration
+        {
+            Code = @"
+public record SelfMacroType
+{
+    public string Id { get; init; } = string.Empty;
+}"
+        });
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("org/self-macro/inst") with
+        {
+            Name = "Instance",
+            NodeType = "type/SelfMacro",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+
+        assemblyPath.Should().NotBeNull();
+        Assembly.LoadFrom(assemblyPath!).GetType("SelfMacroType").Should().NotBeNull(
+            "$self should expand to type/SelfMacro, finding its _Source code");
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_SourcesFiltersNonCodeChildren()
+    {
+        // Non-Code children in the _Source folder must never sneak into the
+        // compilation — the service always ANDs with nodeType:Code.
+        var persistence = new InMemoryPersistenceService();
+
+        var definition = new NodeTypeDefinition();
+        await SetupNodeType(persistence, "FilterType", definition, new CodeConfiguration
+        {
+            Code = @"
+public record FilterTypeA
+{
+    public string Id { get; init; } = string.Empty;
+}"
+        });
+
+        // A sibling non-Code node under _Source — must be ignored.
+        var junkNode = new MeshNode("notes", "type/FilterType/_Source")
+        {
+            NodeType = "Markdown",
+            Name = "Notes",
+            Content = "# not code"
+        };
+        await persistence.SaveNodeAsync(junkNode, SetupJsonOptions, TestContext.Current.CancellationToken);
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("org/filter/one") with
+        {
+            Name = "One",
+            NodeType = "type/FilterType",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+
+        assemblyPath.Should().NotBeNull(
+            "non-Code children must not break compilation — the nodeType:Code filter excludes them");
+        Assembly.LoadFrom(assemblyPath!).GetType("FilterTypeA").Should().NotBeNull();
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_SourcesWithMultipleLocations_PullsInExternalCode()
+    {
+        // This is the SocialMedia scenario: Profile NodeType needs Platform.cs
+        // which lives under Post's _Source folder. Without `Sources` this fails;
+        // with `Sources` listing both paths it compiles.
+        var persistence = new InMemoryPersistenceService();
+
+        // "Post" NodeType with shared Platform.cs in its _Source.
+        var postDef = new NodeTypeDefinition
+        {
+            Configuration = "config => config.WithContentType<Post>()"
+        };
+        await SetupNodeType(persistence, "Post", postDef, new CodeConfiguration
+        {
+            Code = @"
+public record Platform
+{
+    public string Id { get; init; } = string.Empty;
+    public static readonly Platform[] All = [];
+}
+public record Post
+{
+    public string Id { get; init; } = string.Empty;
+}"
+        });
+
+        // "Profile" NodeType with its own SocialMediaProfile, AND Sources pointing
+        // at Post's _Source so it can reference Platform.
+        var profileDef = new NodeTypeDefinition
+        {
+            Configuration = "config => config.WithContentType<Profile>()",
+            Sources =
+            [
+                "namespace:$self/_Source scope:subtree",
+                "namespace:type/Post/_Source scope:subtree"
+            ]
+        };
+        await SetupNodeType(persistence, "Profile", profileDef, new CodeConfiguration
+        {
+            Code = @"
+public record Profile
+{
+    public string Id { get; init; } = string.Empty;
+    public Platform? Platform { get; init; }
+}"
+        });
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("org/profiles/alice") with
+        {
+            Name = "Alice",
+            NodeType = "type/Profile",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+
+        assemblyPath.Should().NotBeNull("Profile should compile with external Platform from Post/_Source");
+        var assembly = Assembly.LoadFrom(assemblyPath!);
+        assembly.GetType("Profile").Should().NotBeNull();
+        assembly.GetType("Platform").Should().NotBeNull("Platform from Post/_Source must be included");
+    }
+
+    [Fact(Timeout = 25000)]
+    public async Task GetAssemblyLocationAsync_SourcesOverlap_DedupesSharedNode()
+    {
+        // When two source queries both match the same Code node, we must not
+        // compile its types twice (compiler would reject duplicates).
+        var persistence = new InMemoryPersistenceService();
+
+        var definition = new NodeTypeDefinition
+        {
+            Sources =
+            [
+                "namespace:$self/_Source scope:subtree",
+                "namespace:type/Overlap/_Source" // matches the same node
+            ]
+        };
+        await SetupNodeType(persistence, "Overlap", definition, new CodeConfiguration
+        {
+            Code = @"
+public record OverlapType
+{
+    public string Value { get; init; } = string.Empty;
+}"
+        });
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath("org/overlaps/one") with
+        {
+            Name = "One",
+            NodeType = "type/Overlap",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+
+        assemblyPath.Should().NotBeNull(
+            "overlapping source queries must be deduped so the same type isn't compiled twice");
+        Assembly.LoadFrom(assemblyPath!).GetType("OverlapType").Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Regression: Code nodes persisted via MCP set MainNode to the parent _Source
+    /// folder (satellite pattern). <c>InMemoryPersistenceService.GetDescendantsAsync</c>
+    /// excludes every node where <c>MainNode != Path</c>, so the compile-path
+    /// source discovery was seeing zero Code files and the NodeType kept failing
+    /// to compile with "type not found" — even though the Code nodes were in
+    /// persistence. <c>NodeTypeService.GatherInputsAsync</c> must find them
+    /// via the query-provider pipeline, which has no satellite filter.
+    /// </summary>
+    [Fact(Timeout = 25000)]
+    public async Task NodeTypeService_CompilesNodeType_WhenCodeNodesAreSatellites()
+    {
+        // Arrange: NodeType + satellite Code node (MainNode != Path).
+        var persistence = new InMemoryPersistenceService();
+        var nodeTypePath = $"type/Satellite_{Guid.NewGuid():N}";
+        var sourceNs = $"{nodeTypePath}/_Source";
+
+        var nodeTypeDef = new NodeTypeDefinition
+        {
+            Configuration = "config => config.WithContentType<SatelliteModel>()"
+        };
+        var nodeTypeNode = MeshNode.FromPath(nodeTypePath) with
+        {
+            Name = "Satellite",
+            NodeType = MeshNode.NodeTypePath,
+            Content = nodeTypeDef,
+            LastModified = DateTimeOffset.UtcNow
+        };
+        await persistence.SaveNodeAsync(nodeTypeNode, SetupJsonOptions, TestContext.Current.CancellationToken);
+
+        // Explicit MainNode = parent _Source folder — this is the satellite pattern
+        // that the persistence layer's GetDescendantsAsync filters out.
+        var satelliteCode = new MeshNode("SatelliteModel", sourceNs)
+        {
+            NodeType = "Code",
+            Name = "Satellite Model",
+            Content = new CodeConfiguration
+            {
+                Code = @"
+public record SatelliteModel
+{
+    public string Id { get; init; } = string.Empty;
+}",
+                Language = "csharp"
+            },
+            MainNode = sourceNs,  // ← satellite marker — the bug trigger
+            LastModified = DateTimeOffset.UtcNow
+        };
+        await persistence.SaveNodeAsync(satelliteCode, SetupJsonOptions, TestContext.Current.CancellationToken);
+
+        // Sanity check: satellite exclusion is actually active in storage
+        var descendants = new List<MeshNode>();
+        await foreach (var d in persistence.GetDescendantsAsync(sourceNs, SetupJsonOptions))
+            descendants.Add(d);
+        descendants.Should().BeEmpty(
+            "this guards the regression: GetDescendantsAsync filters out satellites — " +
+            "so any compile path that uses it to discover Code nodes will see zero files");
+
+        // Act: wire up the full service graph and ask NodeTypeService to enrich the
+        // NodeType, which triggers CompileWithReleaseAsync → GatherInputsAsync.
+        var nodeTypeService = CreateNodeTypeService(persistence);
+        var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(
+            MeshNode.FromPath($"inst/Alice") with
+            {
+                NodeType = nodeTypePath,
+                LastModified = DateTimeOffset.UtcNow
+            },
+            TestContext.Current.CancellationToken);
+
+        // Assert: compilation succeeded — the SatelliteModel type is reachable.
+        nodeTypeService.GetCompilationError(nodeTypePath).Should().BeNull(
+            "compilation must succeed for satellite-pattern Code nodes. " +
+            "If this fails with 'SatelliteModel could not be found', the compile " +
+            "path is back to using meshStorage.GetDescendantsAsync (which excludes satellites) " +
+            "instead of the query-provider pipeline.");
+        enriched.AssemblyLocation.Should().NotBeNullOrEmpty(
+            "assembly should compile and its location returned");
+    }
+
+    private NodeTypeService CreateNodeTypeService(InMemoryPersistenceService persistence)
+    {
+        IServiceCollection services = new ServiceCollection();
+        services.AddInMemoryPersistence(persistence);
+        services.AddScoped<IMessageHub>(_ => _mockHub);
+        services.AddSingleton(new MeshConfiguration(new Dictionary<string, MeshNode>()));
+        services.AddSingleton(_cacheService);
+        services.AddSingleton(_cacheOptions);
+        services.AddSingleton(NullLogger<MeshNodeCompilationService>.Instance);
+        services.AddSingleton(NullLogger<NodeTypeService>.Instance);
+        services.AddSingleton<MeshNodeCompilationService>();
+        services.AddLogging();
+
+        var sp = services.BuildServiceProvider();
+        var hubSp = NSubstitute.Substitute.For<IServiceProvider>();
+        hubSp.GetService(Arg.Any<Type>()).Returns(ci => sp.GetService(ci.Arg<Type>()));
+        _mockHub.ServiceProvider.Returns(hubSp);
+
+        var scope = sp.CreateScope();
+        // ActivatorUtilities resolves the constructor parameters via DI — no need to
+        // name the (internal) IMeshStorage type here.
+        return ActivatorUtilities.CreateInstance<NodeTypeService>(scope.ServiceProvider);
+    }
+
+    [Theory(Timeout = 25000)]
+    [InlineData("@", "single-at")]
+    [InlineData("@@", "double-at")]
+    public async Task GetAssemblyLocationAsync_SourcesWithAtPrefixShorthand_ResolvesSingleNode(string prefix, string suffix)
+    {
+        // Shorthand: "@path" / "@@path" in a Sources line means "this one Code node".
+        // No need to spell out "path:..." — the compilation service normalises it.
+        var persistence = new InMemoryPersistenceService();
+
+        var sharedTypeName = $"Shared_{suffix}";
+        var consumerTypeName = $"Consumer_{suffix}";
+
+        var sharedDef = new NodeTypeDefinition();
+        await SetupNodeType(persistence, sharedTypeName, sharedDef, new CodeConfiguration
+        {
+            Code = $@"
+public record SharedHelper_{suffix.Replace("-", "_")}
+{{
+    public static string Greet() => ""hi"";
+}}"
+        });
+
+        var consumerDef = new NodeTypeDefinition
+        {
+            Sources = [$"{prefix}type/{sharedTypeName}/_Source/code"]
+        };
+        await SetupNodeType(persistence, consumerTypeName, consumerDef);
+
+        var service = CreateService(persistence);
+        var node = MeshNode.FromPath($"org/consumers/{suffix}") with
+        {
+            Name = "One",
+            NodeType = $"type/{consumerTypeName}",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+
+        assemblyPath.Should().NotBeNull($"'{prefix}path' shorthand should resolve to the Shared Code node");
+        var expectedTypeName = $"SharedHelper_{suffix.Replace("-", "_")}";
+        Assembly.LoadFrom(assemblyPath!).GetType(expectedTypeName).Should().NotBeNull();
+    }
 }

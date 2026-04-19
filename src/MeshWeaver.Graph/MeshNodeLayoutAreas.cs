@@ -72,6 +72,7 @@ public static class MeshNodeLayoutAreas
     public const string ExportArea = "Export";
     public const string CopyArea = "Copy";
     public const string MoveArea = "Move";
+    public const string RecycleArea = "Recycle";
     public const string VersionsArea = "Versions";
     public const string VersionDiffArea = "VersionDiff";
 
@@ -115,9 +116,13 @@ public static class MeshNodeLayoutAreas
             .WithView(ExportArea, ExportLayoutArea.Export)
             .WithView(CopyArea, CopyLayoutArea.Copy)
             .WithView(MoveArea, MoveLayoutArea.Move)
+            .WithView(RecycleArea, RecycleLayoutArea.Recycle)
             .WithView(VersionsArea, VersionLayoutArea.Versions)
             .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
+            .WithView(PinLayoutArea.PinArea, PinLayoutArea.Pin)
+            .WithView(PinLayoutArea.UnpinArea, PinLayoutArea.Unpin)
+            .WithView(PinLayoutArea.PinnedThumbnailArea, PinLayoutArea.PinnedThumbnail)
             // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
@@ -259,10 +264,12 @@ public static class MeshNodeLayoutAreas
         var title = node?.Name ?? node?.Id ?? host.Hub.Address.ToString();
         var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node);
 
-        // Build title with icon
+        // Build title with icon.
+        // Extra top margin separates the icon+title row from whatever sits above it
+        // (e.g. the parent back-link / breadcrumb rendered by the surrounding page).
         var titleContent = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 16px;");
+            .WithStyle("align-items: center; gap: 20px; margin-top: 16px;");
 
         // Add icon/image if available
         if (!string.IsNullOrEmpty(iconValue))
@@ -323,7 +330,9 @@ public static class MeshNodeLayoutAreas
         }
         else
         {
-            titleContent = titleContent.WithView(Controls.Html($"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
+            titleContent = titleContent.WithView(Controls.Html(
+                $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;\">" +
+                $"{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
         }
 
         return Controls.Stack
@@ -690,7 +699,7 @@ public static class MeshNodeLayoutAreas
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(MeshSearchRenderMode.Hierarchical)
                 .WithMaxColumns(3)
-                .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(instanceNs)}");
+                .WithCreateHref($"/create?namespace={Uri.EscapeDataString(instanceNs)}");
         });
     }
 
@@ -717,7 +726,7 @@ public static class MeshNodeLayoutAreas
             .WithItemLimit(50)
             .WithMaxRows(3)
             .WithCollapsibleSections(true)
-            .WithCreateHref($"/{hubPath}/{CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(hubPath)}");
+            .WithCreateHref($"/{hubPath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(hubPath)}");
     }
 
     /// <summary>

@@ -1,0 +1,20 @@
+{
+  "id": "Post-005",
+  "namespace": "SocialMedia/Post",
+  "path": "SocialMedia/Post/Post-005",
+  "name": "We're hiring: Senior Backend Engineer",
+  "nodeType": "SocialMedia/Post",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SocialMediaPost",
+    "title": "We're hiring: Senior Backend Engineer",
+    "body": "We are growing the platform team. Looking for someone who loves distributed systems, reactive design and shipping frequently.\n\nDM me or apply via the careers page.",
+    "profilePath": "SocialMedia/Profile/Sarah-LinkedIn",
+    "platform": "LinkedIn",
+    "scheduledAt": "2026-04-25T10:00:00+02:00",
+    "impressions": 0,
+    "likes": 0,
+    "comments": 0
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "Post",
+  "namespace": "Doc/DataMesh/SocialMedia",
+  "name": "Social Media Post",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A social media post (scheduled, published, with engagement stats)",
+  "icon": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%' stop-color='#0a66c2'/><stop offset='100%' stop-color='#004f8a'/></linearGradient></defs><rect width='24' height='24' rx='5' fill='url(#g)'/><path d='M6 7h12M6 11h12M6 15h8' stroke='#fff' stroke-width='1.6' stroke-linecap='round'/></svg>",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Post",
+    "namespace": "Doc/DataMesh/SocialMedia",
+    "displayName": "Social Media Post",
+    "description": "A social media post (scheduled, published, with engagement stats)",
+    "configuration": "config => config.WithContentType<SocialMediaPost>().AddData(data => data.AddSource(source => source.WithType<Platform>(t => t.WithInitialData(Platform.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddSocialMediaPostLayoutAreas().WithDefaultArea(\"List\"))"
+  }
+}

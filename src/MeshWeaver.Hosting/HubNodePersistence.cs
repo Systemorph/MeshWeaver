@@ -147,5 +147,5 @@ internal sealed class HubNodePersistence(
     }
 
     public IObservable<MeshNode> CreateTransient(MeshNode node)
-        => Observable.FromAsync(() => catalog.CreateTransientNodeAsync(node));
+        => catalog.CreateTransientNode(node);
 }
