@@ -447,7 +447,28 @@ public static class AgentView
                     new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedAgent),
                     o => o.WithTarget(hubAddress))!;
                 var callbackResponse = await actx.Host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
-                var responseMsg = ((IMessageDelivery<DataChangeResponse>)callbackResponse).Message;
+
+                // Handle routing failures (e.g., agent hub unreachable) and unexpected
+                // response shapes before touching the DataChangeResponse fields.
+                if (callbackResponse is IMessageDelivery<DeliveryFailure> deliveryFailure)
+                {
+                    var dialog = Controls.Dialog(
+                        Controls.Markdown($"**Error saving:**\n\n{deliveryFailure.Message.Message ?? "Delivery failed"}"),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                    return;
+                }
+                if (callbackResponse is not IMessageDelivery<DataChangeResponse> dataChange)
+                {
+                    var dialog = Controls.Dialog(
+                        Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                    return;
+                }
+                var responseMsg = dataChange.Message;
 
                 if (responseMsg.Log.Status != ActivityStatus.Succeeded)
                 {

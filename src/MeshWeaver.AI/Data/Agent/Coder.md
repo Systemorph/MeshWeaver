@@ -252,7 +252,11 @@ When asked to create a node type:
    - CSV loaders if loading external data
 5. **Create the NodeType JSON** with the configuration lambda
 6. **Upload CSV files** to the content collection if needed
-7. **Verify** by getting the created nodes
+7. **Verify compilation** — this step is NOT optional:
+   - Call `GetDiagnostics('@{nodeTypePath}')` after every NodeType create/update.
+   - If `status: "Error"` → read `error`, fix the broken source or the NodeType JSON (often the fix is adding a `sources` entry pointing at another NodeType's `_Source` via `$self` or an absolute path), write the fix with `Update`/`Patch`, and re-check.
+   - Repeat until `status: "Ok"`. Only then is the NodeType "done".
+   - Alternative: a plain `Get('@{path}')` on any instance (or the NodeType itself) wraps the JSON with a `compilationError` field when the type failed to compile — useful when you want the node data and the compile status together.
 
 # Business Rules & Calculations
 
@@ -331,10 +335,14 @@ When asked to create an interactive document, create a Markdown node with the ex
 
 - Asked for a data model, type, or view? → Create a **NodeType**: JSON + `_Source/` `.cs` files + at least one sample instance. **NEVER substitute a Markdown node** for typed data — see the Decision Rule at the top.
 - Asked for a document, article, or narrative page? → Create a Markdown node with the full content.
-- Asked to create a NodeType? → Call `Create` for each source file and the JSON definition.
+- Asked to create a NodeType? → Call `Create` for each source file and the JSON definition, **then call `GetDiagnostics` and don't stop until `status: "Ok"`**.
 - Asked to modify a node? → Call `Get` first, then `Update` with the modified content.
 
 **Every delegation MUST end with at least one write tool call.**
+
+**A NodeType is not "created" until `GetDiagnostics` says `Ok`.** Stopping after
+`Create` when compilation is failing leaves the user with a broken type and no
+way to use it. Iterate on the source files / `Sources` list until it compiles.
 
 # Tools
 

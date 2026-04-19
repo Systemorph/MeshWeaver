@@ -75,13 +75,14 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateTools();
 
         tools.Should().NotBeNull();
-        // Read-only tools: Get, Search, NavigateTo
-        tools.Should().HaveCount(3);
+        // Read-only tools: Get, Search, NavigateTo, GetDiagnostics
+        tools.Should().HaveCount(4);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
         toolNames.Should().Contain("Search");
         toolNames.Should().Contain("NavigateTo");
+        toolNames.Should().Contain("GetDiagnostics");
         toolNames.Should().NotContain("Create");
         toolNames.Should().NotContain("Update");
         toolNames.Should().NotContain("Delete");
@@ -96,8 +97,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateAllTools();
 
         tools.Should().NotBeNull();
-        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete
-        tools.Should().HaveCount(7);
+        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete, GetDiagnostics
+        tools.Should().HaveCount(8);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
@@ -107,6 +108,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("Update");
         toolNames.Should().Contain("Patch");
         toolNames.Should().Contain("Delete");
+        toolNames.Should().Contain("GetDiagnostics");
     }
 
     #endregion
@@ -694,6 +696,115 @@ public class MeshPluginTest : MonolithMeshTestBase
         using var reader = new StreamReader(stream!);
         var text = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
         text.Should().Contain("svg");
+    }
+
+    #endregion
+
+    #region GetDiagnostics / compilation-error surfacing
+
+    /// <summary>
+    /// A NodeType whose Configuration references an undefined type must surface
+    /// the compilation error through <see cref="MeshPlugin.GetDiagnostics"/> so
+    /// the Coder agent can self-diagnose.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task GetDiagnostics_BrokenNodeType_ReturnsErrorStatus()
+    {
+        var mockChat = new MockAgentChat();
+        var plugin = new MeshPlugin(Mesh, mockChat);
+
+        var nodeTypeId = $"BrokenType_{Guid.NewGuid():N}";
+        var createJson = JsonSerializer.Serialize(new
+        {
+            id = nodeTypeId,
+            @namespace = "ACME",
+            name = "Broken Type",
+            nodeType = "NodeType",
+            content = new
+            {
+                type = "NodeTypeDefinition",
+                configuration = "config => config.WithContentType<ThisTypeDoesNotExist>()"
+            }
+        });
+        // Wrap "type" → "$type" for JsonPolymorphic
+        createJson = createJson.Replace("\"type\":", "\"$type\":");
+        await plugin.Create(createJson);
+
+        // Force compilation via the hub. Touching the NodeType path via the hub
+        // triggers compile; the error is then cached in NodeTypeService.
+        var nodeTypePath = $"ACME/{nodeTypeId}";
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        try
+        {
+            await nodeTypeService.EnrichWithNodeTypeAsync(
+                new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath },
+                TestContext.Current.CancellationToken);
+        }
+        catch
+        {
+            // Expected: compilation throws; NodeTypeService still records the error.
+        }
+
+        var diagnosticsJson = await plugin.GetDiagnostics($"@{nodeTypePath}");
+        diagnosticsJson.Should().NotBeNullOrEmpty();
+
+        using var doc = JsonDocument.Parse(diagnosticsJson);
+        var root = doc.RootElement;
+        root.GetProperty("status").GetString()
+            .Should().Be("Error", "because the broken NodeType should report compile failure");
+        root.GetProperty("error").GetString()
+            .Should().Contain("ThisTypeDoesNotExist",
+                "the cached error must include the unresolved type");
+    }
+
+    /// <summary>
+    /// <see cref="MeshPlugin.Get"/> on an instance of a broken NodeType must
+    /// wrap the response with a <c>compilationError</c> field so callers that
+    /// only call Get still see the failure.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Get_InstanceOfBrokenNodeType_WrapsResponseWithCompilationError()
+    {
+        var mockChat = new MockAgentChat();
+        var plugin = new MeshPlugin(Mesh, mockChat);
+
+        // Create a broken NodeType and force its compilation to cache the error.
+        var nodeTypeId = $"BrokenType2_{Guid.NewGuid():N}";
+        var nodeTypePath = $"ACME/{nodeTypeId}";
+        var createJson = JsonSerializer.Serialize(new
+        {
+            id = nodeTypeId,
+            @namespace = "ACME",
+            name = "Broken Type 2",
+            nodeType = "NodeType",
+            content = new
+            {
+                type = "NodeTypeDefinition",
+                configuration = "config => config.WithContentType<AlsoNotAType>()"
+            }
+        }).Replace("\"type\":", "\"$type\":");
+        await plugin.Create(createJson);
+
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        try
+        {
+            await nodeTypeService.EnrichWithNodeTypeAsync(
+                new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath },
+                TestContext.Current.CancellationToken);
+        }
+        catch { /* expected */ }
+
+        // Get the NodeType itself — response should include compilationError.
+        var result = await plugin.Get($"@{nodeTypePath}");
+        result.Should().NotBeNullOrEmpty();
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        root.TryGetProperty("compilationError", out var err).Should().BeTrue(
+            "Get on a broken NodeType must include a compilationError field");
+        err.GetString().Should().Contain("AlsoNotAType");
+        root.TryGetProperty("node", out _).Should().BeTrue(
+            "the original node payload must still be included under 'node'");
     }
 
     #endregion

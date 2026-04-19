@@ -22,6 +22,7 @@ public class MeshOperations
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
     private readonly IMeshService mesh;
+    private readonly INodeTypeService? nodeTypeService;
 
     /// <summary>
     /// Callback invoked when a node is created, updated, or patched.
@@ -34,6 +35,24 @@ public class MeshOperations
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
         this.mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        this.nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+    }
+
+    /// <summary>
+    /// Looks up the cached compilation error for the owning NodeType of <paramref name="node"/>.
+    /// - If <paramref name="node"/> is a NodeType definition, checks its own path.
+    /// - Otherwise checks the NodeType's path.
+    /// Returns <c>null</c> if no error is recorded.
+    /// </summary>
+    private string? LookupCompilationError(MeshNode node)
+    {
+        if (nodeTypeService == null) return null;
+        var nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
+            ? node.Path
+            : node.NodeType;
+        return !string.IsNullOrEmpty(nodeTypePath)
+            ? nodeTypeService.GetCompilationError(nodeTypePath)
+            : null;
     }
 
     /// <summary>
@@ -170,6 +189,11 @@ public class MeshOperations
             await foreach (var node in mesh.QueryAsync<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
             {
+                var compileError = LookupCompilationError(node);
+                if (compileError != null)
+                    return JsonSerializer.Serialize(
+                        new { node, compilationError = compileError },
+                        hub.JsonSerializerOptions);
                 return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
             }
 
@@ -855,5 +879,54 @@ public class MeshOperations
             logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
             return Task.FromResult<string?>(null);
         }
+    }
+
+    /// <summary>
+    /// Returns compilation diagnostics for a NodeType or an instance of one.
+    /// The response is JSON with <c>status</c> (<c>Error</c> / <c>Ok</c> /
+    /// <c>Unknown</c>) and, when relevant, the error text from the last compile.
+    /// Used by the Coder agent's self-verification loop after creating / updating
+    /// a NodeType.
+    /// </summary>
+    public async Task<string> GetDiagnostics(string path)
+    {
+        logger.LogInformation("GetDiagnostics called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions);
+
+        var resolvedPath = ResolvePath(path);
+        if (nodeTypeService == null)
+            return JsonSerializer.Serialize(
+                new { status = "Unknown", message = "INodeTypeService not registered on this hub" },
+                hub.JsonSerializerOptions);
+
+        // Resolve the owning NodeType path: either the path itself (if it IS a NodeType)
+        // or the NodeType of the instance at that path.
+        string? nodeTypePath = null;
+        await foreach (var node in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
+        {
+            nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
+                ? node.Path
+                : node.NodeType;
+            break;
+        }
+
+        if (string.IsNullOrEmpty(nodeTypePath))
+            return JsonSerializer.Serialize(
+                new { status = "Unknown", message = $"Not found: {resolvedPath}" },
+                hub.JsonSerializerOptions);
+
+        var err = nodeTypeService.GetCompilationError(nodeTypePath);
+        if (string.IsNullOrEmpty(err))
+            return JsonSerializer.Serialize(
+                new { status = "Ok", nodeTypePath },
+                hub.JsonSerializerOptions);
+
+        return JsonSerializer.Serialize(
+            new { status = "Error", nodeTypePath, error = err },
+            hub.JsonSerializerOptions);
     }
 }

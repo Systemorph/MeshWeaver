@@ -35,4 +35,18 @@ public interface INodeTypeService
     /// Returns null if no access rules are defined in the hub config.
     /// </summary>
     INodeTypeAccessRule? GetAccessRule(string nodeTypePath) => null;
+
+    /// <summary>
+    /// Returns the last compilation error recorded for the given NodeType path,
+    /// or <c>null</c> if compilation has not failed. The error text includes the
+    /// formatted Roslyn diagnostics as produced by
+    /// <c>MeshNodeCompilationService</c>.
+    /// </summary>
+    /// <remarks>
+    /// Used by MCP <c>Get</c> / <c>GetDiagnostics</c> so callers (e.g. the Coder
+    /// agent) can verify that a NodeType they just created or updated actually
+    /// compiles. The error is cached by <c>NodeTypeService</c> each time a compile
+    /// fails and cleared when it succeeds.
+    /// </remarks>
+    string? GetCompilationError(string nodeTypePath) => null;
 }
