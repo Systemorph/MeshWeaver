@@ -869,6 +869,109 @@ public record OverlapType
         Assembly.LoadFrom(assemblyPath!).GetType("OverlapType").Should().NotBeNull();
     }
 
+    /// <summary>
+    /// Regression: Code nodes persisted via MCP set MainNode to the parent _Source
+    /// folder (satellite pattern). <c>InMemoryPersistenceService.GetDescendantsAsync</c>
+    /// excludes every node where <c>MainNode != Path</c>, so the compile-path
+    /// source discovery was seeing zero Code files and the NodeType kept failing
+    /// to compile with "type not found" — even though the Code nodes were in
+    /// persistence. <c>NodeTypeService.GatherInputsAsync</c> must find them
+    /// via the query-provider pipeline, which has no satellite filter.
+    /// </summary>
+    [Fact(Timeout = 25000)]
+    public async Task NodeTypeService_CompilesNodeType_WhenCodeNodesAreSatellites()
+    {
+        // Arrange: NodeType + satellite Code node (MainNode != Path).
+        var persistence = new InMemoryPersistenceService();
+        var nodeTypePath = $"type/Satellite_{Guid.NewGuid():N}";
+        var sourceNs = $"{nodeTypePath}/_Source";
+
+        var nodeTypeDef = new NodeTypeDefinition
+        {
+            Configuration = "config => config.WithContentType<SatelliteModel>()"
+        };
+        var nodeTypeNode = MeshNode.FromPath(nodeTypePath) with
+        {
+            Name = "Satellite",
+            NodeType = MeshNode.NodeTypePath,
+            Content = nodeTypeDef,
+            LastModified = DateTimeOffset.UtcNow
+        };
+        await persistence.SaveNodeAsync(nodeTypeNode, SetupJsonOptions, TestContext.Current.CancellationToken);
+
+        // Explicit MainNode = parent _Source folder — this is the satellite pattern
+        // that the persistence layer's GetDescendantsAsync filters out.
+        var satelliteCode = new MeshNode("SatelliteModel", sourceNs)
+        {
+            NodeType = "Code",
+            Name = "Satellite Model",
+            Content = new CodeConfiguration
+            {
+                Code = @"
+public record SatelliteModel
+{
+    public string Id { get; init; } = string.Empty;
+}",
+                Language = "csharp"
+            },
+            MainNode = sourceNs,  // ← satellite marker — the bug trigger
+            LastModified = DateTimeOffset.UtcNow
+        };
+        await persistence.SaveNodeAsync(satelliteCode, SetupJsonOptions, TestContext.Current.CancellationToken);
+
+        // Sanity check: satellite exclusion is actually active in storage
+        var descendants = new List<MeshNode>();
+        await foreach (var d in persistence.GetDescendantsAsync(sourceNs, SetupJsonOptions))
+            descendants.Add(d);
+        descendants.Should().BeEmpty(
+            "this guards the regression: GetDescendantsAsync filters out satellites — " +
+            "so any compile path that uses it to discover Code nodes will see zero files");
+
+        // Act: wire up the full service graph and ask NodeTypeService to enrich the
+        // NodeType, which triggers CompileWithReleaseAsync → GatherInputsAsync.
+        var nodeTypeService = CreateNodeTypeService(persistence);
+        var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(
+            MeshNode.FromPath($"inst/Alice") with
+            {
+                NodeType = nodeTypePath,
+                LastModified = DateTimeOffset.UtcNow
+            },
+            TestContext.Current.CancellationToken);
+
+        // Assert: compilation succeeded — the SatelliteModel type is reachable.
+        nodeTypeService.GetCompilationError(nodeTypePath).Should().BeNull(
+            "compilation must succeed for satellite-pattern Code nodes. " +
+            "If this fails with 'SatelliteModel could not be found', the compile " +
+            "path is back to using meshStorage.GetDescendantsAsync (which excludes satellites) " +
+            "instead of the query-provider pipeline.");
+        enriched.AssemblyLocation.Should().NotBeNullOrEmpty(
+            "assembly should compile and its location returned");
+    }
+
+    private NodeTypeService CreateNodeTypeService(InMemoryPersistenceService persistence)
+    {
+        IServiceCollection services = new ServiceCollection();
+        services.AddInMemoryPersistence(persistence);
+        services.AddScoped<IMessageHub>(_ => _mockHub);
+        services.AddSingleton(new MeshConfiguration(new Dictionary<string, MeshNode>()));
+        services.AddSingleton(_cacheService);
+        services.AddSingleton(_cacheOptions);
+        services.AddSingleton(NullLogger<MeshNodeCompilationService>.Instance);
+        services.AddSingleton(NullLogger<NodeTypeService>.Instance);
+        services.AddSingleton<MeshNodeCompilationService>();
+        services.AddLogging();
+
+        var sp = services.BuildServiceProvider();
+        var hubSp = NSubstitute.Substitute.For<IServiceProvider>();
+        hubSp.GetService(Arg.Any<Type>()).Returns(ci => sp.GetService(ci.Arg<Type>()));
+        _mockHub.ServiceProvider.Returns(hubSp);
+
+        var scope = sp.CreateScope();
+        // ActivatorUtilities resolves the constructor parameters via DI — no need to
+        // name the (internal) IMeshStorage type here.
+        return ActivatorUtilities.CreateInstance<NodeTypeService>(scope.ServiceProvider);
+    }
+
     [Theory(Timeout = 25000)]
     [InlineData("@", "single-at")]
     [InlineData("@@", "double-at")]

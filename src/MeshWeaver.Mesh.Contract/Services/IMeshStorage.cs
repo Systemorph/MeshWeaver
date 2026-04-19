@@ -37,6 +37,16 @@ internal interface IMeshStorage
     IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath);
 
     /// <summary>
+    /// Gets ALL descendant nodes including satellites (nodes where
+    /// <c>MainNode != Path</c>). Default implementation delegates to
+    /// <see cref="GetDescendantsAsync"/> which excludes satellites — impls that
+    /// know how to include satellites (e.g. the full persistence service)
+    /// override this.
+    /// </summary>
+    IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath)
+        => GetDescendantsAsync(parentPath);
+
+    /// <summary>
     /// Creates or updates a node. Returns an observable that emits the saved node on success
     /// or signals OnError on failure. Subscribe to drive — do not await.
     /// </summary>
