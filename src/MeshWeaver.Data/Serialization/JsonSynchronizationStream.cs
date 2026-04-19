@@ -149,16 +149,30 @@ public static class JsonSynchronizationStream
 
         // Keep the remote owner grain alive while this subscription exists.
         // HeartBeatEvent is a no-op in monolith mode (no GrainKeepAliveCallback).
+        // Stop sending after the first DeliveryFailure so we don't spam warnings when
+        // the owner hub has no HeartBeatEvent handler (e.g. non-grain event hubs).
         if (!owner.Equals(hub.Address))
         {
-            reduced.RegisterForDisposal(
-                Observable.Interval(TimeSpan.FromSeconds(45))
-                    .Subscribe(_ =>
+            var cts = new CancellationTokenSource();
+            IDisposable? sub = null;
+            sub = Observable.Interval(TimeSpan.FromSeconds(45))
+                .Subscribe(_ =>
+                {
+                    if (hub.RunLevel > MessageHubRunLevel.Started) return;
+                    var delivery = hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
+                    if (delivery == null) return;
+                    hub.RegisterCallback(delivery, (d, _) =>
                     {
-                        if (hub.RunLevel <= MessageHubRunLevel.Started)
-                            hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
-                    })
-            );
+                        if (d.Message is DeliveryFailure)
+                        {
+                            sub?.Dispose();
+                            cts.Cancel();
+                        }
+                        return Task.FromResult(d);
+                    }, cts.Token);
+                });
+            reduced.RegisterForDisposal(sub);
+            reduced.RegisterForDisposal(new AnonymousDisposable(() => cts.Cancel()));
         }
 
         return reduced;

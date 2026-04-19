@@ -147,6 +147,12 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string? Name { get; init; }
 
     /// <summary>
+    /// Long-form description of this node. Used as the seed prompt for AI-assisted
+    /// Name/Id/Icon generation in the Create dialog, and displayed in detail views.
+    /// </summary>
+    public string? Description { get; init; }
+
+    /// <summary>
     /// The type/category of this node (e.g., "Northwind", "Todo", "Insurance").
     /// Used to identify the application type for routing and configuration.
     /// </summary>
