@@ -680,15 +680,37 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     /// <summary>
     /// Creates a hub configuration that shows a compilation error in the Overview area.
+    /// Renders as markdown so it respects the current theme (readable in both light and
+    /// dark modes) and gets code-block formatting for the Roslyn diagnostics.
     /// </summary>
     private static Func<MessageHubConfiguration, MessageHubConfiguration> CreateCompilationErrorConfiguration(string errorMessage)
     {
         return config => config.AddLayout(layout =>
             layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
-                Observable.Return<UiControl?>(
-                    Controls.Stack
-                        .WithView(Controls.Html(
-                            $"<div style=\"color:#d32f2f;background:#fce4ec;padding:16px;border:1px solid #d32f2f;border-radius:4px;font-family:monospace;white-space:pre-wrap\">{WebUtility.HtmlEncode(errorMessage)}</div>")))));
+                Observable.Return<UiControl?>(BuildCompilationErrorMarkdown(errorMessage))));
+    }
+
+    private static UiControl BuildCompilationErrorMarkdown(string errorMessage)
+    {
+        // Split "Compilation failed for 'X':\n<diagnostics>" into header + body so the
+        // diagnostics land in a fenced code block — much easier to read than one long
+        // HTML blob, and uses the theme's code/text colours.
+        var newlineIdx = errorMessage.IndexOf('\n');
+        var header = newlineIdx >= 0 ? errorMessage[..newlineIdx].TrimEnd(':') : errorMessage;
+        var body = newlineIdx >= 0 ? errorMessage[(newlineIdx + 1)..].TrimEnd() : string.Empty;
+
+        var markdown =
+$@"> **⚠ {header}**
+>
+> Fix the source code or the NodeType's `sources` list, then use the **Recycle** menu to flush the cached grain (or call `GetDiagnostics` via MCP to re-check).
+
+```text
+{body}
+```";
+
+        return Controls.Stack
+            .WithStyle("padding: 16px;")
+            .WithView(Controls.Markdown(markdown));
     }
 
     #region Creatable Types

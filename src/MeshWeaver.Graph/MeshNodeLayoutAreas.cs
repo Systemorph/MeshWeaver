@@ -72,6 +72,7 @@ public static class MeshNodeLayoutAreas
     public const string ExportArea = "Export";
     public const string CopyArea = "Copy";
     public const string MoveArea = "Move";
+    public const string RecycleArea = "Recycle";
     public const string VersionsArea = "Versions";
     public const string VersionDiffArea = "VersionDiff";
 
@@ -115,9 +116,13 @@ public static class MeshNodeLayoutAreas
             .WithView(ExportArea, ExportLayoutArea.Export)
             .WithView(CopyArea, CopyLayoutArea.Copy)
             .WithView(MoveArea, MoveLayoutArea.Move)
+            .WithView(RecycleArea, RecycleLayoutArea.Recycle)
             .WithView(VersionsArea, VersionLayoutArea.Versions)
             .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
+            .WithView(PinLayoutArea.PinArea, PinLayoutArea.Pin)
+            .WithView(PinLayoutArea.UnpinArea, PinLayoutArea.Unpin)
+            .WithView(PinLayoutArea.PinnedThumbnailArea, PinLayoutArea.PinnedThumbnail)
             // UCR special areas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
