@@ -49,4 +49,19 @@ public interface INodeTypeService
     /// fails and cleared when it succeeds.
     /// </remarks>
     string? GetCompilationError(string nodeTypePath) => null;
+
+    /// <summary>
+    /// Returns <c>true</c> if compilation for the given NodeType path is currently
+    /// running (the task has been kicked off but not yet completed). Consumers can use
+    /// this to render a "Compiling…" progress indicator so the user sees activity
+    /// rather than a blank layout while they wait.
+    /// </summary>
+    bool IsCompiling(string nodeTypePath) => false;
+
+    /// <summary>
+    /// When compilation for <paramref name="nodeTypePath"/> is running, returns when
+    /// it started (UTC). Otherwise <c>null</c>. Paired with <see cref="IsCompiling"/>
+    /// to show elapsed-time feedback in progress overlays.
+    /// </summary>
+    DateTimeOffset? GetCompilationStartedAt(string nodeTypePath) => null;
 }
