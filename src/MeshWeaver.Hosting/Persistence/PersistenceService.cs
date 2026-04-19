@@ -40,12 +40,9 @@ internal class PersistenceService(
     public IObservable<MeshNode> SaveNode(MeshNode node)
         => Observable.FromAsync(ct => core.SaveNodeAsync(node, Options, ct));
 
-    public IObservable<MeshNode> DeleteNode(string path, bool recursive = false)
-        => Observable.FromAsync(ct => core.GetNodeAsync(path, Options, ct))
-            .SelectMany(existing => existing is null
-                ? Observable.Throw<MeshNode>(new InvalidOperationException($"Node not found at path: {path}"))
-                : Observable.FromAsync(ct => core.DeleteNodeAsync(path, recursive, ct))
-                    .Select(_ => existing));
+    public IObservable<string> DeleteNode(string path, bool recursive = false)
+        => Observable.FromAsync(ct => core.DeleteNodeAsync(path, recursive, ct))
+            .Select(_ => path);
 
     public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath)
         => Observable.FromAsync(ct => core.MoveNodeAsync(sourcePath, targetPath, Options, ct));
