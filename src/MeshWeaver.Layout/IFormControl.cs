@@ -63,6 +63,16 @@ public interface IFormControl : IUiControl
     object? Placeholder { get; init; }
 
     /// <summary>
+    /// Data-bindable width for the control (CSS value).
+    /// </summary>
+    object? Width { get; init; }
+
+    /// <summary>
+    /// Data-bindable height for the control (CSS value).
+    /// </summary>
+    object? Height { get; init; }
+
+    /// <summary>
     /// Whether the control has a blur action.
     /// </summary>
     bool IsBlurable { get; }

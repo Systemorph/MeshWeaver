@@ -101,6 +101,17 @@ public record UnifiedReference(string Path) : WorkspaceReference<object>
 }
 
 /// <summary>
+/// Reference for the list of UCR prefixes available on a hub.
+/// Returned data is a collection of prefix names ("content", "data", "schema", etc.)
+/// that have dedicated autocomplete providers registered.
+/// Resolved via the prefix/ UCR keyword.
+/// </summary>
+public record PrefixReference() : WorkspaceReference<object>
+{
+    public override string ToString() => "prefix";
+}
+
+/// <summary>
 /// Reference to a file in a content collection.
 /// Used by the content: prefix handler.
 /// </summary>

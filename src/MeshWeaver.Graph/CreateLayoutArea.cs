@@ -719,10 +719,11 @@ public static class CreateLayoutArea
         if (string.IsNullOrWhiteSpace(name))
             return "";
 
-        // Split by spaces and other separators
+        // Split by spaces and other separators; preserve case within each word,
+        // only ensure the first character is uppercase.
         var words = Regex.Split(name, @"[\s\-_]+")
             .Where(w => !string.IsNullOrEmpty(w))
-            .Select(w => char.ToUpperInvariant(w[0]) + w.Substring(1).ToLowerInvariant());
+            .Select(w => char.ToUpperInvariant(w[0]) + w.Substring(1));
 
         var pascalCase = string.Join("", words);
 

@@ -105,7 +105,7 @@ else
             <MonacoEditorView @ref="monacoEditor"
                               Value="@MessageText"
                               ValueChanged="@OnMessageTextChanged"
-                              OnSubmit="SendMessageAsync"
+                              OnSubmit="SendMessage"
                               OnCompletionAccepted="OnCompletionItemAccepted"
                               IsDisabled="@(!submissionHandler.IsInputEnabled)"
                               Placeholder="@placeholderText"
@@ -164,7 +164,7 @@ else
             }
             else
             {
-                <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessageAsync"
+                <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessage"
                               Disabled="@(string.IsNullOrWhiteSpace(MessageText))" Title="Send">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
                 </FluentButton>

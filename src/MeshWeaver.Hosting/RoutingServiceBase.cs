@@ -1,4 +1,5 @@
 using MeshWeaver.Domain;
+using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -45,6 +46,16 @@ namespace MeshWeaver.Hosting
                 if (hostedHub is not null)
                 {
                     hostedHub.DeliverMessage(delivery);
+                    return;
+                }
+
+                // Kernel addresses are always handled by local hosted hubs — never delegate to grains.
+                if (address.Type == AddressExtensions.KernelType)
+                {
+                    hostedHub = Mesh.GetHostedHub(address,
+                        config => config.AddKernelSubHubHandlers(),
+                        HostedHubCreation.Always);
+                    hostedHub?.DeliverMessage(delivery);
                     return;
                 }
 

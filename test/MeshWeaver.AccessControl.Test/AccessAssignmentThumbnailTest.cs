@@ -310,7 +310,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     public void Overview_RendersSubjectPickerQueries()
     {
         // Verify that the [MeshNode] attribute on AccessObject provides queries
-        // that allow selecting any mesh node via descendants scope
+        // that scope the picker to valid subjects (Users + Groups in the current subtree).
         var meshNodeAttr = typeof(AccessAssignment)
             .GetProperty(nameof(AccessAssignment.AccessObject))!
             .GetCustomAttributes(typeof(MeshWeaver.Domain.MeshNodeAttribute), false)
@@ -319,8 +319,10 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         meshNodeAttr.Should().NotBeNull("AccessObject should have [MeshNode] attribute");
         meshNodeAttr!.Queries.Should().HaveCountGreaterThan(0,
             "AccessObject should have at least one query for the picker");
-        meshNodeAttr.Queries.Should().Contain(q => q.Contains("scope:descendants"),
-            "should search descendants to allow selecting any node");
+        meshNodeAttr.Queries.Should().Contain(q => q.Contains("nodeType:User"),
+            "User subjects must be pickable");
+        meshNodeAttr.Queries.Should().Contain(q => q.Contains("nodeType:Group"),
+            "Group subjects must be pickable");
     }
 
     [Fact(Timeout = 30000)]

@@ -5,27 +5,43 @@ Description: Complete tools reference for AI agents
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
 ---
 
-MeshPlugin provides tools for interacting with the mesh data graph. All paths support the `@` prefix shorthand: `@graph/org1` resolves to `graph/org1`.
+MeshPlugin provides tools for interacting with the mesh data graph.
 
 **IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
 
 ## Path Rules
 
-**Tool calls use paths relative to the current context by default.** The "Current Application Context" tells you your current node path.
+**Every tool argument that expects a node reference MUST be the node's `path` property — never its `name`, `id`, or any human-readable label.** When `Get` / `Search` returns a MeshNode, you will see both `name` ("Final Report – AI Readiness Assessment & 100-Day Plan") and `path` ("PartnerRe/AIConsulting/FinalReport"). **Use the `path` value.** Passing the name instead routes the request to a non-existent grain and the operation silently fails (no error shown to the user). If you only know the display name, call `Search('name:"...the name..."')` first and read the `path` field off the match.
 
-- **Relative paths** (no leading `/`): resolved against your current context. When the user references a file or node they can see, use a relative path.
-  - `content:report.docx` → file in the current node's content collection
-  - `Get('@content:report.docx')` → get content from current node
-  - `Get('@MyChild/*')` → list children of a child node under current context
-- **Absolute paths** (leading `/`): start from the root, independent of context.
-  - `Get('@/OrgA/Projects/my-doc')` → always resolves to the same node
-  - `Get('@/Doc/Architecture/content:icon.svg')` → file from a specific node
+**The `@` prefix is a reference marker — the character after it determines absolute vs. relative:**
+
+| Form | Meaning |
+|------|---------|
+| `@/Full/Path/To/Node` | **Absolute path** — starts from the mesh root, independent of context. Always resolves to the same node. |
+| `@Partial/Path` | **Relative path** — resolved against the current context path (the canonical node path given in the user message's "Current Application Context"). |
+
+The leading `/` after `@` is load-bearing: `@/X` ≠ `@X`.
+
+### Context comes from the user message
+
+Every user message carries a **"Current Application Context"** header with the canonical path of the node the user is currently viewing. **That is the path to use when resolving `@...` relative references.** Examples:
+
+- Context = `PartnerRe/AIConsulting`, agent calls `Get('@FinalReport')` → resolves to `@/PartnerRe/AIConsulting/FinalReport`.
+- Context = `PartnerRe/AIConsulting`, agent calls `Get('@/OrgA/Docs/other')` → resolves to `@/OrgA/Docs/other` (absolute — context ignored).
+- Context = `PartnerRe/AIConsulting`, agent calls `Get('@content/report.docx')` → resolves to `@/PartnerRe/AIConsulting/content/report.docx`.
+- Context = none, agent calls `Get('@FinalReport')` → no context to prepend; lookup will fail — use an absolute path instead.
+
+### Output links
 
 **LINKS in markdown output**: Always use **absolute paths** starting with `@/` so they are clickable regardless of where the message is viewed.
 - Correct: `@/OrgA/Projects/my-doc`, `@/User/rbuergi/my-page`
-- **Wrong**: `my-doc`, `../Projects/my-doc`
+- **Wrong**: `my-doc`, `../Projects/my-doc`, `@my-doc` (relative links break when viewed from another context)
 
-**When the user mentions a file or document they see on screen**, they are referring to something in the current context. Use the relative path (e.g., `content:filename.docx`), not a fully qualified absolute path.
+### Choosing relative vs. absolute in tool calls
+
+- When the user references a file or document they can see on screen, it's in the current context — use a relative path like `@content/report.docx` or `@MyChild/*`.
+- When the user references something outside their current context (a specific org, a link they pasted, a cross-reference), use an absolute path starting with `@/`.
+- If in doubt, absolute is always safe.
 
 ## Get
 
@@ -45,19 +61,19 @@ Get supports Unified Path syntax with reserved prefixes for accessing specific r
 
 | Syntax | Returns |
 |--------|---------|
-| `Get('@Doc/Architecture/data:')` | Node's Content data as JSON |
-| `Get('@Doc/Architecture/data:Collection')` | All entities in a data collection |
-| `Get('@Doc/Architecture/data:Collection/id')` | A specific entity by ID |
-| `Get('@Doc/Architecture/schema:')` | JSON Schema for the node's content type |
-| `Get('@Doc/Architecture/schema:TypeName')` | JSON Schema for a specific named type |
-| `Get('@Doc/Architecture/model:')` | Full data model with all registered types |
-| `Get('@Doc/Architecture/layoutAreas:')` | List of available layout areas (reports, charts) |
-| `Get('@Doc/Architecture/area:AreaName')` | Download a layout area's data for analysis |
-| `Get('@Doc/Architecture/content:icon.svg')` | File content from the "content" collection |
-| `Get('@Doc/Architecture/content:folder/file.png')` | File from a subfolder in a collection |
-| `Get('@Doc/Architecture/content:platform-overview.svg')` | File from a content collection |
-| `Get('@Doc/Architecture/collection:')` | All content collection configs (names, types, editability) |
-| `Get('@Doc/Architecture/collection:content,assets')` | Specific collection configs |
+| `Get('@Doc/Architecture/data/')` | Node's Content data as JSON |
+| `Get('@Doc/Architecture/data/Collection')` | All entities in a data collection |
+| `Get('@Doc/Architecture/data/Collection/id')` | A specific entity by ID |
+| `Get('@Doc/Architecture/schema/')` | JSON Schema for the node's content type |
+| `Get('@Doc/Architecture/schema/TypeName')` | JSON Schema for a specific named type |
+| `Get('@Doc/Architecture/model/')` | Full data model with all registered types |
+| `Get('@Doc/Architecture/layoutAreas/')` | List of available layout areas (reports, charts) |
+| `Get('@Doc/Architecture/area/AreaName')` | Download a layout area's data for analysis |
+| `Get('@Doc/Architecture/content/icon.svg')` | File content from the "content" collection |
+| `Get('@Doc/Architecture/content/folder/file.png')` | File from a subfolder in a collection |
+| `Get('@Doc/Architecture/content/platform-overview.svg')` | File from a content collection |
+| `Get('@Doc/Architecture/collection/')` | All content collection configs (names, types, editability) |
+| `Get('@Doc/Architecture/collection/content,assets')` | Specific collection configs |
 
 #### Unified Path Reference
 
@@ -65,28 +81,28 @@ Unified Path allows you to **reference** and **embed** content from anywhere in 
 
 **Pattern:**
 ```
-{address}/{prefix}:{path}
+{address}/{prefix}/{path}
 ```
 
 | Component | Description |
 |-----------|-------------|
 | `address` | MeshNode path (resolved via MeshCatalog) |
-| `prefix` | Either a **reserved keyword** or a **content collection name** |
+| `prefix` | A reserved keyword (`data`, `content`, `schema`, `model`, `area`, `collection`, `menu`) |
 | `path` | Resource within the address |
+
+> **Note:** The legacy colon syntax (`{prefix}:{path}`) is still supported for backward compatibility.
 
 **Reserved Keywords:**
 
 | Prefix | Description |
 |--------|-------------|
-| `data:` | Access the node's Content data as JSON |
-| `schema:` | Access the ContentType schema |
-| `model:` | Access the data model |
-| `area:` | Access a specific layout area |
-| `layoutAreas:` | List available layout areas (reports, views, charts) |
-
-**Content Collection Prefixes:**
-
-Any other prefix is treated as a **content collection name** (e.g., `content:`, `assets:`, `files:`).
+| `data/` | Access the node's Content data as JSON |
+| `content/` | Access files from content collections |
+| `schema/` | Access the ContentType schema |
+| `model/` | Access the data model |
+| `area/` | Access a specific layout area |
+| `collection/` | Access collection configurations |
+| `menu/` | Access the menu structure |
 
 **@ vs @@:**
 
@@ -239,7 +255,7 @@ Creates a new node in the mesh. The node is validated before being persisted.
 | `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. |
 | `nodeType` | string | Yes | Type category (must match an existing NodeType) |
 | `category` | string | No | Grouping category |
-| `icon` | string | No | Inline SVG icon (start with `<svg`) — always create a unique, visually appealing SVG for the node |
+| `icon` | string | **Yes** | Inline SVG icon (start with `<svg`) — **ALWAYS** create a unique, visually appealing SVG that represents the node's topic. Never leave blank. |
 | `order` | int | No | Sort order (lower values appear first) |
 | `content` | object | Depends on type | Type-specific data model content |
 
@@ -266,10 +282,16 @@ Before creating a node, discover what content fields are expected:
 3. Construct the MeshNode JSON with all required fields
 4. Call Create with the JSON
 
+### Content Rules for Markdown Nodes
+
+- **Never repeat the title** in the markdown body. The `name` field is displayed as the page heading — starting content with `# Title` duplicates it.
+- **Never use emoji** in the `name` field. The `icon` SVG provides visual identity.
+- **Always set `icon`** to an inline SVG (starting with `<svg`). Design it to visually represent the content.
+
 ### Example
 
 ```
-Create('{"id": "NewPage", "namespace": "MyOrg", "name": "New Page", "nodeType": "Markdown"}')
+Create('{"id": "NewPage", "namespace": "MyOrg", "name": "New Page", "nodeType": "Markdown", "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><rect x=\"15\" y=\"10\" width=\"70\" height=\"80\" rx=\"4\" fill=\"#e3f2fd\" stroke=\"#1976d2\" stroke-width=\"2\"/><line x1=\"30\" y1=\"30\" x2=\"70\" y2=\"30\" stroke=\"#1976d2\" stroke-width=\"2\"/><line x1=\"30\" y1=\"45\" x2=\"65\" y2=\"45\" stroke=\"#90caf9\" stroke-width=\"2\"/><line x1=\"30\" y1=\"60\" x2=\"60\" y2=\"60\" stroke=\"#90caf9\" stroke-width=\"2\"/></svg>", "content": "Start with the first paragraph — no heading."}')
 ```
 
 ## Update
@@ -372,26 +394,26 @@ Use double @@ prefix to embed a layout area inline in markdown responses. Write 
 
 ### Workflow
 
-1. **Discover**: `Get('@Doc/Architecture/layoutAreas:')` — list available areas
-2. **Analyze**: `Get('@Doc/Architecture/area:AreaName')` — download area data
+1. **Discover**: `Get('@Doc/Architecture/layoutAreas/')` — list available areas
+2. **Analyze**: `Get('@Doc/Architecture/area/AreaName')` — download area data
 3. **Display**: `NavigateTo('@Doc/Architecture/AreaName')` — show visual chart/report
 4. **Embed**: write double @@ followed by `Doc/Architecture/AreaName` at the start of a line
 
 ## Content Collections
 
-Content collections store files (images, documents, markdown, etc.) associated with mesh nodes. The `content:` prefix accesses the default "content" collection.
+Content collections store files (images, documents, markdown, etc.) associated with mesh nodes. The `content/` prefix accesses the default "content" collection.
 
 **Document conversion**: `.docx` files are automatically converted to markdown when accessed. The user can reference documents by name and get readable text.
 
 ### Accessing Files (Relative to Current Context)
 
-When the user references a file they see on screen, use the **relative** `content:` path:
+When the user references a file they see on screen, use the **relative** `content/` path:
 
 ```
-Get('@content:report.docx')                  -- File from current node's "content" collection
-Get('@content:subfolder/image.png')          -- File from a subfolder
-Get('@content:')                             -- List files in the current node's content root
-Get('@collection:')                          -- List all collection configs
+Get('@content/report.docx')                  -- File from current node's "content" collection
+Get('@content/subfolder/image.png')          -- File from a subfolder
+Get('@content/')                             -- List files in the current node's content root
+Get('@collection/')                          -- List all collection configs
 ```
 
 ### Accessing Files (Absolute Path)
@@ -399,8 +421,8 @@ Get('@collection:')                          -- List all collection configs
 For files on other nodes, use the full path:
 
 ```
-Get('@/Doc/Architecture/content:icon.svg')   -- File from a specific node
-Get('@/OrgA/content:report.docx')            -- File from another org's node
+Get('@/Doc/Architecture/content/icon.svg')   -- File from a specific node
+Get('@/OrgA/content/report.docx')            -- File from another org's node
 ```
 
 ### Document Support
@@ -411,11 +433,11 @@ Get('@/OrgA/content:report.docx')            -- File from another org's node
 | `.md` | Returned as-is |
 | `.pdf`, `.png`, `.jpg` | Returned as binary content |
 
-When the user asks about a document they uploaded or see in the file browser, use `Get('@content:filename.docx')` to read its content as markdown.
+When the user asks about a document they uploaded or see in the file browser, use `Get('@content/filename.docx')` to read its content as markdown.
 
 ### Embedding Content Files
 
-Use double @@ prefix to embed content files inline in markdown. Write the double @@ followed by the node path and content reference at the start of a line. Only embed files that actually exist — use `Get` with the `content:` prefix first to verify the file is available.
+Use double @@ prefix to embed content files inline in markdown. Write the double @@ followed by the node path and content reference at the start of a line. Only embed files that actually exist — use `Get` with the `content/` prefix first to verify the file is available.
 
 Example syntax: `@@Doc/Architecture/ActorModel` embeds the Actor Model documentation inline.
 
@@ -434,7 +456,7 @@ Parameters:
 - `content` — the text content (SVG markup, markdown, JSON, etc.)
 - `collectionName` — collection name (default: `content`)
 
-After uploading, reference the file with `@Doc/Architecture/content:diagram.svg` or embed inline with `@@Doc/Architecture/content:diagram.svg`.
+After uploading, reference the file with `@Doc/Architecture/content/diagram.svg` or embed inline with `@@Doc/Architecture/content/diagram.svg`.
 
 **Tip for icons:** Set a node's `icon` property to inline SVG (starting with `<svg`) and it renders directly — no upload needed.
 
@@ -476,7 +498,7 @@ Then read any article with `Get('@Doc/...')`.
 
 ## Binary Attachments (PDF, Images)
 
-Chat threads support binary file attachments from content collections. When a `content:` path references a binary file, it is sent to the AI model as native binary content (base64).
+Chat threads support binary file attachments from content collections. When a `content/` path references a binary file, it is sent to the AI model as native binary content (base64).
 
 ### Supported Binary Formats
 
@@ -490,8 +512,8 @@ Chat threads support binary file attachments from content collections. When a `c
 
 ### Attachment Path Resolution
 
-- **Relative** (no `/` prefix): `content:report.pdf` → resolved against thread's context path
-- **Absolute** (`/` prefix): `@/OrgA/Doc/content:report.pdf` → explicit path from root
+- **Relative** (no `/` prefix): `content/report.pdf` → resolved against thread's context path
+- **Absolute** (`/` prefix): `@/OrgA/Doc/content/report.pdf` → explicit path from root
 
 ### Delegation
 

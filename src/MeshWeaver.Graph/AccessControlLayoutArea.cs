@@ -50,14 +50,20 @@ public static class AccessControlLayoutArea
                 var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
                 var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
 
-                // Load inherited assignments from ancestor nodes via IMeshService (one-shot, rarely changes)
+                // Restrict to the current partition — the first path segment — so the query
+                // never fans out across partitions. Ancestors above the partition root
+                // (i.e. global/admin assignments) are excluded here by design.
+                var partitionRoot = hubPath.Split('/', 2)[0];
+
+                // Load ancestor assignments within the current partition only.
                 var inherited = new List<(AccessAssignment Assignment, string SourcePath, MeshNode Node)>();
-                if (meshQuery != null)
+                if (meshQuery != null && !string.IsNullOrEmpty(partitionRoot))
                 {
                     try
                     {
                         var ancestorAssignments = await meshQuery
-                            .QueryAsync<MeshNode>($"path:{hubPath} nodeType:AccessAssignment scope:ancestors")
+                            .QueryAsync<MeshNode>(
+                                $"namespace:{partitionRoot} path:{hubPath} nodeType:AccessAssignment scope:ancestors")
                             .ToListAsync();
 
                         foreach (var assignmentNode in ancestorAssignments)
@@ -73,13 +79,16 @@ public static class AccessControlLayoutArea
                     }
                 }
 
-                // Pre-fetch user nodes for icons (assignment nodes may lack avatars)
+                // Pre-fetch user nodes for icons. Each user path is targeted (exact path) —
+                // no scope or fan-out. The query router uses the first segment to pick a
+                // partition (User, Group, etc.) so this stays O(1) per subject.
                 var userNodeLookup = new Dictionary<string, MeshNode>();
                 if (meshQuery != null)
                 {
                     var userPaths = inherited.Select(x => x.Assignment.AccessObject).Distinct();
                     foreach (var userPath in userPaths)
                     {
+                        if (string.IsNullOrEmpty(userPath)) continue;
                         try
                         {
                             var userNode = await meshQuery.QueryAsync<MeshNode>(

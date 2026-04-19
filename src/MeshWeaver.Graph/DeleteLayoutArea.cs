@@ -21,12 +21,11 @@ public static class DeleteLayoutArea
     /// <summary>
     /// Returns the Delete menu item if the user has Delete permission.
     /// </summary>
-    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, string? nodeName, Permission perms)
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
     {
         if (!perms.HasFlag(Permission.Delete))
             return null;
-        var label = string.IsNullOrEmpty(nodeName) ? "Delete" : $"Delete {nodeName}";
-        return new(label, MeshNodeLayoutAreas.DeleteArea,
+        return new("Delete", MeshNodeLayoutAreas.DeleteArea,
             RequiredPermission: Permission.Delete, Order: 100,
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.DeleteArea));
     }
@@ -152,28 +151,18 @@ public static class DeleteLayoutArea
                         return;
                     }
 
-                    ShowDialog(ctx, "Deleting...", "Deletion in progress. Please wait...");
-
-                    try
-                    {
-                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        await nodeFactory.DeleteNodeAsync(nodePath);
-
-                        // Navigate to parent on success
-                        var parentPath = GetParentPath(nodePath);
-                        var parentHref = !string.IsNullOrEmpty(parentPath)
-                            ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
-                            : "/";
-
-                        ShowDialog(ctx, "Deleted",
-                            $"Successfully deleted node **{nodePath}** and its descendants.\n\nRedirecting...");
-
-                        ctx.NavigateTo(parentHref);
-                    }
-                    catch (Exception ex)
-                    {
-                        ShowDialog(ctx, "Delete Failed", ex.Message);
-                    }
+                    // Reactive delete — subscribe with onNext/onError to surface failures.
+                    host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+                        .DeleteNode(nodePath).Subscribe(
+                            _ =>
+                            {
+                                // Empty the area in-place — no redirect. The user can navigate via menu/back.
+                                ctx.Host.UpdateArea(MeshNodeLayoutAreas.DeleteArea, null);
+                            },
+                            ex =>
+                            {
+                                ShowDialog(ctx, "Delete Failed", $"Could not delete node: {ex.Message}");
+                            });
                 })));
 
         return stack;

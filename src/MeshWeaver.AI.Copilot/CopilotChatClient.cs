@@ -253,8 +253,7 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
 
             var clientOptions = new CopilotClientOptions
             {
-                AutoStart = true,
-                AutoRestart = true
+                AutoStart = true
             };
 
             if (!string.IsNullOrEmpty(configuration.CliPath))

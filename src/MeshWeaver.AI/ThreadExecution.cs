@@ -40,10 +40,44 @@ public static class ThreadExecution
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
+            .WithHandler<AppendUserMessageRequest>(ThreadSubmission.HandleAppendUserMessage)
+            .WithHandler<ResubmitUserMessageRequest>(ThreadSubmission.HandleResubmitUserMessage)
+            .WithHandler<RecordSubmissionFailureRequest>(ThreadSubmission.HandleRecordSubmissionFailure)
             .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
             .WithInitialization(SetThreadHubIdentity)
             .WithInitialization(RecoverStaleExecutingThread)
-            .WithInitialization(WatchForExecution);
+            .WithInitialization(WatchForExecution)
+            .WithInitialization(InstallSubmissionWatcher);
+
+    /// <summary>
+    /// Installs the continuous server-side watcher that ingests queued user messages
+    /// into new rounds and dispatches agent execution. See <see cref="ThreadSubmission"/>.
+    /// </summary>
+    private static Task InstallSubmissionWatcher(IMessageHub hub, CancellationToken ct)
+    {
+        var sub = ThreadSubmission.InstallServerWatcher(hub);
+        // Dispose with the hub lifetime.
+        hub.RegisterForDisposal(sub);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Cancels the active execution on <paramref name="threadPath"/> — used by the explicit
+    /// user "Stop" button. Do NOT call this automatically when queued user messages arrive
+    /// during execution: the Anthropic Messages API does not support mid-stream injection,
+    /// and cancelling during a tool_use produces orphaned tool_use blocks that require a
+    /// synthetic error tool_result to recover. The correct pattern for queued input is
+    /// "wait for the round to complete, then dispatch a fresh round with all queued
+    /// messages in history". See ThreadSubmissionServer.InstallServerWatcher.
+    /// Idempotent — repeated calls during the same round are no-ops.
+    /// </summary>
+    internal static void RequestSafeCancellation(string threadPath)
+    {
+        if (ExecutionCancellations.TryGetValue(threadPath, out var cts) && !cts.IsCancellationRequested)
+        {
+            try { cts.Cancel(); } catch { /* already disposed */ }
+        }
+    }
 
     /// <summary>
     /// Sets the thread hub's access context to the thread creator's identity.
@@ -952,13 +986,17 @@ public static class ThreadExecution
         if (string.IsNullOrEmpty(text))
             return (null, null, true);
 
-        // Try JSON parsing only if text looks like JSON (starts with { or [)
+        // Try JSON parsing only if text looks like a JSON object — arrays/scalars don't carry
+        // threadId/result/success, and TryGetProperty would throw InvalidOperationException on them.
         var trimmed = text.AsSpan().TrimStart();
-        if (trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '['))
+        if (trimmed.Length > 0 && trimmed[0] == '{')
         try
         {
             using var doc = JsonDocument.Parse(text);
             var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return (text, null, !text.StartsWith("Error", StringComparison.Ordinal));
+
             string? threadId = null;
             if (root.TryGetProperty("threadId", out var tidProp) ||
                 root.TryGetProperty("ThreadId", out tidProp))

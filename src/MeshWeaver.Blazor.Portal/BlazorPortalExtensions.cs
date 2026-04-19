@@ -34,7 +34,7 @@ public static class BlazorPortalExtensions
         services.AddSingleton<DimensionManager>();
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
-        services.AddSingleton<BlazorAutocompleteService>();  // Centralized @ autocomplete
+        services.AddScoped<BlazorAutocompleteService>();  // Centralized @ autocomplete (scoped: depends on scoped IMeshService)
         return services;
     }
 }

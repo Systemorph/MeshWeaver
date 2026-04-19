@@ -56,7 +56,7 @@ public static class ApiTokensSettingsTab
         host.UpdateData(createDataId, new Dictionary<string, object?>
         {
             ["label"] = "",
-            ["expiryDays"] = 0
+            ["expiryDays"] = 365
         });
         // NOTE: Do NOT initialize resultDataId here — CreateTokenAsync saves a MeshNode
         // which triggers the workspace stream, causing the Settings page to rebuild.
@@ -80,70 +80,103 @@ public static class ApiTokensSettingsTab
             Label = "Label",
             Placeholder = "e.g. Claude Code",
             DataContext = LayoutAreaReference.GetDataPointer(createDataId)
-        });
+        }.WithWidth("240px"));
 
         formRow = formRow.WithView(new NumberFieldControl(new JsonPointerReference("expiryDays"), "Int32")
         {
             Label = "Expires in (days)",
             DataContext = LayoutAreaReference.GetDataPointer(createDataId)
-        });
+        }.WithWidth("140px"));
+
+        // Inline token result area driven by a data-bound render ID.
+        // Using data binding (not UpdateArea with DialogControl) so the result survives
+        // workspace stream rebuilds triggered by CreateNodeAsync. A separate counter
+        // key guarantees each Generate click produces a distinct stream emission (so
+        // repeated tokens show a dialog even if the raw token string is identical).
+        const string tokenRenderKey = "apiTokenRenderKey";
 
         formRow = formRow.WithView(Controls.Button("Generate Token")
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(async ctx =>
+            .WithClickAction(ctx =>
             {
-                var label = "";
-                var expiryDays = 0;
+                // Immediate feedback so user knows click fired.
+                ctx.Host.UpdateData(resultDataId,
+                    "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint);\">Starting…</p>");
+
+                // Subscribe (no await) to read current form data, then kick off the token
+                // creation via the service's observable API — fires hub.Post + RegisterCallback
+                // internally, never blocks the click handler.
                 ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(createDataId)
                     .Take(1)
                     .Subscribe(data =>
                     {
-                        label = data?.GetValueOrDefault("label")?.ToString()?.Trim() ?? "";
+                        var label = data?.GetValueOrDefault("label")?.ToString()?.Trim() ?? "";
+                        var expiryDays = 0;
                         if (data?.GetValueOrDefault("expiryDays") is { } ed)
                             int.TryParse(ed.ToString(), out expiryDays);
+
+                        if (string.IsNullOrEmpty(label))
+                        {
+                            ctx.Host.UpdateData(resultDataId,
+                                "<p style=\"padding: 8px 12px; background: var(--warning-fill-rest, #fef3c7); " +
+                                "color: var(--warning-color, #92400e); border-radius: 6px;\">Please enter a label.</p>");
+                            return;
+                        }
+
+                        DateTimeOffset? expiresAt = expiryDays > 0
+                            ? DateTimeOffset.UtcNow.AddDays(expiryDays)
+                            : null;
+
+                        ctx.Host.UpdateData(resultDataId,
+                            $"<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint);\">" +
+                            $"Creating token '{Esc(label)}'…</p>");
+
+                        // Observable-based service call — subscribes to the underlying
+                        // hub.Post + RegisterCallback pipeline without any await.
+                        tokenService.CreateToken(userId, userName, userEmail, label, expiresAt)
+                            .Subscribe(
+                                result =>
+                                {
+                                    var rawToken = result.RawToken;
+                                    var tokenHtml =
+                                        "<div style=\"padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; " +
+                                        "border: 1px solid var(--warning-color, #d4a72c); margin-bottom: 16px; " +
+                                        "width: 100%; box-sizing: border-box;\">" +
+                                        "<div style=\"font-weight: 600; margin-bottom: 8px; color: var(--warning-color, #92400e);\">" +
+                                        "Copy your token now — it won't be shown again!</div>" +
+                                        "<div style=\"font-family: ui-monospace, monospace; background: var(--neutral-layer-4); " +
+                                        "padding: 12px; border-radius: 6px; word-break: break-all; user-select: all; " +
+                                        "border: 1px solid var(--neutral-stroke-rest); cursor: pointer;\" " +
+                                        "onclick=\"var r=document.createRange();r.selectNodeContents(this);" +
+                                        "var s=window.getSelection();s.removeAllRanges();s.addRange(r);" +
+                                        "navigator.clipboard&&navigator.clipboard.writeText(this.textContent);\">" +
+                                        $"{Esc(rawToken)}</div>" +
+                                        "<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); " +
+                                        "margin-top: 6px;\">Click the token above to select &amp; copy to clipboard.</div>" +
+                                        "</div>";
+
+                                    ctx.Host.UpdateData(resultDataId, tokenHtml);
+                                    ctx.Host.UpdateData(tokenRenderKey, DateTimeOffset.UtcNow.Ticks);
+                                    ctx.Host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
+                                },
+                                ex => ctx.Host.UpdateData(resultDataId,
+                                    "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
+                                    $"border-radius: 6px;\">Error: {Esc(ex.Message)}</p>"));
                     });
 
-                if (string.IsNullOrEmpty(label))
-                {
-                    ctx.Host.UpdateData(resultDataId,
-                        "<p style=\"color: var(--warning-color);\">Please enter a label.</p>");
-                    return;
-                }
-
-                DateTimeOffset? expiresAt = expiryDays > 0
-                    ? DateTimeOffset.UtcNow.AddDays(expiryDays)
-                    : null;
-
-                try
-                {
-                    var (rawToken, _) = await tokenService.CreateTokenAsync(
-                        userId, userName, userEmail, label, expiresAt);
-
-                    ctx.Host.UpdateData(resultDataId,
-                        "<div style=\"padding: 12px; background: var(--warning-fill-rest); border-radius: 6px; margin-bottom: 16px;\">" +
-                        "<strong>Copy your token now — it won't be shown again!</strong>" +
-                        $"<div style=\"margin-top: 8px; font-family: monospace; background: var(--neutral-layer-4); padding: 8px 12px; " +
-                        $"border-radius: 4px; word-break: break-all; user-select: all;\">{Esc(rawToken)}</div></div>");
-
-                    ctx.Host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
-                }
-                catch (Exception ex)
-                {
-                    ctx.Host.UpdateData(resultDataId,
-                        $"<p style=\"color: #f87171;\">Error: {Esc(ex.Message)}</p>");
-                }
+                return Task.CompletedTask;
             }));
 
         createSection = createSection.WithView(formRow);
         stack = stack.WithView(createSection);
 
-        // Result area (newly created token display)
+        // Result area (newly created token display) — full width so the token text has room.
         stack = stack.WithView((h, _) =>
             h.Stream.GetDataStream<string>(resultDataId)
                 .Select(html => string.IsNullOrEmpty(html)
-                    ? (UiControl?)Controls.Stack
-                    : (UiControl?)Controls.Html(html))
-                .StartWith((UiControl?)Controls.Stack));
+                    ? (UiControl?)Controls.Stack.WithWidth("100%")
+                    : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Html(html)))
+                .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // Token list
         stack = stack.WithView(
@@ -202,18 +235,60 @@ public static class ApiTokensSettingsTab
             row = row.WithView(Controls.Html(
                 $"<span style=\"color: {statusColor}; font-weight: 600; font-size: 0.85rem;\">{status}</span>"));
 
+            var capturedForDelete = token;
+            // Delete button — available for revoked or expired tokens to clean up the list.
+            if (token.IsRevoked || (token.ExpiresAt.HasValue && token.ExpiresAt.Value < DateTimeOffset.UtcNow))
+            {
+                row = row.WithView(Controls.Button("Delete")
+                    .WithAppearance(Appearance.Outline)
+                    .WithClickAction(ctx =>
+                    {
+                        ctx.Host.UpdateData(resultDataId,
+                            "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint); " +
+                            $"background: var(--neutral-layer-2); border-radius: 6px;\">Deleting '{Esc(capturedForDelete.Label)}'…</p>");
+
+                        // Reactive: Subscribe to the service observable (hub.Post + RegisterCallback under the hood).
+                        tokenService.DeleteToken(capturedForDelete.NodePath).Subscribe(
+                            _ =>
+                            {
+                                ctx.Host.UpdateData(resultDataId,
+                                    "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
+                                    $"border-radius: 6px;\">Token '{Esc(capturedForDelete.Label)}' deleted.</p>");
+                                ctx.Host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
+                            },
+                            ex => ctx.Host.UpdateData(resultDataId,
+                                "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
+                                $"border-radius: 6px;\">Failed to delete: {Esc(ex.Message)}</p>"));
+                        return Task.CompletedTask;
+                    }));
+            }
+
             if (!token.IsRevoked)
             {
                 var captured = token;
                 row = row.WithView(Controls.Button("Revoke")
                     .WithAppearance(Appearance.Outline)
-                    .WithClickAction(async ctx =>
+                    .WithClickAction(ctx =>
                     {
-                        var success = await tokenService.RevokeTokenAsync(captured.NodePath);
-                        ctx.Host.UpdateData(resultDataId, success
-                            ? $"<p style=\"color: #4ade80;\">Token '{Esc(captured.Label)}' revoked.</p>"
-                            : "<p style=\"color: #f87171;\">Failed to revoke token.</p>");
-                        ctx.Host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
+                        ctx.Host.UpdateData(resultDataId,
+                            "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint); " +
+                            $"background: var(--neutral-layer-2); border-radius: 6px;\">Revoking '{Esc(captured.Label)}'…</p>");
+
+                        // Reactive: Subscribe to the service observable — no await, no Task.Run.
+                        tokenService.RevokeToken(captured.NodePath).Subscribe(
+                            success =>
+                            {
+                                ctx.Host.UpdateData(resultDataId, success
+                                    ? "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
+                                      $"border-radius: 6px;\">Token '{Esc(captured.Label)}' revoked.</p>"
+                                    : "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
+                                      "border-radius: 6px;\">Failed to revoke token.</p>");
+                                ctx.Host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
+                            },
+                            ex => ctx.Host.UpdateData(resultDataId,
+                                "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
+                                $"border-radius: 6px;\">Failed to revoke: {Esc(ex.Message)}</p>"));
+                        return Task.CompletedTask;
                     }));
             }
 

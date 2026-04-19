@@ -23,7 +23,11 @@ public static class KernelNodeType
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
         builder
-            .ConfigureHub(AddKernelTypes)
+            .ConfigureHub(config => AddKernelTypes(config)
+                // Route kernel addresses to local hosted hubs — never delegate to grains.
+                .WithRoutes(routes => routes.RouteAddressToHostedHub(
+                    AddressExtensions.KernelType,
+                    c => c.AddKernelSubHubHandlers())))
             .ConfigureServices(services =>
             {
                 services.AddSingleton<INodeTypeAccessRule>(sp =>
@@ -57,6 +61,12 @@ public static class KernelNodeType
         {
             var kernelContainer = new KernelContainer(config.ParentHub!.ServiceProvider);
             return kernelContainer.ConfigureHub(config);
+        }
+
+        public MessageHubConfiguration ConfigureSubHub(MessageHubConfiguration config)
+        {
+            var kernelContainer = new KernelContainer(config.ParentHub!.ServiceProvider);
+            return kernelContainer.ConfigureSubHub(config);
         }
     }
 

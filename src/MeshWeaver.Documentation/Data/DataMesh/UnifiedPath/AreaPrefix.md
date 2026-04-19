@@ -5,14 +5,16 @@ Description: Embed layout areas like Thumbnail, Details, or Catalog
 Icon: /static/DocContent/DataMesh/UnifiedPath/AreaPrefix/icon.svg
 ---
 
-The `area:` prefix (or no prefix) embeds layout areas from a node.
+The `area/` prefix (or no prefix) embeds layout areas from a node.
 
 # Syntax
 
 ```
-@@{address}/area:{areaName}
-@@{address}/{areaName}          (shorthand)
+@@{address}/area/{areaName}
+@@{address}/{areaName}          (shorthand — preferred)
 ```
+
+> **Note:** The legacy colon syntax (`area:AreaName`) is still supported for backward compatibility.
 
 # Standard Areas
 

@@ -521,11 +521,13 @@ export function registerCompletionProvider(editorId, config) {
 
                 // @ can be followed by paths with slashes: @agent/Name, @content/path/file
                 // / is only a trigger at word boundary (for commands like /agent)
+                // For @, require start-of-string or whitespace BEFORE the @ — this prevents
+                // "@/path/@content/..." from triggering a new @-reference inside an existing path.
                 let regex;
                 if (trigger === '/') {
                     regex = new RegExp(`(?:^|\\s)${escapedTrigger}([\\w\\-\\.]+)?$`);
                 } else {
-                    regex = new RegExp(`${escapedTrigger}([\\w\\-\\./:]+)?$`);
+                    regex = new RegExp(`(?:^|\\s|")${escapedTrigger}([\\w\\-\\./:]+)?$`);
                 }
 
                 const match = textUntilPosition.match(regex);
@@ -535,6 +537,11 @@ export function registerCompletionProvider(editorId, config) {
                         const fullMatch = match[0];
                         const slashIndex = fullMatch.indexOf('/');
                         match[0] = fullMatch.substring(slashIndex);
+                    } else {
+                        // Adjust @ match to not include the leading space/quote
+                        const fullMatch = match[0];
+                        const atIndex = fullMatch.indexOf('@');
+                        match[0] = fullMatch.substring(atIndex);
                     }
                     triggerMatch = match;
                     break;

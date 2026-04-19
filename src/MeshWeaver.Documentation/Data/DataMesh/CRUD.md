@@ -136,13 +136,13 @@ Query data using path-based references:
 var todoRef = "data:TodoItems/todo-1";
 
 // Get entire collection
-var allTodosRef = "data:TodoItems";
+var allTodosRef = "data/TodoItems";
 
 // Get file content
-var fileRef = "content:uploads/document.pdf";
+var fileRef = "content/uploads/document.pdf";
 
 // Get schema
-var schemaRef = "schema:TodoItem";
+var schemaRef = "schema/TodoItem";
 ```
 
 ## Virtual Paths

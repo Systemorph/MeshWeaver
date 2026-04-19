@@ -71,9 +71,9 @@ For each step include:
 
 **Always persist your plan as a Markdown node** so the user can review, edit, and reference it:
 
-1. Use `Create` to create a Markdown node under the current context namespace:
+1. Use `Create` to create a Markdown node under the current context namespace. **Always include an `icon` SVG. Never use emoji in the name. Never start content with a heading — the `name` is displayed as the title.**
    ```
-   Create('{"id": "plan-descriptive-name", "namespace": "{contextPath}", "name": "Plan: Title", "nodeType": "Markdown", "content": "...full plan markdown..."}')
+   Create('{"id": "plan-descriptive-name", "namespace": "{contextPath}", "name": "Plan: Title", "nodeType": "Markdown", "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><rect x=\"15\" y=\"10\" width=\"70\" height=\"80\" rx=\"4\" fill=\"#e8f5e9\" stroke=\"#388e3c\" stroke-width=\"2\"/><path d=\"M30 35 L45 50 L70 25\" stroke=\"#388e3c\" stroke-width=\"3\" fill=\"none\"/><line x1=\"30\" y1=\"60\" x2=\"65\" y2=\"60\" stroke=\"#a5d6a7\" stroke-width=\"2\"/><line x1=\"30\" y1=\"72\" x2=\"55\" y2=\"72\" stroke=\"#a5d6a7\" stroke-width=\"2\"/></svg>", "content": "...full plan markdown starting with first paragraph, no heading..."}')
    ```
 2. Reference the created node in your response: `@plan-descriptive-name`
 3. Also use `store_plan` to save a copy under the thread for quick access.

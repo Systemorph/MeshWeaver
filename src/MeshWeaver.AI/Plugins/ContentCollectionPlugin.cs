@@ -13,9 +13,7 @@ namespace MeshWeaver.AI.Plugins;
 /// the IFileContentProvider registered.
 /// </summary>
 
-#pragma warning disable CS9113 // Parameter 'chat' is unread — required by plugin DI convention
 public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugin
-#pragma warning restore CS9113
 {
     public string Name => "ContentCollection";
 
@@ -25,44 +23,63 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
     }
 
     [Description("Uploads text content (SVG, markdown, JSON, CSS, etc.) to a node's content collection. Use for storing diagrams, images (SVG), stylesheets, or any text-based files alongside a node.")]
-    public async Task<string> UploadContent(
-        [Description("Path to the node that owns the collection (e.g., @PartnerRe/AiConsulting)")] string nodePath,
+    public Task<string> UploadContent(
+        [Description("Canonical path to the node that owns the collection — use the MeshNode's `path` property, NOT its `name`. Use @/full/path for absolute or @relative/path relative to the current context. Example: @/PartnerRe/AIConsulting or @FinalReport. If you only know the display name, call Search('name:\"...\"') first and use the path field of the match.")] string nodePath,
         [Description("File name/path within the collection (e.g., 'diagram.svg', 'images/architecture.svg')")] string filePath,
         [Description("The text content to upload (SVG markup, markdown, JSON, etc.)")] string content,
         [Description("Collection name (default: 'content')")] string collectionName = "content",
         CancellationToken cancellationToken = default)
     {
-        var resolvedPath = MeshOperations.ResolvePath(nodePath);
+        var resolvedPath = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodePath));
+        var address = new Address(resolvedPath);
 
-        try
+        // Post + RegisterCallback + TCS — never `await hub.RegisterCallback(..., ct)` from
+        // a plugin method: that blocks the hub scheduler. The callback fires on a non-hub
+        // thread when the response arrives and resolves the TCS to unblock the caller.
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+        var registration = timeoutCts.Token.Register(() =>
         {
-            // Route to the node's hub where IFileContentProvider is registered
-            var address = new Address(resolvedPath);
-            var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+            if (cancellationToken.IsCancellationRequested)
+                tcs.TrySetCanceled(cancellationToken);
+            else
+                tcs.TrySetResult($"Error uploading to {resolvedPath}: the operation timed out waiting for a response.");
+        });
+        _ = tcs.Task.ContinueWith(_ => { registration.Dispose(); timeoutCts.Dispose(); }, TaskScheduler.Default);
 
-            // Use RegisterCallback pattern to avoid blocking
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var delivery = hub.Post(
-                new SaveContentRequest
-                {
-                    CollectionName = collectionName,
-                    FilePath = filePath,
-                    TextContent = content
-                },
-                o => o.WithTarget(address))!;
+        var delivery = hub.Post(
+            new SaveContentRequest
+            {
+                CollectionName = collectionName,
+                FilePath = filePath,
+                TextContent = content
+            },
+            o => o.WithTarget(address))!;
 
-            var response = await hub.RegisterCallback(delivery,
-                (d, _) => Task.FromResult(d), cts.Token);
-            var result = ((IMessageDelivery<SaveContentResponse>)response).Message;
-
-            return result.Success
-                ? $"Uploaded `{filePath}` to @{resolvedPath}/{collectionName}:{filePath}"
-                : $"Error: {result.Error}";
-        }
-        catch (Exception ex)
+        hub.RegisterCallback(delivery, callback =>
         {
-            return $"Error uploading to {resolvedPath}: {ex.Message}";
-        }
+            switch (callback)
+            {
+                case IMessageDelivery<SaveContentResponse> typed:
+                    tcs.TrySetResult(typed.Message.Success
+                        ? $"Uploaded `{filePath}` to @{resolvedPath}/{collectionName}/{filePath}"
+                        : $"Error: {typed.Message.Error}");
+                    break;
+                case IMessageDelivery<DeliveryFailure> failure:
+                    tcs.TrySetResult(
+                        $"Error uploading to {resolvedPath}: {failure.Message.Message ?? "delivery failed"}. " +
+                        $"Check that '{nodePath}' resolves to an existing node — pass the MeshNode's " +
+                        "`path` property, not its `name`.");
+                    break;
+                default:
+                    tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} uploading to {resolvedPath}.");
+                    break;
+            }
+            return callback;
+        });
+
+        return tcs.Task;
     }
 }
 
