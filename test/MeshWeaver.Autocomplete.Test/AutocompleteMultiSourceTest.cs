@@ -23,7 +23,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Query.Test;
+namespace MeshWeaver.Autocomplete.Test;
 
 /// <summary>
 /// Multi-source autocomplete integration tests.
