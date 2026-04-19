@@ -153,8 +153,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Files", "Threads", "Versions"],
-            "Viewer has only Read — no Create, Update, Delete, or Export items (Settings is a dedicated header button)");
+            ["Files", "Threads", "Versions", "Pin"],
+            "Viewer has only Read — no Create, Update, Delete, or Export items (Pin requires no permission; Settings is a dedicated header button)");
     }
 
     [Fact(Timeout = 30000)]
@@ -181,10 +181,10 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        // Editor gets Edit, Create, Copy, Import, Export, plus always-visible items
+        // Editor gets Edit, Create, Copy, Import, Export, Recycle (Update), Pin (None), plus always-visible items
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions"],
-            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export plus always-visible items (Settings is a dedicated header button)");
+            ["Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions", "Pin", "Recycle"],
+            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export/Recycle plus always-visible items and Pin (Settings is a dedicated header button)");
     }
 
     [Fact(Timeout = 30000)]
@@ -211,9 +211,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(10, "Admin should see all default menu items across Node and Mesh contexts (Settings is a dedicated header button)");
+        items.Should().HaveCount(12, "Admin should see all default menu items across Node and Mesh contexts (Settings is a dedicated header button)");
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Delete"]);
+            ["Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Delete", "Pin", "Recycle"]);
     }
 
     [Fact(Timeout = 30000)]
