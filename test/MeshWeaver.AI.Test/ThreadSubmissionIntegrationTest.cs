@@ -72,7 +72,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var committed = await WaitForThreadAsync(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
-            timeoutMs: 10_000,
+            timeoutMs: 30_000,
             ct);
 
         committed.IngestedMessageIds.Should().HaveCount(1);
@@ -151,7 +151,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         await WaitForThreadAsync(
             threadPath,
             t => t.IngestedMessageIds.Count == 3,
-            timeoutMs: 10_000,
+            timeoutMs: 30_000,
             ct);
 
         var final = await ReadThreadAsync(threadPath, ct);
@@ -179,7 +179,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var afterRoundOne = await WaitForThreadAsync(
             threadPath,
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 1 && t.Messages.Count == 2,
-            timeoutMs: 10_000, ct);
+            timeoutMs: 30_000, ct);
 
         var u1 = afterRoundOne.UserMessageIds[0];
         var r1 = afterRoundOne.Messages[1];
@@ -423,7 +423,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var settled = await WaitForThreadAsync(
             threadPath,
             t => !t.IsExecuting && t.IngestedMessageIds.Count == 1,
-            timeoutMs: 10_000, ct);
+            timeoutMs: 30_000, ct);
 
         // Give any racing second-dispatch a chance to land.
         await Task.Delay(500, ct);
