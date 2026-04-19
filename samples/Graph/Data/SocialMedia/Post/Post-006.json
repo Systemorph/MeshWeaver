@@ -1,0 +1,20 @@
+{
+  "id": "Post-006",
+  "namespace": "SocialMedia/Post",
+  "path": "SocialMedia/Post/Post-006",
+  "name": "April recap: what shipped and what's next",
+  "nodeType": "SocialMedia/Post",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SocialMediaPost",
+    "title": "April recap: what shipped and what's next",
+    "body": "A quick look back at April:\n\n- Annotation system: \u2705\n- MCP OAuth discovery: \u2705\n- Aggregating providers: \u2705\n\nNext month we open up the social media planner publicly. Stay tuned.",
+    "profilePath": "SocialMedia/Profile/Roland-LinkedIn",
+    "platform": "LinkedIn",
+    "scheduledAt": "2026-04-29T08:00:00+02:00",
+    "impressions": 0,
+    "likes": 0,
+    "comments": 0
+  }
+}

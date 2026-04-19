@@ -237,7 +237,7 @@ public static class UserActivityLayoutAreas
             "<div style=\"flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; " +
             "background: var(--neutral-layer-3); " +
             "display: flex; align-items: center; justify-content: center;\">" +
-            "<img src=\"/static/storage/content/MeshWeaver/logo.svg\" alt=\"\" style=\"width: 24px; height: 24px;\" />" +
+            "<img src=\"/static/NodeTypeIcons/meshweaver-logo.svg\" alt=\"\" style=\"width: 24px; height: 24px;\" />" +
             "</div>" +
 
             // Content

@@ -1,0 +1,17 @@
+{
+  "id": "Sarah-LinkedIn",
+  "namespace": "SocialMedia/Profile",
+  "path": "SocialMedia/Profile/Sarah-LinkedIn",
+  "name": "Sarah on LinkedIn",
+  "nodeType": "SocialMedia/Profile",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SocialMediaProfile",
+    "name": "Sarah on LinkedIn",
+    "platform": "LinkedIn",
+    "owner": "sarah@example.com",
+    "profileUrl": "https://www.linkedin.com/in/sarah-example/",
+    "bio": "Marketing lead. Posts about product launches and customer stories."
+  }
+}

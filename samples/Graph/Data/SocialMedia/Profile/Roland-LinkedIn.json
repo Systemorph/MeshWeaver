@@ -1,0 +1,17 @@
+{
+  "id": "Roland-LinkedIn",
+  "namespace": "SocialMedia/Profile",
+  "path": "SocialMedia/Profile/Roland-LinkedIn",
+  "name": "Roland on LinkedIn",
+  "nodeType": "SocialMedia/Profile",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SocialMediaProfile",
+    "name": "Roland on LinkedIn",
+    "platform": "LinkedIn",
+    "owner": "rbuergi@systemorph.com",
+    "profileUrl": "https://www.linkedin.com/in/rolandbuergi/",
+    "bio": "Building MeshWeaver \u2014 collaborative actor-based runtime for data, AI and reactive UIs."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "Post-001",
+  "namespace": "SocialMedia/Post",
+  "path": "SocialMedia/Post/Post-001",
+  "name": "Why we bet on the actor model",
+  "nodeType": "SocialMedia/Post",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SocialMediaPost",
+    "title": "Why we bet on the actor model",
+    "body": "Reactive systems live or die on isolation. After years of fighting threadpools, we leaned into the actor model with Orleans \u2014 and never looked back.\n\nWhat surprised us most? **The debugging story is dramatically better.**",
+    "profilePath": "SocialMedia/Profile/Roland-LinkedIn",
+    "platform": "LinkedIn",
+    "scheduledAt": "2026-04-05T09:00:00+02:00",
+    "publishedAt": "2026-04-05T09:01:42+02:00",
+    "impressions": 4321,
+    "likes": 187,
+    "comments": 24,
+    "mediaUrl": "https://picsum.photos/seed/meshweaver-actors/800/450"
+  }
+}

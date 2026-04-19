@@ -1,0 +1,22 @@
+{
+  "id": "Post-003",
+  "namespace": "SocialMedia/Post",
+  "path": "SocialMedia/Post/Post-003",
+  "name": "Customer story: how Northwind cut reporting latency 10x",
+  "nodeType": "SocialMedia/Post",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SocialMediaPost",
+    "title": "Customer story: how Northwind cut reporting latency 10x",
+    "body": "When the analytics team at Northwind moved their pricing dashboards onto MeshWeaver, page renders dropped from 4.1s to 380ms.\n\nFull case study in comments.",
+    "profilePath": "SocialMedia/Profile/Sarah-LinkedIn",
+    "platform": "LinkedIn",
+    "scheduledAt": "2026-04-08T14:00:00+02:00",
+    "publishedAt": "2026-04-08T14:00:51+02:00",
+    "impressions": 9120,
+    "likes": 421,
+    "comments": 67,
+    "mediaUrl": "https://picsum.photos/seed/northwind-case/800/450"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "Posts",
+  "namespace": "SocialMedia",
+  "path": "SocialMedia/Posts",
+  "name": "Posts",
+  "nodeType": "Markdown",
+  "category": "SocialMedia",
+  "description": "Calendar overview of scheduled and published social media posts",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "MarkdownDocument",
+    "title": "Social Media Calendar",
+    "icon": "/static/NodeTypeIcons/document.svg",
+    "content": "# Social Media Calendar\n\nPlan and review your scheduled LinkedIn posts. Use the arrows to switch months and the filter buttons to narrow down to a single profile. By default the calendar shows posts from your own profiles.\n\n@SocialMedia/Post/Calendar\n"
+  }
+}

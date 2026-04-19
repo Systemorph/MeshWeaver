@@ -1,0 +1,20 @@
+{
+  "id": "Post-004",
+  "namespace": "SocialMedia/Post",
+  "path": "SocialMedia/Post/Post-004",
+  "name": "Live demo Thursday: agentic data exploration",
+  "nodeType": "SocialMedia/Post",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SocialMediaPost",
+    "title": "Live demo Thursday: agentic data exploration",
+    "body": "Join us this Thursday for a 30-minute live demo of our new Navigator agent. Bring questions \u2014 we'll answer them on a real dataset.\n\nRegister via the link in comments.",
+    "profilePath": "SocialMedia/Profile/Roland-LinkedIn",
+    "platform": "LinkedIn",
+    "scheduledAt": "2026-04-22T17:00:00+02:00",
+    "impressions": 0,
+    "likes": 0,
+    "comments": 0
+  }
+}
