@@ -906,9 +906,40 @@ public class MeshOperations
 
         try
         {
+            // 1. Flush LOCAL NodeTypeService caches so a fresh compile runs on next access.
+            //    Disposing the hub alone is not enough — NodeTypeService._compilationErrors
+            //    and _compilationTasks survive hub teardown and would keep serving stale
+            //    errors.
+            nodeTypeService?.InvalidateCache(resolvedPath);
+
+            // 2. Broadcast the invalidation across silos via IMeshChangeFeed. Every silo's
+            //    NodeTypeService subscribes to this feed and calls InvalidateCache locally
+            //    when it sees an event for a tracked NodeType path.
+            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+            if (changeFeed != null)
+            {
+                var segments = resolvedPath.Split('/');
+                var id = segments.Length > 0 ? segments[^1] : resolvedPath;
+                var ns = segments.Length > 1 ? string.Join("/", segments[..^1]) : "";
+                changeFeed.Publish(new MeshChangeEvent(
+                    Namespace: ns,
+                    Id: id,
+                    Path: resolvedPath,
+                    Kind: MeshChangeKind.Updated,
+                    NodeType: MeshNode.NodeTypePath,
+                    Version: 0,
+                    Timestamp: DateTimeOffset.UtcNow));
+            }
+
+            // 3. Dispose the hub so the next request re-initialises with fresh config.
             hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(resolvedPath)));
             return Task.FromResult(JsonSerializer.Serialize(
-                new { status = "Recycled", path = resolvedPath, message = "DisposeRequest posted. Wait ~100ms before the next access so the grain teardown completes." },
+                new
+                {
+                    status = "Recycled",
+                    path = resolvedPath,
+                    message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. Wait ~100ms before the next access."
+                },
                 hub.JsonSerializerOptions));
         }
         catch (Exception ex)

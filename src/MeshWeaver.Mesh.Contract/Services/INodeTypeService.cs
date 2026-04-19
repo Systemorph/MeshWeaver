@@ -64,4 +64,13 @@ public interface INodeTypeService
     /// to show elapsed-time feedback in progress overlays.
     /// </summary>
     DateTimeOffset? GetCompilationStartedAt(string nodeTypePath) => null;
+
+    /// <summary>
+    /// Flushes all cached state (compilation errors, cached tasks, cached hub
+    /// configurations, etc.) for the given NodeType path, forcing a fresh compile
+    /// on the next access. Paired with <c>DisposeRequest</c> to fully reset a
+    /// stuck NodeType — disposing the hub alone is not enough because the
+    /// service-level caches survive hub teardown.
+    /// </summary>
+    void InvalidateCache(string nodeTypePath) { }
 }
