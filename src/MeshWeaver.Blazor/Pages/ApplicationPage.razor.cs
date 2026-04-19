@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
@@ -26,8 +27,12 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     [Inject]
     private IMeshService MeshService { get; set; } = null!;
 
+    // Resolved lazily from the service provider so the page still renders when
+    // INodeTypeService isn't registered. A hard [Inject] would throw during
+    // component construction and leave the user with a black screen.
     [Inject]
-    private INodeTypeService NodeTypeService { get; set; } = null!;
+    private IServiceProvider Services { get; set; } = null!;
+    private INodeTypeService? NodeTypeService => Services.GetService<INodeTypeService>();
 
     /// <summary>
     /// Path of any NodeType currently compiling. Used by the razor template to flip
@@ -93,20 +98,27 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         // most compiles are sub-second; the tick is for reassurance on slow ones.
         _compileProgressTimer = new System.Threading.Timer(_ =>
         {
-            if (!IsLoading) return;
-            var paths = NodeTypeService.GetCompilingPaths();
-            var first = paths.FirstOrDefault();
-            var next = first;
-            if (next != CompilingPath)
+            try
             {
-                CompilingPath = next;
-                CompilingSeconds = 0;
+                if (!IsLoading) return;
+                var paths = NodeTypeService?.GetCompilingPaths();
+                var first = paths?.FirstOrDefault();
+                if (first != CompilingPath)
+                {
+                    CompilingPath = first;
+                    CompilingSeconds = 0;
+                }
+                else if (first != null)
+                {
+                    CompilingSeconds++;
+                }
+                _ = InvokeAsync(StateHasChanged);
             }
-            else if (next != null)
+            catch
             {
-                CompilingSeconds++;
+                // Timer tick should never take down the page. The worst-case is a stale
+                // "Compiling…" message; that's better than a crashed circuit.
             }
-            InvokeAsync(StateHasChanged);
         }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
