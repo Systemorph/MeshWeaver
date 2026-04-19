@@ -85,26 +85,42 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         InitializeFromMeshConfiguration();
 
         // Subscribe to the mesh change feed so cache invalidations reach every silo.
-        // In monolith this is in-process; in Orleans it's a broadcast channel.
-        // We invalidate whenever a known NodeType's path is seen in an event — covers both:
-        //   (a) a NodeType definition was updated / deleted elsewhere, and
-        //   (b) Recycle published a synthetic Updated event to force a reset.
+        // Defensive: wrap in try/catch because a construction-time throw here would
+        // take down *every* silo's DI and deadlock the whole cluster — the feed impl
+        // might not be ready, might throw on early subscription, etc. Log and move on.
         if (changeFeed != null)
         {
-            _changeFeedSubscription = changeFeed.Subscribe(evt =>
+            try
             {
-                if (string.IsNullOrEmpty(evt.Path)) return;
-                if (_hubConfigurations.ContainsKey(evt.Path)
-                    || _compilationTasks.ContainsKey(evt.Path)
-                    || _compilationErrors.ContainsKey(evt.Path)
-                    || string.Equals(evt.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+                _changeFeedSubscription = changeFeed.Subscribe(evt =>
                 {
-                    logger.LogInformation(
-                        "Cross-silo cache invalidation for {NodeTypePath} via MeshChangeFeed ({Kind})",
-                        evt.Path, evt.Kind);
-                    InvalidateCache(evt.Path);
-                }
-            });
+                    try
+                    {
+                        if (string.IsNullOrEmpty(evt.Path)) return;
+                        if (_hubConfigurations.ContainsKey(evt.Path)
+                            || _compilationTasks.ContainsKey(evt.Path)
+                            || _compilationErrors.ContainsKey(evt.Path)
+                            || string.Equals(evt.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+                        {
+                            logger.LogInformation(
+                                "Cross-silo cache invalidation for {NodeTypePath} via MeshChangeFeed ({Kind})",
+                                evt.Path, evt.Kind);
+                            InvalidateCache(evt.Path);
+                        }
+                    }
+                    catch (Exception handlerEx)
+                    {
+                        logger.LogWarning(handlerEx,
+                            "MeshChangeFeed handler faulted while processing event for {Path}",
+                            evt.Path);
+                    }
+                });
+            }
+            catch (Exception subscribeEx)
+            {
+                logger.LogWarning(subscribeEx,
+                    "Failed to subscribe to IMeshChangeFeed — cross-silo cache invalidation disabled");
+            }
         }
     }
 
