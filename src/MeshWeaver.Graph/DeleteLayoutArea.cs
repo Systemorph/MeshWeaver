@@ -42,17 +42,31 @@ public static class DeleteLayoutArea
         var backHref = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
-        var permissionsObs = PermissionHelper.ObservePermissions(host.Hub, nodePath).Take(1);
+        // Both source streams must emit at least once for the page to render. Add Timeout
+        // + Catch so a stuck permission lookup or a hanging descendant count can never
+        // leave the user with an eternal spinner. We render conservatively on failure
+        // (deny, zero descendants) rather than blocking.
+        var permissionsObs = PermissionHelper.ObservePermissions(host.Hub, nodePath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<Permission, Exception>(_ => Observable.Return(Permission.None));
 
-        var descendantsObs = meshQuery != null
+        var descendantsObs = (meshQuery != null
             ? Observable.FromAsync(token => CountDescendantsAsync(meshQuery, nodePath, token))
-            : Observable.Return(0);
+            : Observable.Return(0))
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<int, Exception>(_ => Observable.Return(0));
+
+        var placeholder = (UiControl?)Controls.Stack.WithStyle("padding: 24px;")
+            .WithView(Controls.Html(
+                "<p style=\"color: var(--neutral-foreground-hint);\">Loading delete confirmation…</p>"));
 
         return permissionsObs.CombineLatest(descendantsObs,
             (perms, count) => (canDelete: perms.HasFlag(Permission.Delete), count))
-            .Select(tuple => tuple.canDelete
+            .Select(tuple => (UiControl?)(tuple.canDelete
                 ? BuildDeletePage(host, nodePath, backHref, tuple.count)
-                : BuildAccessDenied(backHref));
+                : BuildAccessDenied(backHref)))
+            .StartWith(placeholder);
     }
 
     private static async Task<int> CountDescendantsAsync(IMeshService meshQuery, string nodePath, CancellationToken ct)
