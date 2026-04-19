@@ -37,6 +37,9 @@ internal class PersistenceService(
     public IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath)
         => core.GetDescendantsAsync(parentPath, Options);
 
+    public IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath)
+        => core.GetAllDescendantsAsync(parentPath, Options);
+
     public IObservable<MeshNode> SaveNode(MeshNode node)
         => Observable.FromAsync(ct => core.SaveNodeAsync(node, Options, ct));
 

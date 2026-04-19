@@ -667,17 +667,21 @@ public static class MeshExtensions
         IMeshStorage persistence,
         ILogger logger)
     {
-        // Post the response FIRST, while the hub is still alive. Under Orleans (and
-        // during monolith disposal) the storage-level delete can tear this hub down
-        // before we'd otherwise get a chance to reply — the caller would then wait
-        // forever on its RegisterCallback. Validators have already passed, so this
-        // is the commit point; if the storage write itself fails we can only log.
-        hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
-
+        // Post the response AFTER the storage delete actually commits so callers see a
+        // consistent view: an awaited DeleteNode returns only once the node is gone from
+        // persistence. Without this, race conditions occur — e.g. tests (and UI flows)
+        // that query right after the delete can still observe the pre-delete node.
+        //
+        // The previous "reply first" approach guarded against Orleans/monolith hub
+        // teardown during self-deletion. HandleDeleteNodeRequest runs on the mesh hub,
+        // and a child-node delete does not tear down that hub — so the teardown concern
+        // does not apply here. If a true self-teardown case emerges we post Fail from
+        // OnError and the caller still unblocks.
         persistence.DeleteNode(path, recursive: false)
             .Subscribe(
                 _ =>
                 {
+                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()
                         ?.Publish(MeshChangeEvent.Deleted(path));
                     logger.LogInformation(
@@ -685,9 +689,13 @@ public static class MeshExtensions
                         path, capturedRequest.DeletedBy ?? "system");
                 },
                 ex =>
-                    logger.LogError(ex,
-                        "Storage delete failed for {Path} after Ok response was already sent — response cannot be walked back",
-                        path));
+                {
+                    logger.LogError(ex, "Storage delete failed for {Path}", path);
+                    hub.Post(
+                        DeleteNodeResponse.Fail($"Storage delete failed: {ex.Message}",
+                            NodeDeletionRejectionReason.Unknown),
+                        o => o.ResponseFor(request));
+                });
     }
 
     /// <summary>

@@ -678,12 +678,13 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
 
         // Collect Code nodes from the configured sources. Default: the sibling "_Source"
-        // subtree. We use the IMeshQueryProvider pipeline (via local QueryAsync) rather
-        // than meshStorage.GetDescendantsAsync, because the storage layer explicitly
-        // EXCLUDES satellite nodes (MeshNode.MainNode != Path) from descendant browsing —
-        // and our Code nodes are always persisted as satellites with MainNode set to
-        // their parent _Source folder. The query provider has no such filter, so it
-        // returns every matching Code node.
+        // subtree. `GetAllDescendantsAsync` (not `GetDescendantsAsync`) is used because
+        // Code nodes are persisted as satellites — CreateNodeRequest auto-sets
+        // MainNode to the parent namespace for any NodeType registered as satellite.
+        // The regular `GetDescendantsAsync` in InMemoryPersistenceService excludes
+        // satellites from browsing; the `All` variant includes them.
+        // We also check the parent path as a single-node fetch so `path:X` shorthand
+        // with a leaf Code node path works.
         var codeFiles = new List<string>();
         var codeFilePaths = new List<string>();
         var seenCodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -691,26 +692,23 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         var sourcePaths = ResolveSourcePaths(definition.Sources, nodeTypePath);
         foreach (var sourcePath in sourcePaths)
         {
-            // Combine path-exact + namespace-subtree so a single-file shorthand and a
-            // folder both resolve. Satellite-safe.
-            var queries = new[]
-            {
-                $"path:{sourcePath} nodeType:{CodeNodeType.NodeType}",
-                $"namespace:{sourcePath} scope:subtree nodeType:{CodeNodeType.NodeType}"
-            };
+            // Path-exact fetch first (handles `path:X` / `@X` pointing at a single Code node).
+            var single = await meshStorage.GetNodeAsync(sourcePath, ct);
+            if (single != null) AddIfCodeNode(single);
 
-            foreach (var q in queries)
-            {
-                await foreach (var candidate in QueryAsync<MeshNode>(q, ct))
-                {
-                    if (candidate.NodeType != CodeNodeType.NodeType) continue;
-                    if (candidate.Content is not CodeConfiguration codeConfig) continue;
-                    if (string.IsNullOrEmpty(codeConfig.Code)) continue;
-                    if (candidate.Path is { Length: > 0 } p && !seenCodePaths.Add(p)) continue;
-                    codeFiles.Add(codeConfig.Code);
-                    if (candidate.Path != null) codeFilePaths.Add(candidate.Path);
-                }
-            }
+            // Then all descendants INCLUDING satellites — that's the Code-file case.
+            await foreach (var descendant in meshStorage.GetAllDescendantsAsync(sourcePath))
+                AddIfCodeNode(descendant);
+        }
+
+        void AddIfCodeNode(MeshNode candidate)
+        {
+            if (candidate.NodeType != CodeNodeType.NodeType) return;
+            if (candidate.Content is not CodeConfiguration codeConfig) return;
+            if (string.IsNullOrEmpty(codeConfig.Code)) return;
+            if (candidate.Path is { Length: > 0 } p && !seenCodePaths.Add(p)) return;
+            codeFiles.Add(codeConfig.Code);
+            if (candidate.Path != null) codeFilePaths.Add(candidate.Path);
         }
 
         logger.LogInformation(
