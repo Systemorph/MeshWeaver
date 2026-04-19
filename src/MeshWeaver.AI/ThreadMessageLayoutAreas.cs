@@ -299,6 +299,7 @@ public static class ThreadMessageLayoutAreas
             .WithTimestamp(msg.Timestamp)
             .WithText(new JsonPointerReference($"{dataPointer}/text"))
             .WithToolCalls(new JsonPointerReference($"{dataPointer}/toolCalls"))
+            .WithUpdatedNodes(new JsonPointerReference($"{dataPointer}/updatedNodes"))
             .WithThreadPath(threadPath)
             .WithMessageId(messageId);
 

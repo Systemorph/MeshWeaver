@@ -1,0 +1,19 @@
+{
+  "id": "Post",
+  "namespace": "SocialMedia",
+  "name": "Social Media Post",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A social media post (scheduled, published, with engagement stats)",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Post",
+    "namespace": "SocialMedia",
+    "displayName": "Social Media Post",
+    "iconName": "DocumentText",
+    "description": "A social media post (scheduled, published, with engagement stats)",
+    "configuration": "config => config.WithContentType<SocialMediaPost>().AddData(data => data.AddSource(source => source.WithType<Platform>(t => t.WithInitialData(Platform.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddSocialMediaPostLayoutAreas().WithDefaultArea(\"Calendar\"))"
+  }
+}

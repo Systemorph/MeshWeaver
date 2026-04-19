@@ -61,6 +61,8 @@
                 }
                 else
                 {
+                    var display = FormatToolCallDisplay(call);
+                    var change = display.IsNodeModifying ? FindChange(display.Path) : null;
                     @* Completed delegation or regular tool call: expandable details *@
                     <details class="thread-msg-tool-entry @(isDelegation ? "thread-msg-delegation-entry" : "")">
                         <summary class="thread-msg-tool-entry-name">
@@ -71,7 +73,27 @@
                             }
                             else
                             {
-                                <span>@summary</span>
+                                <span>@display.Verb</span>
+                                @if (!string.IsNullOrEmpty(display.Path))
+                                {
+                                    <text>&nbsp;</text>
+                                    <a href="/@display.Path" class="thread-msg-tool-path" @onclick:stopPropagation>@display.Path</a>
+                                }
+                                @if (change is not null)
+                                {
+                                    @if (change.VersionBefore.HasValue && change.VersionAfter.HasValue)
+                                    {
+                                        <a class="thread-msg-tool-action" title="Compare v@(change.VersionBefore) with v@(change.VersionAfter)"
+                                           href="/@display.Path/Versions?from=@(change.VersionBefore)&to=@(change.VersionAfter)"
+                                           @onclick:stopPropagation>Diff</a>
+                                    }
+                                    @if (change.VersionBefore.HasValue)
+                                    {
+                                        <a class="thread-msg-tool-action thread-msg-tool-action-muted" title="Revert to v@(change.VersionBefore)"
+                                           href="/@display.Path/Versions?restore=@(change.VersionBefore)"
+                                           @onclick:stopPropagation>Revert v@(change.VersionBefore)</a>
+                                    }
+                                }
                             }
                         </summary>
                         @if (!string.IsNullOrEmpty(call.Arguments))
@@ -236,6 +258,36 @@
     }
     .thread-msg-tool-entry-name:hover {
         color: var(--neutral-foreground-rest);
+    }
+    .thread-msg-tool-path {
+        color: var(--accent-fill-rest);
+        text-decoration: none;
+        font-family: var(--monospace-font, monospace);
+        font-size: 0.72rem;
+        padding: 1px 4px;
+        border-radius: 3px;
+    }
+    .thread-msg-tool-path:hover {
+        background: var(--neutral-layer-3);
+        text-decoration: underline;
+    }
+    .thread-msg-tool-action {
+        display: inline-flex;
+        align-items: center;
+        margin-left: 6px;
+        padding: 1px 6px;
+        font-size: 0.7rem;
+        border-radius: 3px;
+        color: var(--accent-fill-rest);
+        text-decoration: none;
+        border: 1px solid transparent;
+    }
+    .thread-msg-tool-action:hover {
+        background: var(--neutral-layer-3);
+        border-color: var(--neutral-stroke-rest);
+    }
+    .thread-msg-tool-action-muted {
+        color: var(--neutral-foreground-hint);
     }
     .thread-msg-tool-pending {
         color: var(--accent-fill-rest);
