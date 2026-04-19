@@ -55,6 +55,9 @@ public static class ContentCollectionsExtensions
         /// </summary>
         public MessageHubConfiguration AddContentCollectionsInfrastructure()
         {
+            if (config.Get<bool>(nameof(AddContentCollectionsInfrastructure)))
+                return config;
+            config = config.Set(true, nameof(AddContentCollectionsInfrastructure));
             return config
                 .WithTypes(typeof(ContentCollectionReference))
                 .WithServices(AddContentService)
