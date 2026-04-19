@@ -694,7 +694,7 @@ public static class MeshNodeLayoutAreas
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(MeshSearchRenderMode.Hierarchical)
                 .WithMaxColumns(3)
-                .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(instanceNs)}");
+                .WithCreateHref($"/create?namespace={Uri.EscapeDataString(instanceNs)}");
         });
     }
 
@@ -721,7 +721,7 @@ public static class MeshNodeLayoutAreas
             .WithItemLimit(50)
             .WithMaxRows(3)
             .WithCollapsibleSections(true)
-            .WithCreateHref($"/{hubPath}/{CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(hubPath)}");
+            .WithCreateHref($"/{hubPath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(hubPath)}");
     }
 
     /// <summary>

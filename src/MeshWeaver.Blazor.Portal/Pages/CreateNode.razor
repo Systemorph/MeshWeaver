@@ -338,11 +338,11 @@
         if (string.IsNullOrWhiteSpace(name))
             return "";
 
-        var words = Regex.Split(name.Trim(), @"[\s_]+")
+        var words = Regex.Split(name.Trim(), @"[\s\-_]+")
             .Where(w => !string.IsNullOrEmpty(w))
-            .Select(w => Regex.Replace(w, @"[^a-zA-Z0-9\-]", "").ToLowerInvariant())
-            .Where(w => !string.IsNullOrEmpty(w));
+            .Select(w => char.ToUpperInvariant(w[0]) + w.Substring(1));
 
-        return string.Join("-", words);
+        var pascalCase = string.Join("", words);
+        return Regex.Replace(pascalCase, @"[^a-zA-Z0-9]", "");
     }
 }

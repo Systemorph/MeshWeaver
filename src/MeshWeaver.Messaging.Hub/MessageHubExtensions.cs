@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -154,8 +155,25 @@ public static class MessageHubExtensions
             current = parent;
         }
 
-        // Fallback: heartbeat via Observable.Interval (monolith or no grain callback)
-        return Observable.Interval(TimeSpan.FromSeconds(25))
-            .Subscribe(_ => hub.Post(new HeartBeatEvent()));
+        // Fallback: heartbeat via Observable.Interval (monolith or no grain callback).
+        // Stop on the first DeliveryFailure so we don't spam warnings when no handler is registered.
+        var cts = new CancellationTokenSource();
+        IDisposable? sub = null;
+        sub = Observable.Interval(TimeSpan.FromSeconds(25))
+            .Subscribe(_ =>
+            {
+                var delivery = hub.Post(new HeartBeatEvent());
+                if (delivery == null) return;
+                hub.RegisterCallback(delivery, (d, _) =>
+                {
+                    if (d.Message is DeliveryFailure)
+                    {
+                        sub?.Dispose();
+                        cts.Cancel();
+                    }
+                    return Task.FromResult(d);
+                }, cts.Token);
+            });
+        return new CompositeDisposable(sub, Disposable.Create(() => cts.Cancel()));
     }
 }
