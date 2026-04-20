@@ -1,120 +1,68 @@
-﻿using System.Text;
-using System.Text.RegularExpressions;
-using HtmlAgilityPack;
-using Markdig;
-using Markdig.Syntax;
-using MeshWeaver.Data;
-using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
-using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components.Rendering;
-using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
 
 namespace MeshWeaver.Blazor.Components;
 
 public partial class MarkdownView
 {
-    private string? Html { get; set; }
-    private readonly string? Markdown;
+    private object? MarkdownRaw { get; set; }
+    private object? HtmlRaw { get; set; }
     private object? CodeSubmissionsRaw { get; set; }
-    private IReadOnlyCollection<SubmitCodeRequest>? CodeSubmissions => CodeSubmissionsRaw as IReadOnlyCollection<SubmitCodeRequest>;
+    private object? ShowReferencesRaw { get; set; }
 
-    /// <summary>
-    /// Unique kernel ID for this markdown view instance.
-    /// Each view instance gets its own unique kernel via a GUID.
-    /// </summary>
+    private string? Html { get; set; }
+    private IReadOnlyList<SubmitCodeRequest>? CodeSubmissions { get; set; }
+    public bool ShowReferencesSection { get; set; } = true;
+
     private readonly string _kernelId = Guid.NewGuid().AsString();
     private Address? _kernelAddress;
     private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(_kernelId);
 
     private bool _codeSubmitted;
 
-    /// <summary>
-    /// Whether to show the References section at the end of the markdown.
-    /// </summary>
-    public bool ShowReferencesSection { get; set; } = true;
-
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.Markdown, x => x.Markdown);
-        DataBind(ViewModel.Html, x => x.Html);
+        DataBind(ViewModel.Markdown, x => x.MarkdownRaw);
+        DataBind(ViewModel.Html, x => x.HtmlRaw);
         DataBind(ViewModel.CodeSubmissions, x => x.CodeSubmissionsRaw);
-        DataBind(ViewModel.ShowReferences, x => x.ShowReferencesSection);
+        DataBind(ViewModel.ShowReferences, x => x.ShowReferencesRaw);
 
-        if (Html == null)
+        var markdown = MarkdownViewLogic.CoerceString(MarkdownRaw);
+        Html = MarkdownViewLogic.CoerceString(HtmlRaw);
+        CodeSubmissions = MarkdownViewLogic.CoerceCodeSubmissions(CodeSubmissionsRaw, Hub.JsonSerializerOptions);
+        ShowReferencesSection = MarkdownViewLogic.CoerceBool(ShowReferencesRaw, defaultValue: true);
+
+        if (Html is null && !string.IsNullOrEmpty(markdown))
         {
-            var currentNodePath = Stream?.Owner?.ToString();
-            var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream?.Owner, currentNodePath);
-            // Transform annotation markers (<!--comment:id-->, <!--insert:id-->, <!--delete:id-->)
-            // into HTML spans before Markdig processing
-            var transformedMarkdown = AnnotationMarkdownExtension.TransformAnnotations(Markdown ?? "");
-            var document = Markdig.Markdown.Parse(transformedMarkdown, pipeline);
-
-            // Extract code submissions from executable code blocks if not already provided
-            if (CodeSubmissions == null || CodeSubmissions.Count == 0)
-            {
-                var executableBlocks = document.Descendants<ExecutableCodeBlock>().ToList();
-                foreach (var block in executableBlocks)
-                {
-                    block.Initialize();
-                }
-                var submissions = executableBlocks
-                    .Select(b => b.SubmitCode)
-                    .Where(s => s != null)
-                    .Cast<SubmitCodeRequest>()  // Cast to non-nullable to fix IReadOnlyCollection cast
-                    .ToList();
-                if (submissions.Count > 0)
-                {
-                    CodeSubmissionsRaw = submissions;
-                }
-            }
-
-            Html = document.ToHtml(pipeline);
+            var result = MarkdownViewLogic.Render(markdown, Stream?.Owner, Stream?.Owner?.ToString());
+            Html = result.Html;
+            CodeSubmissions ??= result.CodeSubmissions;
+        }
+        else if (CodeSubmissions is null
+                 && Html is not null
+                 && Html.Contains(ExecutableCodeBlockRenderer.KernelAddressPlaceholder)
+                 && !string.IsNullOrEmpty(markdown))
+        {
+            CodeSubmissions = MarkdownViewLogic.ExtractCodeSubmissions(
+                markdown, Stream?.Owner, Stream?.Owner?.ToString());
         }
 
-        // Replace kernel address placeholder in HTML with actual kernel address
-        if (Html != null && CodeSubmissions != null && CodeSubmissions.Count > 0)
-        {
-            var htmlString = Html.ToString();
-            if (htmlString != null && htmlString.Contains(ExecutableCodeBlockRenderer.KernelAddressPlaceholder))
-            {
-                Html = htmlString.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString());
-            }
-        }
+        if (Html is not null && CodeSubmissions is { Count: > 0 })
+            Html = MarkdownViewLogic.ReplaceKernelPlaceholder(Html, KernelAddress);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await base.OnAfterRenderAsync(firstRender);
 
-        // Submit code to kernel on first render.
-        // Create the kernel node first so Orleans can activate the grain.
-        if (firstRender && !_codeSubmitted && CodeSubmissions != null && CodeSubmissions.Count > 0)
+        if (firstRender && !_codeSubmitted && CodeSubmissions is { Count: > 0 })
         {
             _codeSubmitted = true;
-            var ownerPath = Stream?.Owner?.ToString();
-            var kernelNode = new MeshNode(KernelAddress.Id!, KernelAddress.Type)
-            {
-                NodeType = "kernel",
-                MainNode = ownerPath,
-                Name = $"Kernel ({_kernelId[..8]})"
-            };
-            var delivery = Hub.Post(new CreateNodeRequest(kernelNode),
-                o => o.WithTarget(Hub.Address));
-            if (delivery != null)
-            {
-                Hub.RegisterCallback((IMessageDelivery)delivery, _ =>
-                {
-                    foreach (var submission in CodeSubmissions)
-                        Hub.Post(submission, o => o.WithTarget(KernelAddress));
-                    return _;
-                });
-            }
+            MarkdownViewLogic.SubmitCode(Hub, KernelAddress, CodeSubmissions);
         }
     }
 

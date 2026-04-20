@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
@@ -25,6 +26,25 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     [Inject]
     private IMeshService MeshService { get; set; } = null!;
+
+    // Resolved lazily from the service provider so the page still renders when
+    // INodeTypeService isn't registered. A hard [Inject] would throw during
+    // component construction and leave the user with a black screen.
+    [Inject]
+    private IServiceProvider Services { get; set; } = null!;
+    private INodeTypeService? NodeTypeService => Services.GetService<INodeTypeService>();
+
+    /// <summary>
+    /// Path of any NodeType currently compiling. Used by the razor template to flip
+    /// the "Looking up …" placeholder into "Compiling &lt;path&gt; (Ns)…" during the
+    /// navigation blocking phase, so the user sees activity instead of a blank spinner.
+    /// </summary>
+    private string? CompilingPath { get; set; }
+
+    /// <summary>Elapsed seconds since the current compile started.</summary>
+    private int CompilingSeconds { get; set; }
+
+    private System.Threading.Timer? _compileProgressTimer;
 
     /// <summary>
     /// Catch-all path parameter - the entire URL path is matched against registered namespace patterns.
@@ -71,6 +91,35 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     {
         base.OnInitialized();
         NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
+
+        // Poll NodeTypeService.GetCompilingPaths while the page is in "Looking up"
+        // state so the user sees "Compiling <path> (Ns)…" rather than a blank spinner.
+        // Stopped once IsLoading flips to false. Two-second granularity is enough —
+        // most compiles are sub-second; the tick is for reassurance on slow ones.
+        _compileProgressTimer = new System.Threading.Timer(_ =>
+        {
+            try
+            {
+                if (!IsLoading) return;
+                var paths = NodeTypeService?.GetCompilingPaths();
+                var first = paths?.FirstOrDefault();
+                if (first != CompilingPath)
+                {
+                    CompilingPath = first;
+                    CompilingSeconds = 0;
+                }
+                else if (first != null)
+                {
+                    CompilingSeconds++;
+                }
+                _ = InvokeAsync(StateHasChanged);
+            }
+            catch
+            {
+                // Timer tick should never take down the page. The worst-case is a stale
+                // "Compiling…" message; that's better than a crashed circuit.
+            }
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
     protected override async Task OnParametersSetAsync()
@@ -178,5 +227,6 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     public void Dispose()
     {
         NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
+        _compileProgressTimer?.Dispose();
     }
 }

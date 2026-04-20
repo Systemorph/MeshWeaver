@@ -415,11 +415,27 @@ public partial class MeshSearchView : IDisposable
                     if (change.ChangeType == QueryChangeType.Initial ||
                         change.ChangeType == QueryChangeType.Reset)
                     {
-                        _nodes = change.Items.ToList();
+                        // Reset the list — dedupe by path in case the server's Initial
+                        // payload itself contains duplicates (UNION ALL across partitions
+                        // on the server side can surface the same path twice).
+                        var seen = new HashSet<string>();
+                        _nodes = new List<MeshNode>();
+                        foreach (var n in change.Items)
+                        {
+                            if (n.Path != null && seen.Add(n.Path))
+                                _nodes.Add(n);
+                        }
                     }
                     else if (change.ChangeType == QueryChangeType.Added)
                     {
-                        _nodes.AddRange(change.Items);
+                        // Only add items whose path isn't already present — otherwise a
+                        // reactive Added event that overlaps the current set doubles rows.
+                        var existing = new HashSet<string>(_nodes.Where(n => n.Path != null).Select(n => n.Path!));
+                        foreach (var n in change.Items)
+                        {
+                            if (n.Path != null && existing.Add(n.Path))
+                                _nodes.Add(n);
+                        }
                     }
                     else if (change.ChangeType == QueryChangeType.Removed)
                     {
@@ -606,20 +622,46 @@ public partial class MeshSearchView : IDisposable
 
         try
         {
-            var searchQuery = string.IsNullOrEmpty(BoundNamespace)
-                ? $"*{query}* scope:descendants"
-                : $"namespace:{BoundNamespace} *{query}* scope:descendants";
+            // Parse the query to split into basePath and prefix for AutocompleteAsync
+            var text = query.TrimStart('@');
+            string basePath;
+            string namePrefix;
 
-            var request = new MeshQueryRequest { Query = searchQuery, Limit = 10 };
-            var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
-
-            return results.Select(node => new CompletionItem
+            if (text.EndsWith("/"))
             {
-                Label = node.Name ?? node.Id,
-                InsertText = node.Name ?? node.Id,
-                Description = node.NodeType ?? "",
-                Path = node.Path,
-                Category = node.Category ?? ""
+                // User typed @path/ — get children of that path
+                basePath = text.TrimEnd('/');
+                namePrefix = "";
+            }
+            else
+            {
+                // Split into path and name parts: "ACME/Mark" → basePath="ACME", namePrefix="Mark"
+                var lastSlash = text.LastIndexOf('/');
+                if (lastSlash >= 0)
+                {
+                    basePath = text[..lastSlash];
+                    namePrefix = text[(lastSlash + 1)..];
+                }
+                else
+                {
+                    basePath = BoundNamespace ?? "";
+                    namePrefix = text;
+                }
+            }
+
+            var suggestions = await MeshQuery
+                .AutocompleteAsync(basePath, namePrefix, AutocompleteMode.RelevanceFirst, 20, BoundNamespace)
+                .ToArrayAsync();
+
+            return suggestions.Select((s, i) => new CompletionItem
+            {
+                Label = s.Name,
+                InsertText = $"@{s.Path}/",
+                Description = s.NodeType ?? "",
+                Path = s.Path,
+                Category = s.NodeType ?? "Nodes",
+                IconUrl = s.Icon,
+                SortKey = (99999 - Math.Clamp((int)s.Score, 0, 99999)).ToString("D5")
             }).ToArray();
         }
         catch

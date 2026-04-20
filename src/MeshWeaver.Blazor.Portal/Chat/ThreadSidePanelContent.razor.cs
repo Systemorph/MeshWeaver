@@ -5,7 +5,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using Microsoft.AspNetCore.Components;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
@@ -20,24 +19,25 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
     [Inject] private INavigationService NavigationService { get; set; } = null!;
-    [Inject] private IMeshService MeshQuery { get; set; } = null!;
 
     [Parameter] public EventCallback OnCloseRequested { get; set; }
 
-    private bool showThreadList;
     private bool positionMenuVisible;
     private string? selectedThreadPath;
     private string? selectedThreadName;
 
-    // Thread list
-    private List<MeshNode> threadList = [];
-    private bool isLoadingThreads;
+    private string? lastPrimaryPath;
 
     protected override void OnInitialized()
     {
         base.OnInitialized();
         selectedThreadPath = SidePanelState.ContentPath;
+        lastPrimaryPath = NavigationService.Context?.PrimaryPath;
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
+        // React to navigation changes: when the user browses to a thread or another node,
+        // the side panel's new-chat context (MainNode / PrimaryPath) changes and the
+        // ThreadChatControl must be rebuilt with the new context attachment.
+        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
     }
 
     private void OnSidePanelStateChanged()
@@ -46,14 +46,25 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
         if (newPath != selectedThreadPath)
         {
             selectedThreadPath = newPath;
-            showThreadList = false;
             InvokeAsync(StateHasChanged);
         }
+    }
+
+    private void OnNavigationContextChanged(NavigationContext? ctx)
+    {
+        var newPrimary = ctx?.PrimaryPath;
+        if (newPrimary == lastPrimaryPath) return;
+        lastPrimaryPath = newPrimary;
+        // Only rebuild when showing the new-chat control (no selected thread).
+        // An in-flight thread keeps its own context.
+        if (string.IsNullOrEmpty(selectedThreadPath))
+            InvokeAsync(StateHasChanged);
     }
 
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
+        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
     }
 
     /// <summary>
@@ -76,54 +87,12 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
 
     private string SidePanelTitle => selectedThreadName ?? "New Chat";
 
-    private void SelectThread(MeshNode thread)
-    {
-        selectedThreadPath = thread.Path;
-        selectedThreadName = thread.Name;
-        SidePanelState.SetContentPath(thread.Path);
-        showThreadList = false;
-        StateHasChanged();
-    }
-
     private void OnNewChat()
     {
         selectedThreadPath = null;
         selectedThreadName = null;
         SidePanelState.SetContentPath(null);
-        showThreadList = false;
         StateHasChanged();
-    }
-
-    private async Task ToggleThreadList()
-    {
-        showThreadList = !showThreadList;
-        if (showThreadList)
-            await LoadThreadListAsync();
-        StateHasChanged();
-    }
-
-    private async Task LoadThreadListAsync()
-    {
-        isLoadingThreads = true;
-        StateHasChanged();
-
-        try
-        {
-            var ns = NavigationService.CurrentNamespace;
-            var query = string.IsNullOrEmpty(ns)
-                ? "nodeType:Thread limit:20 sort:LastModified-desc"
-                : $"nodeType:Thread namespace:{ns}/_Thread limit:20 sort:LastModified-desc";
-            threadList = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-        }
-        catch
-        {
-            threadList = [];
-        }
-        finally
-        {
-            isLoadingThreads = false;
-            StateHasChanged();
-        }
     }
 
     private void OpenThreadFullScreen()

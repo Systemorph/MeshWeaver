@@ -134,6 +134,11 @@ public class AzureClaudeChatClient : IChatClient
         string? currentToolName = null;
         var currentToolInput = new StringBuilder();
 
+        // Cumulative token counters across the stream (Anthropic emits input-tokens
+        // once on message_start and cumulative output-tokens on message_delta).
+        var inputTokens = 0;
+        var outputTokens = 0;
+
         while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
         {
             if (string.IsNullOrEmpty(line) || !line.StartsWith("data: "))
@@ -160,6 +165,13 @@ public class AzureClaudeChatClient : IChatClient
             {
                 case "message_start":
                     currentRole = streamEvent.Message?.Role ?? "assistant";
+                    if (streamEvent.Message?.Usage is { } startUsage)
+                    {
+                        inputTokens = startUsage.InputTokens;
+                        // Anthropic reports cumulative output tokens on message_delta;
+                        // seed with any initial value on message_start.
+                        outputTokens = startUsage.OutputTokens;
+                    }
                     break;
 
                 case "content_block_start":
@@ -216,12 +228,34 @@ public class AzureClaudeChatClient : IChatClient
                     break;
 
                 case "message_delta":
+                    if (streamEvent.Usage is { } deltaUsage)
+                    {
+                        // Anthropic: output_tokens on message_delta is the running cumulative
+                        // count. Keep the latest so the final UsageContent below has the total.
+                        outputTokens = deltaUsage.OutputTokens;
+                    }
                     if (streamEvent.Delta?.StopReason != null)
                     {
                         yield return new ChatResponseUpdate(ChatRole.Assistant, string.Empty)
                         {
                             FinishReason = ConvertStopReason(streamEvent.Delta.StopReason)
                         };
+                    }
+                    break;
+
+                case "message_stop":
+                    // Final UsageContent carries the totals — ThreadExecution stamps the
+                    // response cell's InputTokens/OutputTokens/TotalTokens from this.
+                    if (inputTokens > 0 || outputTokens > 0)
+                    {
+                        yield return new ChatResponseUpdate(ChatRole.Assistant, [
+                            new UsageContent(new UsageDetails
+                            {
+                                InputTokenCount = inputTokens,
+                                OutputTokenCount = outputTokens,
+                                TotalTokenCount = inputTokens + outputTokens
+                            })
+                        ]);
                     }
                     break;
             }
@@ -578,6 +612,8 @@ public class AzureClaudeChatClient : IChatClient
         public ClaudeStreamDelta? Delta { get; set; }
         public ClaudeStreamContentBlock? ContentBlock { get; set; }
         public int? Index { get; set; }
+        /// <summary>Populated on the <c>message_delta</c> event — cumulative output-token count.</summary>
+        public ClaudeUsage? Usage { get; set; }
     }
 
     private class ClaudeStreamMessage
@@ -586,6 +622,8 @@ public class AzureClaudeChatClient : IChatClient
         public string? Type { get; set; }
         public string? Role { get; set; }
         public string? Model { get; set; }
+        /// <summary>Populated on the <c>message_start</c> event — input-token count for the turn.</summary>
+        public ClaudeUsage? Usage { get; set; }
     }
 
     private class ClaudeStreamContentBlock

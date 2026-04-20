@@ -415,6 +415,14 @@ public static class SettingsLayoutArea
             DataContext = dataPointer
         });
 
+        stack = stack.WithView(new TextAreaControl(new JsonPointerReference("Description"))
+        {
+            Label = "Description",
+            Placeholder = "Long-form description. Seeds AI Name/Id/Icon generation and appears in detail views.",
+            Immediate = true,
+            DataContext = dataPointer
+        }.WithRows(3));
+
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Category"))
         {
             Label = "Category",
@@ -477,10 +485,14 @@ public static class SettingsLayoutArea
         section = section.WithView(new TextFieldControl(new JsonPointerReference("Icon"))
         {
             Label = "Icon Path",
-            Placeholder = "e.g., /static/collection/icon.svg",
+            Placeholder = "e.g., /static/collection/icon.svg, or an inline data:image/svg+xml URI",
             Immediate = true,
             DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
         });
+
+        section = section.WithView(Controls.Body(
+            "Upload an image via the file browser above, paste a URL, or paste an inline SVG as a data: URI (e.g. data:image/svg+xml;utf8,<svg…/>).")
+            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-top: 4px;"));
 
         return section;
     }
@@ -518,9 +530,10 @@ public static class SettingsLayoutArea
 
                     var updatedNode = updatedMeta.ApplyTo(node);
 
-                    host.Hub.Post(
-                        new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
-                        o => o.WithTarget(host.Hub.Address));
+                    // Use UpdateNodeRequest (the routed MeshNode write path) instead of
+                    // DataChangeRequest — MeshNode has no data-source key mapping and
+                    // DataChangeRequest fails with "No key mapping is defined for type MeshNode".
+                    host.Hub.Post(new UpdateNodeRequest(updatedNode));
                 }));
     }
 
@@ -565,6 +578,8 @@ public record MeshNodeMetadata
 
     public string? Name { get; init; }
 
+    public string? Description { get; init; }
+
     [Editable(false)]
     public string? Namespace { get; init; }
 
@@ -593,6 +608,7 @@ public record MeshNodeMetadata
     {
         Id = node.Id,
         Name = node.Name,
+        Description = node.Description,
         Namespace = node.Namespace,
         NodeType = node.NodeType,
         Category = node.Category,
@@ -607,6 +623,7 @@ public record MeshNodeMetadata
     public MeshNode ApplyTo(MeshNode node) => node with
     {
         Name = Name,
+        Description = Description,
         Category = Category,
         Icon = Icon,
         Order = Order,

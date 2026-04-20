@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Linq;
 
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -20,6 +21,7 @@ using MeshWeaver.Layout;
 using Markdig;
 using Markdig.Syntax;
 
+using MeshWeaver.Kernel;
 using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
@@ -1014,6 +1016,56 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine($"Found {layoutAreaCount} layout-area divs in rendered HTML");
         layoutAreaCount.Should().Be(2, "There should be exactly 2 layout-area divs for the two code blocks");
     }
+
+    /// <summary>
+    /// Test that MarkdownContent with CodeSubmissions survives a JSON serialization
+    /// round-trip (simulating DB storage). When MeshNode.Content is deserialized from
+    /// the database, it must come back as MarkdownContent (not JsonElement) so that
+    /// CodeSubmissions and PrerenderedHtml are preserved for interactive markdown.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public void MarkdownContent_CodeSubmissions_SurviveJsonRoundTrip()
+    {
+        var markdown = @"# Hello
+
+```csharp --render --id timestamp
+DateTime.Now.ToString()
+```
+";
+        // Parse to get MarkdownContent with CodeSubmissions and PrerenderedHtml
+        var content = MarkdownContent.Parse(markdown);
+
+        content.CodeSubmissions.Should().NotBeNullOrEmpty(
+            "Parsing markdown with --render code block should produce CodeSubmissions");
+        content.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder,
+            "PrerenderedHtml should contain __KERNEL_ADDRESS__ placeholder");
+
+        // Simulate DB write: serialize as object (what MeshNode.Content stores)
+        var options = Mesh.JsonSerializerOptions;
+        var json = JsonSerializer.Serialize<object>(content, options);
+
+        Output.WriteLine($"Serialized JSON: {json}");
+
+        // Verify $type discriminator is in the JSON
+        json.Should().Contain("$type", "Serialized JSON must contain $type discriminator for polymorphic deserialization");
+
+        // Simulate DB read: deserialize as object (how ReadMeshNode works)
+        var deserialized = JsonSerializer.Deserialize<object>(json, options);
+
+        deserialized.Should().BeOfType<MarkdownContent>(
+            "Content deserialized from DB should be MarkdownContent, not JsonElement");
+
+        var roundTripped = (MarkdownContent)deserialized!;
+        roundTripped.Content.Should().Be(content.Content);
+        roundTripped.PrerenderedHtml.Should().Contain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder);
+        roundTripped.CodeSubmissions.Should().NotBeNullOrEmpty(
+            "CodeSubmissions must survive the JSON round-trip so interactive markdown can replace __KERNEL_ADDRESS__");
+        roundTripped.CodeSubmissions!.Count.Should().Be(content.CodeSubmissions!.Count);
+        roundTripped.CodeSubmissions![0].Code.Should().Be(content.CodeSubmissions[0].Code);
+    }
+
+    // RepairMarkdownContent_* tests removed — the MarkdownNodeType.RepairMarkdownContent hook
+    // and MeshDataSource.WithNodeConverter pipeline they covered no longer exist in the codebase.
 
     #endregion
 }

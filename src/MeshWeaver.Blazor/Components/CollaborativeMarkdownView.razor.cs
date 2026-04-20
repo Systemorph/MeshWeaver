@@ -1,19 +1,19 @@
-using Markdig;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using System.Reactive.Linq;
-using System.Text.Json;
 using MeshWeaver.Markdown.Collaboration;
 using AnnotationType = MeshWeaver.Markdown.AnnotationType;
 
@@ -52,6 +52,13 @@ public partial class CollaborativeMarkdownView
     private string _pendingCommentText = "";
     private bool _showPageCommentInput;
     private string _pageCommentText = "";
+
+    // Interactive markdown (kernel execution)
+    private readonly string _kernelId = Guid.NewGuid().AsString();
+    private Address? _kernelAddress;
+    private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(_kernelId);
+    private bool _codeSubmitted;
+    private IReadOnlyCollection<SubmitCodeRequest>? _codeSubmissions;
 
     // Parsed data
     private string? _processedHtml;
@@ -213,6 +220,13 @@ public partial class CollaborativeMarkdownView
             dotNetRef = DotNetObjectReference.Create(this);
             await jsModule.InvokeVoidAsync("enableCommentSelection", containerRef, dotNetRef);
         }
+
+        // Submit code to kernel — the mesh routing rule creates the hub on demand.
+        if (!_codeSubmitted && _codeSubmissions is { Count: > 0 })
+        {
+            _codeSubmitted = true;
+            MarkdownViewLogic.SubmitCode(Hub, KernelAddress, _codeSubmissions);
+        }
     }
 
     private void ProcessContent()
@@ -237,6 +251,10 @@ public partial class CollaborativeMarkdownView
 
         // Render markdown to HTML with annotation spans
         _processedHtml = RenderMarkdown(content);
+
+        // Replace kernel address placeholder with actual kernel address
+        if (_processedHtml != null && _codeSubmissions is { Count: > 0 })
+            _processedHtml = MarkdownViewLogic.ReplaceKernelPlaceholder(_processedHtml, KernelAddress);
     }
 
     /// <summary>
@@ -257,15 +275,21 @@ public partial class CollaborativeMarkdownView
     private string RenderMarkdown(string content)
     {
         if (string.IsNullOrWhiteSpace(content))
+        {
+            _codeSubmissions = null;
             return "";
+        }
 
-        // Transform annotation markers to HTML spans before markdown rendering
+        // Transform annotation markers to HTML spans before markdown rendering,
+        // then render with source-position data attributes (data-start/data-end) so JS
+        // can map text selections back to markdown source positions.
         var transformed = AnnotationMarkdownExtension.TransformAnnotations(content);
+        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(null, BoundNodePath);
+        var document = Markdig.Markdown.Parse(transformed, pipeline);
 
-        // Render with source position data attributes (data-start/data-end)
-        // so JS can map text selections back to markdown source positions.
-        var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null, BoundNodePath);
-        return SourceMapHtmlRenderer.RenderWithSourceMap(transformed, pipeline);
+        _codeSubmissions = MarkdownViewLogic.ExtractCodeSubmissions(document);
+
+        return SourceMapHtmlRenderer.RenderWithSourceMap(document, pipeline);
     }
 
     // View mode
@@ -332,40 +356,27 @@ public partial class CollaborativeMarkdownView
         StateHasChanged();
     }
 
-    // Post content update to hub and return success/failure
-    private async Task<bool> PostContentUpdateAsync(string newContent)
+    // Post content update by syncing the full MeshNode via the remote stream and
+    // editing its Content field directly — this preserves Name/Icon/Description/etc.
+    // Using a partial MeshNode + DataChangeRequest fails key-mapping validation on the
+    // hosting hub ("No key mapping is defined for type MeshNode").
+    private Task<bool> PostContentUpdateAsync(string newContent)
     {
-        if (string.IsNullOrEmpty(BoundHubAddress))
-            return false;
-
-        // Split path into Id + Namespace so the workspace matches the existing node by key (Id).
-        var path = BoundNodePath ?? "";
-        var lastSlash = path.LastIndexOf('/');
-        var (id, ns) = lastSlash > 0
-            ? (path[(lastSlash + 1)..], path[..lastSlash])
-            : (path, (string?)null);
-
-        var nodeUpdate = new MeshNode(id, ns)
-        {
-            NodeType = "Markdown",
-            Content = new MarkdownContent { Content = newContent }
-        };
+        if (string.IsNullOrEmpty(BoundHubAddress) || string.IsNullOrEmpty(BoundNodePath))
+            return Task.FromResult(false);
 
         try
         {
-            var response = await Hub.AwaitResponse(
-                new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
-                o => o.WithTarget(new Address(BoundHubAddress)),
-                default);
-
-            if (response.Message is DataChangeResponse dcr && dcr.Status != DataChangeStatus.Committed)
-                return false;
-
-            return true;
+            var workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
+            workspace.UpdateMeshNode(
+                node => node with { Content = new MarkdownContent { Content = newContent } },
+                new Address(BoundHubAddress),
+                BoundNodePath);
+            return Task.FromResult(true);
         }
         catch
         {
-            return false;
+            return Task.FromResult(false);
         }
     }
 

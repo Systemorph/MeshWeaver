@@ -8,6 +8,7 @@
   "content": {
     "$type": "User",
     "email": "rbuergi@systemorph.com",
-    "bio": "Founder of Systemorph and creator of MeshWeaver."
+    "bio": "Founder of Systemorph and creator of MeshWeaver.",
+    "pinnedPaths": ["Doc"]
   }
 }

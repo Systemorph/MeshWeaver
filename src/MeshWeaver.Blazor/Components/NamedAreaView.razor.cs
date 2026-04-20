@@ -20,14 +20,11 @@ public partial class NamedAreaView
     private IDictionary<string, object>? MetaAttributes;
 
     private string? AreaToBeRendered { get; set; }
-    private CancellationTokenSource? _timeoutCts;
 
     protected override void BindData()
     {
         subscription?.Dispose();
         subscription = null;
-        _timeoutCts?.Cancel();
-        _timeoutCts?.Dispose();
         var newArea = ViewModel.Area?.ToString() ?? string.Empty;
         if (newArea != AreaToBeRendered)
             RootControl = null; // Only clear when the area actually changed
@@ -43,43 +40,61 @@ public partial class NamedAreaView
         // When area is empty, GetControlStream returns a NamedAreaControl pointing to the default area
         var controlStream = Stream.GetControlStream(AreaToBeRendered);
 
-        // Start a timeout — if no content arrives within 15s, show diagnostic info
-        if (ShowProgress && !Top)
-        {
-            _timeoutCts = new CancellationTokenSource();
-            _ = ShowTimeoutMessageAsync(_timeoutCts.Token);
-        }
-
         AddBinding(controlStream
             .Subscribe(
                 x =>
                 {
-                    _timeoutCts?.Cancel(); // Content arrived, cancel timeout
-                    InvokeAsync(() =>
+                    if (IsViewDisposed) return;
+                    try
                     {
-                        var control = x as UiControl;
-                        if (RootControl is null && control is null || RootControl != null && RootControl.Equals(control))
-                            return;
-                        RootControl = control;
-                        if (RootControl is not null)
+                        InvokeAsync(() =>
                         {
-                            DataBind(RootControl.PageTitle, y => y.PageTitle);
-                            DataBind(RootControl.Meta, y => y.MetaAttributes);
-                        }
-                        Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
-                            AreaToBeRendered, control?.GetType().Name ?? "null");
-                        RequestStateChange();
-                    });
+                            if (IsViewDisposed) return;
+                            try
+                            {
+                                var control = x as UiControl;
+                                if (RootControl is null && control is null || RootControl != null && RootControl.Equals(control))
+                                    return;
+                                RootControl = control;
+                                if (RootControl is not null)
+                                {
+                                    DataBind(RootControl.PageTitle, y => y.PageTitle);
+                                    DataBind(RootControl.Meta, y => y.MetaAttributes);
+                                }
+                                Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
+                                    AreaToBeRendered, control?.GetType().Name ?? "null");
+                                RequestStateChange();
+                            }
+                            catch (ObjectDisposedException) { /* renderer gone */ }
+                        });
+                    }
+                    catch (ObjectDisposedException) { /* renderer gone */ }
                 },
                 error =>
                 {
-                    _timeoutCts?.Cancel();
-                    Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
-                    InvokeAsync(() =>
+                    // ObjectDisposedException is a benign teardown artifact — the area stream's
+                    // upstream hub or workspace was disposed during navigation/component swap.
+                    // Don't surface it as a user-visible "Error loading area" markdown.
+                    if (IsViewDisposed || error is ObjectDisposedException)
                     {
-                        RootControl = new MarkdownControl($"**Error loading area:** {error.Message}");
-                        RequestStateChange();
-                    });
+                        Logger.LogDebug(error, "Suppressed teardown error in control stream for area {Area}", AreaToBeRendered);
+                        return;
+                    }
+                    Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
+                    try
+                    {
+                        InvokeAsync(() =>
+                        {
+                            if (IsViewDisposed) return;
+                            try
+                            {
+                                RootControl = new MarkdownControl($"**Error loading area:** {error.Message}");
+                                RequestStateChange();
+                            }
+                            catch (ObjectDisposedException) { /* renderer gone */ }
+                        });
+                    }
+                    catch (ObjectDisposedException) { /* renderer gone */ }
                 },
                 () =>
                 {
@@ -87,28 +102,6 @@ public partial class NamedAreaView
                 }
             )
         );
-    }
-
-    private async Task ShowTimeoutMessageAsync(CancellationToken ct)
-    {
-        try
-        {
-            await Task.Delay(15_000, ct);
-            await InvokeAsync(() =>
-            {
-                if (RootControl == null)
-                {
-                    var owner = Stream?.Owner?.ToString() ?? "(unknown)";
-                    var area = AreaToBeRendered ?? "(default)";
-                    Logger.LogWarning("Layout area timeout: no content after 15s for {Owner}/{Area}", owner, area);
-                    RootControl = new MarkdownControl(
-                        $"**Timed out** waiting for `{owner}` area `{area}`");
-                    ShowProgress = false;
-                    RequestStateChange();
-                }
-            });
-        }
-        catch (TaskCanceledException) { /* Content arrived or component disposed */ }
     }
 
 

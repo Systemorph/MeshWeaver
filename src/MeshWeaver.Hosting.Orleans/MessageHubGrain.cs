@@ -92,6 +92,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             node.HubConfiguration(config)
                 .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
                 .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation)))!;
+
+        Hub.RegisterForDisposal(_ => DeactivateOnIdle());
     }
 
     private IGrainTimer? _keepAliveTimer;
@@ -135,8 +137,6 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             DeactivateOnIdle();
             return Task.FromResult(delivery.Failed($"Hub not started for {address}"));
         }
-
-        Hub?.RegisterForDisposal(_ => DeactivateOnIdle());
 
         // Apply user identity from Orleans RequestContext to the delivery.
         // The client-side OrleansRoutingService sets UserId/UserName which Orleans

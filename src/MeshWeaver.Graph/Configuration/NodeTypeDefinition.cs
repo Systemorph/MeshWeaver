@@ -110,4 +110,32 @@ public record NodeTypeDefinition
     /// When set, the Create form only allows selection from these namespaces.
     /// </summary>
     public List<string>? RestrictedToNamespaces { get; init; }
+
+    /// <summary>
+    /// Locations of the Code nodes to compile with this NodeType's
+    /// <see cref="Configuration"/> lambda. Each entry is either:
+    /// <list type="bullet">
+    ///   <item>A mesh query — e.g. <c>"namespace:_Source scope:subtree"</c>,
+    ///     <c>"namespace:SocialMedia/Post/_Source scope:subtree"</c>. A
+    ///     <c>namespace:X</c> with a single segment (no <c>/</c>, like
+    ///     <c>_Source</c>) is automatically rebased onto the owning NodeType's
+    ///     path. The macro <c>$self</c> can be used anywhere in the query and
+    ///     expands to that path.</item>
+    ///   <item>A single-node shorthand — <c>"@path/to/code"</c> or
+    ///     <c>"@@path/to/code"</c>. Resolves to both an exact-path match and a
+    ///     namespace-subtree match, so it works for either a leaf Code node or a
+    ///     folder of them.</item>
+    /// </list>
+    /// Every resolved query is ANDed with <c>nodeType:Code</c>, so non-code
+    /// children never leak in. Matches are de-duplicated across entries.
+    /// </summary>
+    /// <remarks>
+    /// If null or empty, defaults to <c>["namespace:_Source scope:subtree"]</c>
+    /// — the conventional <c>_Source/</c> sibling folder. Add more entries to pull
+    /// in shared code, e.g.
+    /// <c>["namespace:_Source scope:subtree", "@SocialMedia/Post/_Source/Platform"]</c>.
+    /// (Note: the <c>@@path</c> form used inside a <em>code file's body</em> is a
+    /// separate feature — inline include — handled during code-content resolution.)
+    /// </remarks>
+    public IReadOnlyList<string>? Sources { get; init; }
 }

@@ -27,6 +27,26 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     protected bool Disabled { get; set; }
     protected bool Readonly { get; set; }
     protected bool Required { get; set; }
+    protected string? Width { get; set; }
+    protected string? Height { get; set; }
+
+    /// <summary>
+    /// Combines the data-bound <see cref="Width"/> and <see cref="Height"/> with the
+    /// control's Style. Views set Style="@ComputedStyle" on the underlying Fluent component.
+    /// If a Fluent component exposes its own Width parameter, the view may pass
+    /// <see cref="Width"/> directly and then exclude width from the style composition.
+    /// </summary>
+    protected string? ComputedStyle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(Style)) parts.Add(Style.TrimEnd(';'));
+            if (!string.IsNullOrWhiteSpace(Width)) parts.Add($"width: {Width}");
+            if (!string.IsNullOrWhiteSpace(Height)) parts.Add($"height: {Height}");
+            return parts.Count > 0 ? string.Join("; ", parts) + ";" : null;
+        }
+    }
 
     // Sync state tracking to prevent race conditions between local edits and stream feedback
     private TValue? lastSyncedValue;
@@ -78,6 +98,8 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         DataBind(ViewModel.IconEnd, x => x.IconEnd);
         DataBind(ViewModel.Readonly, x => x.Readonly);
         DataBind(ViewModel.Required, x => x.Required);
+        DataBind(ViewModel.Width, x => x.Width);
+        DataBind(ViewModel.Height, x => x.Height);
 
         DataPointer = ViewModel.Data as JsonPointerReference;
         valueUpdateSubject = new();

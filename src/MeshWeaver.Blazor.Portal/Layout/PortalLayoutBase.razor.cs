@@ -4,6 +4,7 @@ using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -51,10 +52,17 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     protected bool IsNavMenuOpen => isNavMenuOpen;
 
     private bool isNodeMenuOpen;
+    private bool isMeshMenuOpen;
 
-    // Menu items from IMenuItemsProvider (populated by LayoutAreaView from $Menu stream)
-    private IReadOnlyList<NodeMenuItemDefinition> _menuItems = [];
-    private IDisposable? _menuSubscription;
+    // Menu context names (must match NodeMenuItemsExtensions.NodeMenuContext / MeshMenuContext).
+    private const string NodeMenuContext = "Node";
+    private const string MeshMenuContext = "Mesh";
+
+    // Menu items per context from IMenuItemsProvider (populated by LayoutAreaView from $Menu:{context} streams)
+    private IReadOnlyList<NodeMenuItemDefinition> _nodeMenuItems = [];
+    private IReadOnlyList<NodeMenuItemDefinition> _meshMenuItems = [];
+    private IDisposable? _nodeMenuSubscription;
+    private IDisposable? _meshMenuSubscription;
 
 
     // Editable content collections
@@ -68,9 +76,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested += OnSidePanelNavigation;
         NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
-        _menuSubscription = MenuItemsProvider.MenuItems.Subscribe(items =>
+        _nodeMenuSubscription = MenuItemsProvider.GetMenu(NodeMenuContext).Subscribe(items =>
         {
-            _menuItems = items;
+            _nodeMenuItems = items;
+            InvokeAsync(StateHasChanged);
+        });
+        _meshMenuSubscription = MenuItemsProvider.GetMenu(MeshMenuContext).Subscribe(items =>
+        {
+            _meshMenuItems = items;
             InvokeAsync(StateHasChanged);
         });
     }
@@ -79,7 +92,22 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         await base.OnInitializedAsync();
         await NavigationService.InitializeAsync();
-        await ResolveSidePanelContentAsync();
+        // Only resolve side panel content if already visible — defer until opened otherwise
+        if (SidePanelState.IsVisible)
+            await ResolveSidePanelContentAsync();
+    }
+
+    /// <summary>
+    /// Display name of the currently-focused node — rendered as a header inside the Node and Mesh menus
+    /// so the user can see what they're about to act on. Null when there's no node context (home page).
+    /// </summary>
+    private string? CurrentNodeName
+    {
+        get
+        {
+            var node = NavigationService.Context?.Node;
+            return node?.Name ?? node?.Id;
+        }
     }
 
     private void ToggleNodeMenu()
@@ -92,6 +120,28 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         isNodeMenuOpen = open;
     }
 
+    private void ToggleMeshMenu()
+    {
+        isMeshMenuOpen = !isMeshMenuOpen;
+    }
+
+    private void OnMeshMenuOpenChanged(bool open)
+    {
+        isMeshMenuOpen = open;
+    }
+
+    /// <summary>
+    /// Navigates to the Settings page — per-node Settings when on a node, Global Settings at the root.
+    /// </summary>
+    private void NavigateToSettings()
+    {
+        var ns = NavigationService.CurrentNamespace;
+        var url = string.IsNullOrEmpty(ns)
+            ? $"/{GlobalSettingsLayoutArea.GlobalSettingsArea}"
+            : $"/{ns}/Settings";
+        NavigationManager.NavigateTo(url);
+    }
+
     /// <summary>
     /// Handles a click on a dynamic menu item.
     /// Uses Href for absolute navigation when set, otherwise constructs URL from Area.
@@ -99,6 +149,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private void HandleMenuItemClick(NodeMenuItemDefinition item)
     {
         isNodeMenuOpen = false;
+        isMeshMenuOpen = false;
         if (!string.IsNullOrEmpty(item.Href))
             NavigationManager.NavigateTo(item.Href);
         else
@@ -119,13 +170,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Returns menu items from the layout stream.
-    /// Permission filtering is done server-side by the providers.
+    /// Returns menu items for the Node context. Permission filtering is done server-side by the providers.
     /// </summary>
-    private IReadOnlyList<NodeMenuItemDefinition> GetVisibleMenuItems()
-    {
-        return _menuItems;
-    }
+    private IReadOnlyList<NodeMenuItemDefinition> GetNodeMenuItems() => _nodeMenuItems;
+
+    /// <summary>
+    /// Returns menu items for the Mesh context. Permission filtering is done server-side by the providers.
+    /// </summary>
+    private IReadOnlyList<NodeMenuItemDefinition> GetMeshMenuItems() => _meshMenuItems;
 
     private static readonly NodeMenuItemDefinition Separator = new("", "_separator");
 
@@ -340,7 +392,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
 
     // Side panel content state
-    private readonly string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
+    // Key derived from the primary path so the ThreadChatView is rebuilt (re-running
+    // OnInitialized, re-seeding the context attachment chip) when navigation moves
+    // to a different node. Without this, the ThreadChatView stays stuck on the
+    // InitialContext it was first rendered with.
+    private string sidePanelContentKey => $"newchat-{NavigationService.Context?.PrimaryPath ?? string.Empty}";
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
     private string? _cachedContextPath;
@@ -350,6 +406,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     /// <summary>
     /// Resolves ContentPath via IPathResolver (same as AreaPage) and builds LayoutAreaControl.
+    /// If the content path points to a node that no longer exists (e.g. deleted thread),
+    /// the path resolves to a parent with satellite segments as remainder — detect and clear.
     /// </summary>
     private async Task ResolveSidePanelContentAsync()
     {
@@ -368,7 +426,22 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         var resolution = await PathResolver.ResolvePathAsync(contentPath);
         if (resolution == null)
         {
+            // Node doesn't exist at all — clear stale content path
             sidePanelViewModel = null;
+            SidePanelState.SetContentPath(null);
+            resolvedSidePanelPath = null;
+            return;
+        }
+
+        // If the resolved prefix doesn't match the content path, it means the node
+        // no longer exists and resolution fell back to a parent (e.g. _Thread/id became
+        // remainder on the parent hub → invalid area). Clear the stale path.
+        if (!string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(resolution.Remainder))
+        {
+            sidePanelViewModel = null;
+            SidePanelState.SetContentPath(null);
+            resolvedSidePanelPath = null;
             return;
         }
 
@@ -414,7 +487,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested -= OnSidePanelNavigation;
         NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
-        _menuSubscription?.Dispose();
+        _nodeMenuSubscription?.Dispose();
+        _meshMenuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }

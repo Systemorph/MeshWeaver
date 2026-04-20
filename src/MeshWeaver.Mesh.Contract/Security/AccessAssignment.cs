@@ -12,14 +12,14 @@ namespace MeshWeaver.Mesh.Security;
 public record AccessAssignment
 {
     /// <summary>Subject identifier (User or Group path) for this assignment.</summary>
-    [MeshNode("is:main scope:descendants")]
+    [MeshNode("namespace:User nodeType:User", "namespace:{node.namespace} nodeType:Group scope:subtree")]
     public string AccessObject { get; init; } = "";
 
     /// <summary>Optional display name for the subject.</summary>
     public string? DisplayName { get; init; }
 
     /// <summary>Role assignments for this subject at this scope.</summary>
-    [MeshNodeCollection("namespace:{node.namespace} nodeType:Role scope:selfAndAncestors")]
+    [MeshNodeCollection("namespace:Role nodeType:Role", "namespace:{node.namespace} nodeType:Role scope:selfAndAncestors")]
     public IReadOnlyList<RoleAssignment> Roles { get; init; } = [];
 }
 

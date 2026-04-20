@@ -189,6 +189,7 @@ else
                 Email = model.Email.Trim(),
                 Bio = string.IsNullOrWhiteSpace(model.Bio) ? null : model.Bio.Trim(),
                 Role = string.IsNullOrWhiteSpace(model.Role) ? null : model.Role.Trim(),
+                PinnedPaths = ["Doc"],
             };
 
             // Use ImpersonateAsHub so the portal hub identity is recognized

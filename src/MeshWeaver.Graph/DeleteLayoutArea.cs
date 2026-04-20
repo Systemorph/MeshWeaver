@@ -21,17 +21,19 @@ public static class DeleteLayoutArea
     /// <summary>
     /// Returns the Delete menu item if the user has Delete permission.
     /// </summary>
-    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, string? nodeName, Permission perms)
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
     {
         if (!perms.HasFlag(Permission.Delete))
             return null;
-        var label = string.IsNullOrEmpty(nodeName) ? "Delete" : $"Delete {nodeName}";
-        return new(label, MeshNodeLayoutAreas.DeleteArea,
+        return new("Delete", MeshNodeLayoutAreas.DeleteArea,
             RequiredPermission: Permission.Delete, Order: 100,
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.DeleteArea));
     }
     /// <summary>
     /// Entry point for the Delete layout area.
+    /// Fully reactive composition — no <c>await</c> on the rendering path.
+    /// Permission and descendant-count streams are combined via <c>CombineLatest</c>;
+    /// a blocked hub cannot produce an emission so the render stays empty instead of deadlocking.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Delete(LayoutAreaHost host, RenderingContext _)
@@ -40,44 +42,55 @@ public static class DeleteLayoutArea
         var backHref = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
-        // Count descendants and check permissions asynchronously
-        return Observable.FromAsync(async () =>
-        {
-            // Permission gate: check Delete permission
-            var canDelete = await PermissionHelper.CanDeleteAsync(host.Hub, nodePath);
-            if (!canDelete)
-                return -1; // Sentinel value for access denied
+        // Both source streams must emit at least once for the page to render. Add Timeout
+        // + Catch so a stuck permission lookup or a hanging descendant count can never
+        // leave the user with an eternal spinner. We render conservatively on failure
+        // (deny, zero descendants) rather than blocking.
+        var permissionsObs = PermissionHelper.ObservePermissions(host.Hub, nodePath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<Permission, Exception>(_ => Observable.Return(Permission.None));
 
-            var descendantCount = 0;
-            if (meshQuery != null)
-            {
-                await foreach (var _ in meshQuery.QueryAsync(
-                    MeshQueryRequest.FromQuery($"path:{nodePath} scope:descendants")))
-                    descendantCount++;
-            }
-            return descendantCount;
-        }).Select(descendantCount =>
-        {
-            // Access denied
-            if (descendantCount < 0)
-            {
-                return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                    .WithView(Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithHorizontalGap(16)
-                        .WithStyle("align-items: center; margin-bottom: 24px;")
-                        .WithView(Controls.Button("Back")
-                            .WithAppearance(Appearance.Lightweight)
-                            .WithIconStart(FluentIcons.ArrowLeft())
-                            .WithNavigateToHref(backHref))
-                        .WithView(Controls.H2("Access Denied").WithStyle("margin: 0; color: var(--error);")))
-                    .WithView(Controls.Html(
-                        "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to delete this node.</p>"));
-            }
+        var descendantsObs = (meshQuery != null
+            ? Observable.FromAsync(token => CountDescendantsAsync(meshQuery, nodePath, token))
+            : Observable.Return(0))
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<int, Exception>(_ => Observable.Return(0));
 
-            return BuildDeletePage(host, nodePath, backHref, descendantCount);
-        });
+        var placeholder = (UiControl?)Controls.Stack.WithStyle("padding: 24px;")
+            .WithView(Controls.Html(
+                "<p style=\"color: var(--neutral-foreground-hint);\">Loading delete confirmation…</p>"));
+
+        return permissionsObs.CombineLatest(descendantsObs,
+            (perms, count) => (canDelete: perms.HasFlag(Permission.Delete), count))
+            .Select(tuple => (UiControl?)(tuple.canDelete
+                ? BuildDeletePage(host, nodePath, backHref, tuple.count)
+                : BuildAccessDenied(backHref)))
+            .StartWith(placeholder);
     }
+
+    private static async Task<int> CountDescendantsAsync(IMeshService meshQuery, string nodePath, CancellationToken ct)
+    {
+        var count = 0;
+        await foreach (var _ in meshQuery.QueryAsync(
+                           MeshQueryRequest.FromQuery($"path:{nodePath} scope:descendants"), ct))
+            count++;
+        return count;
+    }
+
+    private static UiControl BuildAccessDenied(string backHref) =>
+        Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(16)
+                .WithStyle("align-items: center; margin-bottom: 24px;")
+                .WithView(Controls.Button("Back")
+                    .WithAppearance(Appearance.Lightweight)
+                    .WithIconStart(FluentIcons.ArrowLeft())
+                    .WithNavigateToHref(backHref))
+                .WithView(Controls.H2("Access Denied").WithStyle("margin: 0; color: var(--error);")))
+            .WithView(Controls.Html(
+                "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to delete this node.</p>"));
 
     private static UiControl BuildDeletePage(LayoutAreaHost host, string nodePath, string backHref, int descendantCount)
     {
@@ -139,41 +152,38 @@ public static class DeleteLayoutArea
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("background: var(--error, #d32f2f); color: white;")
                 .WithIconStart(FluentIcons.Delete())
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    var formValues = await ctx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(dataId).FirstAsync();
+                    // Fully reactive: no await anywhere on the hub thread.
+                    // 1) Read the form data synchronously via Take(1).Subscribe
+                    // 2) Validate
+                    // 3) Call IMeshService.DeleteNode (Post + RegisterCallback under the hood)
+                    //    and propagate onNext/onError via Subscribe.
+                    ctx.Host.Stream
+                        .GetDataStream<Dictionary<string, object?>>(dataId)
+                        .Take(1)
+                        .Subscribe(formValues =>
+                        {
+                            var confirmation = formValues.GetValueOrDefault("confirmation")?.ToString()?.Trim();
+                            if (confirmation != "DELETE")
+                            {
+                                ShowDialog(ctx, "Confirmation Required",
+                                    "Please type **DELETE** in the confirmation field to proceed.");
+                                return;
+                            }
 
-                    var confirmation = formValues.GetValueOrDefault("confirmation")?.ToString()?.Trim();
-                    if (confirmation != "DELETE")
-                    {
-                        ShowDialog(ctx, "Confirmation Required",
-                            "Please type **DELETE** in the confirmation field to proceed.");
-                        return;
-                    }
+                            host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+                                .DeleteNode(nodePath)
+                                .Subscribe(
+                                    _ =>
+                                    {
+                                        // Empty the area in-place — no redirect. The user can navigate via menu/back.
+                                        ctx.Host.UpdateArea(MeshNodeLayoutAreas.DeleteArea, null);
+                                    },
+                                    ex => ShowDialog(ctx, "Delete Failed", $"Could not delete node: {ex.Message}"));
+                        });
 
-                    ShowDialog(ctx, "Deleting...", "Deletion in progress. Please wait...");
-
-                    try
-                    {
-                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        await nodeFactory.DeleteNodeAsync(nodePath);
-
-                        // Navigate to parent on success
-                        var parentPath = GetParentPath(nodePath);
-                        var parentHref = !string.IsNullOrEmpty(parentPath)
-                            ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
-                            : "/";
-
-                        ShowDialog(ctx, "Deleted",
-                            $"Successfully deleted node **{nodePath}** and its descendants.\n\nRedirecting...");
-
-                        ctx.NavigateTo(parentHref);
-                    }
-                    catch (Exception ex)
-                    {
-                        ShowDialog(ctx, "Delete Failed", ex.Message);
-                    }
+                    return Task.CompletedTask;
                 })));
 
         return stack;

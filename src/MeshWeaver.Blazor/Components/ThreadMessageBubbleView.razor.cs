@@ -13,9 +13,17 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
 
     private string? messageText;
     private IReadOnlyList<ToolCallEntry>? toolCalls;
+    private IReadOnlyList<NodeChangeEntry>? updatedNodes;
     private bool isEditing;
 
     private bool HasToolCalls => toolCalls is { Count: > 0 };
+
+    /// <summary>
+    /// Shape returned by <see cref="FormatToolCallDisplay"/>: tells the view how
+    /// to render the chip — verb text, target path (when the tool modifies a node),
+    /// and whether the path should be decorated with Diff + Restore links.
+    /// </summary>
+    public readonly record struct ToolCallDisplay(string Verb, string? Path, bool IsNodeModifying);
 
     private MarkdownControl MarkdownVm => new MarkdownControl(messageText ?? "")
         .WithStyle("background: transparent;");
@@ -46,32 +54,99 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
             if (result != null && prev != null && result.SequenceEqual(prev)) return prev;
             return result;
         });
+        DataBind(ViewModel.UpdatedNodes, x => x.updatedNodes, (val, prev) =>
+        {
+            IReadOnlyList<NodeChangeEntry>? result = val switch
+            {
+                null => null,
+                IReadOnlyList<NodeChangeEntry> list => list,
+                JsonElement je => je.Deserialize<List<NodeChangeEntry>>(Hub.JsonSerializerOptions),
+                _ => null
+            };
+            if (result == null && prev == null) return prev;
+            if (result != null && prev != null && result.SequenceEqual(prev)) return prev;
+            return result;
+        });
+    }
+
+    /// <summary>
+    /// Matches a tool-call target path against the message's aggregated
+    /// <c>UpdatedNodes</c> so the chip can render Diff / Restore links with the
+    /// correct before/after versions.
+    /// </summary>
+    private NodeChangeEntry? FindChange(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || updatedNodes is null)
+            return null;
+        return updatedNodes.FirstOrDefault(n =>
+            string.Equals(n.Path, path, StringComparison.Ordinal));
     }
 
     private static string FormatToolCallSummary(ToolCallEntry call)
     {
+        var d = FormatToolCallDisplay(call);
+        return d.Path is null ? d.Verb : $"{d.Verb} {d.Path}";
+    }
+
+    /// <summary>
+    /// Splits the tool call into a verb + target-path + flag. Node-modifying verbs
+    /// (Create / Update / Patch / Delete) flow through with <c>IsNodeModifying=true</c>
+    /// so the view can render inline Diff + Restore links next to the path.
+    /// </summary>
+    private static ToolCallDisplay FormatToolCallDisplay(ToolCallEntry call)
+    {
         if (!string.IsNullOrEmpty(call.DelegationPath))
         {
-            // Delegation: extract agent name from DisplayName (e.g., "Delegating to Coder..." → "Coder")
             var name = call.DisplayName ?? call.Name;
             if (name.Contains("Delegating to "))
                 name = name.Replace("Delegating to ", "").TrimEnd('.', ' ');
-            return name;
+            return new ToolCallDisplay(name, null, false);
         }
 
-        // Regular tool calls: friendly verb
-        var target = call.Arguments?.Split('\n').FirstOrDefault()?.Trim() ?? "";
+        // Args come serialized as "path: Org/X\ncontent: ...". Strip the "path: " prefix.
+        var rawArgs = call.Arguments ?? "";
+        string? path = null;
+        foreach (var line in rawArgs.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("path:", StringComparison.OrdinalIgnoreCase))
+            {
+                path = trimmed["path:".Length..].Trim();
+                break;
+            }
+            if (trimmed.StartsWith("url:", StringComparison.OrdinalIgnoreCase))
+            {
+                path = trimmed["url:".Length..].Trim();
+                break;
+            }
+            if (trimmed.StartsWith("query:", StringComparison.OrdinalIgnoreCase))
+            {
+                path = trimmed["query:".Length..].Trim();
+                break;
+            }
+        }
+        // Fallback to the first arg line if we couldn't identify the key.
+        if (string.IsNullOrEmpty(path))
+            path = rawArgs.Split('\n').FirstOrDefault()?.Trim();
+
+        // Agents write references as "@/Foo/Bar" — strip the "@" so href="/{path}"
+        // renders as "/Foo/Bar" and not "/@/Foo/Bar".
+        if (!string.IsNullOrEmpty(path) && path.StartsWith('@'))
+            path = path[1..].TrimStart('/');
+
         return call.Name switch
         {
-            "Get" or "get_node" => $"Getting {target}",
-            "Search" or "search_nodes" => $"Searching {target}",
-            "Create" or "create_node" => $"Creating {target}",
-            "Update" or "update_node" => $"Updating {target}",
-            "Patch" or "patch_node" => $"Patching {target}",
-            "Delete" or "delete_node" => $"Deleting {target}",
-            "NavigateTo" or "navigate_to" => $"Navigating to {target}",
-            "store_plan" => "Storing plan",
-            _ => call.DisplayName ?? call.Name
+            "Get" or "get_node" => new ToolCallDisplay("Reading", path, false),
+            "Search" or "search_nodes" => new ToolCallDisplay("Searching", path, false),
+            "Create" or "create_node" => new ToolCallDisplay("Created", path, true),
+            "Update" or "update_node" => new ToolCallDisplay("Updated", path, true),
+            "Patch" or "patch_node" => new ToolCallDisplay("Patched", path, true),
+            "Delete" or "delete_node" => new ToolCallDisplay("Deleted", path, true),
+            "NavigateTo" or "navigate_to" => new ToolCallDisplay("Navigating to", path, false),
+            "SearchWeb" => new ToolCallDisplay("Searching web for", path, false),
+            "FetchWebPage" => new ToolCallDisplay("Fetching", path, false),
+            "store_plan" => new ToolCallDisplay("Stored plan", null, false),
+            _ => new ToolCallDisplay(call.DisplayName ?? call.Name, path, false)
         };
     }
 }
