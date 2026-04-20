@@ -1,5 +1,5 @@
 ---
-NodeType: Organization
+NodeType: Markdown
 Name: ACME
 Category: Task Management
 Description: Project and task management demo showcasing MeshWeaver's collaborative workflows and AI agent integration
