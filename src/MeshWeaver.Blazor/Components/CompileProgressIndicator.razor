@@ -1,0 +1,75 @@
+@using MeshWeaver.Mesh.Services
+@implements IDisposable
+@inject INodeTypeService? NodeTypeService
+
+@if (CompilingPath is not null)
+{
+    <div class="compile-progress">
+        <FluentProgressRing style="width: 24px; height: 24px;" />
+        <span>
+            Compiling <strong>@CompilingPath</strong>
+            @if (Seconds > 0)
+            {
+                <text> (@Seconds s)</text>
+            }
+            …
+        </span>
+    </div>
+}
+
+@code {
+    /// <summary>
+    /// Optional: restrict polling to a specific NodeType path. When set, the
+    /// indicator only shows compilation progress for that exact path. When null,
+    /// it shows the first path reported by <c>INodeTypeService.GetCompilingPaths</c>.
+    /// </summary>
+    [Parameter] public string? NodeTypePath { get; set; }
+
+    private string? CompilingPath { get; set; }
+    private int Seconds { get; set; }
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        if (NodeTypeService is null) return;
+        _timer = new System.Threading.Timer(_ =>
+        {
+            try
+            {
+                string? first = null;
+                if (NodeTypePath is not null)
+                {
+                    if (NodeTypeService.IsCompiling(NodeTypePath))
+                        first = NodeTypePath;
+                }
+                else
+                {
+                    var paths = NodeTypeService.GetCompilingPaths();
+                    first = paths?.FirstOrDefault();
+                }
+
+                if (first != CompilingPath)
+                {
+                    CompilingPath = first;
+                    Seconds = 0;
+                }
+                else if (first is not null)
+                {
+                    Seconds++;
+                }
+
+                InvokeAsync(StateHasChanged);
+            }
+            catch
+            {
+                // Poll best-effort; keep the UI alive.
+            }
+        }, null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _timer = null;
+    }
+}

@@ -2,6 +2,12 @@
 @inherits BlazorView<LayoutAreaControl, LayoutAreaView>
 
 <div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading")" style="@Style">
+    @* Surface NodeType compile progress when the stream hasn't emitted yet so the
+       user sees "Compiling <path> (Ns)…" instead of an indefinite spinner. *@
+    @if (!IsContentLoaded)
+    {
+        <CompileProgressIndicator />
+    }
     <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
 </div>
 
