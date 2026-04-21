@@ -54,10 +54,32 @@ public class McpMeshPlugin
         => ops.Update(nodes);
 
     [McpServerTool]
+    [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless overwriting — never set 'content' to null. Prefer this over Update for small edits like icon/name/category.")]
+    public Task<string> Patch(
+        [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
+        [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}.")] string fields)
+        => ops.Patch(path, fields);
+
+    [McpServerTool]
     [Description("Deletes one or more nodes from the mesh by path.")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete (e.g., [\"ACME/OldProject\", \"ACME/ArchivedTask\"])")] string paths)
         => ops.Delete(paths);
+
+    [McpServerTool]
+    [Description("Moves a node and its descendants to a new path. Equivalent to the Move menu item. Requires Delete on the source namespace and Create on the target. Source and target are full paths (namespace + id), e.g. 'OrgA/Child' -> 'OrgB/Child'.")]
+    public Task<string> Move(
+        [Description("Current path of the node (e.g., @OrgA/Child)")] string sourcePath,
+        [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath)
+        => ops.Move(sourcePath, targetPath);
+
+    [McpServerTool]
+    [Description("Copies a node and all its descendants to a target namespace. Equivalent to the Copy menu item. Source ids are preserved; paths are rewritten under the target namespace.")]
+    public Task<string> Copy(
+        [Description("Current path of the node to copy (e.g., @OrgA/Child)")] string sourcePath,
+        [Description("Target namespace to copy under (e.g., @OrgB)")] string targetNamespace,
+        [Description("Overwrite existing nodes at the target. Default: false.")] bool force = false)
+        => ops.Copy(sourcePath, targetNamespace, force);
 
     [McpServerTool]
     [Description("Returns a URL to view a node in the MeshWeaver UI. Use this to provide links for users to open in their browser.")]
