@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Runtime.Loader;
 using Microsoft.Extensions.Logging;
@@ -151,6 +152,13 @@ internal interface ICompilationCacheService
     /// <param name="release">The NodeTypeRelease.</param>
     /// <returns>Absolute path to the release folder.</returns>
     string GetReleaseFolderPath(NodeTypeRelease release);
+
+    /// <summary>
+    /// Registers NuGet probing directories for a node. The node's AssemblyLoadContext
+    /// consults these directories during Resolving events so transitive dependencies
+    /// of resolved NuGet packages can be loaded at runtime.
+    /// </summary>
+    void RegisterProbingDirectories(string nodeName, System.Collections.Generic.IReadOnlyList<string> directories);
 }
 
 /// <summary>
@@ -166,6 +174,12 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     private readonly object _loadLock = new();
     private Assembly? _loadedAssembly;
     private volatile bool _disposed;
+    private ImmutableArray<string> _probingDirs = ImmutableArray<string>.Empty;
+
+    public void SetProbingDirectories(System.Collections.Generic.IReadOnlyList<string> dirs)
+    {
+        _probingDirs = dirs.ToImmutableArray();
+    }
 
     /// <summary>
     /// Gets the node name associated with this context.
@@ -308,7 +322,27 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
-        // For dependencies, delegate to the default context
+        // Probe registered NuGet package directories for transitive dependencies.
+        var name = assemblyName.Name;
+        if (!string.IsNullOrEmpty(name) && !_probingDirs.IsDefaultOrEmpty)
+        {
+            foreach (var dir in _probingDirs)
+            {
+                var candidate = Path.Combine(dir, name + ".dll");
+                if (File.Exists(candidate))
+                {
+                    try
+                    {
+                        return LoadFromAssemblyPath(candidate);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogDebug(ex, "Probing load failed for {Candidate}", candidate);
+                    }
+                }
+            }
+        }
+        // For other dependencies, delegate to the default context
         return null;
     }
 
@@ -343,10 +377,26 @@ internal class CompilationCacheService(
 {
     private readonly CompilationCacheOptions _options = options.Value ?? new CompilationCacheOptions();
     private readonly ConcurrentDictionary<string, NodeAssemblyLoadContext> _loadContexts = new();
+    private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _probingDirs = new();
+    // Sticky invalidation set: a node name in here forces IsCacheValid to return false
+    // on the NEXT call (and then clears itself). Needed because InvalidateCache's
+    // File.Delete can silently fail when the DLL is still mapped by a live ALC — in
+    // that case the stale DLL sits on disk with a newer timestamp than the NodeType's
+    // LastModified, so the ordinary timestamp-based IsCacheValid would reuse it.
+    private readonly ConcurrentDictionary<string, byte> _invalidated = new(StringComparer.Ordinal);
     private readonly string _absoluteCacheDirectory = ResolveAbsolutePath(options.Value?.CacheDirectory ?? ".mesh-cache");
     private readonly Lazy<DateTimeOffset> _frameworkTimestamp = new(ComputeFrameworkTimestamp);
     private readonly object _disposeLock = new();
     private volatile bool _disposed;
+
+    /// <inheritdoc />
+    public void RegisterProbingDirectories(string nodeName, System.Collections.Generic.IReadOnlyList<string> directories)
+    {
+        if (directories.Count == 0) return;
+        _probingDirs[nodeName] = directories.ToImmutableArray();
+        if (_loadContexts.TryGetValue(nodeName, out var ctx))
+            ctx.SetProbingDirectories(directories);
+    }
 
     /// <inheritdoc />
     public bool IsDiskCacheEnabled => _options.EnableDiskCache;
@@ -414,6 +464,15 @@ internal class CompilationCacheService(
     {
         if (!_options.EnableCompilationCache)
             return false;
+
+        // Sticky invalidation — honored once and then cleared, so the next compile
+        // can write fresh artifacts and subsequent IsCacheValid calls go back to the
+        // timestamp check.
+        if (_invalidated.TryRemove(nodeName, out _))
+        {
+            logger.LogDebug("Cache forced-stale for {NodeName} by prior InvalidateCache", nodeName);
+            return false;
+        }
 
         var dllPath = GetDllPath(nodeName);
         var pdbPath = GetPdbPath(nodeName);
@@ -488,6 +547,11 @@ internal class CompilationCacheService(
     public void InvalidateCache(string nodeName)
     {
         logger.LogDebug("Invalidating cache for {NodeName}", nodeName);
+
+        // Mark invalidated BEFORE attempting to delete: if the DLL is still mapped by
+        // a live ALC, File.Delete will silently fail and leave the stale DLL on disk.
+        // The flag ensures the next IsCacheValid returns false regardless.
+        _invalidated[nodeName] = 0;
 
         // First, unload the AssemblyLoadContext to release the file lock
         UnloadContext(nodeName);
@@ -578,7 +642,10 @@ internal class CompilationCacheService(
         {
             var dllPath = GetDllPath(name);
             logger.LogDebug("Creating new AssemblyLoadContext for {NodeName}", name);
-            return new NodeAssemblyLoadContext(name, dllPath, logger);
+            var ctx = new NodeAssemblyLoadContext(name, dllPath, logger);
+            if (_probingDirs.TryGetValue(name, out var dirs) && !dirs.IsDefaultOrEmpty)
+                ctx.SetProbingDirectories(dirs);
+            return ctx;
         });
     }
 
