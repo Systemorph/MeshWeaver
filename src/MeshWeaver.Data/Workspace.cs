@@ -5,6 +5,7 @@ using System.Reflection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
@@ -12,6 +13,7 @@ namespace MeshWeaver.Data;
 public class Workspace : IWorkspace
 {
     private readonly ILogger<Workspace> _logger;
+    private readonly IDisposable? _changeFeedSubscription;
 
     public Workspace(IMessageHub hub, ILogger<Workspace> logger)
     {
@@ -21,6 +23,93 @@ public class Workspace : IWorkspace
         DataContext = this.CreateDataContext();
         logger.LogDebug("Started initialization of data context of address {address}", Id);
         DataContext.Initialize();
+
+        // Evict cached remote streams when their owner node changes (delete, recreate,
+        // recycle, content/type update). Without this, a Singleton workspace keeps
+        // serving the original snapshot forever — including across Blazor circuit
+        // refreshes, since the workspace lives on the singleton mesh hub. The next
+        // GetRemoteStream after eviction creates a fresh subscription against the
+        // (re-)activated owner and pulls the current persistence state.
+        //
+        // IMeshChangeFeed lives in MeshWeaver.Mesh.Contract which would create a
+        // Data → Mesh.Contract → Layout → Data project cycle. Resolve via reflection
+        // and adapt the Subscribe(Action<MeshChangeEvent>, MeshChangeKind?) signature.
+        _changeFeedSubscription = TrySubscribeToChangeFeed(hub.ServiceProvider, _logger,
+            evtPath => EvictForPath(evtPath));
+    }
+
+    private static IDisposable? TrySubscribeToChangeFeed(
+        IServiceProvider serviceProvider, ILogger logger, Action<string> onPathChanged)
+    {
+        try
+        {
+            var feedType = Type.GetType("MeshWeaver.Mesh.Services.IMeshChangeFeed, MeshWeaver.Mesh.Contract", throwOnError: false);
+            if (feedType is null) return null;
+            var feed = serviceProvider.GetService(feedType);
+            if (feed is null) return null;
+
+            var eventType = Type.GetType("MeshWeaver.Mesh.Services.MeshChangeEvent, MeshWeaver.Mesh.Contract", throwOnError: false);
+            if (eventType is null) return null;
+            var pathProp = eventType.GetProperty("Path");
+            if (pathProp is null) return null;
+
+            // Build a strongly-typed Action<MeshChangeEvent> via a generic helper so the
+            // runtime sees the exact delegate signature Subscribe expects.
+            var helper = typeof(Workspace).GetMethod(nameof(SubscribeChangeFeedHelper),
+                BindingFlags.NonPublic | BindingFlags.Static)!.MakeGenericMethod(eventType);
+            return (IDisposable?)helper.Invoke(null, [feed, pathProp, onPathChanged]);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Workspace failed to subscribe to IMeshChangeFeed — remote stream cache will only invalidate via heartbeat resubscribe.");
+            return null;
+        }
+    }
+
+    private static IDisposable? SubscribeChangeFeedHelper<TEvent>(
+        object feed, PropertyInfo pathProperty, Action<string> onPathChanged)
+        where TEvent : class
+    {
+        Action<TEvent> handler = evt =>
+        {
+            try
+            {
+                if (pathProperty.GetValue(evt) is string p && !string.IsNullOrEmpty(p))
+                    onPathChanged(p);
+            }
+            catch { /* keep change-feed alive on handler faults */ }
+        };
+        var subscribe = feed.GetType().GetMethod("Subscribe");
+        return (IDisposable?)subscribe!.Invoke(feed, [handler, null]);
+    }
+
+    /// <summary>
+    /// Drops any cached remote streams whose owner address matches the changed path.
+    /// The currently-attached subscribers stay live (they continue to receive
+    /// DataChanged events from the source hub for the moment); the eviction only
+    /// affects the NEXT GetRemoteStream caller, which will spin up a fresh stream.
+    /// </summary>
+    private void EvictForPath(string path)
+    {
+        if (string.IsNullOrEmpty(path) || _remoteStreamCache.IsEmpty)
+            return;
+
+        // Do NOT dispose the evicted stream — existing subscribers (e.g. live Blazor
+        // components) are still attached to it and need to keep receiving updates
+        // until they drop on their own. The eviction only prevents NEW callers from
+        // re-using the now-stale stream; the next GetRemoteStream creates a fresh one
+        // against the (re-)activated owner.
+        foreach (var key in _remoteStreamCache.Keys)
+        {
+            if (string.Equals(key.Item1.ToString(), path, StringComparison.OrdinalIgnoreCase)
+                && _remoteStreamCache.TryRemove(key, out _))
+            {
+                _logger.LogDebug(
+                    "Evicted remote stream cache for {Address} after change event.",
+                    key.Item1);
+            }
+        }
     }
 
     /// <summary>
@@ -221,6 +310,12 @@ public class Workspace : IWorkspace
         catch (Exception ex)
         {
             _logger.LogError(ex, "Workspace {WorkspaceId} error disposing DataContext", Id);
+        }
+
+        try { _changeFeedSubscription?.Dispose(); }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Workspace {WorkspaceId} failed to dispose change-feed subscription", Id);
         }
 
         _logger.LogInformation("Workspace {WorkspaceId} DisposeAsync completed", Id);
