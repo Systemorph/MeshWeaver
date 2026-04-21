@@ -161,13 +161,21 @@ public static class JsonSynchronizationStream
 
         // Keep the remote owner grain alive while this subscription exists.
         // HeartBeatEvent is a no-op in monolith mode (no GrainKeepAliveCallback).
-        // Stop sending after the first DeliveryFailure so we don't spam warnings when
-        // the owner hub has no HeartBeatEvent handler (e.g. non-grain event hubs).
+        // On a heartbeat DeliveryFailure the owner is gone (recycled, idle-deactivated,
+        // crashed). Don't just stop — the cached snapshot here would be served forever,
+        // even though the next access would re-activate the owner grain with fresh data.
+        // Re-issue the SubscribeRequest so the new owner grain replays an Initial snapshot
+        // back to us. This is what removes the need for a Blazor circuit refresh after
+        // Recycle / delete+create on the same path.
         if (!owner.Equals(hub.Address))
         {
             var cts = new CancellationTokenSource();
             IDisposable? sub = null;
-            sub = Observable.Interval(TimeSpan.FromSeconds(45))
+            var resubscribing = 0;
+            var heartbeatInterval = hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
+                ?.Value?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
+            sub = Observable.Interval(heartbeatInterval)
                 .Subscribe(_ =>
                 {
                     if (hub.RunLevel > MessageHubRunLevel.Started) return;
@@ -175,10 +183,47 @@ public static class JsonSynchronizationStream
                     if (delivery == null) return;
                     hub.RegisterCallback(delivery, (d, _) =>
                     {
-                        if (d.Message is DeliveryFailure)
+                        if (d.Message is DeliveryFailure
+                            && Interlocked.Exchange(ref resubscribing, 1) == 0)
                         {
-                            sub?.Dispose();
-                            cts.Cancel();
+                            logger.LogInformation(
+                                "Stream {StreamId}: owner {Owner} heartbeat failed — resubscribing for fresh snapshot.",
+                                reduced.StreamId, owner);
+
+                            var resubIdentity = accessService?.Context?.ObjectId
+                                                 ?? accessService?.CircuitContext?.ObjectId;
+                            var resub = hub.Post(
+                                new SubscribeRequest(reduced.StreamId, reference) { Identity = resubIdentity },
+                                o => impersonateAsHub
+                                    ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
+                                    : o.WithTarget(owner));
+
+                            if (resub != null)
+                            {
+                                hub.RegisterCallback(resub, (rd, _) =>
+                                {
+                                    if (rd.Message is DeliveryFailure rdFail)
+                                    {
+                                        logger.LogWarning(
+                                            "Stream {StreamId}: resubscribe failed: {Message}. Stopping heartbeat.",
+                                            reduced.StreamId, rdFail.Message);
+                                        sub?.Dispose();
+                                        cts.Cancel();
+                                    }
+                                    else
+                                    {
+                                        // New Initial snapshot from the re-activated owner —
+                                        // forward to the stream hub so cached state is replaced.
+                                        reduced.Hub.DeliverMessage(rd);
+                                    }
+                                    Interlocked.Exchange(ref resubscribing, 0);
+                                    return Task.FromResult(rd);
+                                }, default);
+                            }
+                            else
+                            {
+                                Interlocked.Exchange(ref resubscribing, 0);
+                            }
                         }
                         return Task.FromResult(d);
                     }, cts.Token);
