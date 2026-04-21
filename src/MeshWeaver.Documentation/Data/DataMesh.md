@@ -253,7 +253,7 @@ Data products are **nodes in a graph** — each with a clear owner, schema, and 
 
 # How MeshWeaver Implements This
 
-- **[Node Types](NodeTypeConfiguration)** — Define what a data product looks like: its properties, behavior, and layout
+- **[Node Types](NodeTypes)** — Design, compile, NuGet-reference, and test node types end to end
 - **[Addressable Paths](UnifiedPath)** — Every product gets a permanent, unique address in the mesh
 - **[Query Language](QuerySyntax)** — GitHub-style search syntax to discover and filter across products
 - **[CRUD Operations](CRUD)** — Type-safe create, read, update, delete for any product

@@ -154,6 +154,8 @@ var portal = builder
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
     .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
+    // NuGet cache for #r "nuget:..." directives (in-process restore via MeshWeaver.NuGet).
+    .WithEnvironment("NUGET_PACKAGES", "/tmp/nuget-cache")
     // Wait for dependencies
     .WaitFor(orleansTables)
     .WaitForCompletion(dbMigration)

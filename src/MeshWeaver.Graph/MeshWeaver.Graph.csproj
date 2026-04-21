@@ -31,6 +31,7 @@
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
 
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
   </ItemGroup>
 
 </Project>

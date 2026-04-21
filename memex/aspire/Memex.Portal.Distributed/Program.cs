@@ -1,9 +1,13 @@
 ﻿using Azure.Identity;
+using Azure.Storage.Blobs;
 using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Messaging;
+using MeshWeaver.NuGet;
+using MeshWeaver.NuGet.AzureBlob;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using Orleans.Configuration;
 
@@ -16,6 +20,15 @@ builder.AddServiceDefaults();
 builder.AddKeyedAzureTableServiceClient("orleans-clustering");
 builder.AddKeyedAzureBlobServiceClient("storage");
 builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
+
+// Persistent NuGet package cache backed by the content-storage account. Each resolved
+// package is stored as a .zip blob under container "nuget-cache" keyed by {id}/{version}.
+// On a new replica the resolver hydrates from blob instead of re-downloading from nuget.org.
+builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
+    new BlobNuGetPackageCache(
+        sp.GetRequiredKeyedService<BlobServiceClient>("storage"),
+        containerName: "nuget-cache",
+        logger: sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<BlobNuGetPackageCache>>())));
 
 // Register Aspire-injected PostgreSQL data source (with pgvector support)
 // Single shared pool for all partition queries (schema-qualified SQL).

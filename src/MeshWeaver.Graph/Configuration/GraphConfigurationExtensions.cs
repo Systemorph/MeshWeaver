@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.NuGet;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -96,6 +97,9 @@ public static class GraphConfigurationExtensions
 
                 // Register compilation cache service
                 services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
+
+                // NuGet package resolver for #r "nuget:..." directives
+                services.AddNuGetResolver();
 
                 return services;
             });

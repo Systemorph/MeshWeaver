@@ -10,6 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
+using MeshWeaver.NuGet;
 using Microsoft.DotNet.Interactive;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.CSharp;
@@ -17,9 +18,9 @@ using Microsoft.DotNet.Interactive.Events;
 using Microsoft.DotNet.Interactive.Formatting;
 using Microsoft.DotNet.Interactive.Formatting.Csv;
 using Microsoft.DotNet.Interactive.Formatting.TabularData;
-using Microsoft.DotNet.Interactive.PackageManagement;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Runtime.Loader;
 
 namespace MeshWeaver.Kernel.Hub;
 
@@ -314,7 +315,6 @@ public class KernelContainer(IServiceProvider serviceProvider)
         var ret = new CSharpKernel()
             .UseKernelHelpers()
             .UseValueSharing()
-            .UseNugetDirective(OnResolve)
             ;
 
         ret.KernelInfo.Uri = new Uri(ret.KernelInfo.Uri.ToString().Replace("local", "mesh"));
@@ -331,8 +331,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
             typeof(FluentIcons).Assembly.Location // MeshWeaver.Application.Styles - for icon support
         ]);
 
-        var composite = new CompositeKernel("mesh")
-            .UseNugetDirective(OnResolve);
+        var composite = new CompositeKernel("mesh");
         composite.KernelInfo.Uri = new(composite.KernelInfo.Uri.ToString().Replace("local", "mesh"));
         composite.Add(ret);
         await Task.WhenAll(composite.ChildKernels.OfType<CSharpKernel>()
@@ -360,27 +359,70 @@ using MeshWeaver.Messaging;
         return composite;
     }
 
-    private Task OnResolve(CompositeKernel arg1, IReadOnlyList<ResolvedPackageReference> arg2)
+    private static readonly HashSet<string> _probingDirs = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object _probingDirLock = new();
+    private static bool _probingResolverInstalled;
+
+    private void InstallRuntimeProbe(IEnumerable<string> dirs)
     {
-        return Task.CompletedTask;
+        lock (_probingDirLock)
+        {
+            foreach (var dir in dirs) _probingDirs.Add(dir);
+            if (_probingResolverInstalled) return;
+            _probingResolverInstalled = true;
+
+            AssemblyLoadContext.Default.Resolving += (ctx, name) =>
+            {
+                var dllName = name.Name + ".dll";
+                lock (_probingDirLock)
+                {
+                    foreach (var d in _probingDirs)
+                    {
+                        var candidate = Path.Combine(d, dllName);
+                        if (File.Exists(candidate))
+                        {
+                            try { return ctx.LoadFromAssemblyPath(candidate); }
+                            catch { /* try next */ }
+                        }
+                    }
+                }
+                return null;
+            };
+        }
     }
 
-    private Task OnResolve(CSharpKernel kernel, IReadOnlyList<ResolvedPackageReference> packages)
+    private async Task<(KernelCommand command, string? resolvedCode)> PreprocessSubmitCodeAsync(
+        CompositeKernel kernel, SubmitCode submit, CancellationToken ct)
     {
-        var assemblies = packages.SelectMany(p => p.AssemblyPaths).Distinct().ToArray();
+        var (cleaned, refs) = NuGetDirectiveParser.Extract(submit.Code);
+        if (refs.Length == 0)
+            return (submit, null);
+
+        var resolver = serviceProvider.GetService<INuGetAssemblyResolver>();
+        if (resolver is null)
+        {
+            logger.LogWarning("INuGetAssemblyResolver not registered; #r \"nuget:...\" directives ignored.");
+            return (submit, null);
+        }
+
         try
         {
-            // Use the correct method to add assembly references
-            kernel.AddAssemblyReferences(assemblies);
-            logger.LogInformation("Added assembly reference: {Assembly}", string.Join(',', assemblies));
+            var resolved = await resolver.ResolveAsync(refs, targetFramework: null, ct);
+            var csharp = kernel.ChildKernels.OfType<CSharpKernel>().FirstOrDefault();
+            csharp?.AddAssemblyReferences(resolved.AssemblyPaths);
+            InstallRuntimeProbe(resolved.ProbingDirectories);
+            logger.LogInformation("Resolved {Count} NuGet package(s) for interactive cell.", refs.Length);
         }
         catch (Exception ex)
         {
-            logger.LogWarning("Failed to add assembly reference {Assembly}: {Message}",
-                string.Join(',', assemblies), ex.Message);
+            logger.LogError(ex, "NuGet restore failed for interactive cell.");
+            throw;
         }
 
-        return Task.CompletedTask;
+        var replaced = new SubmitCode(cleaned, targetKernelName: submit.TargetKernelName);
+        foreach (var (k, v) in submit.Parameters)
+            replaced.Parameters[k] = v;
+        return (replaced, cleaned);
     }
     private string FormatControl(IMessageHub hub, UiControl? control, string iframeUrl, string viewId)
     {
@@ -437,6 +479,10 @@ using MeshWeaver.Messaging;
     private async Task<IMessageDelivery> SubmitCommand(IMessageHub hub, IMessageDelivery request, CancellationToken ct, KernelCommand command)
     {
         var kernel = await hub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
+        if (command is SubmitCode submit)
+        {
+            (command, _) = await PreprocessSubmitCodeAsync(kernel, submit, ct);
+        }
         var ret = await kernel.SendAsync(command, ct);
         return request.Processed();
     }
