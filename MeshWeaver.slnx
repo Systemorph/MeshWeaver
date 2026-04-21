@@ -93,6 +93,8 @@
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
+    <Project Path="src/MeshWeaver.NuGet.AzureBlob/MeshWeaver.NuGet.AzureBlob.csproj" />
+    <Project Path="src/MeshWeaver.NuGet/MeshWeaver.NuGet.csproj" />
     <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
@@ -118,6 +120,7 @@
     <Project Path="test/MeshWeaver.Json.Assertions/MeshWeaver.Json.Assertions.csproj" />
     <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Test/MeshWeaver.Markdown.Test.csproj" />
+    <Project Path="test/MeshWeaver.MathDemo.Test/MeshWeaver.MathDemo.Test.csproj" />
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
     <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />

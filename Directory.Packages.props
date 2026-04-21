@@ -141,6 +141,11 @@
     <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.59.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageVersion Include="NuGet.Protocol" Version="7.3.1" />
+    <PackageVersion Include="NuGet.Packaging" Version="7.3.1" />
+    <PackageVersion Include="NuGet.Resolver" Version="7.3.1" />
+    <PackageVersion Include="NuGet.DependencyResolver.Core" Version="7.3.1" />
+    <PackageVersion Include="NuGet.Frameworks" Version="7.3.1" />
     <PackageVersion Include="Npgsql" Version="10.0.2" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageVersion Include="Pgvector" Version="0.3.2" />

@@ -4,6 +4,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
@@ -22,6 +23,7 @@ internal class MeshNodeCompilationService(
     ICompilationCacheService cacheService,
     IOptions<CompilationCacheOptions> cacheOptions,
     IMessageHub hub,
+    INuGetAssemblyResolver nugetResolver,
     ILogger<MeshNodeCompilationService> logger)
     : IMeshNodeCompilationService
 {
@@ -514,7 +516,18 @@ internal class MeshNodeCompilationService(
         ct.ThrowIfCancellationRequested();
 
         // Generate full source with MeshNodeProviderAttribute (including content collections)
-        var source = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
+        var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeFile, hubConfiguration, contentCollections);
+
+        // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
+        var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
+        IEnumerable<MetadataReference> references = _references;
+        if (nugetRefs.Length > 0)
+        {
+            var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
+            references = _references.Concat(
+                resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+            cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);
+        }
 
         // Write source file for debugging (only for disk cache)
         var sourcePath = cacheService.GetSourcePath(nodeName);
@@ -524,8 +537,8 @@ internal class MeshNodeCompilationService(
             logger.LogDebug("Wrote source file for debugging: {SourcePath}", sourcePath);
         }
 
-        logger.LogInformation("Compiling assembly for {NodeName} ({Mode})",
-            nodeName, cacheService.IsDiskCacheEnabled ? "disk" : "in-memory");
+        logger.LogInformation("Compiling assembly for {NodeName} ({Mode}, {NuGetRefs} NuGet refs)",
+            nodeName, cacheService.IsDiskCacheEnabled ? "disk" : "in-memory", nugetRefs.Length);
 
         // Parse with source path and encoding embedded (critical for PDB source linking)
         var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
@@ -541,7 +554,7 @@ internal class MeshNodeCompilationService(
         var compilation = CSharpCompilation.Create(
             assemblyName,
             syntaxTrees: [syntaxTree],
-            references: _references,
+            references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
                 .WithPlatform(Platform.AnyCpu));

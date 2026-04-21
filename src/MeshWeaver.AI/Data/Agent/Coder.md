@@ -49,8 +49,8 @@ A NodeType is a MeshNode with `nodeType: "NodeType"` whose `content` contains a 
       Status.cs             # Reference data (optional)
       DataLoader.cs         # CSV loader (optional)
       MyTypeLayoutAreas.cs  # Custom views (optional)
-    _Test/                  # xUnit tests (optional)
-      MyTypeTests.cs
+    _Test/                  # C# test files — REQUIRED for every NodeType
+      MyTypeTest.cs
 ```
 
 ## Source Code Frontmatter
@@ -257,6 +257,12 @@ When asked to create a node type:
    - If `status: "Error"` → read `error`, fix the broken source or the NodeType JSON (often the fix is adding a `sources` entry pointing at another NodeType's `_Source` via `$self` or an absolute path), write the fix with `Update`/`Patch`, and re-check.
    - Repeat until `status: "Ok"`. Only then is the NodeType "done".
    - Alternative: a plain `Get('@{path}')` on any instance (or the NodeType itself) wraps the JSON with a `compilationError` field when the type failed to compile — useful when you want the node data and the compile status together.
+8. **Write tests** — ALWAYS, before you consider the NodeType done:
+   - Every NodeType gets a `_Test/` sibling folder next to `_Source/` with at least one test file per feature (content type, each reference data type, each layout area).
+   - Test files follow the same `// <meshweaver>` frontmatter + top-level C# pattern as `_Source/` files. Asserts throw on failure.
+   - Run them with the `RunTests` tool. For a NodeType living at `samples/Graph/Data/MyNamespace/MyType`, invoke the project-level tests that exercise it, e.g. `RunTests("test/MeshWeaver.MyNamespace.Test", "FullyQualifiedName~MyType")`.
+   - Do not ship a NodeType whose tests are red. If you can't get them green, surface the failure with the test output and ask for guidance.
+   - See [Testing Node Types](@@Doc/DataMesh/NodeTypes/Testing) for the full layout-area + request/response patterns.
 
 # Business Rules & Calculations
 

@@ -13,6 +13,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.NuGet;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -94,7 +95,8 @@ public class MeshNodeCompilationServiceTest : IDisposable
 
         // Update to use the real scope service provider for subsequent calls
         hubSp.GetService(typeof(IMeshService)).Returns(meshQuery);
-        return new(_cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
+        var nugetResolver = new MeshWeaver.NuGet.NuGetAssemblyResolver(NullLogger<MeshWeaver.NuGet.NuGetAssemblyResolver>.Instance);
+        return new(_cacheService, _cacheOptions, _mockHub, nugetResolver, NullLogger<MeshNodeCompilationService>.Instance);
     }
 
     private async Task SetupNodeType(InMemoryPersistenceService persistence, string nodeType, NodeTypeDefinition definition, CodeConfiguration? codeFile = null, string? displayName = null)
@@ -958,6 +960,7 @@ public record SatelliteModel
         services.AddSingleton(_cacheOptions);
         services.AddSingleton(NullLogger<MeshNodeCompilationService>.Instance);
         services.AddSingleton(NullLogger<NodeTypeService>.Instance);
+        services.AddNuGetResolver();
         services.AddSingleton<MeshNodeCompilationService>();
         services.AddLogging();
 

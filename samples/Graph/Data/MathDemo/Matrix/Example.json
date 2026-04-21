@@ -1,0 +1,16 @@
+{
+  "id": "Example",
+  "namespace": "MathDemo/Matrix",
+  "name": "Example 2x2",
+  "nodeType": "MathDemo/Matrix",
+  "description": "Sample 2x2 matrix for the NuGet-in-node-type documentation walkthrough.",
+  "isPersistent": true,
+  "content": {
+    "$type": "Matrix",
+    "name": "Example 2x2",
+    "a11": 1,
+    "a12": 2,
+    "a21": 3,
+    "a22": 4
+  }
+}

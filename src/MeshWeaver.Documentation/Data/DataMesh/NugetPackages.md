@@ -4,7 +4,7 @@ Category: Documentation
 Description: Reference NuGet packages directly from interactive markdown code cells using the #r "nuget:..." directive.
 ---
 
-Interactive markdown in MeshWeaver is backed by a [.NET Interactive](https://github.com/dotnet/interactive) `CSharpKernel`. That gives every code cell the same package-management directive used by Polyglot Notebooks: `#r "nuget:PackageId, Version"`. The package is resolved by the NuGet client libraries *in-process* — no `dotnet` CLI, no .NET SDK on the container, no restart. The resolved assemblies are added to the kernel's compilation references and become usable immediately.
+Interactive markdown in MeshWeaver is backed by a [.NET Interactive](https://github.com/dotnet/interactive) `CSharpKernel`. That gives every code cell the same package-management directive used by Polyglot Notebooks: `#r "nuget:PackageId, Version"`. MeshWeaver resolves the package in-process using the public `NuGet.Protocol` / `NuGet.Packaging` / `NuGet.Resolver` libraries (no .NET SDK, no MSBuild), adds its assemblies to the kernel's compilation references, and it becomes usable immediately — no restart.
 
 ## Basic usage
 
@@ -72,18 +72,19 @@ If the package id is unknown, the version does not exist, or the kernel cannot r
 "unreachable"
 ```
 
-## How this fits with dynamic compilation
+## Also in node types
 
-Interactive markdown and dynamic node compilation (`MeshNodeCompilationService`, `ScriptCompilationService`) are different paths. `#r "nuget"` support described here covers interactive markdown only. The dynamic node compiler builds MeshNode assemblies from runtime assemblies and does not currently accept `nuget:` references — it takes its reference set from `TRUSTED_PLATFORM_ASSEMBLIES` plus an explicit list.
+The same directive works at the top of any `_Source/*.cs` file in a node type. See [NuGet Packages in Node Types](NodeTypeWithNuGet) for the end-to-end walkthrough.
 
-## No .NET SDK on the container
+## Deployment — no SDK required
 
-The runtime image (`mcr.microsoft.com/dotnet/aspnet`) is enough. NuGet restore in .NET Interactive is a library operation — `NuGet.Protocol` and `NuGet.Packaging` talk HTTPS to `api.nuget.org` and unpack `.nupkg` files into the local cache. The `dotnet restore` CLI (which needs the SDK) is never invoked. When deploying to Azure Container Apps, make sure:
+The restore is a library operation on `NuGet.Protocol` + `NuGet.Packaging` + `NuGet.Resolver`. It does not shell out to `dotnet restore` and does not need MSBuild, so the ACA image is the plain `mcr.microsoft.com/dotnet/aspnet` runtime. Requirements are minimal:
 
-- Outbound HTTPS to `api.nuget.org` is permitted (ACA's default egress policy allows it).
-- A writable cache directory is available. The default (`$HOME/.nuget/packages` or `%USERPROFILE%\.nuget\packages`) works on ACA; set `NUGET_PACKAGES` if you need a specific path.
+- Outbound HTTPS to `api.nuget.org` (default ACA egress allows it).
+- A writable cache directory. The Aspire AppHost sets `NUGET_PACKAGES=/tmp/nuget-cache` for the portal resource.
 
 ## Related
 
 - [Interactive Markdown](InteractiveMarkdown) — how code cells and `--render` areas work
+- [NuGet Packages in Node Types](NodeTypeWithNuGet) — same directive in `_Source/*.cs`
 - [Data Modeling](DataModeling) — referencing your own schema types from a code cell

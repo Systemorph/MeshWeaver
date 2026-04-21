@@ -131,6 +131,92 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return $"Navigating to: {resolvedPath}";
     }
 
+    [Description("Runs xUnit tests via `dotnet test` on the given test project path (repo-relative, e.g. 'test/MeshWeaver.Acme.Test'). Optional filter uses the xunit `--filter` syntax: 'FullyQualifiedName~TodoViewsTest' to narrow by class, or '...Test.MethodName' for a single method. Returns the condensed test runner output (stdout + pass/fail summary). Dev-only — intended for the Monolith portal, not production.")]
+    public async Task<string> RunTests(
+        [Description("Repo-relative path to the test project or its directory (e.g. 'test/MeshWeaver.Acme.Test')")] string projectPath,
+        [Description("Optional xunit filter expression (e.g. 'FullyQualifiedName~TodoViewsTest')")] string? filter = null)
+    {
+        logger.LogInformation("RunTests called project={Project} filter={Filter}", projectPath, filter ?? "<none>");
+
+        var repoRoot = FindRepoRoot(AppContext.BaseDirectory);
+        if (repoRoot is null)
+            return "{\"status\":\"Error\",\"message\":\"Could not locate repo root (no MeshWeaver.slnx upstream from executable).\"}";
+
+        var fullPath = Path.GetFullPath(Path.Combine(repoRoot, projectPath));
+        if (!fullPath.StartsWith(repoRoot, StringComparison.OrdinalIgnoreCase))
+            return "{\"status\":\"Error\",\"message\":\"projectPath must stay inside the repo root.\"}";
+        if (!Directory.Exists(fullPath) && !File.Exists(fullPath))
+            return $"{{\"status\":\"Error\",\"message\":\"Path not found: {projectPath}\"}}";
+
+        var args = new List<string> { "test", fullPath, "--no-restore", "--nologo" };
+        if (!string.IsNullOrWhiteSpace(filter))
+        {
+            args.Add("--filter");
+            args.Add(filter);
+        }
+
+        using var process = new System.Diagnostics.Process
+        {
+            StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "dotnet",
+                WorkingDirectory = repoRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            }
+        };
+        foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
+
+        var stdout = new System.Text.StringBuilder();
+        var stderr = new System.Text.StringBuilder();
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderr.AppendLine(e.Data); };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        try
+        {
+            await process.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            return "{\"status\":\"Timeout\",\"message\":\"Test run exceeded 5 minutes.\"}";
+        }
+
+        var combined = stdout.ToString();
+        if (stderr.Length > 0) combined += "\n--- stderr ---\n" + stderr;
+        // Trim to last ~4 KB so a noisy build log doesn't blow up the tool result.
+        const int MaxLen = 4000;
+        if (combined.Length > MaxLen)
+            combined = "…\n" + combined[^MaxLen..];
+
+        return System.Text.Json.JsonSerializer.Serialize(new
+        {
+            status = process.ExitCode == 0 ? "Passed" : "Failed",
+            exitCode = process.ExitCode,
+            projectPath,
+            filter,
+            output = combined,
+        });
+    }
+
+    private static string? FindRepoRoot(string startDir)
+    {
+        var dir = new DirectoryInfo(startDir);
+        while (dir is not null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx"))) return dir.FullName;
+            dir = dir.Parent;
+        }
+        return null;
+    }
+
     private string ResolveContextPath(string path) => MeshOperations.ResolveContextPath(chat, path);
 
     /// <summary>
@@ -144,6 +230,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo),
             AIFunctionFactory.Create(GetDiagnostics),
+            AIFunctionFactory.Create(RunTests),
         ];
     }
 
@@ -165,6 +252,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Copy),
             AIFunctionFactory.Create(GetDiagnostics),
             AIFunctionFactory.Create(Recycle),
+            AIFunctionFactory.Create(RunTests),
         ];
     }
 }

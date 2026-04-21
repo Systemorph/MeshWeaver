@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
     <ProjectReference Include="..\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.NuGet.AzureBlob\MeshWeaver.NuGet.AzureBlob.csproj" />
   </ItemGroup>
 
   <ItemGroup>
