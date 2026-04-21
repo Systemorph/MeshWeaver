@@ -143,6 +143,35 @@ Pin the same package version across every `_Source/` file that uses it — each 
 }
 ```
 
+## See it run
+
+The deployed sample lives at `MathDemo/Matrix/Example`. Its `Inverse` layout area — rendered by `MatrixLayoutAreas.Inverse` compiled from `_Source/` with the `#r "nuget:MathNet.Numerics, 5.0.0"` directive — embeds directly below:
+
+@MathDemo/Matrix/Example/Inverse
+
+And here is the equivalent interactive-markdown cell — same NuGet directive, same MathNet call, executed by the kernel every time this page loads:
+
+```csharp --render MatrixInverseDemo --show-code
+#r "nuget:MathNet.Numerics, 5.0.0"
+using MathNet.Numerics.LinearAlgebra;
+
+var m = Matrix<double>.Build.DenseOfArray(new double[,] { { 1, 2 }, { 3, 4 } });
+var inv = m.Inverse();
+Controls.Markdown($"""
+**Matrix**
+```
+{m}
+```
+**Inverse**
+```
+{inv}
+```
+**Determinant:** {m.Determinant()}
+""")
+```
+
+Both routes go through the same `NuGetAssemblyResolver` — the node-type compilation path for the layout-area embed, and the kernel preprocessor for the code cell. On a fresh replica the first of the two pays the single MathNet restore; the second hits the in-memory cache instantly.
+
 ## Caching
 
 The resolver keeps an in-memory cache keyed by the sorted `(Id, VersionRange)` tuple. Within a single portal process every subsequent compilation that names the same packages reuses the already-resolved assembly list — no repeat HTTP calls. Across restarts, the NuGet package folder on disk (`$NUGET_PACKAGES`, default `~/.nuget/packages`) provides the second level of caching; only a fresh replica on a fresh ACA node triggers a real download.

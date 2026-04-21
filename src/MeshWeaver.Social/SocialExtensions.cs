@@ -31,41 +31,38 @@ public static class SocialExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // Options from "Social" section.
-        var socialSection = configuration.GetSection("Social");
+        // Options from "Social" section (optional; all fields have sensible defaults).
         var options = new SocialOptions();
-        socialSection.Bind(options);
+        configuration.GetSection("Social").Bind(options);
         services.AddSingleton(options);
 
         // Shared queue (in-memory default).
         services.TryAddSingleton<IPublishQueue, InMemoryPublishQueue>();
 
-        // Platform publishers — each gated by its config section so unconfigured
-        // platforms don't end up in DI (the scheduler falls back to "no publisher
-        // for this platform, drop" on missing entries, which is the desired UX).
-        var liSection = socialSection.GetSection("LinkedIn");
-        if (!string.IsNullOrEmpty(liSection["ClientId"]))
+        // Platform publishers — gated by the presence of a client id so unconfigured
+        // platforms don't end up in DI. Values come from user-secrets / env vars under
+        // Social:LinkedIn:* and Social:Twitter:* (no entry in appsettings required).
+        var linkedInClientId = configuration["Social:LinkedIn:ClientId"];
+        if (!string.IsNullOrEmpty(linkedInClientId))
         {
             services.AddHttpClient<LinkedInPublisher>();
-            var liOpts = new LinkedInOptions
+            services.AddSingleton(new LinkedInOptions
             {
-                ClientId = liSection["ClientId"]!,
-                ClientSecret = liSection["ClientSecret"] ?? ""
-            };
-            services.AddSingleton(liOpts);
+                ClientId = linkedInClientId!,
+                ClientSecret = configuration["Social:LinkedIn:ClientSecret"] ?? ""
+            });
             services.AddSingleton<IPlatformPublisher>(sp => sp.GetRequiredService<LinkedInPublisher>());
         }
 
-        var xSection = socialSection.GetSection("Twitter");
-        if (!string.IsNullOrEmpty(xSection["ClientId"]))
+        var xClientId = configuration["Social:Twitter:ClientId"];
+        if (!string.IsNullOrEmpty(xClientId))
         {
             services.AddHttpClient<XPublisher>();
-            var xOpts = new XOptions
+            services.AddSingleton(new XOptions
             {
-                ClientId = xSection["ClientId"]!,
-                ClientSecret = xSection["ClientSecret"] ?? ""
-            };
-            services.AddSingleton(xOpts);
+                ClientId = xClientId!,
+                ClientSecret = configuration["Social:Twitter:ClientSecret"] ?? ""
+            });
             services.AddSingleton<IPlatformPublisher>(sp => sp.GetRequiredService<XPublisher>());
         }
 

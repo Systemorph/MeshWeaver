@@ -1,6 +1,7 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Settings;
+using Memex.Portal.Shared.Social;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
@@ -122,6 +123,21 @@ public static class MemexConfiguration
         // Register API token service for MCP bearer auth and OAuth code store
         services.AddSingleton<ApiTokenService>();
         services.AddSingleton<OAuthCodeStore>();
+
+        // Social publishing — minimal registration for the LinkedIn connect + pull endpoints.
+        // (The full hosted-service pipeline is gated behind AddSocialPublishing which needs
+        // IApprovalPublishBridge / IStatsRefreshSource / IPastPostIngestSource — those come
+        // in Phase 4. For now the publisher is enough for /connect/linkedin/pull to work.)
+        var linkedInClientId = builder.Configuration["Social:LinkedIn:ClientId"];
+        if (!string.IsNullOrEmpty(linkedInClientId))
+        {
+            services.AddHttpClient<MeshWeaver.Social.LinkedInPublisher>();
+            services.AddSingleton(new MeshWeaver.Social.LinkedInOptions
+            {
+                ClientId = linkedInClientId!,
+                ClientSecret = builder.Configuration["Social:LinkedIn:ClientSecret"] ?? ""
+            });
+        }
 
         // Configure authentication
         var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
@@ -451,6 +467,11 @@ public static class MemexConfiguration
         app.MapMeshMcp();
 
         app.MapMeshWeaver();
+
+        // Social publishing — LinkedIn connect/pull endpoints. Must be AFTER
+        // UseAuthentication so HttpContext.User is populated.
+        app.MapLinkedInConnect();
+
         app.UseMiddleware<VirtualUserMiddleware>();
         app.UseMiddleware<UserContextMiddleware>();
         app.UseMiddleware<OnboardingMiddleware>();

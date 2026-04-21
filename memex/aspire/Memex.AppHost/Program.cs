@@ -27,6 +27,7 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Parameters:embedding-model
 //   Parameters:microsoft-client-id
 //   Parameters:microsoft-client-secret
+//   Social:LinkedIn:ClientSecret               (LinkedIn publishing — client id is inlined above)
 //
 // For local-test/local-prod, also set the connection string to the Azure PostgreSQL:
 //   ConnectionStrings:memex  (Azure PostgreSQL, bypassing provisioning)
@@ -59,6 +60,15 @@ var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: fals
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
 var googleClientId = builder.AddParameter("google-client-id", secret: false);
 var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
+
+// Social publishing — LinkedIn OAuth app used for publishing posts on behalf
+// of the signed-in user (scopes: w_member_social + r_member_social). Client Id
+// is public (shown in the consent screen URL) so it's inlined; the secret is
+// read from the AppHost's configuration (user-secrets locally, GitHub Actions
+// secret in deploy). Key: Social:LinkedIn:ClientSecret
+//   dotnet user-secrets set "Social:LinkedIn:ClientSecret" "<value>" --project memex/aspire/Memex.AppHost
+const string LinkedInClientId = "780dsuvyxglmc4";
+var linkedinClientSecret = builder.Configuration["Social:LinkedIn:ClientSecret"] ?? "";
 
 // --- Custom domain (for deployed modes) ---
 var customDomain = builder.AddParameter("custom-domain", secret: false);
@@ -154,6 +164,9 @@ var portal = builder
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
     .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
+    // Social publishing (LinkedIn)
+    .WithEnvironment("Social__LinkedIn__ClientId", LinkedInClientId)
+    .WithEnvironment("Social__LinkedIn__ClientSecret", linkedinClientSecret)
     // NuGet cache for #r "nuget:..." directives (in-process restore via MeshWeaver.NuGet).
     .WithEnvironment("NUGET_PACKAGES", "/tmp/nuget-cache")
     // Wait for dependencies

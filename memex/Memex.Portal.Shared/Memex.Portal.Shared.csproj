@@ -27,6 +27,8 @@
     <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.ClaudeCode\MeshWeaver.AI.ClaudeCode.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.Copilot\MeshWeaver.AI.Copilot.csproj" />
+    <!-- Social publishing -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
   </ItemGroup>
 
   <ItemGroup>
