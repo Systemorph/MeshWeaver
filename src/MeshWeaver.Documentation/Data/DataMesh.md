@@ -261,6 +261,7 @@ Data products are **nodes in a graph** — each with a clear owner, schema, and 
 - **[Data Modeling](DataModeling)** — C# records as the schema contract between producers and consumers
 - **[Satellite Entities](SatelliteEntities)** — Comments, approvals, access, and audit trails attach to any node
 - **[Interactive Markdown](InteractiveMarkdown)** — Embed live data and charts directly inside documentation
+- **[NuGet Packages](NugetPackages)** — Reference any NuGet package from interactive markdown with `#r "nuget:..."`
 - **[Collaborative Editing](CollaborativeEditing)** — Real-time co-editing with track changes
 - **[Data Configuration](DataConfiguration)** — Wire data sources and hub-to-hub synchronization
 
