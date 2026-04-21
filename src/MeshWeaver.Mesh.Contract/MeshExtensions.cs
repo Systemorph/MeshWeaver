@@ -684,6 +684,13 @@ public static class MeshExtensions
                     hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()
                         ?.Publish(MeshChangeEvent.Deleted(path));
+
+                    // Dispose the grain at the deleted address so a subsequent recreate at
+                    // the same path doesn't keep the old node's HubConfiguration. Without
+                    // this, delete+create with a different nodeType leaves the grain bound
+                    // to the previous nodeType's config until the next idle deactivation.
+                    hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
+
                     logger.LogInformation(
                         "Node deleted at {Path} by {DeletedBy}",
                         path, capturedRequest.DeletedBy ?? "system");
