@@ -128,6 +128,7 @@
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
+    <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Blazor.Test/MeshWeaver.Hosting.Blazor.Test.csproj" />
