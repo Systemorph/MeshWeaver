@@ -60,7 +60,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return ops.Patch(ResolveContextPath(path), fields);
     }
 
-    [Description("Deletes nodes from the mesh by path.")]
+    [Description("Deletes nodes from the mesh by path. Recursive: deleting a parent removes all descendants — pass the subtree root, no need to enumerate children.")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete")] string paths)
     {

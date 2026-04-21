@@ -61,7 +61,7 @@ public class McpMeshPlugin
         => ops.Patch(path, fields);
 
     [McpServerTool]
-    [Description("Deletes one or more nodes from the mesh by path.")]
+    [Description("Deletes one or more nodes from the mesh by path. Recursive: deleting a parent removes all descendants. To remove a subtree, just pass the root path — children do not need to be enumerated.")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete (e.g., [\"ACME/OldProject\", \"ACME/ArchivedTask\"])")] string paths)
         => ops.Delete(paths);
