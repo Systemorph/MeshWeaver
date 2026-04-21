@@ -716,7 +716,11 @@ public static class MeshNodeLayoutAreas
 
         return Controls.MeshSearch
             .WithTitle("Associated")
-            .WithHiddenQuery($"namespace:{hubPath} is:main context:search")
+            // Exclude NodeType definitions — they belong to type admin, not the
+            // Organization/instance catalog — and enable ReactiveMode so moves,
+            // renames, and new children show up without an F5.
+            .WithHiddenQuery($"namespace:{hubPath} is:main context:search -nodeType:NodeType")
+            .WithReactiveMode(true)
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(false)
             .WithShowLoadingIndicator(false)
