@@ -725,7 +725,10 @@ public static class MeshNodeLayoutAreas
             .WithShowEmptyMessage(false)
             .WithShowLoadingIndicator(false)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
-            // No explicit grouping - defaults to NodeType which gives meaningful labels
+            // Group by Category first — falls back to NodeType inside the view
+            // for nodes without an explicit category, so curated section names
+            // ("Marketing", "Demo", etc.) drive the headings when set.
+            .WithGroupBy("Category")
             .WithSectionCounts(true)
             .WithItemLimit(50)
             .WithMaxRows(3)

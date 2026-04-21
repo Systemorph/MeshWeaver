@@ -714,7 +714,26 @@ internal class CompilationCacheService(
         {
             var dllPath = Path.Combine(releaseFolder, $"{sanitizedPath}.dll");
             logger.LogDebug("Creating new AssemblyLoadContext for {ReleasePath} from release {ReleaseFolder}", release.Path, releaseFolder);
-            return new NodeAssemblyLoadContext(sanitizedPath, dllPath, logger);
+            var ctx = new NodeAssemblyLoadContext(sanitizedPath, dllPath, logger);
+
+            // Restore persisted NuGet probing directories so transitive deps resolve.
+            var probingPath = Path.Combine(releaseFolder, "probing.json");
+            if (File.Exists(probingPath))
+            {
+                try
+                {
+                    var json = File.ReadAllText(probingPath);
+                    var dirs = System.Text.Json.JsonSerializer.Deserialize<string[]>(json);
+                    if (dirs is { Length: > 0 })
+                        ctx.SetProbingDirectories(dirs);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to read probing directories from {ProbingPath}", probingPath);
+                }
+            }
+
+            return ctx;
         });
     }
 
