@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
-using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -9,8 +9,6 @@ namespace MeshWeaver.AI.Plugins;
 
 /// <summary>
 /// Result record preserved for tests + <see cref="ThreadExecution.ExtractToolResult"/>.
-/// No longer used as the delegation tool return shape — the tool now yields
-/// <see cref="IAsyncEnumerable{string}"/> chunks directly.
 /// </summary>
 public record DelegationResult
 {
@@ -31,15 +29,17 @@ public record DelegationInfo(string AgentPath, string Description);
 /// <summary>
 /// Creates delegation tools for agents that support isolated context per delegation.
 ///
-/// The tool signature is <see cref="IAsyncEnumerable{string}"/> so that the sub-thread's
-/// streaming text flows back as incremental chunks. Microsoft.Extensions.AI aggregates
-/// the yielded chunks as the tool result; meanwhile, a side-channel delta push keeps the
-/// parent's response bubble updated in real time so the user sees sub-thread progress
-/// inline without waiting for completion.
+/// The tool drains the sub-thread's stream on a ThreadPool <c>Task.Run</c> with
+/// <c>ConfigureAwait(false)</c>, and exposes completion through a TCS-backed
+/// <see cref="Task{String}"/>. The caller (FunctionInvokingChatClient) still awaits
+/// the task, but its await is resolved from a non-hub thread — this is the standard
+/// MeshWeaver "Post + RegisterCallback" shape and it does not capture the Orleans
+/// grain scheduler. The prior <see cref="IAsyncEnumerable{String}"/> shape wedged
+/// the grain whenever a sub-thread continuation had to post back through the same
+/// scheduler the parent was awaiting on.
 ///
-/// No more <see cref="Task{String}"/> — the previous Task-returning shape forced the
-/// FunctionInvokingChatClient to block on sub-thread completion, which deadlocks under
-/// Orleans when the child's completion patch queues behind the parent hub scheduler.
+/// Sub-thread progress is additionally visible inline via the side-channel
+/// <c>ToolCallEntry.DelegationPath</c> → the sub-thread's <c>Streaming</c> layout area.
 /// </summary>
 public static class DelegationTool
 {
@@ -83,28 +83,56 @@ public static class DelegationTool
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         });
 
-        async IAsyncEnumerable<string> Delegate(
+        Task<string> Delegate(
             [Description("The name of the agent to delegate to. Use the agentPath from the available agents.")] string agentName,
             [Description("The task or instructions for the delegated agent. Be specific about what you need.")] string task,
             [Description("Optional: the node path to use as context for this delegation (e.g., 'OrgA/my-doc'). When omitted, inherits the parent context. Set explicitly when delegating parallel work on different documents.")] string? context = null,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default)
         {
             logger?.LogInformation("Delegating to {AgentName}: {Task}, context={Context}",
                 agentName, task, context ?? "(inherited)");
 
-            await foreach (var chunk in executeAsync(agentName, task, context, cancellationToken)
-                .WithCancellation(cancellationToken))
-            {
-                yield return chunk;
-            }
+            // Drain the sub-thread's enumerable on ThreadPool with ConfigureAwait(false).
+            // This is the MeshWeaver "Post + RegisterCallback" shape: the caller awaits a
+            // TCS-backed Task resolved from a non-hub thread, so the grain scheduler is
+            // never captured on sub-thread continuations. The previous `async IAsyncEnumerable`
+            // shape let FunctionInvokingChatClient capture the grain scheduler on every
+            // iteration, wedging it whenever a sub-thread continuation needed to post back
+            // through the same scheduler — the Orleans deadlock.
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            logger?.LogInformation("Delegation to {AgentName} stream completed", agentName);
+            _ = Task.Run(async () =>
+            {
+                var sb = new StringBuilder();
+                try
+                {
+                    await foreach (var chunk in executeAsync(agentName, task, context, cancellationToken)
+                        .WithCancellation(cancellationToken).ConfigureAwait(false))
+                    {
+                        sb.Append(chunk);
+                    }
+                    tcs.TrySetResult(sb.ToString());
+                    logger?.LogInformation("Delegation to {AgentName} stream completed", agentName);
+                }
+                catch (OperationCanceledException)
+                {
+                    tcs.TrySetCanceled(cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "Delegation to {AgentName} failed", agentName);
+                    tcs.TrySetException(ex);
+                }
+            });
+
+            return tcs.Task;
         }
 
         var description = $"""
             Delegate to a specialized agent when the request matches their expertise.
             Each delegation runs in an isolated context - the agent won't see previous conversation history.
-            The delegated agent's output streams back as it generates.
+            The delegated agent's output streams inline in the parent conversation via a nested streaming
+            view, and the aggregated text is also returned as the tool result.
 
             When delegating parallel work on different documents, set the 'context' parameter to the
             specific node path for each delegation. This ensures each agent sees the correct document.
