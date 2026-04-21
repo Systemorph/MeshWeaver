@@ -10,6 +10,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -68,7 +69,12 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
         client.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
         await Task.Delay(50, ct); // let dispose settle
 
-        var current = await NodeFactory.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync(ct);
+        MeshNode? current = null;
+        await foreach (var n in NodeFactory.QueryAsync<MeshNode>($"path:{path}", ct: ct).WithCancellation(ct))
+        {
+            current = n;
+            break;
+        }
         current.Should().NotBeNull();
         await NodeFactory.UpdateNodeAsync(current! with { Name = "Updated" }, ct);
 
