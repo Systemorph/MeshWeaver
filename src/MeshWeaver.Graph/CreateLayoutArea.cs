@@ -13,6 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+// IIconGenerator is consumed via DI; interface lives in MeshWeaver.Mesh.Services.
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -460,7 +461,7 @@ public static class CreateLayoutArea
     /// Renders an icon value as a 48x48 preview. Supports three forms:
     /// inline SVG markup, an http(s) or /static URL, and a FluentIcon name.
     /// </summary>
-    private static UiControl BuildIconPreview(string icon)
+    internal static UiControl BuildIconPreview(string icon)
     {
         const string boxStyle = "width:48px;height:48px;display:flex;align-items:center;justify-content:center;border:1px solid var(--neutral-stroke-rest);border-radius:6px;color:var(--neutral-foreground-rest);";
         if (icon.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
@@ -468,6 +469,45 @@ public static class CreateLayoutArea
         if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith("/"))
             return Controls.Html($"<div style=\"{boxStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(icon)}\" style=\"max-width:32px;max-height:32px;\" /></div>");
         return Controls.Html($"<div style=\"{boxStyle}\"><span style=\"font-size:12px;\">{System.Web.HttpUtility.HtmlEncode(icon)}</span></div>");
+    }
+
+    /// <summary>
+    /// Handles the Create form's "Regenerate" icon click: reads Name+Description from the
+    /// form dictionary, invokes IIconGenerator, and writes the resulting SVG back into the
+    /// form's "icon" slot so the preview refreshes live.
+    /// </summary>
+    private static Task RegenerateFormIcon(UiActionContext actx, string formId)
+    {
+        var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
+        if (generator == null)
+        {
+            ShowErrorDialog(actx, "Regenerate Icon",
+                "Icon generator service is not registered. Call AddAgentChatServices().");
+            return Task.CompletedTask;
+        }
+        actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+            .Take(1)
+            .Subscribe(form =>
+            {
+                var currentName = form?.GetValueOrDefault("name")?.ToString() ?? "";
+                var currentDesc = form?.GetValueOrDefault("description")?.ToString();
+                if (string.IsNullOrWhiteSpace(currentName) && string.IsNullOrWhiteSpace(currentDesc))
+                {
+                    ShowErrorDialog(actx, "Regenerate Icon",
+                        "Enter a Name or Description first — the agent uses those to craft the icon.");
+                    return;
+                }
+                generator.GenerateSvgAsync(currentName, currentDesc).Subscribe(
+                    svg =>
+                    {
+                        var updated = form is null
+                            ? new Dictionary<string, object?> { ["icon"] = svg }
+                            : new Dictionary<string, object?>(form) { ["icon"] = svg };
+                        actx.Host.UpdateData(formId, updated);
+                    },
+                    ex => ShowErrorDialog(actx, "Icon Generation Failed", ex.Message));
+            });
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -683,10 +723,12 @@ public static class CreateLayoutArea
             DataContext = dataContext
         }.WithRows(3).WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 9. Icon preview + Regenerate button.
+        // 9. Icon: "Icon" label, live preview, Regenerate button.
         // Preview is data-bound so it reflects live updates (default from the chosen type,
         // or a regenerated SVG from the Node Initializer agent).
-        var iconPreview = (UiControl)Controls.Stack
+        stack = stack.WithView(Controls.Body("Icon")
+            .WithStyle("font-weight: 600; display: block; margin-bottom: 6px;"));
+        stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("align-items: center; margin-bottom: 24px;")
@@ -694,28 +736,14 @@ public static class CreateLayoutArea
                 .Select(form =>
                 {
                     var icon = form?.GetValueOrDefault("icon")?.ToString() ?? "";
-                    var preview = string.IsNullOrEmpty(icon)
+                    return string.IsNullOrEmpty(icon)
                         ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
                         : BuildIconPreview(icon);
-                    return (UiControl)Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithHorizontalGap(12)
-                        .WithStyle("align-items: center;")
-                        .WithView(preview)
-                        .WithView(Controls.Body("Icon").WithStyle("font-weight: 600;"));
                 }))
             .WithView(Controls.Button("Regenerate")
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
-                .WithClickAction(actx =>
-                {
-                    // Hook for Node Initializer agent integration. For now, surfaces a visible
-                    // notice so the UX slot is real; SVG generation is wired in a follow-up.
-                    ShowErrorDialog(actx, "Regenerate Icon",
-                        "Icon regeneration from the Node Initializer agent is coming — for now the default type icon is used.");
-                    return Task.CompletedTask;
-                }));
-        stack = stack.WithView(iconPreview);
+                .WithClickAction(actx => RegenerateFormIcon(actx, formId))));
 
         // 10. Button row: Cancel on left, Create on right
         var cancelUrl = MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea);

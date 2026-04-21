@@ -287,6 +287,9 @@ public static class ThreadLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
         var stream = host.Workspace.GetStream<MeshNode>();
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.StreamingView");
+        logger?.LogDebug("[StreamingView] SUBSCRIBE hub={Hub} streamNull={StreamNull}", hubPath, stream is null);
 
         return stream!
             .Select(nodes =>
@@ -299,9 +302,15 @@ public static class ThreadLayoutAreas
             .Select(state =>
             {
                 if (!state.IsExecuting || string.IsNullOrEmpty(state.ActiveMessageId))
+                {
+                    logger?.LogDebug("[StreamingView] EMIT_NULL hub={Hub} isExec={IsExec} activeMsg={Msg}",
+                        hubPath, state.IsExecuting, state.ActiveMessageId);
                     return (UiControl?)null;
+                }
 
                 var responsePath = $"{hubPath}/{state.ActiveMessageId}";
+                logger?.LogDebug("[StreamingView] EMIT_CONTROL hub={Hub} responsePath={Path}",
+                    hubPath, responsePath);
                 return (UiControl?)new LayoutAreaControl(responsePath,
                     new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
             });

@@ -446,10 +446,30 @@ public static class SettingsLayoutArea
     {
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.ToList() ?? [];
+        var metadataPointer = LayoutAreaReference.GetDataPointer(metadataDataId);
 
         var section = Controls.Stack.WithStyle("gap: 8px;");
         section = section.WithView(Controls.Html(
             "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
+
+        // Live preview + Regenerate button — mirrors the Create form's layout so the
+        // two surfaces feel consistent.
+        section = section.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("align-items: center;")
+            .WithView((h, _) => h.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
+                .Select(meta =>
+                {
+                    var icon = meta?.Icon ?? "";
+                    return string.IsNullOrEmpty(icon)
+                        ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
+                        : CreateLayoutArea.BuildIconPreview(icon);
+                }))
+            .WithView(Controls.Button("Regenerate")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Sparkle())
+                .WithClickAction(actx => RegenerateIconFromMetadata(actx, metadataDataId))));
 
         if (collections.Count > 0)
         {
@@ -487,14 +507,63 @@ public static class SettingsLayoutArea
             Label = "Icon Path",
             Placeholder = "e.g., /static/collection/icon.svg, or an inline data:image/svg+xml URI",
             Immediate = true,
-            DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
+            DataContext = metadataPointer
         });
 
         section = section.WithView(Controls.Body(
-            "Upload an image via the file browser above, paste a URL, or paste an inline SVG as a data: URI (e.g. data:image/svg+xml;utf8,<svg…/>).")
+            "Upload an image via the file browser above, paste a URL, paste an inline SVG data: URI, or click Regenerate to have the Node Initializer agent craft one from Name + Description.")
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-top: 4px;"));
 
         return section;
+    }
+
+    /// <summary>
+    /// Click handler for the Regenerate-icon button in the Settings Metadata tab.
+    /// Reads Name + Description from the MeshNodeMetadata stream, invokes the
+    /// IIconGenerator, and writes the resulting SVG back into the metadata object
+    /// so the auto-save subscription persists it on the node.
+    /// </summary>
+    private static Task RegenerateIconFromMetadata(UiActionContext actx, string metadataDataId)
+    {
+        var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
+        if (generator == null)
+        {
+            ShowSettingsErrorDialog(actx, "Regenerate Icon",
+                "Icon generator service is not registered. Call AddAgentChatServices().");
+            return Task.CompletedTask;
+        }
+        actx.Host.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
+            .Take(1)
+            .Subscribe(meta =>
+            {
+                var name = meta?.Name ?? "";
+                var description = meta?.Description;
+                if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(description))
+                {
+                    ShowSettingsErrorDialog(actx, "Regenerate Icon",
+                        "Enter a Name or Description first — the agent uses those to craft the icon.");
+                    return;
+                }
+                generator.GenerateSvgAsync(name, description).Subscribe(
+                    svg =>
+                    {
+                        // Replace the Icon field on the metadata record; the Throttled
+                        // auto-save subscription picks this up and posts UpdateNodeRequest.
+                        var updated = (meta ?? new MeshNodeMetadata()) with { Icon = svg };
+                        actx.Host.UpdateData(metadataDataId, updated);
+                    },
+                    ex => ShowSettingsErrorDialog(actx, "Icon Generation Failed", ex.Message));
+            });
+        return Task.CompletedTask;
+    }
+
+    private static void ShowSettingsErrorDialog(UiActionContext ctx, string title, string message)
+    {
+        var errorDialog = Controls.Dialog(
+            Controls.Markdown($"**{title}:**\n\n{message}"),
+            title
+        ).WithSize("M").WithClosable(true);
+        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
     }
 
     private static UiControl BuildTimestampsSection(MeshNodeMetadata meta)

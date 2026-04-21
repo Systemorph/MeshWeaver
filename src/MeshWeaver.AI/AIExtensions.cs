@@ -104,6 +104,7 @@ public static class AIExtensions
         {
             services.AddOptions<ModelTierConfiguration>()
                 .BindConfiguration("ModelTier");
+            services.AddTransient<IIconGenerator, IconGenerator>();
             return services;
         }
 

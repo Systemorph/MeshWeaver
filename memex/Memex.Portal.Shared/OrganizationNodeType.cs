@@ -90,7 +90,7 @@ public static class OrganizationNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<Organization>())
             .AddContentCollections()
-            .AddNodeTypeLayoutAreas()
+            .AddDefaultLayoutAreas()
             .AddLayout(layout => layout
                 .WithView(MeshNodeLayoutAreas.OverviewArea, OrganizationLayoutAreas.Overview))
     };

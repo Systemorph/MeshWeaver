@@ -2,6 +2,7 @@
   <PropertyGroup>
     <ProjectGuid>{8b7e3c9a-5f2d-4e1b-a8c3-6d9f0e2b1a4c}</ProjectGuid>
     <StaticWebAssetBasePath>_content/MeshWeaver.Blazor.Portal</StaticWebAssetBasePath>
+    <NoWarn>$(NoWarn);NU1510</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <SupportedPlatform Include="browser" />

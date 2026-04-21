@@ -27,15 +27,19 @@ public partial class LayoutAreaView
     {
         await base.SetParametersAsync(parameters);
         BindViewModel();
+        var hadStream = AreaStream is not null;
         if (AreaStream is not null
             && (!AreaStream.Reference.Equals(ViewModel.Reference) ||
                 !AreaStream.Owner.Equals(Address)))
         {
-            Logger.LogDebug("LayoutAreaView disposing stale stream for {Address}/{Reference} (parameters changed)",
-                ViewModel.Address, ViewModel.Reference);
+            Logger.LogDebug("[LAV] DISPOSE_STALE area={Area} addr={Address} ref={Ref} (parameters changed)",
+                Area, ViewModel.Address, ViewModel.Reference);
             AreaStream.Dispose();
             AreaStream = null;
         }
+
+        Logger.LogDebug("[LAV] SET_PARAMS area={Area} addr={Address} ref={Ref} preRender={PreRender} hadStream={HadStream} keepStream={KeepStream}",
+            Area, Address, ViewModel?.Reference, !IsNotPreRender, hadStream, AreaStream is not null);
 
         // Only bind stream when already in interactive mode (not during prerender)
         // try/catch: during navigation, old circuit's hub may already be disposing
@@ -125,11 +129,15 @@ public partial class LayoutAreaView
     {
         if (AreaStream is null)
         {
-
-            Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address!, ViewModel.Reference);
-            AreaStream = Address!.Equals(Workspace.Hub.Address)
+            var isLocal = Address!.Equals(Workspace.Hub.Address);
+            Logger.LogDebug("[LAV] BIND_STREAM area={Area} addr={Address} ref={Ref} mode={Mode}",
+                Area, Address, ViewModel.Reference, isLocal ? "local" : "remote");
+            AreaStream = isLocal
                 ? Workspace.GetStream(ViewModel.Reference)!.Reduce(new JsonPointerReference("/"))
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address!, ViewModel.Reference);
+            if (AreaStream is null)
+                Logger.LogWarning("[LAV] BIND_STREAM_NULL area={Area} addr={Address} ref={Ref} — GetRemoteStream returned null",
+                    Area, Address, ViewModel.Reference);
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
             if (Top)
@@ -227,11 +235,11 @@ public partial class LayoutAreaView
         if (firstRender)
         {
             IsNotPreRender = true;
+            Logger.LogDebug("[LAV] FIRST_RENDER area={Area} addr={Address} ref={Ref} hasStream={HasStream}",
+                Area, Address, ViewModel?.Reference, AreaStream != null);
             // If we're now rendered and we don't have a stream yet, bind it
             if (AreaStream == null)
             {
-                Logger.LogDebug("LayoutAreaView first interactive render — binding stream for {Area} ({Address}/{Reference})",
-                    Area, Address, ViewModel?.Reference);
                 BindStream();
                 StateHasChanged();
             }

@@ -84,6 +84,25 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return ops.Recycle(ResolveContextPath(path));
     }
 
+    [Description("Moves a node and its descendants to a new path. Equivalent to the Move menu item. Requires Delete on the source namespace and Create on the target. Source and target are full paths (namespace + id), e.g. 'OrgA/Child' -> 'OrgB/Child'.")]
+    public Task<string> Move(
+        [Description("Current path of the node (e.g., @OrgA/Child)")] string sourcePath,
+        [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath)
+    {
+        RestoreAccessContext();
+        return ops.Move(ResolveContextPath(sourcePath), ResolveContextPath(targetPath));
+    }
+
+    [Description("Copies a node and all its descendants to a target namespace. Equivalent to the Copy menu item. Source ids are preserved; paths are rewritten under the target namespace.")]
+    public Task<string> Copy(
+        [Description("Current path of the node to copy (e.g., @OrgA/Child)")] string sourcePath,
+        [Description("Target namespace to copy under (e.g., @OrgB)")] string targetNamespace,
+        [Description("Overwrite existing nodes at the target. Default: false (skip if any target path already exists).")] bool force = false)
+    {
+        RestoreAccessContext();
+        return ops.Copy(ResolveContextPath(sourcePath), ResolveContextPath(targetNamespace), force);
+    }
+
     /// <summary>
     /// Restores the user's AccessContext from <see cref="IAgentChat.ExecutionContext"/>.
     /// AsyncLocal doesn't flow reliably through the AI framework's streaming + tool
@@ -142,6 +161,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Update),
             AIFunctionFactory.Create(Patch),
             AIFunctionFactory.Create(Delete),
+            AIFunctionFactory.Create(Move),
+            AIFunctionFactory.Create(Copy),
             AIFunctionFactory.Create(GetDiagnostics),
             AIFunctionFactory.Create(Recycle),
         ];

@@ -5,6 +5,7 @@ using System.Text.Json.Schema;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -878,6 +879,75 @@ public class MeshOperations
         {
             logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
             return Task.FromResult<string?>(null);
+        }
+    }
+
+    /// <summary>
+    /// Moves a node and its descendants to a new path. Mirrors the Move menu item:
+    /// posts <see cref="MoveNodeRequest"/> and reports the response. The target path
+    /// is the full new path (namespace + id), e.g. "OrgA/Child" → "OrgB/Child".
+    /// </summary>
+    public async Task<string> Move(string sourcePath, string targetPath)
+    {
+        logger.LogInformation("Move called: {Source} -> {Target}", sourcePath, targetPath);
+
+        if (string.IsNullOrWhiteSpace(sourcePath))
+            return "Error: sourcePath is required.";
+        if (string.IsNullOrWhiteSpace(targetPath))
+            return "Error: targetPath is required.";
+
+        var resolvedSource = ResolvePath(sourcePath);
+        var resolvedTarget = ResolvePath(targetPath);
+
+        if (resolvedSource == resolvedTarget)
+            return $"Error: target path is the same as source ({resolvedSource}).";
+
+        try
+        {
+            var response = await hub.AwaitResponse<MoveNodeResponse>(
+                new MoveNodeRequest(resolvedSource, resolvedTarget),
+                o => o.WithTarget(new Address(resolvedSource)));
+
+            if (response.Message.Success)
+                return $"Moved: {resolvedSource} -> {resolvedTarget}";
+
+            return $"Error moving {resolvedSource} -> {resolvedTarget}: {response.Message.Error ?? "unknown error"}"
+                + (response.Message.RejectionReason is { } r ? $" ({r})" : "");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error moving {Source} -> {Target}", resolvedSource, resolvedTarget);
+            return $"Error: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Copies a node and all its descendants to a target namespace. Mirrors the
+    /// Copy menu item: delegates to <see cref="NodeCopyHelper.CopyNodeTreeAsync"/>.
+    /// Source ids are preserved; paths are rewritten under the target namespace.
+    /// </summary>
+    public async Task<string> Copy(string sourcePath, string targetNamespace, bool force = false)
+    {
+        logger.LogInformation("Copy called: {Source} -> {Target}, force={Force}", sourcePath, targetNamespace, force);
+
+        if (string.IsNullOrWhiteSpace(sourcePath))
+            return "Error: sourcePath is required.";
+        if (string.IsNullOrWhiteSpace(targetNamespace))
+            return "Error: targetNamespace is required.";
+
+        var resolvedSource = ResolvePath(sourcePath);
+        var resolvedTarget = ResolvePath(targetNamespace);
+
+        try
+        {
+            var copied = await NodeCopyHelper.CopyNodeTreeAsync(
+                mesh, mesh, hub, resolvedSource, resolvedTarget, force, logger);
+            return $"Copied {copied} node(s): {resolvedSource} -> {resolvedTarget}";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error copying {Source} -> {Target}", resolvedSource, resolvedTarget);
+            return $"Error: {ex.Message}";
         }
     }
 
