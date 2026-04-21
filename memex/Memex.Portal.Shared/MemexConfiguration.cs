@@ -2,6 +2,7 @@
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
@@ -137,6 +138,13 @@ public static class MemexConfiguration
                 ClientId = linkedInClientId!,
                 ClientSecret = builder.Configuration["Social:LinkedIn:ClientSecret"] ?? ""
             });
+
+            // Add the menu provider so "Connect LinkedIn" + "Pull LinkedIn posts"
+            // appear on the viewer's own user page.
+            services.TryAddEnumerable(
+                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
+                    MeshWeaver.Mesh.INodeMenuProvider,
+                    Memex.Portal.Shared.Social.LinkedInCredentialMenuProvider>());
         }
 
         // Configure authentication

@@ -40,6 +40,15 @@
                     <span>Developer Login</span>
                 </button>
             }
+
+            <div class="divider">
+                <span>Publishing</span>
+            </div>
+            <button class="provider-btn provider-linkedin" @onclick="NavigateToConnectLinkedIn"
+                    title="Authorizes Memex to read &amp; publish LinkedIn posts on your behalf. Requires you to be signed in first — you'll be redirected back here if not.">
+                <span class="provider-icon">&#x1F4BC;</span>
+                <span>Connect LinkedIn for publishing</span>
+            </button>
         </FluentStack>
     </div>
 </div>
@@ -58,6 +67,14 @@
     {
         var url = ReturnUrl != null ? $"/dev/login?ReturnUrl={Uri.EscapeDataString(ReturnUrl)}" : "/dev/login";
         Navigation.NavigateTo(url, forceLoad: true);
+    }
+
+    private void NavigateToConnectLinkedIn()
+    {
+        // /connect/linkedin/me uses the signed-in user's path as the profile.
+        // If the user isn't signed in yet, the endpoint issues a Challenge that
+        // returns them here after authentication.
+        Navigation.NavigateTo("/connect/linkedin/me", forceLoad: true);
     }
 
     protected override void OnInitialized()

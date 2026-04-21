@@ -56,6 +56,24 @@ public static class LinkedInConnectEndpoints
     /// </summary>
     public static IEndpointRouteBuilder MapLinkedInConnect(this IEndpointRouteBuilder endpoints)
     {
+        // Convenience: /connect/linkedin/me binds the credential to the authenticated
+        // user's own mesh node (User/{identity}). Redirects into the main flow.
+        endpoints.MapGet("/connect/linkedin/me", (HttpContext http) =>
+        {
+            if (!http.User.Identity?.IsAuthenticated ?? true)
+                return Results.Challenge(new AuthenticationProperties { RedirectUri = "/connect/linkedin/me" });
+            var user = http.User.Identity!.Name ?? "anonymous";
+            return Results.Redirect($"/connect/linkedin?profile=User/{Uri.EscapeDataString(user)}");
+        }).RequireAuthorization();
+
+        endpoints.MapGet("/connect/linkedin/pull/me", (HttpContext http) =>
+        {
+            if (!http.User.Identity?.IsAuthenticated ?? true)
+                return Results.Challenge(new AuthenticationProperties { RedirectUri = "/connect/linkedin/pull/me" });
+            var user = http.User.Identity!.Name ?? "anonymous";
+            return Results.Redirect($"/connect/linkedin/pull?profile=User/{Uri.EscapeDataString(user)}");
+        }).RequireAuthorization();
+
         endpoints.MapGet("/connect/linkedin", async (
             HttpContext http,
             [Microsoft.AspNetCore.Mvc.FromQuery] string profile,
