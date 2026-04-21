@@ -61,9 +61,51 @@ public static class CreateLayoutArea
             var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
 
             if (currentNode?.State == MeshNodeState.Transient)
+            {
+                // Content-editor types (Markdown, etc.) don't need a separate "Create" confirmation —
+                // the Edit view is itself the authoring surface, so flip transient→Active and jump there.
+                if (IsDirectEditContentType(host, currentNode))
+                {
+                    ConfirmTransientAsync(host, currentNode);
+                    var editHref = MeshNodeLayoutAreas.BuildUrl(currentNode.Path, MeshNodeLayoutAreas.EditArea);
+                    return (UiControl?)new RedirectControl(editHref);
+                }
                 return (UiControl?)BuildCreateEditor(host, currentNode);
+            }
 
             return (UiControl?)BuildCreateNewForm(host, nodes, currentPath);
+        });
+    }
+
+    /// <summary>
+    /// True when the transient node's content is edited directly (Markdown, etc.)
+    /// — no intermediate Create form needed; go straight to Edit.
+    /// </summary>
+    private static bool IsDirectEditContentType(LayoutAreaHost host, MeshNode node)
+    {
+        if (node.NodeType == "Markdown")
+            return true;
+
+        // Inspect the hub's MeshDataSource ContentType (same resolution BuildCreateEditor uses).
+        var contentType = host.Workspace.DataContext.DataSources
+            .OfType<MeshDataSource>()
+            .FirstOrDefault(ds => ds.ContentType != null)?.ContentType;
+        return contentType != null
+            && contentType.Name.Contains("Markdown", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Flips a transient node to Active state. Fire-and-forget — subscribers handle errors via logger.
+    /// </summary>
+    private static void ConfirmTransientAsync(LayoutAreaHost host, MeshNode transient)
+    {
+        var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
+        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var active = transient with { State = MeshNodeState.Active };
+        meshService.CreateNodeAsync(active).ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                logger?.LogWarning(t.Exception, "Failed to confirm transient node {Path}", transient.Path);
         });
     }
 
@@ -415,6 +457,20 @@ public static class CreateLayoutArea
     }
 
     /// <summary>
+    /// Renders an icon value as a 48x48 preview. Supports three forms:
+    /// inline SVG markup, an http(s) or /static URL, and a FluentIcon name.
+    /// </summary>
+    private static UiControl BuildIconPreview(string icon)
+    {
+        const string boxStyle = "width:48px;height:48px;display:flex;align-items:center;justify-content:center;border:1px solid var(--neutral-stroke-rest);border-radius:6px;color:var(--neutral-foreground-rest);";
+        if (icon.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            return Controls.Html($"<div style=\"{boxStyle}\">{icon}</div>");
+        if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith("/"))
+            return Controls.Html($"<div style=\"{boxStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(icon)}\" style=\"max-width:32px;max-height:32px;\" /></div>");
+        return Controls.Html($"<div style=\"{boxStyle}\"><span style=\"font-size:12px;\">{System.Web.HttpUtility.HtmlEncode(icon)}</span></div>");
+    }
+
+    /// <summary>
     /// Builds the unified "Create New" form:
     /// Namespace (MeshNodePicker), Type (MeshNodePicker with Items), Name, Id, Create/Cancel.
     /// Synchronous — defaults are resolved from the already-available nodes array.
@@ -432,9 +488,10 @@ public static class CreateLayoutArea
         // 1. Resolve defaults from the current node
         var currentNode = nodes.FirstOrDefault(n => n.Path == parentPath);
 
-        var defaultNamespace = currentNode != null && currentNode.MainNode != currentNode.Path
-            ? currentNode.MainNode
-            : parentPath;
+        // Non-NodeType: pre-select self as Location (matches Associated-catalog behavior).
+        // NodeType: start from the current path; the NodeTypeDefinition's DefaultNamespace
+        // (resolved below) will override if configured.
+        var defaultNamespace = parentPath;
 
         var defaultType = currentNode?.NodeType == MeshNode.NodeTypePath
             ? parentPath
@@ -491,6 +548,10 @@ public static class CreateLayoutArea
             .OrderBy(n => n.Name ?? n.Path)
             .ToArray();
 
+        // Resolve the default icon from the selected type's registration so the preview
+        // can show something meaningful before the user clicks "Regenerate".
+        var defaultTypeIcon = creatableTypeNodes.FirstOrDefault(n => n.Path == defaultType)?.Icon;
+
         // 3. Form data
         var formId = $"create_form_{Guid.NewGuid().AsString()}";
         host.UpdateData(formId, new Dictionary<string, object?>
@@ -499,21 +560,12 @@ public static class CreateLayoutArea
             ["type"] = defaultType,
             ["name"] = "",
             ["id"] = "",
-            ["description"] = ""
+            ["description"] = "",
+            ["icon"] = defaultTypeIcon ?? ""
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
 
-        // 4. Description — free-text seed for future AI-assisted Name/Id/Icon generation.
-        // Stored on the final node so Settings can display / re-generate from it.
-        stack = stack.WithView(new TextAreaControl(new JsonPointerReference("description"))
-        {
-            Label = "Description",
-            Placeholder = "Briefly describe what you're creating. Used to seed Name/Id/Icon generation.",
-            Immediate = true,
-            DataContext = dataContext
-        }.WithRows(3).WithStyle("width: 100%; margin-bottom: 16px;"));
-
-        // 5. Name field (required)
+        // 4. Name field (required) — primary input, Id auto-derives from it.
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("name"))
         {
             Label = "Name *",
@@ -564,7 +616,11 @@ public static class CreateLayoutArea
         }
         else
         {
-            // No restriction — full picker with Items and query
+            // No restriction — full picker. Queries cover (a) root-level registered NodeTypes
+            // and (b) any NodeType defined within the current namespace or its ancestors.
+            var ancestorQuery = string.IsNullOrEmpty(parentPath)
+                ? "namespace: nodeType:NodeType"
+                : $"namespace:{parentPath} nodeType:NodeType scope:selfAndAncestors";
             stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
             {
                 Label = "Type *",
@@ -572,7 +628,7 @@ public static class CreateLayoutArea
                 Placeholder = "Select a type...",
                 DataContext = dataContext
             }.WithItems(creatableTypeNodes)
-             .WithQueries("nodeType:NodeType context:create")
+             .WithQueries("namespace: nodeType:NodeType", ancestorQuery)
              .WithMaxResults(15)
              .WithStyle("width: 100%; margin-bottom: 16px;"));
         }
@@ -618,7 +674,50 @@ public static class CreateLayoutArea
              .WithStyle("width: 100%; margin-bottom: 16px;"));
         }
 
-        // 8. Button row: Cancel on left, Create on right
+        // 8. Description — free-text context. Also used as the seed when regenerating an icon.
+        stack = stack.WithView(new TextAreaControl(new JsonPointerReference("description"))
+        {
+            Label = "Description",
+            Placeholder = "Briefly describe what you're creating. Used to seed icon generation.",
+            Immediate = true,
+            DataContext = dataContext
+        }.WithRows(3).WithStyle("width: 100%; margin-bottom: 16px;"));
+
+        // 9. Icon preview + Regenerate button.
+        // Preview is data-bound so it reflects live updates (default from the chosen type,
+        // or a regenerated SVG from the Node Initializer agent).
+        var iconPreview = (UiControl)Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("align-items: center; margin-bottom: 24px;")
+            .WithView((h, _) => h.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                .Select(form =>
+                {
+                    var icon = form?.GetValueOrDefault("icon")?.ToString() ?? "";
+                    var preview = string.IsNullOrEmpty(icon)
+                        ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
+                        : BuildIconPreview(icon);
+                    return (UiControl)Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithHorizontalGap(12)
+                        .WithStyle("align-items: center;")
+                        .WithView(preview)
+                        .WithView(Controls.Body("Icon").WithStyle("font-weight: 600;"));
+                }))
+            .WithView(Controls.Button("Regenerate")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Sparkle())
+                .WithClickAction(actx =>
+                {
+                    // Hook for Node Initializer agent integration. For now, surfaces a visible
+                    // notice so the UX slot is real; SVG generation is wired in a follow-up.
+                    ShowErrorDialog(actx, "Regenerate Icon",
+                        "Icon regeneration from the Node Initializer agent is coming — for now the default type icon is used.");
+                    return Task.CompletedTask;
+                }));
+        stack = stack.WithView(iconPreview);
+
+        // 10. Button row: Cancel on left, Create on right
         var cancelUrl = MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea);
         var buttonRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -641,6 +740,7 @@ public static class CreateLayoutArea
                 var name = formValues.GetValueOrDefault("name")?.ToString()?.Trim();
                 var id = formValues.GetValueOrDefault("id")?.ToString()?.Trim();
                 var description = formValues.GetValueOrDefault("description")?.ToString()?.Trim();
+                var icon = formValues.GetValueOrDefault("icon")?.ToString()?.Trim();
 
                 if (string.IsNullOrWhiteSpace(selectedType))
                 {
@@ -698,7 +798,7 @@ public static class CreateLayoutArea
                         Name = name.Trim(),
                         Description = string.IsNullOrEmpty(description) ? null : description,
                         NodeType = selectedType,
-                        Icon = typeRegistration?.Icon,
+                        Icon = string.IsNullOrEmpty(icon) ? typeRegistration?.Icon : icon,
                         Category = typeRegistration?.Category,
                         DesiredId = id,
                         State = MeshNodeState.Transient

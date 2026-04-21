@@ -690,7 +690,6 @@ public static class MeshNodeLayoutAreas
 
             // Instance node catalog
             var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath}";
-            var instanceNs = node?.Namespace ?? hubPath;
 
             return Controls.MeshSearch
                 .WithHiddenQuery(instanceHiddenQuery)
@@ -699,7 +698,8 @@ public static class MeshNodeLayoutAreas
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(MeshSearchRenderMode.Hierarchical)
                 .WithMaxColumns(3)
-                .WithCreateHref($"/create?namespace={Uri.EscapeDataString(instanceNs)}");
+                // Pre-select self as the Location for the Create form (matches Associated catalog behavior).
+                .WithCreateHref($"/{hubPath}/{CreateNodeArea}?namespace={Uri.EscapeDataString(hubPath)}");
         });
     }
 
