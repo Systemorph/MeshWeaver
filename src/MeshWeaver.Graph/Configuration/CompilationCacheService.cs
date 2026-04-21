@@ -362,7 +362,32 @@ internal class CompilationCacheService(
             ? Directory.GetCurrentDirectory()
             : Path.GetDirectoryName(assemblyLocation) ?? Directory.GetCurrentDirectory();
 
-        return Path.GetFullPath(Path.Combine(assemblyDirectory, cacheDirectory));
+        var resolved = Path.GetFullPath(Path.Combine(assemblyDirectory, cacheDirectory));
+
+        // Container deployments (Docker/Aspire) ship a read-only /app/ — writing the cache
+        // there fails with UnauthorizedAccessException on the first compile and breaks every
+        // dynamic NodeType. Probe the assembly directory; if it's not writable, fall back to
+        // a tmp-rooted path so dynamic compilation still works.
+        if (!IsDirectoryWritable(assemblyDirectory))
+            resolved = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "MeshWeaver", cacheDirectory));
+
+        return resolved;
+    }
+
+    private static bool IsDirectoryWritable(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probe = Path.Combine(directory, $".mesh-cache-probe-{Guid.NewGuid():N}");
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static DateTimeOffset ComputeFrameworkTimestamp()
