@@ -97,6 +97,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                     try
                     {
                         if (string.IsNullOrEmpty(evt.Path)) return;
+
+                        // Direct match: the changed node IS a NodeType (or we already
+                        // track its path for other reasons).
                         if (_hubConfigurations.ContainsKey(evt.Path)
                             || _compilationTasks.ContainsKey(evt.Path)
                             || _compilationErrors.ContainsKey(evt.Path)
@@ -106,6 +109,22 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                                 "Cross-silo cache invalidation for {NodeTypePath} via MeshChangeFeed ({Kind})",
                                 evt.Path, evt.Kind);
                             InvalidateCache(evt.Path);
+                            return;
+                        }
+
+                        // Owning-NodeType match: the changed node lives under a NodeType's
+                        // _Source/ folder (convention: {NodeTypePath}/_Source/{File}). Updates
+                        // to these Code pieces change what the NodeType compiles to, so the
+                        // owning NodeType's cache (in-memory + on-disk DLL) must be flushed —
+                        // otherwise the stale DLL keeps being served because the NodeType's
+                        // own LastModified hasn't moved.
+                        var owning = TryResolveOwningNodeTypePath(evt.Path);
+                        if (owning != null)
+                        {
+                            logger.LogInformation(
+                                "Cross-silo cache invalidation for owning {NodeTypePath} after source change at {SourcePath} ({Kind})",
+                                owning, evt.Path, evt.Kind);
+                            InvalidateCache(owning);
                         }
                     }
                     catch (Exception handlerEx)
@@ -306,11 +325,42 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _notCreatableTypes.TryRemove(nodeTypePath, out _);
         _accessRules.TryRemove(nodeTypePath, out _);
 
+        // Also delete the on-disk DLL/PDB/source so the next access forces a fresh
+        // compile. Without this, IsCacheValid can still return true when the NodeType's
+        // own LastModified hasn't changed (e.g. a _Source/ child was edited).
+        try
+        {
+            var nodeName = cacheService.SanitizeNodeName(nodeTypePath);
+            cacheService.InvalidateCache(nodeName);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to invalidate on-disk compilation cache for {NodeTypePath}", nodeTypePath);
+        }
+
         // Dispose subscription (will re-subscribe on next access)
         if (_subscriptions.TryRemove(nodeTypePath, out var subscription))
         {
             subscription.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Resolves the owning NodeType path for a node whose path contains a "_Source"
+    /// segment (the established convention for source-code pieces). Returns the parent
+    /// of "_Source". Example: "Org/MyType/_Source/Foo" → "Org/MyType". Returns null if
+    /// the path doesn't follow the convention.
+    /// </summary>
+    private static string? TryResolveOwningNodeTypePath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        var segments = path.Split('/');
+        for (var i = 1; i < segments.Length; i++)
+        {
+            if (string.Equals(segments[i], "_Source", StringComparison.Ordinal))
+                return string.Join("/", segments.Take(i));
+        }
+        return null;
     }
 
     private MeshNode EnrichWithNodeType(MeshNode node)
