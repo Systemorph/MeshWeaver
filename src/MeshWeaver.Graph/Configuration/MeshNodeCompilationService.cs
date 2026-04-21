@@ -675,7 +675,19 @@ internal class MeshNodeCompilationService(
 
         // Generate source code
         var codeConfig = string.IsNullOrEmpty(release.Code) ? null : new CodeConfiguration { Code = release.Code };
-        var source = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
+        var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
+
+        // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
+        var (source, nugetRefs) = NuGetDirectiveParser.Extract(rawSource);
+        IEnumerable<MetadataReference> references = _references;
+        IReadOnlyList<string> probingDirs = [];
+        if (nugetRefs.Length > 0)
+        {
+            var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
+            references = _references.Concat(
+                resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+            probingDirs = resolved.ProbingDirectories;
+        }
 
         // Write source file for debugging
         if (_cacheOptions.EnableSourceDebugging)
@@ -698,7 +710,7 @@ internal class MeshNodeCompilationService(
         var compilation = CSharpCompilation.Create(
             assemblyName,
             syntaxTrees: [syntaxTree],
-            references: _references,
+            references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Debug)
                 .WithPlatform(Platform.AnyCpu));
@@ -742,6 +754,15 @@ internal class MeshNodeCompilationService(
         var metadataPath = Path.Combine(releaseFolder, "release.json");
         var metadataJson = JsonSerializer.Serialize(release, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(metadataPath, metadataJson, ct);
+
+        // Persist NuGet probing directories alongside the release so the load context
+        // can probe for transitive dependencies at load time.
+        if (probingDirs.Count > 0)
+        {
+            var probingPath = Path.Combine(releaseFolder, "probing.json");
+            var probingJson = JsonSerializer.Serialize(probingDirs);
+            await File.WriteAllTextAsync(probingPath, probingJson, ct);
+        }
 
         logger.LogInformation("Successfully compiled {NodePath} to {DllPath}", node.Path, dllPath);
 

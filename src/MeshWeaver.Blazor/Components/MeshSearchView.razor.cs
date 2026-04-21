@@ -470,7 +470,17 @@ public partial class MeshSearchView : IDisposable
             groupByProperty = "NodeType";
 
         var groups = sortedNodes
-            .GroupBy(n => GetPropertyValue(n, groupByProperty) ?? "")
+            // When grouping by Category, fall back to NodeType for nodes that don't
+            // carry an explicit category so they still bucket meaningfully rather
+            // than collapsing into a single empty-label group.
+            .GroupBy(n =>
+            {
+                var val = GetPropertyValue(n, groupByProperty);
+                if (!string.IsNullOrEmpty(val)) return val;
+                if (groupByProperty.Equals("Category", StringComparison.OrdinalIgnoreCase))
+                    return n.NodeType?.Split('/').LastOrDefault() ?? "";
+                return "";
+            })
             .Select(g =>
             {
                 var groupKey = g.Key;
