@@ -1,7 +1,9 @@
 ﻿using System;
+using System.IO;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -74,6 +76,15 @@ public class TestClientConfigurator : IHostConfigurator
 
 public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
 {
+    /// <summary>
+    /// Shared root directory for the <see cref="IAssemblyStore"/> across every silo in
+    /// the test cluster. Fixed (not <c>Guid.NewGuid()</c>) so that multi-silo tests can
+    /// observe one silo's Put reflected in another silo's TryGet — exactly what the
+    /// content-addressed store promises in production across ACA replicas.
+    /// </summary>
+    public static readonly string AssemblyStoreRoot =
+        Path.Combine(Path.GetTempPath(), "mw-orleans-asmstore");
+
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder
             .ConfigurePortalMesh()
@@ -84,6 +95,8 @@ public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
     {
         siloBuilder.ConfigureMeshWeaverServer()
             .AddMemoryGrainStorageAsDefault();
+        siloBuilder.ConfigureServices(services =>
+            services.AddFileSystemAssemblyStore(AssemblyStoreRoot));
     }
 
     public void Configure(IHostBuilder hostBuilder)
