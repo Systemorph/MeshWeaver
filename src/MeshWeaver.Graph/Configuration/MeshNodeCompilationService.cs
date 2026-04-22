@@ -570,6 +570,11 @@ internal class MeshNodeCompilationService(
             CompileToMemory(compilation, nodeName, node.Path, ct);
         }
 
+        // The preparatory InvalidateCache above set a sticky flag so the NEXT IsCacheValid
+        // returns false; now that we've just written fresh artifacts, clear it so the
+        // immediately following call short-circuits on the new DLL.
+        cacheService.MarkCacheFresh(nodeName);
+
         logger.LogInformation("Successfully compiled assembly for {NodePath}", node.Path);
     }
 
