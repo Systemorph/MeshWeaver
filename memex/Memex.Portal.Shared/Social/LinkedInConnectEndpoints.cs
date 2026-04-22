@@ -185,6 +185,9 @@ public static class LinkedInConnectEndpoints
                 return Results.Problem("LinkedIn userinfo fetch failed.", statusCode: 502);
             using var uiDoc = JsonDocument.Parse(await uiResp.Content.ReadAsStringAsync(http.RequestAborted));
             var subject = uiDoc.RootElement.GetProperty("sub").GetString()!;
+            var displayName = uiDoc.RootElement.TryGetProperty("name", out var nm) ? nm.GetString() : null;
+            var pictureUrl = uiDoc.RootElement.TryGetProperty("picture", out var pic) ? pic.GetString() : null;
+            var emailAddress = uiDoc.RootElement.TryGetProperty("email", out var em) ? em.GetString() : null;
 
             var credential = new PlatformCredential
             {
@@ -219,7 +222,37 @@ public static class LinkedInConnectEndpoints
 
             logger.LogInformation("Connected LinkedIn credential for profile {Profile} (subject {Subject})", profilePath, subject);
 
-            return Results.Redirect($"/{profilePath}?connect=linkedin-ok");
+            // Also upsert a LinkedInProfile node at {profilePath}/LinkedIn so the
+            // analytics page has somewhere to render. Loose dictionary content avoids
+            // a hard dependency on the dynamic LinkedInProfile content type from this
+            // assembly — the NodeType registration handles deserialization.
+            var profileNode = new MeshNode("LinkedIn", profilePath)
+            {
+                Name = displayName ?? "LinkedIn",
+                NodeType = "Systemorph/LinkedInProfile",
+                State = MeshNodeState.Active,
+                Content = new Dictionary<string, object?>
+                {
+                    ["$type"] = "LinkedInProfile",
+                    ["displayName"] = displayName ?? subject,
+                    ["subjectUrn"] = $"urn:li:person:{subject}",
+                    ["pictureUrl"] = pictureUrl,
+                    ["email"] = emailAddress,
+                    ["connectedAt"] = DateTimeOffset.UtcNow,
+                }
+            };
+            try
+            {
+                await mesh.CreateNodeAsync(profileNode, http.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                logger.LogInformation(ex, "LinkedInProfile create failed at {Path}, attempting update", profileNode.Path);
+                try { await mesh.UpdateNodeAsync(profileNode, http.RequestAborted); }
+                catch (Exception ex2) { logger.LogWarning(ex2, "LinkedInProfile upsert failed for {Path}", profileNode.Path); }
+            }
+
+            return Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-ok");
         });
 
         // Manual "pull past posts now" trigger — calls LinkedInPublisher.ListPastPostsAsync
@@ -493,22 +526,26 @@ public static class LinkedInConnectEndpoints
         foreach (var c in commentList)
         {
             if (string.IsNullOrEmpty(c.ActorUrn)) continue;
-            var existing = byActor.TryGetValue(c.ActorUrn, out var v) ? v : (c.ActorName, c.ActorProfileUrl, 0, DateTimeOffset.MinValue);
+            var existing = byActor.TryGetValue(c.ActorUrn, out var v)
+                ? v
+                : (Name: c.ActorName, Url: c.ActorProfileUrl, Count: 0, LastAt: DateTimeOffset.MinValue);
             byActor[c.ActorUrn] = (
-                existing.Name ?? c.ActorName,
-                existing.Url ?? c.ActorProfileUrl,
-                existing.Count + 1,
-                c.CreatedAt > existing.LastAt ? c.CreatedAt : existing.LastAt);
+                Name: existing.Name ?? c.ActorName,
+                Url: existing.Url ?? c.ActorProfileUrl,
+                Count: existing.Count + 1,
+                LastAt: c.CreatedAt > existing.LastAt ? c.CreatedAt : existing.LastAt);
         }
         foreach (var l in likeList)
         {
             if (string.IsNullOrEmpty(l.ActorUrn)) continue;
-            var existing = byActor.TryGetValue(l.ActorUrn, out var v) ? v : (l.ActorName, l.ActorProfileUrl, 0, DateTimeOffset.MinValue);
+            var existing = byActor.TryGetValue(l.ActorUrn, out var v)
+                ? v
+                : (Name: l.ActorName, Url: l.ActorProfileUrl, Count: 0, LastAt: DateTimeOffset.MinValue);
             byActor[l.ActorUrn] = (
-                existing.Name ?? l.ActorName,
-                existing.Url ?? l.ActorProfileUrl,
-                existing.Count + 1,
-                l.CreatedAt > existing.LastAt ? l.CreatedAt : existing.LastAt);
+                Name: existing.Name ?? l.ActorName,
+                Url: existing.Url ?? l.ActorProfileUrl,
+                Count: existing.Count + 1,
+                LastAt: l.CreatedAt > existing.LastAt ? l.CreatedAt : existing.LastAt);
         }
 
         var topEngagers = byActor
