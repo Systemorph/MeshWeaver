@@ -145,6 +145,13 @@ public static class MemexConfiguration
                 Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
                     MeshWeaver.Mesh.INodeMenuProvider,
                     Memex.Portal.Shared.Social.LinkedInCredentialMenuProvider>());
+
+            // "Social Media" menu shortcut on the viewer's User node →
+            // {userPath}/SocialMedia hub page (lazy-created on first menu render).
+            services.TryAddEnumerable(
+                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
+                    MeshWeaver.Mesh.INodeMenuProvider,
+                    Memex.Portal.Shared.Social.SocialMediaUserMenuProvider>());
         }
 
         // Configure authentication
