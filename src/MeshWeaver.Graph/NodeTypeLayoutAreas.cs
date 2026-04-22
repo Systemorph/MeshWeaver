@@ -182,33 +182,33 @@ public static class NodeTypeLayoutAreas
 
         var definitionStream = GetNodeStream(host);
 
-        // Observe child Code nodes reactively via ObserveQuery
-        host.UpdateData(CodeNodesDataId, Array.Empty<MeshNode>());
+        // Resolve Sources / Tests via CodeQueryResolver — the same queries the
+        // compiler runs — so the side-menu listing is guaranteed to match what
+        // actually compiles. Each emission re-resolves in case the NodeType's
+        // definition changed.
+        var sourcesNodesStream = definitionStream
+            .Select(node =>
+            {
+                if (node == null || meshQuery == null)
+                    return Observable.Return(Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>);
+                var def = node.Content as NodeTypeDefinition;
+                return Observable.FromAsync(token => RunQueriesAsync(meshQuery,
+                    CodeQueryResolver.ExpandAll(def?.Sources, CodeQueryResolver.DefaultSources, node.Path),
+                    token));
+            })
+            .Switch();
 
-        if (meshQuery != null)
-        {
-            meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{hubPath} nodeType:{CodeNodeType.NodeType} scope:descendants"))
-                .Scan(new List<MeshNode>(), (list, change) =>
-                {
-                    if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
-                        return change.Items.ToList();
-                    foreach (var item in change.Items)
-                    {
-                        if (change.ChangeType == QueryChangeType.Added)
-                            list.Add(item);
-                        else if (change.ChangeType == QueryChangeType.Removed)
-                            list.RemoveAll(n => n.Path == item.Path);
-                        else if (change.ChangeType == QueryChangeType.Updated)
-                        {
-                            list.RemoveAll(n => n.Path == item.Path);
-                            list.Add(item);
-                        }
-                    }
-                    return list;
-                })
-                .Subscribe(codeNodes => host.UpdateData(CodeNodesDataId, codeNodes.ToArray()));
-        }
+        var testsNodesStream = definitionStream
+            .Select(node =>
+            {
+                if (node == null || meshQuery == null)
+                    return Observable.Return(Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>);
+                var def = node.Content as NodeTypeDefinition;
+                return Observable.FromAsync(token => RunQueriesAsync(meshQuery,
+                    CodeQueryResolver.ExpandAll(def?.Tests, CodeQueryResolver.DefaultTests, node.Path),
+                    token));
+            })
+            .Switch();
 
         // Query for NodeType nodes under this namespace
         var nodeTypesStream = Observable.FromAsync(async () =>
@@ -240,21 +240,19 @@ public static class NodeTypeLayoutAreas
             }
         });
 
-        var codeNodesStream = host.Stream.GetDataStream<MeshNode[]>(CodeNodesDataId);
-
         // Return static Splitter structure with observable nested views
         return Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
-                // Left menu - observable, updates when definition or code nodes load
+                // Left menu - observable, updates when definition or resolved code lists change
                 (h, c) => definitionStream
-                    .CombineLatest(codeNodesStream, nodeTypesStream, agentsStream)
+                    .CombineLatest(sourcesNodesStream, testsNodesStream, nodeTypesStream, agentsStream)
                     .Select(tuple =>
                     {
-                        var (definition, codeNodes, nodeTypes, agents) = tuple;
+                        var (definition, sources, tests, nodeTypes, agents) = tuple;
                         if (definition == null)
                             return RenderLoading("Loading...");
-                        return BuildLeftMenu(host, hubAddress, definition, codeNodes, nodeTypes, agents);
+                        return BuildLeftMenu(host, hubAddress, definition, sources, tests, nodeTypes, agents);
                     }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
@@ -273,7 +271,9 @@ public static class NodeTypeLayoutAreas
 
     /// <summary>
     /// Builds the left navigation menu with Configuration, Code files, Node Types, and Agents entries.
-    /// Code files are shown in a hierarchical tree grouped by namespace (relative to the NodeType root).
+    /// Sources / Tests lists are the fully resolved outputs of the NodeType's source queries (or the
+    /// defaults), so the user sees exactly what compiles — including shared code pulled in from
+    /// other namespaces via <c>@path</c> shorthand or foreign <c>namespace:</c> queries.
     /// Search link is placed at the bottom so the MeshSearch children listing is reachable from there
     /// without visually competing with the configuration-focused entries at the top.
     /// </summary>
@@ -281,7 +281,8 @@ public static class NodeTypeLayoutAreas
         LayoutAreaHost host,
         object hubAddress,
         MeshNode node,
-        IReadOnlyCollection<MeshNode>? codeNodes,
+        IReadOnlyCollection<MeshNode>? sources,
+        IReadOnlyCollection<MeshNode>? tests,
         IReadOnlyCollection<MeshNode>? nodeTypes = null,
         IReadOnlyCollection<MeshNode>? agents = null)
     {
@@ -295,13 +296,14 @@ public static class NodeTypeLayoutAreas
             new NavLinkControl("Configuration", FluentIcons.Settings(), configHref)
         );
 
-        // Sources + Tests sections — hierarchical trees grouped by namespace relative to
-        // the NodeType's root. Code lives under {node.Path}/Source and {node.Path}/Test
-        // (see CodeNodeType.SourceSubNamespace / TestSubNamespace).
+        // Sources + Tests sections — hierarchical trees of whatever the configured
+        // source/test queries resolved to. Each file is displayed at its relative
+        // path under {node.Path}; foreign files (shared code from other namespaces)
+        // are shown with their full absolute path so their origin is visible.
         navMenu = navMenu.WithNavGroup(BuildCodeNavGroup(
-            "Sources", FluentIcons.Code(), node.Path, CodeNodeType.SourceSubNamespace, codeNodes));
+            "Sources", FluentIcons.Code(), node.Path, sources));
         navMenu = navMenu.WithNavGroup(BuildCodeNavGroup(
-            "Tests", FluentIcons.Beaker(), node.Path, CodeNodeType.TestSubNamespace, codeNodes));
+            "Tests", FluentIcons.Beaker(), node.Path, tests));
 
         // Node Types section (if any NodeType nodes exist under this namespace)
         if (nodeTypes != null && nodeTypes.Count > 0)
@@ -366,50 +368,97 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
-    /// Builds a hierarchical navigation group for either Sources or Tests. Code nodes
-    /// under <c>{rootPath}/{subNamespace}</c> are bucketed by namespace; each directory
-    /// becomes a nested <see cref="NavGroupControl"/>, leaves are <see cref="NavLinkControl"/>s
-    /// pointing at the code node's own address. Code nodes OUTSIDE <c>{rootPath}/{subNamespace}</c>
-    /// are ignored — callers filter by <see cref="CodeNodeType.SourceSubNamespace"/> or
-    /// <see cref="CodeNodeType.TestSubNamespace"/>, so foreign nodes (e.g. pulled in by
-    /// <c>@path</c> shorthand or cross-NodeType <c>namespace:</c> queries) don't leak into
-    /// the Sources/Tests sections.
+    /// Builds a hierarchical navigation group for a resolved Sources or Tests list. Files
+    /// whose path starts with <c>{rootPath}/</c> are displayed at their relative path
+    /// (folders by namespace segment); files OUTSIDE <c>{rootPath}</c> — shared code pulled
+    /// in via <c>@path</c> or cross-NodeType <c>namespace:</c> queries — are displayed under
+    /// a "(shared)" folder at their absolute path so their origin remains obvious.
     /// </summary>
     internal static NavGroupControl BuildCodeNavGroup(
         string groupLabel,
         Icon groupIcon,
         string rootPath,
-        string subNamespace,
         IReadOnlyCollection<MeshNode>? codeNodes)
     {
         var root = new NavGroupControl(groupLabel)
             .WithIcon(groupIcon)
             .WithSkin(s => s.WithExpanded(true));
 
-        var subPrefix = $"{rootPath}/{subNamespace}/";
-        var matching = codeNodes?
-            .Where(n => n.Path.StartsWith(subPrefix, StringComparison.Ordinal))
-            .ToList();
-
-        if (matching == null || matching.Count == 0)
+        if (codeNodes == null || codeNodes.Count == 0)
         {
             return root.WithView(
                 Controls.Body($"No {groupLabel.ToLowerInvariant()} yet")
                     .WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);"));
         }
 
-        var tree = new CodeTreeFolder("");
-        foreach (var codeNode in matching.OrderBy(n => n.Path, StringComparer.Ordinal))
-        {
-            var relative = codeNode.Path.Substring(subPrefix.Length);
-            var segments = relative.Split('/');
-            tree.Insert(segments, 0, codeNode);
-        }
-
+        var tree = BuildCodeTreeForNavigation(rootPath, codeNodes);
         foreach (var child in tree.OrderedChildren())
             root = AppendCodeTreeNode(root, child);
 
         return root;
+    }
+
+    /// <summary>
+    /// Groups resolved code nodes into a tree: local files (paths starting with
+    /// <c>{rootPath}/</c>) are relativised; foreign files go under a single
+    /// "(shared)" folder with their absolute path preserved.
+    /// </summary>
+    internal static CodeTreeFolder BuildCodeTreeForNavigation(string rootPath, IReadOnlyCollection<MeshNode> nodes)
+    {
+        var rootPrefix = rootPath + "/";
+        var tree = new CodeTreeFolder("");
+        CodeTreeFolder? sharedFolder = null;
+
+        foreach (var node in nodes.OrderBy(n => n.Path, StringComparer.Ordinal))
+        {
+            if (node.Path.StartsWith(rootPrefix, StringComparison.Ordinal))
+            {
+                var relative = node.Path.Substring(rootPrefix.Length);
+                tree.Insert(relative.Split('/'), 0, node);
+            }
+            else
+            {
+                if (sharedFolder == null)
+                {
+                    sharedFolder = new CodeTreeFolder("(shared)");
+                    tree.AddFolder(sharedFolder);
+                }
+                // Preserve full absolute path so operators can tell which NodeType
+                // owns this shared file. Split on '/' gives a nested folder tree.
+                sharedFolder.Insert(node.Path.Split('/'), 0, node);
+            }
+        }
+        return tree;
+    }
+
+    /// <summary>
+    /// Runs a sequence of expanded queries via <see cref="IMeshService"/> and returns
+    /// the de-duplicated MeshNode results. Empty input → empty result, so the default
+    /// "no sources/tests yet" state still renders cleanly.
+    /// </summary>
+    private static async Task<IReadOnlyList<MeshNode>> RunQueriesAsync(
+        IMeshService meshQuery,
+        IEnumerable<string> queries,
+        CancellationToken ct)
+    {
+        var results = new List<MeshNode>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var q in queries)
+        {
+            try
+            {
+                await foreach (var n in meshQuery.QueryAsync<MeshNode>(q, ct: ct).WithCancellation(ct))
+                {
+                    if (n?.Path is { Length: > 0 } p && seen.Add(p))
+                        results.Add(n);
+                }
+            }
+            catch
+            {
+                // A stray query syntax error in one entry shouldn't empty the whole list.
+            }
+        }
+        return results;
     }
 
     private static NavGroupControl AppendCodeTreeNode(NavGroupControl parent, CodeTreeNode node)
@@ -469,6 +518,12 @@ public static class NodeTypeLayoutAreas
 
         public IReadOnlyDictionary<string, CodeTreeFolder> Folders => _folders;
         public IReadOnlyList<CodeTreeLeaf> Leaves => _leaves;
+
+        /// <summary>
+        /// Splices an externally-built folder into this tree under its own name.
+        /// Used to attach the synthetic "(shared)" folder for foreign code files.
+        /// </summary>
+        public void AddFolder(CodeTreeFolder folder) => _folders[folder.Name] = folder;
 
         public void Insert(string[] segments, int index, MeshNode node)
         {

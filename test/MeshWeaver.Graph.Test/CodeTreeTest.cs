@@ -157,4 +157,75 @@ public class CodeTreeTest
         }
         current.Leaves.Should().ContainSingle(l => l.Name == "Leaf.cs");
     }
+
+    // -----------------------------------------------------------------------
+    // BuildCodeTreeForNavigation — the side-menu variant: takes a resolved list
+    // (Sources or Tests query output) and renders foreign files under "(shared)".
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void BuildCodeTreeForNavigation_LocalFiles_AreRelativised()
+    {
+        var nodes = new List<MeshNode>
+        {
+            Code($"{RootPath}/Source/Program.cs"),
+            Code($"{RootPath}/Source/Models/Person.cs"),
+        };
+
+        var tree = NodeTypeLayoutAreas.BuildCodeTreeForNavigation(RootPath, nodes);
+
+        tree.Folders.Should().ContainKey("Source");
+        tree.Folders["Source"].Leaves.Should().ContainSingle(l => l.Name == "Program.cs");
+        tree.Folders["Source"].Folders["Models"].Leaves.Should().ContainSingle(l => l.Name == "Person.cs");
+        tree.Folders.Should().NotContainKey("(shared)");
+    }
+
+    [Fact]
+    public void BuildCodeTreeForNavigation_ForeignFiles_GoUnderSharedFolder()
+    {
+        // Shared code pulled in via "@Shared/Utils" or "namespace:Other/Lib…" must
+        // still be visible — the user asked for "show all files as queried by
+        // Source resolution" — but labelled as shared so its origin is obvious.
+        var nodes = new List<MeshNode>
+        {
+            Code($"{RootPath}/Source/Local.cs"),
+            Code("Shared/Utils/Helper.cs"),
+            Code("Other/Lib/CommonTypes.cs"),
+        };
+
+        var tree = NodeTypeLayoutAreas.BuildCodeTreeForNavigation(RootPath, nodes);
+
+        tree.Folders.Should().ContainKey("Source", "local file is relativised");
+        tree.Folders.Should().ContainKey("(shared)", "foreign files collect under a shared folder");
+
+        var shared = tree.Folders["(shared)"];
+        // Foreign files keep their full path so operators see where they came from.
+        shared.Folders.Should().ContainKey("Shared");
+        shared.Folders["Shared"].Folders["Utils"].Leaves.Should().ContainSingle(l => l.Name == "Helper.cs");
+        shared.Folders.Should().ContainKey("Other");
+        shared.Folders["Other"].Folders["Lib"].Leaves.Should().ContainSingle(l => l.Name == "CommonTypes.cs");
+    }
+
+    [Fact]
+    public void BuildCodeTreeForNavigation_Empty_ReturnsEmptyTree()
+    {
+        var tree = NodeTypeLayoutAreas.BuildCodeTreeForNavigation(RootPath, new List<MeshNode>());
+        tree.Folders.Should().BeEmpty();
+        tree.Leaves.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void BuildCodeTreeForNavigation_OnlyForeignFiles_StillRenders()
+    {
+        var nodes = new List<MeshNode>
+        {
+            Code("Shared/Utils/A.cs"),
+            Code("Shared/Utils/B.cs"),
+        };
+
+        var tree = NodeTypeLayoutAreas.BuildCodeTreeForNavigation(RootPath, nodes);
+
+        tree.Folders.Should().ContainKey("(shared)");
+        tree.Folders.Should().NotContainKey("Source", "no local files means no local root folder");
+    }
 }
