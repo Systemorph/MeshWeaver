@@ -107,9 +107,9 @@ public class SatelliteQueryTests : IAsyncLifetime
         UserPartition.ResolveTableByNodeType("UserActivity").Should().Be("user_activities");
         UserPartition.ResolveTableByNodeType("Comment").Should().Be("annotations");
         UserPartition.ResolveTableByNodeType("AccessAssignment").Should().Be("access");
-        // Code maps to _Source which maps to "code", but NodeTypeToSuffix
+        // Code maps to Source which maps to "code", but NodeTypeToSuffix
         // doesn't have "Code" entry — it uses path-based resolution instead
-        UserPartition.ResolveTable("User/alice/_Source/MyClass").Should().Be("code");
+        UserPartition.ResolveTable("User/alice/Source/MyClass").Should().Be("code");
 
         // Verify parser extracts nodeType correctly
         var parser = new QueryParser();
@@ -383,17 +383,17 @@ public class SatelliteQueryTests : IAsyncLifetime
     {
         var ct = TestContext.Current.CancellationToken;
 
-        await _adapter.WriteAsync(new MeshNode("MyClass", "User/alice/project/_Source")
+        await _adapter.WriteAsync(new MeshNode("MyClass", "User/alice/project/Source")
         {
             Name = "MyClass.cs",
             NodeType = "Code",
             MainNode = "User/alice/project",
         }, _options, ct);
 
-        // Code uses _Source/_Test path-based resolution (no NodeTypeToSuffix entry).
+        // Code uses Source/Test path-based resolution (no NodeTypeToSuffix entry).
         // Path-based query works:
-        var byPath = await QueryAsync("namespace:User/alice/project/_Source nodeType:Code");
-        byPath.Should().NotBeEmpty("path-based query to _Source should find Code nodes");
+        var byPath = await QueryAsync("namespace:User/alice/project/Source nodeType:Code");
+        byPath.Should().NotBeEmpty("path-based query to Source should find Code nodes");
 
         // nodeType-only query with DefaultPath falls back to mesh_nodes (Code has no NodeTypeToSuffix entry)
         var byType = await QueryAsync("nodeType:Code scope:descendants", defaultPath: "User");

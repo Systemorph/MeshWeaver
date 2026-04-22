@@ -289,65 +289,62 @@ public class SatelliteNodeTests : IAsyncLifetime
 
     #endregion
 
-    #region Code satellite (_Source and _Test → code)
+    #region Code content (Source and Test → code table)
 
     [Fact(Timeout = 30000)]
     public async Task CodeFile_WriteAndRead_RoutesToCodeTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var codeAdapter = AdapterFor("_Source", "code");
+        var codeAdapter = AdapterFor("Source", "code");
 
-        var codeNode = new MeshNode("MyClass", "ACME/Projects/Alpha/_Source")
+        var codeNode = new MeshNode("MyClass", "ACME/Projects/Alpha/Source")
         {
             Name = "MyClass.cs",
             NodeType = "Code",
-            MainNode = "ACME/Projects/Alpha",
             Content = new { FileName = "MyClass.cs", Language = "csharp", Namespace = "ACME.Projects" }
         };
         await codeAdapter.WriteAsync(codeNode, _options, ct);
 
         // Verify in code table
         await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/_Source' AND id = 'MyClass'");
+            "SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/Source' AND id = 'MyClass'");
         var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
         count.Should().Be(1);
 
         // Not in mesh_nodes
         await using var mnCmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects/Alpha/_Source' AND id = 'MyClass'");
+            "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = 'ACME/Projects/Alpha/Source' AND id = 'MyClass'");
         var mnCount = (long)(await mnCmd.ExecuteScalarAsync(ct))!;
         mnCount.Should().Be(0);
 
         // Read back
-        var read = await codeAdapter.ReadAsync("ACME/Projects/Alpha/_Source/MyClass", _options, ct);
+        var read = await codeAdapter.ReadAsync("ACME/Projects/Alpha/Source/MyClass", _options, ct);
         read.Should().NotBeNull();
         read!.NodeType.Should().Be("Code");
-        read.MainNode.Should().Be("ACME/Projects/Alpha");
     }
 
     [Fact(Timeout = 30000)]
     public async Task TestFile_WriteAndRead_AlsoRoutesToCodeTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var testAdapter = AdapterFor("_Test", "code");
+        var testAdapter = AdapterFor("Test", "code");
 
-        var testNode = new MeshNode("MyClassTests", "ACME/Projects/Alpha/_Test")
+        var testNode = new MeshNode("MyClassTests", "ACME/Projects/Alpha/Test")
         {
             Name = "MyClassTests.cs",
             NodeType = "Code",
-            MainNode = "ACME/Projects/Alpha",
             Content = new { FileName = "MyClassTests.cs", Language = "csharp", Namespace = "ACME.Projects.Tests" }
         };
         await testAdapter.WriteAsync(testNode, _options, ct);
 
-        // Verify in code table (same table as _Source)
+        // Verify in code table (same table as Source)
         await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/_Test' AND id = 'MyClassTests'");
+            "SELECT COUNT(*) FROM code WHERE namespace = 'ACME/Projects/Alpha/Test' AND id = 'MyClassTests'");
         var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
         count.Should().Be(1);
 
         // Read back
-        var read = await testAdapter.ReadAsync("ACME/Projects/Alpha/_Test/MyClassTests", _options, ct);
+        var read = await testAdapter.ReadAsync("ACME/Projects/Alpha/Test/MyClassTests", _options, ct);
         read.Should().NotBeNull();
         read!.Name.Should().Be("MyClassTests.cs");
     }
@@ -492,8 +489,8 @@ public class SatelliteNodeTests : IAsyncLifetime
             ("rt-cmt", "ACME/Y/_Comment", "Comment", "annotations"),
             ("rt-trk", "ACME/Y/_Tracking", "TrackedChange", "annotations"),
             ("rt-apr", "ACME/Y/_Approval", "Approval", "annotations"),
-            ("rt-src", "ACME/Y/_Source", "Code", "code"),
-            ("rt-tst", "ACME/Y/_Test", "Code", "code"),
+            ("rt-src", "ACME/Y/Source", "Code", "code"),
+            ("rt-tst", "ACME/Y/Test", "Code", "code"),
         };
 
         foreach (var (id, ns, nodeType, _) in nodes)
@@ -542,8 +539,8 @@ public class SatelliteNodeTests : IAsyncLifetime
         def.ResolveTable("User/alice/_Comment/cmt-1").Should().Be("annotations");
         def.ResolveTable("User/alice/_Tracking/tc-1").Should().Be("annotations");
         def.ResolveTable("User/alice/_Approval/apr-1").Should().Be("annotations");
-        def.ResolveTable("User/alice/_Source/MyClass").Should().Be("code");
-        def.ResolveTable("User/alice/_Test/MyTest").Should().Be("code");
+        def.ResolveTable("User/alice/Source/MyClass").Should().Be("code");
+        def.ResolveTable("User/alice/Test/MyTest").Should().Be("code");
     }
 
     [Fact(Timeout = 30000)]

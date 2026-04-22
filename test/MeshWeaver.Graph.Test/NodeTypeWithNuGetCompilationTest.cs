@@ -20,7 +20,7 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Compiles a node type whose _Source references MathNet.Numerics via a #r "nuget:..." directive,
+/// Compiles a node type whose Source references MathNet.Numerics via a #r "nuget:..." directive,
 /// and verifies the resulting assembly can execute MathNet code end-to-end.
 /// Requires network access to api.nuget.org on first run.
 /// </summary>
@@ -96,7 +96,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
         };
         await persistence.SaveNodeAsync(node, SetupJsonOptions, TestContext.Current.CancellationToken);
 
-        var codeNode = new MeshNode("code", $"type/{nodeType}/_Source")
+        var codeNode = new MeshNode("code", $"type/{nodeType}/Source")
         {
             NodeType = "Code",
             Name = "Code",
@@ -182,7 +182,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
 
     /// <summary>
     /// Reproduces the prod failure mode directly on the release-path compile
-    /// (CompileToReleaseAsync), which bakes the combined _Source into a
+    /// (CompileToReleaseAsync), which bakes the combined Source into a
     /// NodeTypeRelease and emits to a dedicated release folder. That path was
     /// initially missing the #r "nuget:..." strip + NuGet resolve step, so
     /// MathNet disappeared even though the on-demand path handled it. Keeping
@@ -253,7 +253,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
     }
 
     /// <summary>
-    /// Reproduces the prod failure mode: two _Source files in the same NodeType,
+    /// Reproduces the prod failure mode: two Source files in the same NodeType,
     /// each starting with `#r "nuget:MathNet.Numerics, 5.0.0"` and each using
     /// MathNet types. After `string.Join("\n\n", ...)` the second file's `#r`
     /// sits on a line that still starts at column 0, so Extract must strip
@@ -302,7 +302,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
         };
         await persistence.SaveNodeAsync(ntNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
-        var c1 = new MeshNode("distributions", $"type/{nodeType}/_Source")
+        var c1 = new MeshNode("distributions", $"type/{nodeType}/Source")
         {
             NodeType = "Code",
             Name = "Distributions",
@@ -310,7 +310,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
         };
         await persistence.SaveNodeAsync(c1, SetupJsonOptions, TestContext.Current.CancellationToken);
 
-        var c2 = new MeshNode("stats", $"type/{nodeType}/_Source")
+        var c2 = new MeshNode("stats", $"type/{nodeType}/Source")
         {
             NodeType = "Code",
             Name = "Stats",

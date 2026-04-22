@@ -1,7 +1,7 @@
 ---
 Name: Creating Node Types
 Category: Documentation
-Description: Step-by-step guide to creating custom node types with _Source code, data models, layout areas, and CSV data loading
+Description: Step-by-step guide to creating custom node types with Source code, data models, layout areas, and CSV data loading
 Icon: Code
 ---
 
@@ -11,31 +11,31 @@ This guide walks through creating a custom NodeType with compiled source code, l
 
 ## Folder Structure
 
-A NodeType lives in a folder under a namespace. Source code goes in `_Source/` and tests in `_Test/`:
+A NodeType lives in a folder under a namespace. Source code goes in `Source/` and tests in `Test/`:
 
 ```
 samples/Graph/Data/
   ACME/
     Project.json              # NodeType definition (nodeType: "NodeType")
     Project/
-      _Source/                # C# code compiled at startup
+      Source/                # C# code compiled at startup
         Project.cs            # Content type (record)
         Status.cs             # Reference data type
         Category.cs           # Reference data type
         Priority.cs           # Reference data type
         ProjectLayoutAreas.cs # Custom views
-      _Test/                  # xUnit tests for the source code
+      Test/                  # xUnit tests for the source code
         ProjectTests.cs
       Todo.json               # Child NodeType definition
       Todo/
-        _Source/
+        Source/
           Todo.cs             # Child content type
           TodoLayoutAreas.cs  # Child views
 ```
 
 ## Step 1: Define the Content Type
 
-Create a C# record in `_Source/` with the `<meshweaver>` frontmatter:
+Create a C# record in `Source/` with the `<meshweaver>` frontmatter:
 
 ```csharp
 // <meshweaver>
@@ -225,7 +225,7 @@ The NodeType definition is a JSON file at the parent level. The `configuration` 
 
 ## Step 4: Loading Data from CSV Files
 
-For types that load data from CSV files (like Northwind), define a loader in `_Source/`:
+For types that load data from CSV files (like Northwind), define a loader in `Source/`:
 
 ### Define the Type
 
@@ -335,7 +335,7 @@ public static class DataLoader
 
 ## Step 5: Create Layout Areas
 
-Define custom views in `_Source/` as static classes:
+Define custom views in `Source/` as static classes:
 
 ```csharp
 // <meshweaver>
@@ -405,10 +405,10 @@ The `AddHubSource(parentAddress, ...)` imports types from the parent node's data
 
 | Step | What | Where |
 |------|------|-------|
-| 1 | Content type (record) | `_Source/MyType.cs` |
-| 2 | Reference data types | `_Source/Status.cs`, etc. |
-| 3 | CSV data loaders | `_Source/DataLoader.cs` |
-| 4 | Layout areas | `_Source/MyTypeLayoutAreas.cs` |
+| 1 | Content type (record) | `Source/MyType.cs` |
+| 2 | Reference data types | `Source/Status.cs`, etc. |
+| 3 | CSV data loaders | `Source/DataLoader.cs` |
+| 4 | Layout areas | `Source/MyTypeLayoutAreas.cs` |
 | 5 | NodeType JSON | `MyType.json` in parent folder |
-| 6 | Tests | `_Test/MyTypeTests.cs` |
+| 6 | Tests | `Test/MyTypeTests.cs` |
 | 7 | CSV files | `attachments/` folder |

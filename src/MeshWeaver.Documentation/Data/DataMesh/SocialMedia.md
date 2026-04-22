@@ -21,14 +21,14 @@ and views — this is the shape to mirror.
 Doc/DataMesh/SocialMedia/
   Post.json                              # NodeType definition (nodeType: "NodeType")
   Post/
-    _Source/                             # C# compiled at startup
+    Source/                             # C# compiled at startup
       Platform.cs                        # Reference-data record
       SocialMediaPost.cs                 # Content record
       SocialMediaPostLayoutAreas.cs      # List + Detail layout areas
     Post-001.json                        # Instance (nodeType: "Doc/DataMesh/SocialMedia/Post")
   Profile.json                           # Second NodeType
   Profile/
-    _Source/
+    Source/
       SocialMediaProfile.cs
       SocialMediaProfileLayoutAreas.cs
     Roland-LinkedIn.json                 # Instance
@@ -197,7 +197,7 @@ The embedded view below is the `Roland-LinkedIn` profile instance, rendered by i
 When asked to build a new model node type "as code":
 
 1. ☐ Create a namespace folder under your target location.
-2. ☐ Add one `.cs` per content record in `_Source/`, each with the `<meshweaver>` frontmatter.
+2. ☐ Add one `.cs` per content record in `Source/`, each with the `<meshweaver>` frontmatter.
 3. ☐ Add reference-data `.cs` files with `[Key]`, static instances, and `All[]`.
 4. ☐ Add a `XxxLayoutAreas.cs` with `List`/`Detail` views returning `IObservable<UiControl?>`.
 5. ☐ Write the `Type.json` with `nodeType: "NodeType"` and a configuration lambda.

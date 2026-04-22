@@ -112,7 +112,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
         if (codeFile != null)
         {
             // Code is stored as a child MeshNode under the Code path
-            var codeNode = new MeshNode("code", $"type/{nodeType}/_Source")
+            var codeNode = new MeshNode("code", $"type/{nodeType}/Source")
             {
                 NodeType = "Code",
                 Name = "Code",
@@ -465,7 +465,7 @@ public record RecordType
         await SetupNodeType(persistence, "Organization", orgDefinition, displayName: "Organization");
 
         // Store Code as child MeshNode (NOT partition object)
-        var codeNode = new MeshNode("Organization", "type/Organization/_Source")
+        var codeNode = new MeshNode("Organization", "type/Organization/Source")
         {
             NodeType = "Code",
             Name = "Organization Data Model",
@@ -509,7 +509,7 @@ public record Organization
         await SetupNodeType(persistence, "Project", definition, displayName: "Project");
 
         // First code file: data model
-        var dataModelNode = new MeshNode("ProjectDataModel", "type/Project/_Source")
+        var dataModelNode = new MeshNode("ProjectDataModel", "type/Project/Source")
         {
             NodeType = "Code",
             Name = "Project Data Model",
@@ -528,7 +528,7 @@ public record Project
         await persistence.SaveNodeAsync(dataModelNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
         // Second code file: enum
-        var enumNode = new MeshNode("ProjectStatus", "type/Project/_Source")
+        var enumNode = new MeshNode("ProjectStatus", "type/Project/Source")
         {
             NodeType = "Code",
             Name = "Project Status Enum",
@@ -661,9 +661,9 @@ public record Contact
     }
 
     [Fact(Timeout = 25000)]
-    public async Task GetAssemblyLocationAsync_SourcesDefaultsToSelfRelativeUnderscoreSource()
+    public async Task GetAssemblyLocationAsync_SourcesDefaultsToSelfRelativeSource()
     {
-        // The default (no Sources set) is "namespace:_Source scope:subtree", which
+        // The default (no Sources set) is "namespace:Sourcescope:subtree", which
         // is auto-rebased onto the NodeType's own path. This is the common case.
         var persistence = new InMemoryPersistenceService();
 
@@ -689,7 +689,7 @@ public record DefaultRelType
 
         assemblyPath.Should().NotBeNull();
         Assembly.LoadFrom(assemblyPath!).GetType("DefaultRelType").Should().NotBeNull(
-            "default 'namespace:_Source' should auto-rebase onto the NodeType's own path");
+            "default 'namespace:Source' should auto-rebase onto the NodeType's own path");
     }
 
     [Fact(Timeout = 25000)]
@@ -701,7 +701,7 @@ public record DefaultRelType
 
         var definition = new NodeTypeDefinition
         {
-            Sources = ["namespace:$self/_Source scope:subtree"]
+            Sources = ["namespace:$self/Source scope:subtree"]
         };
         await SetupNodeType(persistence, "SelfMacro", definition, new CodeConfiguration
         {
@@ -724,13 +724,13 @@ public record SelfMacroType
 
         assemblyPath.Should().NotBeNull();
         Assembly.LoadFrom(assemblyPath!).GetType("SelfMacroType").Should().NotBeNull(
-            "$self should expand to type/SelfMacro, finding its _Source code");
+            "$self should expand to type/SelfMacro, finding its Sourcecode");
     }
 
     [Fact(Timeout = 25000)]
     public async Task GetAssemblyLocationAsync_SourcesFiltersNonCodeChildren()
     {
-        // Non-Code children in the _Source folder must never sneak into the
+        // Non-Code children in the Sourcefolder must never sneak into the
         // compilation — the service always ANDs with nodeType:Code.
         var persistence = new InMemoryPersistenceService();
 
@@ -744,8 +744,8 @@ public record FilterTypeA
 }"
         });
 
-        // A sibling non-Code node under _Source — must be ignored.
-        var junkNode = new MeshNode("notes", "type/FilterType/_Source")
+        // A sibling non-Code node under Source— must be ignored.
+        var junkNode = new MeshNode("notes", "type/FilterType/Source")
         {
             NodeType = "Markdown",
             Name = "Notes",
@@ -772,11 +772,11 @@ public record FilterTypeA
     public async Task GetAssemblyLocationAsync_SourcesWithMultipleLocations_PullsInExternalCode()
     {
         // This is the SocialMedia scenario: Profile NodeType needs Platform.cs
-        // which lives under Post's _Source folder. Without `Sources` this fails;
+        // which lives under Post's Sourcefolder. Without `Sources` this fails;
         // with `Sources` listing both paths it compiles.
         var persistence = new InMemoryPersistenceService();
 
-        // "Post" NodeType with shared Platform.cs in its _Source.
+        // "Post" NodeType with shared Platform.cs in its Source.
         var postDef = new NodeTypeDefinition
         {
             Configuration = "config => config.WithContentType<Post>()"
@@ -796,14 +796,14 @@ public record Post
         });
 
         // "Profile" NodeType with its own SocialMediaProfile, AND Sources pointing
-        // at Post's _Source so it can reference Platform.
+        // at Post's Sourceso it can reference Platform.
         var profileDef = new NodeTypeDefinition
         {
             Configuration = "config => config.WithContentType<Profile>()",
             Sources =
             [
-                "namespace:$self/_Source scope:subtree",
-                "namespace:type/Post/_Source scope:subtree"
+                "namespace:$self/Source scope:subtree",
+                "namespace:type/Post/Source scope:subtree"
             ]
         };
         await SetupNodeType(persistence, "Profile", profileDef, new CodeConfiguration
@@ -826,10 +826,10 @@ public record Profile
 
         var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
 
-        assemblyPath.Should().NotBeNull("Profile should compile with external Platform from Post/_Source");
+        assemblyPath.Should().NotBeNull("Profile should compile with external Platform from Post/Source");
         var assembly = Assembly.LoadFrom(assemblyPath!);
         assembly.GetType("Profile").Should().NotBeNull();
-        assembly.GetType("Platform").Should().NotBeNull("Platform from Post/_Source must be included");
+        assembly.GetType("Platform").Should().NotBeNull("Platform from Post/Source must be included");
     }
 
     [Fact(Timeout = 25000)]
@@ -843,8 +843,8 @@ public record Profile
         {
             Sources =
             [
-                "namespace:$self/_Source scope:subtree",
-                "namespace:type/Overlap/_Source" // matches the same node
+                "namespace:$self/Source scope:subtree",
+                "namespace:type/Overlap/Source" // matches the same node
             ]
         };
         await SetupNodeType(persistence, "Overlap", definition, new CodeConfiguration
@@ -872,7 +872,7 @@ public record OverlapType
     }
 
     /// <summary>
-    /// Regression: Code nodes persisted via MCP set MainNode to the parent _Source
+    /// Regression: Code nodes persisted via MCP set MainNode to the parent Source
     /// folder (satellite pattern). <c>InMemoryPersistenceService.GetDescendantsAsync</c>
     /// excludes every node where <c>MainNode != Path</c>, so the compile-path
     /// source discovery was seeing zero Code files and the NodeType kept failing
@@ -886,7 +886,7 @@ public record OverlapType
         // Arrange: NodeType + satellite Code node (MainNode != Path).
         var persistence = new InMemoryPersistenceService();
         var nodeTypePath = $"type/Satellite_{Guid.NewGuid():N}";
-        var sourceNs = $"{nodeTypePath}/_Source";
+        var sourceNs = $"{nodeTypePath}/Source";
 
         var nodeTypeDef = new NodeTypeDefinition
         {
@@ -901,7 +901,7 @@ public record OverlapType
         };
         await persistence.SaveNodeAsync(nodeTypeNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
-        // Explicit MainNode = parent _Source folder — this is the satellite pattern
+        // Explicit MainNode = parent Sourcefolder — this is the satellite pattern
         // that the persistence layer's GetDescendantsAsync filters out.
         var satelliteCode = new MeshNode("SatelliteModel", sourceNs)
         {
@@ -999,7 +999,7 @@ public record SharedHelper_{suffix.Replace("-", "_")}
 
         var consumerDef = new NodeTypeDefinition
         {
-            Sources = [$"{prefix}type/{sharedTypeName}/_Source/code"]
+            Sources = [$"{prefix}type/{sharedTypeName}/Source/code"]
         };
         await SetupNodeType(persistence, consumerTypeName, consumerDef);
 

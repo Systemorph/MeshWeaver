@@ -32,7 +32,7 @@ var result = await exportService.ExportToDirectoryAsync("org/acme/project", outp
 // result.NodesExported, result.PartitionsExported, result.Success
 ```
 
-`IMeshExportService` uses `FileFormatParserRegistry` to select the appropriate serializer for each node based on its content type. Partition data (sub-paths like `_Source`, `layoutAreas`) is exported as JSON.
+`IMeshExportService` uses `FileFormatParserRegistry` to select the appropriate serializer for each node based on its content type. Partition data (sub-paths like `Source`, `layoutAreas`) is exported as JSON.
 
 ## Export-Import Round Trip
 

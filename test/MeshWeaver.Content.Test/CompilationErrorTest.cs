@@ -76,7 +76,7 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
         await NodeFactory.CreateNodeAsync(nodeTypeNode, ct: ct);
 
         // Code with a compile error: missing required parameter
-        var codeNode = new MeshNode("BrokenCode", $"{nodeTypePath}/_Source")
+        var codeNode = new MeshNode("BrokenCode", $"{nodeTypePath}/Source")
         {
             NodeType = "Code",
             Name = "Broken Code",

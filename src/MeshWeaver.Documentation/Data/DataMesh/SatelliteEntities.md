@@ -56,8 +56,8 @@ Each satellite type has a reserved sub-namespace prefix:
 | `_Thread` | Thread | Chat and discussion threads |
 | `_Activity` | Activity | Node lifecycle events (created, updated, deleted) |
 | `_UserActivity` | UserActivity | Per-user access tracking and history |
-| `_Source` | Code | Source code files (.cs) attached to node types |
-| `_Test` | Code | Test code files (.cs) for node type testing |
+
+Note: `Source/` and `Test/` sub-namespaces also exist under NodeTypes, but they hold **primary** Code nodes (source files and tests), not satellite metadata. They are listed with satellite namespaces only because they share the same routing mechanism (a dedicated `code` table) as a storage optimization.
 
 # File System Layout
 
@@ -72,8 +72,8 @@ ACME/
   Projects/
     Alpha/
       index.md                          ← Alpha project node
-      _Source/
-        Alpha.cs                        ← Source code for Alpha
+      Source/
+        Alpha.cs                        ← Source code for Alpha (primary content, not satellite)
         AlphaLayoutAreas.cs             ← Layout area definitions
       _Comment/
         c1.json                         ← Comment on Alpha
@@ -89,7 +89,7 @@ ACME/
 ```
 
 Replies to comments are nested as children of the comment node (e.g., `_Comment/c1/reply1.json`).
-Source code files (`.cs`) live in `_Source/` directories and test code in `_Test/` directories.
+Source code files (`.cs`) live in `Source/` directories and test code in `Test/` directories. These are primary content — not satellite metadata — even though they share the `code` PostgreSQL table as a storage optimization.
 
 # PostgreSQL Table Routing
 

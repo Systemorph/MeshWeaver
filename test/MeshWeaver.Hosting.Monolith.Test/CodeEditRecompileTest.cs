@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///   4. Recycle the NodeType hub to force a fresh activation.
 ///   5. Re-evaluate the Overview — must emit V2, NOT the cached V1 assembly.
 ///
-/// Regression: before the <c>_Source/</c>-aware NodeTypeService invalidator and
+/// Regression: before the <c>Source/</c>-aware NodeTypeService invalidator and
 /// the on-disk <c>ICompilationCacheService.InvalidateCache</c> call, step (5)
 /// reused the cached V1 DLL because the NodeType's own LastModified hadn't
 /// advanced and IsCacheValid returned true.
@@ -48,7 +48,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                     o.CacheDirectory = _cacheDir;
                     // Keep disk+release caching ENABLED — that's the production config
                     // where the bug originally showed up (stale DLL survives LastModified
-                    // being unchanged because only a _Source child was edited).
+                    // being unchanged because only a Sources child was edited).
                     o.EnableCompilationCache = true;
                     o.EnableDiskCache = true;
                 }));
@@ -100,7 +100,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             }
         }, ct);
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("code", $"{TestPartition}/CodeEditType/_Source")
+        await NodeFactory.CreateNodeAsync(new MeshNode("code", $"{TestPartition}/CodeEditType/Source")
         {
             Name = "Code",
             NodeType = "Code",
@@ -120,7 +120,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // 3. Update the Code source with V2 (same path, new body).
         MeshNode? codeNode = null;
         await foreach (var n in NodeFactory.QueryAsync<MeshNode>(
-            $"path:{TestPartition}/CodeEditType/_Source/code", ct: ct).WithCancellation(ct))
+            $"path:{TestPartition}/CodeEditType/Source/code", ct: ct).WithCancellation(ct))
         {
             codeNode = n;
             break;
@@ -138,7 +138,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             MeshNode? probe = null;
             await foreach (var n in NodeFactory.QueryAsync<MeshNode>(
-                $"path:{TestPartition}/CodeEditType/_Source/code", ct: ct).WithCancellation(ct))
+                $"path:{TestPartition}/CodeEditType/Source/code", ct: ct).WithCancellation(ct))
             {
                 probe = n;
                 break;
@@ -161,7 +161,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // 4. Trigger the full production recycle path: invalidate NodeTypeService
         //    caches AND dispose the instance grain. The new NodeTypeService
-        //    MeshChangeFeed subscriber also fires automatically when the _Source
+        //    MeshChangeFeed subscriber also fires automatically when the Sources
         //    child was updated above, but call InvalidateCache explicitly so the
         //    test is deterministic.
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();

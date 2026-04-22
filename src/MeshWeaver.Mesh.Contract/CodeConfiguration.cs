@@ -2,7 +2,7 @@ namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Represents a code configuration with C# source code for dynamic compilation.
-/// Stored as MeshNode.Content in the _Source sub-partition of NodeType hubs.
+/// Stored as MeshNode.Content in the Source sub-partition of NodeType hubs.
 /// Identity (Id) and display name (Name) live on the parent MeshNode.
 /// </summary>
 public record CodeConfiguration

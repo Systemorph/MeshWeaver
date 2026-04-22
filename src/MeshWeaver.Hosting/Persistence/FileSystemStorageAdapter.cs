@@ -602,10 +602,14 @@ public class FileSystemStorageAdapter : IStorageAdapter
     }
 
     /// <summary>
-    /// Checks if a sub-namespace name is a code sub-namespace (_Source or _Test).
+    /// Checks if a sub-namespace name is a code sub-namespace (Source or Test).
+    /// Legacy "_Source"/"_Test" names are recognised for backward compatibility
+    /// with existing on-disk data that has not yet been migrated.
     /// </summary>
     private static bool IsCodeSubNamespace(string? name) =>
-        string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
+        string.Equals(name, "Source", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Test", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
         || string.Equals(name, "_Test", StringComparison.OrdinalIgnoreCase);
 
     #endregion

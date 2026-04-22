@@ -41,7 +41,7 @@ internal class MeshNodeCompilationService(
     ///     match (de-duplicated downstream by the caller).</item>
     ///   <item>A <c>namespace:X</c> value that is a single relative segment (no
     ///     <c>/</c>, no absolute root) is rebased onto <paramref name="selfPath"/>,
-    ///     so the default <c>namespace:_Source</c> reads as "my own _Source folder".</item>
+    ///     so the default <c>namespace:Source</c> reads as "my own Source folder".</item>
     ///   <item>Every emitted query is ANDed with <c>nodeType:Code</c> so non-code
     ///     children can never leak into the compilation.</item>
     /// </list>
@@ -67,7 +67,7 @@ internal class MeshNodeCompilationService(
         }
 
         // Rebase relative "namespace:X" values onto selfPath. A value without '/' is
-        // assumed to be a subfolder of the NodeType (the default "_Source" case).
+        // assumed to be a subfolder of the NodeType (the default "Source" case).
         var rebased = RebaseRelativeNamespace(expanded, selfPath);
         yield return WithCodeTypeFilter(rebased);
     }
@@ -84,7 +84,7 @@ internal class MeshNodeCompilationService(
             valueEnd++;
         var value = query.Substring(valueStart, valueEnd - valueStart);
 
-        // Relative iff it contains no path separator (e.g. "_Source").
+        // Relative iff it contains no path separator (e.g. "Source").
         if (value.Length == 0 || value.Contains('/')) return query;
 
         var rebased = $"{selfPath}/{value}";
@@ -156,7 +156,7 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Resolves @@path references in code content by fetching the referenced node's CodeConfiguration.
-    /// For example, @@FutuRe/LineOfBusiness/_Source/LineOfBusiness resolves to that node's code content.
+    /// For example, @@FutuRe/LineOfBusiness/Source/LineOfBusiness resolves to that node's code content.
     /// Resolution is transitive: if a resolved include itself contains @@references, those are resolved too.
     /// </summary>
     internal async Task<string> ResolveCodeIncludesAsync(
@@ -288,7 +288,7 @@ internal class MeshNodeCompilationService(
         }
 
         // Resolve the owning NodeTypeDefinition once — used both for source discovery
-        // (Sources / _Source convention) and for Configuration / ContentCollections.
+        // (Sources / Source convention) and for Configuration / ContentCollections.
         // - If this node IS a NodeType, "self" is its own path and we read its Content.
         // - If this node is an instance, "self" is the NodeType's path and we fetch it.
         var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
@@ -314,10 +314,10 @@ internal class MeshNodeCompilationService(
         }
 
         // Collect Code nodes from each configured source query.
-        // Default: "_Source" subtree directly under the NodeType (implicitly self-relative).
+        // Default: "Source" subtree directly under the NodeType (implicitly self-relative).
         var sourceQueries = ntDef?.Sources is { Count: > 0 } configured
             ? configured
-            : (IReadOnlyList<string>)["namespace:_Source scope:subtree"];
+            : (IReadOnlyList<string>)[$"namespace:{CodeNodeType.SourceSubNamespace} scope:subtree"];
 
         var codeFiles = new List<CodeConfiguration>();
         var matchedCodePaths = new List<string>();
@@ -352,7 +352,7 @@ internal class MeshNodeCompilationService(
             }
         }
 
-        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
+        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Source/LineOfBusiness)
         if (meshQuery != null)
         {
             for (int i = 0; i < codeFiles.Count; i++)
@@ -425,7 +425,7 @@ internal class MeshNodeCompilationService(
             sb.AppendLine($"  - {q}");
         sb.AppendLine($"Matched Code nodes ({matchedCodePaths.Count}):");
         if (matchedCodePaths.Count == 0)
-            sb.AppendLine("  (none) — the configuration lambda cannot reference types because no source files were included. Check that your _Source Code nodes exist and that the NodeType's `sources` list points at them.");
+            sb.AppendLine("  (none) — the configuration lambda cannot reference types because no source files were included. Check that your Source Code nodes exist and that the NodeType's `sources` list points at them.");
         else
             foreach (var p in matchedCodePaths)
                 sb.AppendLine($"  - {p}");

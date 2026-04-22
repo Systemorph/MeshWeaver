@@ -256,6 +256,9 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         "admin", "portal", "kernel",
         // Satellite table names that became schemas by mistake
         "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        // Code sub-namespace names that could become schemas by mistake (should never happen,
+        // but guard just in case — these are path segments under NodeTypes, not top-level namespaces)
+        "source", "test",
         // Path segments that became schemas by mistake
         "login", "markdown", "onboarding", "welcome", "settings", "storage",
         "p", "path", "mesh", "thread", "agent", "partition", "organization", "vuser",

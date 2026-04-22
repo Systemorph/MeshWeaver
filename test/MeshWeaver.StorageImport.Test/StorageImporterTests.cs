@@ -127,7 +127,7 @@ public class StorageImporterTests : IDisposable
     public async Task RecursiveImport_NodeWithSubfolder_ImportsAllChildren()
     {
         // Arrange - import only the ACME/Project subtree which contains
-        // Todo.json + TodoAgent.md + _Source/*.cs + Todo/ subfolder
+        // Todo.json + TodoAgent.md + Source/*.cs + Todo/ subfolder
         Directory.Exists(_sourceDir).Should().BeTrue($"Source directory {_sourceDir} must exist");
         var source = new FileSystemStorageAdapter(_sourceDir);
         var target = new FileSystemStorageAdapter(_targetDir);
@@ -413,7 +413,7 @@ public class StorageImporterTests : IDisposable
         var namespaceDir = Path.Combine(importDir, "ACME");
         Directory.CreateDirectory(namespaceDir);
 
-        // Copy ACME/Project/ directory (contains Todo.json, _Source/*.cs, etc.)
+        // Copy ACME/Project/ directory (contains Todo.json, Source/*.cs, etc.)
         CopyDirectory(
             Path.Combine(_sourceDir, "ACME", "Project"),
             Path.Combine(namespaceDir, "Project"));
@@ -432,7 +432,7 @@ public class StorageImporterTests : IDisposable
         // Act
         var result = await importer.ImportAsync(ct: ct);
 
-        // Assert - Project subtree: Todo.json + TodoAgent.md + _Source/*.cs
+        // Assert - Project subtree: Todo.json + TodoAgent.md + Source/*.cs
         result.NodesImported.Should().BeGreaterThanOrEqualTo(3,
             "Project subtree should have at least 3 nodes");
 

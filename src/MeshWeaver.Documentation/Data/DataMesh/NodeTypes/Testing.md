@@ -124,7 +124,7 @@ See `TodoViewsTest.CreateArea_WithTypeParam_ShouldRenderCreateForm` for a full e
 
 ## Archetype 2 — request/response / simulation
 
-When your node type wires in a custom handler — `config.AddHandler<RunSimulationRequest>(HandleRunSimulation)` in `_Source/MyHub.cs` — test it the same way the UI would invoke it: `client.AwaitResponse<TResponse>(request, o => o.WithTarget(address))`.
+When your node type wires in a custom handler — `config.AddHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it the same way the UI would invoke it: `client.AwaitResponse<TResponse>(request, o => o.WithTarget(address))`.
 
 ```csharp
 [Fact(Timeout = 15_000)]
@@ -146,13 +146,13 @@ This is the same pattern as inter-hub messaging in production, so it exercises t
 
 ## Tests for node types *without* a samples folder
 
-If your node type lives entirely in a `_Source/` under `samples/Graph/Data/MyNamespace/MyType/`, the layout-area test above already exercises the whole pipeline: load the node, compile `_Source/`, register handlers, render. Nothing extra.
+If your node type lives entirely in a `Source/` under `samples/Graph/Data/MyNamespace/MyType/`, the layout-area test above already exercises the whole pipeline: load the node, compile `Source/`, register handlers, render. Nothing extra.
 
 If your node type ships as a compiled assembly (a typed record in the portal itself, not a dynamic node), the pattern is identical — just skip the `samples/Graph` pre-copy and register the type via `builder.AddMyType()` in `ConfigureMesh`.
 
 ## NuGet-referenced node types
 
-A node type that adds `#r "nuget:..."` at the top of its `_Source/*.cs` compiles identically under `MonolithMeshTestBase` — the test's compilation path hits the same `MeshNodeCompilationService` and the same `INuGetAssemblyResolver` that the portal uses. The only prerequisite is network access to `api.nuget.org` during the test (the resolver caches so subsequent test methods in the same process are instant). See `test/MeshWeaver.Graph.Test/NodeTypeWithNuGetCompilationTest.cs` for a narrowly-scoped compilation test against `MathNet.Numerics`.
+A node type that adds `#r "nuget:..."` at the top of its `Source/*.cs` compiles identically under `MonolithMeshTestBase` — the test's compilation path hits the same `MeshNodeCompilationService` and the same `INuGetAssemblyResolver` that the portal uses. The only prerequisite is network access to `api.nuget.org` during the test (the resolver caches so subsequent test methods in the same process are instant). See `test/MeshWeaver.Graph.Test/NodeTypeWithNuGetCompilationTest.cs` for a narrowly-scoped compilation test against `MathNet.Numerics`.
 
 ## Running the tests
 
@@ -173,5 +173,5 @@ dotnet test
 ## Related
 
 - [Creating Node Types](CreatingNodeTypes) — how to build the thing you're testing
-- [NuGet Packages](NodeTypeWithNuGet) — `#r "nuget:..."` in `_Source/*.cs`
+- [NuGet Packages](NodeTypeWithNuGet) — `#r "nuget:..."` in `Source/*.cs`
 - [Interactive Markdown](InteractiveMarkdown) — test interactive markdown too

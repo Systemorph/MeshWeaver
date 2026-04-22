@@ -115,10 +115,10 @@ public record NodeTypeDefinition
     /// Locations of the Code nodes to compile with this NodeType's
     /// <see cref="Configuration"/> lambda. Each entry is either:
     /// <list type="bullet">
-    ///   <item>A mesh query — e.g. <c>"namespace:_Source scope:subtree"</c>,
-    ///     <c>"namespace:SocialMedia/Post/_Source scope:subtree"</c>. A
+    ///   <item>A mesh query — e.g. <c>"namespace:Source scope:subtree"</c>,
+    ///     <c>"namespace:SocialMedia/Post/Source scope:subtree"</c>. A
     ///     <c>namespace:X</c> with a single segment (no <c>/</c>, like
-    ///     <c>_Source</c>) is automatically rebased onto the owning NodeType's
+    ///     <c>Source</c>) is automatically rebased onto the owning NodeType's
     ///     path. The macro <c>$self</c> can be used anywhere in the query and
     ///     expands to that path.</item>
     ///   <item>A single-node shorthand — <c>"@path/to/code"</c> or
@@ -130,10 +130,10 @@ public record NodeTypeDefinition
     /// children never leak in. Matches are de-duplicated across entries.
     /// </summary>
     /// <remarks>
-    /// If null or empty, defaults to <c>["namespace:_Source scope:subtree"]</c>
-    /// — the conventional <c>_Source/</c> sibling folder. Add more entries to pull
+    /// If null or empty, defaults to <c>["namespace:Source scope:subtree"]</c>
+    /// — the conventional <c>Source/</c> sibling folder. Add more entries to pull
     /// in shared code, e.g.
-    /// <c>["namespace:_Source scope:subtree", "@SocialMedia/Post/_Source/Platform"]</c>.
+    /// <c>["namespace:Source scope:subtree", "@SocialMedia/Post/Source/Platform"]</c>.
     /// (Note: the <c>@@path</c> form used inside a <em>code file's body</em> is a
     /// separate feature — inline include — handled during code-content resolution.)
     /// </remarks>
