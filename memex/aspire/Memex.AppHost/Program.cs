@@ -143,6 +143,7 @@ var portal = builder
     .WithEnvironment("Anthropic__Models__0", "claude-sonnet-4-6")
     .WithEnvironment("Anthropic__Models__1", "claude-opus-4-7")
     .WithEnvironment("Anthropic__Models__2", "claude-haiku-4-5")
+    .WithEnvironment("Anthropic__Order", "1")
     // Model tiers: map agent tiers to concrete models
     .WithEnvironment("ModelTier__Heavy", "claude-opus-4-7")
     .WithEnvironment("ModelTier__Standard", "claude-sonnet-4-6")
@@ -152,6 +153,7 @@ var portal = builder
     .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
     .WithEnvironment("AzureOpenAIS__Models__0", "gpt-5-mini")
     .WithEnvironment("AzureOpenAIS__Models__1", "gpt-5.4")
+    .WithEnvironment("AzureOpenAIS__Order", "2")
     // LLM: Azure AI Foundry (multi-model inference endpoint)
     .WithEnvironment("AzureAIS__Endpoint", "https://fy-meshweaver3-dev-swc-001.services.ai.azure.com/models")
     .WithEnvironment("AzureAIS__ApiKey", azureFoundryKey)
@@ -159,7 +161,7 @@ var portal = builder
     .WithEnvironment("AzureAIS__Models__1", "gpt-5.3-codex")
     .WithEnvironment("AzureAIS__Models__2", "Mistral-Large-3")
     .WithEnvironment("AzureAIS__Models__3", "DeepSeek-V3.2")
-    .WithEnvironment("AzureAIS__Order", "1")
+    .WithEnvironment("AzureAIS__Order", "0")
     // Authentication
     .WithEnvironment("Authentication__EnableDevLogin", mode != "prod" ? "true" : "false")
     .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)

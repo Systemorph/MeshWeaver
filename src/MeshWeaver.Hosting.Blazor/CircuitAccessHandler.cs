@@ -147,22 +147,19 @@ public class CircuitAccessHandler : CircuitHandler
     {
         try
         {
-            // Use IMeshQueryCore (no access control) — this is an infrastructure lookup
-            // during login, before the user's identity is established.
-            var queryCore = _hub.ServiceProvider.GetService<IMeshQueryCore>();
-            if (queryCore == null)
+            // Impersonate as the hub identity for this lookup — the user's access context
+            // isn't established yet during login, so we use the hub's system-level identity
+            // to query the User namespace for email-to-ObjectId resolution.
+            var accessService = _hub.ServiceProvider.GetService<AccessService>();
+            if (accessService == null)
                 return null;
 
-            var request = new MeshQueryRequest
+            using (accessService.ImpersonateAsHub(_hub))
             {
-                Query = $"$type:MeshNode nodeType:User namespace:User content.email:{email} limit:1"
-            };
-            await foreach (var item in queryCore.QueryAsync(request, _hub.JsonSerializerOptions))
-            {
-                if (item is MeshNode node)
-                    return node;
+                var meshService = _hub.ServiceProvider.GetRequiredService<IMeshService>();
+                return await meshService.QueryAsync<MeshNode>(
+                    $"nodeType:User namespace:User content.email:{email} limit:1").FirstOrDefaultAsync();
             }
-            return null;
         }
         catch (Exception ex)
         {

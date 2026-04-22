@@ -264,3 +264,159 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
         }
     }
 }
+
+/// <summary>
+/// Tests that the User hub grants read access to authenticated users via HubPermissionRuleSet.
+/// Reproduces deployed test environment error:
+/// "Access denied: user 'sglauser@systemorph.com' lacks Read permission on 'User'"
+/// The fix: WithUserNodePublicRead() must register AddHubPermissionRule (not just AddAccessRule).
+/// </summary>
+public class UserHubAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddGraph()
+            .AddSampleUsers();
+
+    [Fact(Timeout = 10000)]
+    public async Task AuthenticatedUser_CanReadUserHub()
+    {
+        // Simulate an unprivileged authenticated user (no Admin role, no explicit access assignments)
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetCircuitContext(new AccessContext { ObjectId = "unprivileged@example.com", Name = "Unprivileged User" });
+
+        var response = await Mesh.AwaitResponse(
+            new GetDataRequest(new UnifiedReference("data:")),
+            o => o.WithTarget(new Address("User")),
+            TestContext.Current.CancellationToken);
+
+        // Should not be blocked by AccessControlPipeline
+        response.Message.Error.Should().NotContain("Access denied",
+            "authenticated user should have Read access to User hub via HubPermissionRuleSet");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task AnonymousUser_CannotReadUserHub()
+    {
+        // Anonymous (empty userId) should be denied
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetCircuitContext(new AccessContext { ObjectId = "", Name = "" });
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await Mesh.AwaitResponse(
+                new GetDataRequest(new UnifiedReference("data:")),
+                o => o.WithTarget(new Address("User")),
+                TestContext.Current.CancellationToken));
+
+        ex.InnerException.Should().BeOfType<DeliveryFailureException>();
+        ex.InnerException!.Message.Should().Contain("Access denied");
+    }
+}
+
+/// <summary>
+/// Tests the self-scope fallback in SecurityService: a user always has Admin
+/// permissions on their own User/{userId} scope and its children, without
+/// needing explicit AccessAssignment nodes.
+/// </summary>
+public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => ConfigureMeshBase(builder); // No PublicAdminAccess — pure RLS
+
+    [Fact(Timeout = 10000)]
+    public async Task UserAccessingOwnScope_ReturnsAdmin()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "User/alice", "alice", TestContext.Current.CancellationToken);
+
+        permissions.Should().HaveFlag(Permission.Read);
+        permissions.Should().HaveFlag(Permission.Create);
+        permissions.Should().HaveFlag(Permission.Update);
+        permissions.Should().HaveFlag(Permission.Delete);
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task UserAccessingOwnChild_ReturnsAdmin()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "User/bob/_Thread/t1", "bob", TestContext.Current.CancellationToken);
+
+        permissions.Should().HaveFlag(Permission.Read);
+        permissions.Should().HaveFlag(Permission.Create);
+        permissions.Should().HaveFlag(Permission.Update);
+        permissions.Should().HaveFlag(Permission.Delete);
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task AnonymousAccessingUserScope_NoFallback()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "User/alice", WellKnownUsers.Anonymous, TestContext.Current.CancellationToken);
+
+        permissions.Should().Be(Permission.None,
+            "Anonymous should not get self-scope fallback on another user's scope");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task PublicAccessingUserScope_NoFallback()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "User/alice", WellKnownUsers.Public, TestContext.Current.CancellationToken);
+
+        permissions.Should().Be(Permission.None,
+            "Public should not get self-scope fallback on another user's scope");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task UserAccessingOtherUserScope_NoFallback()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "User/alice", "bob", TestContext.Current.CancellationToken);
+
+        permissions.Should().Be(Permission.None,
+            "bob should not have any permissions on alice's scope without explicit assignment");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task UserWithExplicitAdmin_FallbackIsNoOp()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Give charlie explicit Admin on User/charlie
+        await securityService.AddUserRoleAsync(
+            "charlie", "Admin", "User/charlie", "system",
+            TestContext.Current.CancellationToken);
+
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "User/charlie", "charlie", TestContext.Current.CancellationToken);
+
+        permissions.Should().HaveFlag(Permission.Read);
+        permissions.Should().HaveFlag(Permission.Create);
+        permissions.Should().HaveFlag(Permission.Update);
+        permissions.Should().HaveFlag(Permission.Delete);
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task CaseInsensitivePath_Works()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Path uses lowercase "user" instead of "User"
+        var permissions = await securityService.GetEffectivePermissionsAsync(
+            "user/alice/child", "alice", TestContext.Current.CancellationToken);
+
+        permissions.Should().HaveFlag(Permission.Read,
+            "self-scope fallback should be case-insensitive on path prefix");
+        permissions.Should().HaveFlag(Permission.Create);
+    }
+}
