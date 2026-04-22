@@ -75,14 +75,15 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateTools();
 
         tools.Should().NotBeNull();
-        // Read-only tools: Get, Search, NavigateTo, GetDiagnostics
-        tools.Should().HaveCount(4);
+        // Read-only tools: Get, Search, NavigateTo, GetDiagnostics, RunTests
+        tools.Should().HaveCount(5);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
         toolNames.Should().Contain("Search");
         toolNames.Should().Contain("NavigateTo");
         toolNames.Should().Contain("GetDiagnostics");
+        toolNames.Should().Contain("RunTests");
         toolNames.Should().NotContain("Create");
         toolNames.Should().NotContain("Update");
         toolNames.Should().NotContain("Delete");
@@ -97,8 +98,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateAllTools();
 
         tools.Should().NotBeNull();
-        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete, GetDiagnostics, Recycle
-        tools.Should().HaveCount(9);
+        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete, Move, Copy, GetDiagnostics, Recycle, RunTests
+        tools.Should().HaveCount(12);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
@@ -108,8 +109,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("Update");
         toolNames.Should().Contain("Patch");
         toolNames.Should().Contain("Delete");
+        toolNames.Should().Contain("Move");
+        toolNames.Should().Contain("Copy");
         toolNames.Should().Contain("GetDiagnostics");
         toolNames.Should().Contain("Recycle");
+        toolNames.Should().Contain("RunTests");
     }
 
     #endregion

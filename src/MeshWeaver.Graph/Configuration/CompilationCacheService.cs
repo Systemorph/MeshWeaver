@@ -59,6 +59,15 @@ internal interface ICompilationCacheService
     void InvalidateCache(string nodeName);
 
     /// <summary>
+    /// Clears the sticky-invalidation flag for a node after a fresh compile has
+    /// successfully written new cache artifacts. Without this call, a recompile
+    /// triggered by <see cref="InvalidateCache"/> would force the next
+    /// <see cref="IsCacheValid"/> to return false even though the just-written
+    /// DLL is already fresh — causing an unnecessary second compile.
+    /// </summary>
+    void MarkCacheFresh(string nodeName);
+
+    /// <summary>
     /// Gets all cached assembly paths (DLLs) in the cache directory.
     /// </summary>
     IEnumerable<string> GetAllCachedAssemblyPaths();
@@ -584,6 +593,9 @@ internal class CompilationCacheService(
             }
         }
     }
+
+    /// <inheritdoc />
+    public void MarkCacheFresh(string nodeName) => _invalidated.TryRemove(nodeName, out _);
 
     /// <inheritdoc />
     public IEnumerable<string> GetAllCachedAssemblyPaths()
