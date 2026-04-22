@@ -255,8 +255,8 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// Builds the header with icon and click-to-edit title.
-    /// When canEdit is true, the icon is clickable to open a file browser for uploading a new icon/photo.
+    /// Builds the header with the node's icon and title.
+    /// When canEdit is true, the title is click-to-edit (icon edits live in Settings &gt; Display).
     /// </summary>
     internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
@@ -296,19 +296,7 @@ public static class MeshNodeLayoutAreas
                     $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 36px;\">{System.Web.HttpUtility.HtmlEncode(iconValue)}</div>");
             }
 
-            if (canEdit)
-                iconControl = BuildEditableIcon(host, node, iconControl);
-
             titleContent = titleContent.WithView(iconControl);
-        }
-        else if (canEdit)
-        {
-            // Show a placeholder icon that can be clicked to upload
-            var placeholderIcon = Controls.Html(
-                "<div style=\"width: 48px; height: 48px; border-radius: 8px; border: 2px dashed var(--neutral-stroke-rest); " +
-                "display: flex; align-items: center; justify-content: center; color: var(--neutral-foreground-hint); font-size: 20px; " +
-                "cursor: pointer;\" title=\"Click to set icon\">&#x1F4F7;</div>");
-            titleContent = titleContent.WithView(BuildEditableIcon(host, node, placeholderIcon));
         }
 
         // Check if content has Title property for click-to-edit
@@ -342,99 +330,6 @@ public static class MeshNodeLayoutAreas
             .WithView(titleContent);
     }
 
-
-    /// <summary>
-    /// Wraps an icon control with a hover overlay and click handler to open a dialog
-    /// for uploading a new icon/photo. The dialog shows a file browser for the "content" collection
-    /// and a text field to set the icon path. Upload a file, then set the path to link it.
-    /// </summary>
-    private static UiControl BuildEditableIcon(LayoutAreaHost host, MeshNode? node, UiControl iconControl)
-    {
-        var nodePath = node?.Path ?? host.Hub.Address.ToString();
-
-        // Wrap icon in a container with hover overlay
-        var wrapper = Controls.Stack
-            .WithStyle("position: relative; width: 48px; height: 48px; cursor: pointer; border-radius: 8px; overflow: hidden;")
-            .WithView(iconControl)
-            .WithView(Controls.Html(
-                "<div style=\"position: absolute; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; " +
-                "justify-content: center; opacity: 0; transition: opacity 0.2s; border-radius: 8px;\" " +
-                "onmouseover=\"this.style.opacity='1'\" onmouseout=\"this.style.opacity='0'\">" +
-                "<span style=\"color: white; font-size: 18px;\">&#x270F;</span></div>"))
-            .WithClickAction(ctx =>
-            {
-                OpenChangeIconDialog(ctx.Host, node, nodePath);
-            });
-
-        return wrapper;
-    }
-
-    /// <summary>
-    /// Opens a dialog to change the node's icon. Contains a file browser for uploading images
-    /// and a text field for setting the icon path. After uploading, the user enters the file path
-    /// and clicks Save to update the node's Icon.
-    /// Can be called from custom layout areas (e.g., Organization overview).
-    /// </summary>
-    public static void OpenChangeIconDialog(LayoutAreaHost host, MeshNode? node, string nodePath)
-    {
-        var iconDataId = $"changeIcon_{nodePath.Replace("/", "_")}";
-        host.UpdateData(iconDataId, new Dictionary<string, object?> { ["iconPath"] = node?.Icon ?? "" });
-
-        var content = Controls.Stack.WithStyle("gap: 16px; padding: 8px;");
-
-        // Instructions
-        content = content.WithView(Controls.Html(
-            "<p style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem; margin: 0;\">" +
-            "Upload an image using the file browser below, then enter or paste the file path and click Save.</p>"));
-
-        // Icon path text field
-        content = content.WithView(new TextFieldControl(new JsonPointerReference("iconPath"))
-        {
-            Label = "Icon Path",
-            Placeholder = "e.g., /static/storage/content/image.png",
-            Immediate = true,
-            DataContext = LayoutAreaReference.GetDataPointer(iconDataId)
-        });
-
-        // File browser for the first editable content collection
-        var iconContentService = host.Hub.ServiceProvider.GetService<IContentService>();
-        var iconCollection = iconContentService?.GetAllCollectionConfigs()?.FirstOrDefault(c => c.IsEditable);
-        if (iconCollection != null)
-            content = content.WithView(new FileBrowserControl(iconCollection.Name) { Path = "/" }
-                .WithTopLevel("/").WithCollectionConfiguration(iconCollection).CreatePath());
-
-        // Save button
-        var actions = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; justify-content: flex-end;")
-            .WithView(Controls.Button("Save")
-                .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
-                {
-                    var iconPath = "";
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(iconDataId)
-                        .Take(1)
-                        .Subscribe(data => iconPath = data?.GetValueOrDefault("iconPath")?.ToString()?.Trim() ?? "");
-
-                    if (node != null && !string.IsNullOrEmpty(iconPath))
-                    {
-                        var updatedNode = node with { Icon = iconPath };
-                        ctx.Host.Hub.Post(
-                            new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
-                            o => o.WithTarget(ctx.Host.Hub.Address));
-                    }
-
-                    // Close dialog
-                    ctx.Host.UpdateArea(DialogControl.DialogArea, null);
-                }));
-
-        var dialog = Controls.Dialog(content, "Change Icon")
-            .WithSize("L")
-            .WithClosable(true)
-            .WithActions(actions);
-
-        host.UpdateArea(DialogControl.DialogArea, dialog);
-    }
 
     /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.
@@ -640,7 +535,7 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> Search(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var isNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
+        var configuredNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
 
         // Get search term from query string (if present)
         var searchTerm = host.GetQueryStringParamValue("q")?.Trim();
@@ -652,6 +547,15 @@ public static class MeshNodeLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+
+            // NodeType catalog mode is used when either:
+            //  (a) the hub opts in via NodeTypeCatalogMode (e.g. AddNodeTypeView), or
+            //  (b) the node itself is a NodeType instance (NodeType = "NodeType") —
+            //      so types declared with only AddDefaultLayoutAreas still render as
+            //      catalogs of their instances instead of falling through to the
+            //      generic namespace search.
+            var isNodeTypeMode = configuredNodeTypeMode
+                || node?.NodeType == MeshNode.NodeTypePath;
 
             // For NodeType mode, query instances under this NodeType's namespace.
             // Uses the node's own path as namespace to correctly scope to local instances.

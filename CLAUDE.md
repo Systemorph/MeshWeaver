@@ -238,6 +238,24 @@ public async Task<IMessageDelivery> HandleFoo(IMessageDelivery<FooRequest> req)
 
 **Everywhere else, the shape is `Subscribe(onNext, onError)`.** If a service you need only exposes `…Async` / `Task<T>`, add a reactive overload that returns `IObservable<T>` and refactor.
 
+## Mesh URL shape
+
+Browser URLs are `{baseUrl}/{meshpath}` — the mesh path is appended directly to the base URL. **No `/node/` segment, no URL-escaping of path separators.**
+
+| Environment | Base URL |
+|---|---|
+| Prod | `https://memex.meshweaver.cloud` |
+| Dev | `http://localhost:5000` (Memex.Portal.Monolith) |
+| Test | Same host as the deployed test ACA |
+
+Examples:
+
+- Prod ACME Pricing: `https://memex.meshweaver.cloud/Systemorph/FutuRe/EuropeRe/AcmeSubmission2025`
+- Prod ACME Pricing Triangle view: `https://memex.meshweaver.cloud/Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Triangle`
+- A content-collection file: `https://memex.meshweaver.cloud/Systemorph/FutuRe/EuropeRe/content/LargeClaims.xlsx`
+
+The MCP server's `NavigateTo` tool and the `GetBaseUrl` tool both honour this shape. If you ever see a URL like `{host}/node/Foo%2FBar` in agent output, it's a bug — `NavigateTo` should return `{host}/Foo/Bar` with real slashes.
+
 ## `@/` is Local-Only — Never in HTTP URLs or href Attributes
 
 The `@/path` prefix is a **Unified Content Reference (UCR)** used exclusively for:

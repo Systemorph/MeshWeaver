@@ -29,9 +29,32 @@ public class McpMeshPlugin
     }
 
     [McpServerTool]
-    [Description("Retrieves a node from the mesh by path. Supports @ prefix shorthand, /* for children, and Unified Path prefixes (path/schema:, path/model:).")]
+    [Description(@"Retrieves a node or a resource attached to a node by path. Returns JSON for nodes/data/schemas, or raw file bytes (JSON-escaped) for content-collection files.
+
+Path shapes:
+  • `@Node/Path`               — the MeshNode itself (metadata + Content)
+  • `@Node/Path/*`             — immediate children of the node
+  • `@Node/Path/data/`         — node Content as structured JSON (whole model)
+  • `@Node/Path/data/Type/id`  — one entity from the node's data collection
+  • `@Node/Path/schema/`       — JSON Schema of the node's Content type
+  • `@Node/Path/schema/Type`   — schema for a specific type
+  • `@Node/Path/model/`        — full data model with all registered types
+  • `@Node/Path/layoutAreas/`  — list of layout areas on the node
+  • `@Node/Path/area/Name`     — that layout area's rendered payload
+  • `@Node/Path/content/file.ext`            — file from the 'content' collection
+  • `@Node/Path/content/subfolder/file.ext`  — file from a nested path
+  • `@Node/Path/{collection}/file.ext`       — file from a NAMED collection (e.g. 'Files/', 'assets/')
+  • `@Node/Path/collection/`                 — list of collection configs on the node
+  • `@Node/Path/collection/name1,name2`      — specific collection configs
+Legacy colon form `path/prefix:value` still works for backward compatibility.")]
     public Task<string> Get(
-        [Description("Path to data (e.g., @graph/org1, @Agent/*, @Cornerstone/schema:, @Cornerstone/schema:TypeName, @Cornerstone/model:)")] string path)
+        [Description(@"Path to data. Examples:
+  @graph/org1                                   (node)
+  @Agent/*                                      (children)
+  @Systemorph/FutuRe/EuropeRe/content/LargeClaims.xlsx  (file from 'content' collection)
+  @Doc/Architecture/content/icon.svg            (file)
+  @Cornerstone/schema/TypeName                  (schema)
+  @Cornerstone/model/                           (full model)")] string path)
         => ops.Get(path);
 
     [McpServerTool]
@@ -82,15 +105,19 @@ public class McpMeshPlugin
         => ops.Copy(sourcePath, targetNamespace, force);
 
     [McpServerTool]
-    [Description("Returns a URL to view a node in the MeshWeaver UI. Use this to provide links for users to open in their browser.")]
+    [Description("Returns a URL to view a node in the MeshWeaver UI. The URL shape is `{baseUrl}/{path}` — the mesh path is appended directly to the base URL with no intermediate segment (no `/node/`) and without URL-escaping the path separators. Use this when you want to give a user a link to open in their browser. For the base URL on its own, use `GetBaseUrl`.")]
     public string NavigateTo(
-        [Description("Path to navigate to (e.g., @graph/org1)")] string path)
+        [Description("Path to navigate to (e.g., @Systemorph/FutuRe/EuropeRe). Leading `@` is stripped.")] string path)
     {
         logger.LogInformation("MCP NavigateTo called with path={Path}", path);
 
         var resolvedPath = MeshOperations.ResolvePath(path);
-        return $"{baseUrl}/node/{Uri.EscapeDataString(resolvedPath)}";
+        return $"{baseUrl.TrimEnd('/')}/{resolvedPath.TrimStart('/')}";
     }
+
+    [McpServerTool]
+    [Description("Returns the MeshWeaver UI base URL configured for this MCP server (e.g. `https://memex.meshweaver.cloud` in prod, `http://localhost:5000` in dev). Every node's browser URL is just `{baseUrl}/{meshpath}` — no `/node/` segment, no URL-escaping of path separators.")]
+    public string GetBaseUrl() => baseUrl.TrimEnd('/');
 
     [McpServerTool]
     [Description("Returns compilation diagnostics for a NodeType (or any instance of one). Status is 'Ok' when the type compiled cleanly, 'Error' with details when it failed, 'Compiling' while a compile is in progress (with elapsedMs), or 'Unknown' when no compile has happened yet. Use after creating/updating a NodeType to verify it actually compiles — a NodeType that doesn't compile is not 'done'.")]

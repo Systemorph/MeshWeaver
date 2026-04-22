@@ -415,13 +415,24 @@ public static class SettingsLayoutArea
             DataContext = dataPointer
         });
 
-        stack = stack.WithView(new TextAreaControl(new JsonPointerReference("Description"))
-        {
-            Label = "Description",
-            Placeholder = "Long-form description. Seeds AI Name/Id/Icon generation and appears in detail views.",
-            Immediate = true,
-            DataContext = dataPointer
-        }.WithRows(3));
+        // Description + Generate button on its own row, matching the icon layout below.
+        stack = stack.WithView(Controls.Stack
+            .WithStyle("gap: 8px;")
+            .WithView(new TextAreaControl(new JsonPointerReference("Description"))
+            {
+                Label = "Description",
+                Placeholder = "Long-form description. Seeds AI Name/Id/Icon generation and appears in detail views.",
+                Immediate = true,
+                DataContext = dataPointer
+            }.WithRows(3))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithStyle("justify-content: flex-end;")
+                .WithView(Controls.Button("Generate")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Sparkle())
+                    .WithClickAction(actx => RegenerateDescriptionFromMetadata(actx, dataId)))));
 
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Category"))
         {
@@ -446,6 +457,7 @@ public static class SettingsLayoutArea
     {
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.ToList() ?? [];
+        var editableCollection = collections.FirstOrDefault(c => c.IsEditable);
         var metadataPointer = LayoutAreaReference.GetDataPointer(metadataDataId);
 
         var section = Controls.Stack.WithStyle("gap: 8px;");
@@ -466,10 +478,48 @@ public static class SettingsLayoutArea
                         ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
                         : CreateLayoutArea.BuildIconPreview(icon);
                 }))
-            .WithView(Controls.Button("Regenerate")
+            .WithView(Controls.Button("Generate")
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
                 .WithClickAction(actx => RegenerateIconFromMetadata(actx, metadataDataId))));
+
+        section = section.WithView(new TextFieldControl(new JsonPointerReference("Icon"))
+        {
+            Label = "Icon Path",
+            Placeholder = "content:logo.png, /static/…, data:image/svg+xml;… or an absolute URL",
+            Immediate = true,
+            DataContext = metadataPointer
+        });
+
+        // Quick-pick row — after uploading a file via the browser below, type its name here
+        // and click "Use as Icon". Writes "content:<filename>" which resolves to the node's
+        // content collection at render time.
+        if (editableCollection != null)
+        {
+            var quickPickDataId = $"iconQuickPick_{metadataDataId}";
+            host.UpdateData(quickPickDataId, new Dictionary<string, object?> { ["fileName"] = "" });
+
+            section = section.WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(8)
+                .WithStyle("align-items: flex-end;")
+                .WithView(new TextFieldControl(new JsonPointerReference("fileName"))
+                {
+                    Label = "Filename in content collection",
+                    Placeholder = "logo.png",
+                    Immediate = true,
+                    DataContext = LayoutAreaReference.GetDataPointer(quickPickDataId)
+                }.WithStyle("flex: 1;"))
+                .WithView(Controls.Button("Use as Icon")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(actx => UseFileAsIcon(actx, metadataDataId, quickPickDataId))));
+        }
+
+        section = section.WithView(Controls.Body(
+            "Tip: upload an image via the browser below, then type its filename and click \"Use as Icon\" — " +
+            "or type \"content:logo.png\" directly. You can also paste an absolute URL, an inline <svg>…</svg>, " +
+            "or a data:image/svg+xml URI. Click \"Generate\" to have the Node Initializer agent craft one from Name + Description.")
+            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-top: 4px;"));
 
         if (collections.Count > 0)
         {
@@ -478,7 +528,8 @@ public static class SettingsLayoutArea
                 .ToArray();
 
             var pickerDataId = $"iconPicker_{metadataDataId}";
-            host.UpdateData(pickerDataId, new Dictionary<string, object?> { ["collection"] = "" });
+            var defaultCollection = editableCollection?.Name ?? "";
+            host.UpdateData(pickerDataId, new Dictionary<string, object?> { ["collection"] = defaultCollection });
             host.UpdateData($"{pickerDataId}_options", collectionOptions);
 
             section = section.WithView(new ComboboxControl(
@@ -486,7 +537,7 @@ public static class SettingsLayoutArea
                 new JsonPointerReference(LayoutAreaReference.GetDataPointer($"{pickerDataId}_options")))
             {
                 Label = "Browse Collection",
-                Placeholder = "Select a collection to browse icons...",
+                Placeholder = "Select a collection to browse images...",
                 Autocomplete = ComboboxAutocomplete.Both,
                 DataContext = LayoutAreaReference.GetDataPointer(pickerDataId)
             });
@@ -502,19 +553,42 @@ public static class SettingsLayoutArea
                     }));
         }
 
-        section = section.WithView(new TextFieldControl(new JsonPointerReference("Icon"))
-        {
-            Label = "Icon Path",
-            Placeholder = "e.g., /static/collection/icon.svg, or an inline data:image/svg+xml URI",
-            Immediate = true,
-            DataContext = metadataPointer
-        });
-
-        section = section.WithView(Controls.Body(
-            "Upload an image via the file browser above, paste a URL, paste an inline SVG data: URI, or click Regenerate to have the Node Initializer agent craft one from Name + Description.")
-            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-top: 4px;"));
-
         return section;
+    }
+
+    /// <summary>
+    /// Click handler for the quick-pick "Use as Icon" button: reads the filename the user
+    /// typed, writes <c>content:&lt;filename&gt;</c> into the metadata's Icon field. The
+    /// icon resolver turns that into <c>/static/storage/content/{nodePath}/{filename}</c>
+    /// at render time.
+    /// </summary>
+    private static Task UseFileAsIcon(UiActionContext actx, string metadataDataId, string quickPickDataId)
+    {
+        actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(quickPickDataId)
+            .Take(1)
+            .Subscribe(data =>
+            {
+                var fileName = data?.GetValueOrDefault("fileName")?.ToString()?.Trim() ?? "";
+                if (string.IsNullOrEmpty(fileName))
+                {
+                    ShowSettingsErrorDialog(actx, "Use as Icon",
+                        "Type the filename (e.g. \"logo.png\") after uploading it to the content collection.");
+                    return;
+                }
+
+                // Accept a leading slash and strip it; users may paste paths copied from the browser.
+                fileName = fileName.TrimStart('/');
+                var iconRef = $"content:{fileName}";
+
+                actx.Host.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
+                    .Take(1)
+                    .Subscribe(meta =>
+                    {
+                        var updated = (meta ?? new MeshNodeMetadata()) with { Icon = iconRef };
+                        actx.Host.UpdateData(metadataDataId, updated);
+                    });
+            });
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -553,6 +627,44 @@ public static class SettingsLayoutArea
                         actx.Host.UpdateData(metadataDataId, updated);
                     },
                     ex => ShowSettingsErrorDialog(actx, "Icon Generation Failed", ex.Message));
+            });
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Click handler for the Generate-description button in the Settings Display section.
+    /// Reads Name + Category from the MeshNodeMetadata stream, invokes the
+    /// IDescriptionGenerator, and writes the resulting text back into the metadata object
+    /// so the auto-save subscription persists it on the node.
+    /// </summary>
+    private static Task RegenerateDescriptionFromMetadata(UiActionContext actx, string metadataDataId)
+    {
+        var generator = actx.Host.Hub.ServiceProvider.GetService<IDescriptionGenerator>();
+        if (generator == null)
+        {
+            ShowSettingsErrorDialog(actx, "Generate Description",
+                "Description generator service is not registered. Call AddAgentChatServices().");
+            return Task.CompletedTask;
+        }
+        actx.Host.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
+            .Take(1)
+            .Subscribe(meta =>
+            {
+                var name = meta?.Name ?? "";
+                var category = meta?.Category;
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    ShowSettingsErrorDialog(actx, "Generate Description",
+                        "Enter a Name first — the agent uses it to write the description.");
+                    return;
+                }
+                generator.GenerateDescriptionAsync(name, category).Subscribe(
+                    description =>
+                    {
+                        var updated = (meta ?? new MeshNodeMetadata()) with { Description = description };
+                        actx.Host.UpdateData(metadataDataId, updated);
+                    },
+                    ex => ShowSettingsErrorDialog(actx, "Description Generation Failed", ex.Message));
             });
         return Task.CompletedTask;
     }
