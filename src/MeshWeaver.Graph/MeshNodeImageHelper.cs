@@ -23,23 +23,37 @@ public static class MeshNodeImageHelper
     /// Resolves a node's icon for rendering, handling content: references relative to the node path.
     /// E.g., "content:icon.svg" on node "Org/Project" → "/static/storage/content/Org/Project/icon.svg"
     /// </summary>
-    public static string? ResolveNodeIcon(MeshNode? node)
+    public static string? ResolveNodeIcon(MeshNode? node) =>
+        node == null ? null : ResolveContentPath(node.Icon, node.Path);
+
+    /// <summary>
+    /// Resolves a user-entered image path to an absolute URL, interpreting bare
+    /// <c>content:filename.ext</c> and <c>content/filename.ext</c> (both without a leading slash)
+    /// as the node's content collection. Returns the original value for absolute URLs, data URIs,
+    /// and inline SVG — and null for legacy Fluent icon names.
+    /// </summary>
+    public static string? ResolveContentPath(string? value, string? nodePath)
     {
-        if (node == null || string.IsNullOrEmpty(node.Icon))
+        if (string.IsNullOrEmpty(value))
             return null;
 
-        var icon = node.Icon;
-
-        // Resolve content: references to absolute URL
-        if (icon.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+        // "content:filename.ext" — documented canonical form.
+        if (value.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
         {
-            var fileName = icon["content:".Length..];
-            var nodePath = node.Path;
+            var fileName = value["content:".Length..];
             if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(nodePath))
                 return $"/static/storage/content/{nodePath}/{fileName}";
         }
 
-        return GetIconForRendering(icon);
+        // "content/filename.ext" — natural bare form many users type after browsing the collection.
+        if (value.StartsWith("content/", StringComparison.OrdinalIgnoreCase))
+        {
+            var fileName = value["content/".Length..];
+            if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(nodePath))
+                return $"/static/storage/content/{nodePath}/{fileName}";
+        }
+
+        return GetIconForRendering(value);
     }
 
     /// <summary>

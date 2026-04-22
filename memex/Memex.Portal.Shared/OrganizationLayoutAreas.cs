@@ -4,7 +4,6 @@ using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 
 namespace Memex.Portal.Shared;
 
@@ -29,24 +28,20 @@ public static class OrganizationLayoutAreas
             ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
             ?? Observable.Return<MeshNode?>(null);
 
-        return orgStream.CombineLatest(nodeStream).SelectMany(async t =>
+        return orgStream.CombineLatest(nodeStream).Select(t =>
         {
             var (org, node) = t;
             if (org == null && node == null)
                 return Controls.Markdown("*Loading...*") as UiControl;
 
-            var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-            var canEdit = perms.HasFlag(Permission.Update);
-            return BuildOrganizationView(host, org, node, hubPath, canEdit);
+            return BuildOrganizationView(host, org, node);
         });
     }
 
     private static UiControl BuildOrganizationView(
         LayoutAreaHost host,
         Organization? org,
-        MeshNode? node,
-        string hubPath,
-        bool canEdit = false)
+        MeshNode? node)
     {
         var name = org?.Name ?? node?.Name ?? "Organization";
         var description = org?.Description;
@@ -80,10 +75,6 @@ public static class OrganizationLayoutAreas
                 $"{System.Web.HttpUtility.HtmlEncode(initials)}</div>");
         }
 
-        if (canEdit)
-        {
-            logoControl = BuildEditableLogo(host, node, logoControl);
-        }
         headerRow = headerRow.WithView(logoControl);
 
         // Info column (flex: 1 to take remaining space)
@@ -162,30 +153,6 @@ public static class OrganizationLayoutAreas
             LayoutAreaControl.Children(host.Hub));
 
         return container;
-    }
-
-    /// <summary>
-    /// Wraps the logo control with a hover overlay and click handler to open a file browser
-    /// for uploading a new logo/icon. Reuses the same dialog pattern as BuildHeader's editable icon.
-    /// </summary>
-    private static UiControl BuildEditableLogo(LayoutAreaHost host, MeshNode? node, UiControl logoControl)
-    {
-        var nodePath = node?.Path ?? host.Hub.Address.ToString();
-
-        var wrapper = Controls.Stack
-            .WithStyle("position: relative; width: 100px; height: 100px; cursor: pointer; border-radius: 12px; overflow: hidden; flex-shrink: 0;")
-            .WithView(logoControl)
-            .WithView(Controls.Html(
-                "<div style=\"position: absolute; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; " +
-                "justify-content: center; opacity: 0; transition: opacity 0.2s; border-radius: 12px;\" " +
-                "onmouseover=\"this.style.opacity='1'\" onmouseout=\"this.style.opacity='0'\">" +
-                "<span style=\"color: white; font-size: 24px;\">&#x270F;</span></div>"))
-            .WithClickAction(ctx =>
-            {
-                MeshNodeLayoutAreas.OpenChangeIconDialog(ctx.Host, node, nodePath);
-            });
-
-        return wrapper;
     }
 
     private static string? GetNodeLogo(MeshNode? node)

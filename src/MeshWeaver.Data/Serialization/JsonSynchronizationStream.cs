@@ -39,6 +39,64 @@ public static class JsonSynchronizationStream
         }
     }
 
+    /// <summary>
+    /// Subscribes to the mesh change feed (resolved via reflection to avoid a
+    /// Data → Mesh.Contract → Layout → Data project cycle) and invokes
+    /// <paramref name="onOwnerChanged"/> when an event's Path equals the owner's
+    /// address string. Returns null if no change-feed service is registered.
+    /// </summary>
+    private static IDisposable? TrySubscribeOwnerPathChangeFeed(
+        IServiceProvider serviceProvider, ILogger logger, string ownerPath, Action onOwnerChanged)
+    {
+        try
+        {
+            var feedType = Type.GetType(
+                "MeshWeaver.Mesh.Services.IMeshChangeFeed, MeshWeaver.Mesh.Contract",
+                throwOnError: false);
+            if (feedType is null) return null;
+            var feed = serviceProvider.GetService(feedType);
+            if (feed is null) return null;
+
+            var eventType = Type.GetType(
+                "MeshWeaver.Mesh.Services.MeshChangeEvent, MeshWeaver.Mesh.Contract",
+                throwOnError: false);
+            if (eventType is null) return null;
+            var pathProp = eventType.GetProperty("Path");
+            if (pathProp is null) return null;
+
+            var helper = typeof(JsonSynchronizationStream).GetMethod(
+                nameof(SubscribeOwnerPathChangeFeedHelper),
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                .MakeGenericMethod(eventType);
+            return (IDisposable?)helper.Invoke(null, [feed, pathProp, ownerPath, onOwnerChanged]);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Stream subscriber could not attach MeshChangeFeed listener for {Owner} — falling back to heartbeat-only resubscribe.",
+                ownerPath);
+            return null;
+        }
+    }
+
+    private static IDisposable? SubscribeOwnerPathChangeFeedHelper<TEvent>(
+        object feed, System.Reflection.PropertyInfo pathProperty, string ownerPath, Action onOwnerChanged)
+        where TEvent : class
+    {
+        Action<TEvent> handler = evt =>
+        {
+            try
+            {
+                if (pathProperty.GetValue(evt) is string p
+                    && string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase))
+                    onOwnerChanged();
+            }
+            catch { /* keep change-feed alive on handler faults */ }
+        };
+        var subscribe = feed.GetType().GetMethod("Subscribe");
+        return (IDisposable?)subscribe!.Invoke(feed, [handler, null]);
+    }
+
     internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         this IWorkspace workspace,
         Address owner,
@@ -172,6 +230,51 @@ public static class JsonSynchronizationStream
             var cts = new CancellationTokenSource();
             IDisposable? sub = null;
             var resubscribing = 0;
+
+            void Resubscribe(string reason)
+            {
+                if (Interlocked.Exchange(ref resubscribing, 1) != 0) return;
+
+                logger.LogInformation(
+                    "Stream {StreamId}: owner {Owner} {Reason} — resubscribing for fresh snapshot.",
+                    reduced.StreamId, owner, reason);
+
+                var resubIdentity = accessService?.Context?.ObjectId
+                                     ?? accessService?.CircuitContext?.ObjectId;
+                var resub = hub.Post(
+                    new SubscribeRequest(reduced.StreamId, reference) { Identity = resubIdentity },
+                    o => impersonateAsHub
+                        ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
+                        : o.WithTarget(owner));
+
+                if (resub != null)
+                {
+                    hub.RegisterCallback(resub, (rd, _) =>
+                    {
+                        if (rd.Message is DeliveryFailure rdFail)
+                        {
+                            logger.LogWarning(
+                                "Stream {StreamId}: resubscribe failed: {Message}. Stopping heartbeat.",
+                                reduced.StreamId, rdFail.Message);
+                            sub?.Dispose();
+                            cts.Cancel();
+                        }
+                        else
+                        {
+                            // New Initial snapshot from the re-activated owner —
+                            // forward to the stream hub so cached state is replaced.
+                            reduced.Hub.DeliverMessage(rd);
+                        }
+                        Interlocked.Exchange(ref resubscribing, 0);
+                        return Task.FromResult(rd);
+                    }, default);
+                }
+                else
+                {
+                    Interlocked.Exchange(ref resubscribing, 0);
+                }
+            }
+
             var heartbeatInterval = hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
                 ?.Value?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
@@ -183,53 +286,26 @@ public static class JsonSynchronizationStream
                     if (delivery == null) return;
                     hub.RegisterCallback(delivery, (d, _) =>
                     {
-                        if (d.Message is DeliveryFailure
-                            && Interlocked.Exchange(ref resubscribing, 1) == 0)
-                        {
-                            logger.LogInformation(
-                                "Stream {StreamId}: owner {Owner} heartbeat failed — resubscribing for fresh snapshot.",
-                                reduced.StreamId, owner);
-
-                            var resubIdentity = accessService?.Context?.ObjectId
-                                                 ?? accessService?.CircuitContext?.ObjectId;
-                            var resub = hub.Post(
-                                new SubscribeRequest(reduced.StreamId, reference) { Identity = resubIdentity },
-                                o => impersonateAsHub
-                                    ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
-                                    : o.WithTarget(owner));
-
-                            if (resub != null)
-                            {
-                                hub.RegisterCallback(resub, (rd, _) =>
-                                {
-                                    if (rd.Message is DeliveryFailure rdFail)
-                                    {
-                                        logger.LogWarning(
-                                            "Stream {StreamId}: resubscribe failed: {Message}. Stopping heartbeat.",
-                                            reduced.StreamId, rdFail.Message);
-                                        sub?.Dispose();
-                                        cts.Cancel();
-                                    }
-                                    else
-                                    {
-                                        // New Initial snapshot from the re-activated owner —
-                                        // forward to the stream hub so cached state is replaced.
-                                        reduced.Hub.DeliverMessage(rd);
-                                    }
-                                    Interlocked.Exchange(ref resubscribing, 0);
-                                    return Task.FromResult(rd);
-                                }, default);
-                            }
-                            else
-                            {
-                                Interlocked.Exchange(ref resubscribing, 0);
-                            }
-                        }
+                        if (d.Message is DeliveryFailure)
+                            Resubscribe("heartbeat failed");
                         return Task.FromResult(d);
                     }, cts.Token);
                 });
             reduced.RegisterForDisposal(sub);
             reduced.RegisterForDisposal(new AnonymousDisposable(() => cts.Cancel()));
+
+            // Also resubscribe when the mesh change feed reports a change on the owner's
+            // path. Monolith hubs auto-reactivate on the next Post, so HeartBeatEvent
+            // never returns DeliveryFailure after a DisposeRequest — the heartbeat path
+            // alone can't detect that the grain was recycled and holds stale state.
+            // MeshChangeFeed fires on every create/update/delete from the persistence
+            // layer, giving us a reliable, mode-agnostic trigger.
+            var ownerPath = owner.ToString();
+            var changeFeedSub = TrySubscribeOwnerPathChangeFeed(
+                hub.ServiceProvider, logger, ownerPath,
+                () => Resubscribe("change feed event"));
+            if (changeFeedSub != null)
+                reduced.RegisterForDisposal(changeFeedSub);
         }
 
         return reduced;
