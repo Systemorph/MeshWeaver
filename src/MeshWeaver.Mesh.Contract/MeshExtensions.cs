@@ -401,6 +401,7 @@ public static class MeshExtensions
 
         var nodeStream = hub.GetWorkspace()?.GetStream<MeshNode>();
         var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
 
         // Read own node from the live workspace stream when the hub exposes one (BehaviorSubject —
         // emits current value synchronously on subscribe). Fall back to persistence when not (some
@@ -411,7 +412,13 @@ public static class MeshExtensions
                 .Select(nodes => nodes?.FirstOrDefault(n => n.Path == path))
             : Observable.FromAsync(token => persistence.GetNodeAsync(path, token));
 
+        // Bound the whole pre-commit chain by MeshOperationOptions.Timeout (default 30s).
+        // A stuck storage adapter, hanging validator, or child-delete that never resolves
+        // must not leave the caller waiting forever — on timeout, Rx's Timeout emits a
+        // TimeoutException which the Subscribe OnError branch below turns into a Fail
+        // response. Normal ops complete in milliseconds, so this ceiling is never hit.
         existingNodeObs
+            .Timeout(opts.Timeout)
             .SelectMany(existingNode =>
             {
                 if (existingNode == null)
@@ -532,7 +539,18 @@ public static class MeshExtensions
                 },
                 ex =>
                 {
-                    if (ex is InvalidOperationException)
+                    if (ex is TimeoutException)
+                    {
+                        logger.LogError(ex,
+                            "Delete of {Path} exceeded the {Timeout}s budget — failing the caller instead of hanging",
+                            path, opts.Timeout.TotalSeconds);
+                        hub.Post(
+                            DeleteNodeResponse.Fail(
+                                $"Delete of '{path}' exceeded the configured timeout of {opts.Timeout.TotalSeconds:0}s",
+                                NodeDeletionRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                    }
+                    else if (ex is InvalidOperationException)
                     {
                         logger.LogWarning(ex, "Node deletion failed for path {Path}", path);
                         hub.Post(
@@ -741,6 +759,7 @@ public static class MeshExtensions
         var msg = delivery.Message;
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
         var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
 
         // Reply FIRST — before storage commit and BEFORE DisposeRequest — so the caller's
         // RegisterCallback resolves on the Ok message well ahead of the DisposeRequest
@@ -756,7 +775,12 @@ public static class MeshExtensions
                 .WithTarget(msg.OriginalSender)
                 .WithProperty(PostOptions.RequestId, msg.OriginalRequestId));
 
+        // Bound storage delete by MeshOperationOptions.Timeout so a stuck adapter
+        // cannot leave the node stranded in persistence forever. We can't take the
+        // Ok back (caller has already been notified), but at least we surface the
+        // failure in logs and skip DisposeRequest.
         persistence.DeleteNode(msg.Path, recursive: false)
+            .Timeout(opts.Timeout)
             .Subscribe(
                 _ =>
                 {
@@ -772,8 +796,10 @@ public static class MeshExtensions
                         msg.Path, msg.DeletedBy ?? "system");
                 },
                 ex => logger.LogError(ex,
-                    "Storage delete failed for {Path} after Ok response was already sent — response cannot be walked back",
-                    msg.Path));
+                    ex is TimeoutException
+                        ? "Storage delete of {Path} exceeded {Timeout}s after Ok response was already sent — node may remain in persistence"
+                        : "Storage delete failed for {Path} after Ok response was already sent — response cannot be walked back",
+                    msg.Path, opts.Timeout.TotalSeconds));
 
         return delivery.Processed();
     }
