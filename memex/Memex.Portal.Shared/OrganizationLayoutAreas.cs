@@ -139,14 +139,37 @@ public static class OrganizationLayoutAreas
         container = container.WithView(Controls.Html(
             "<hr style=\"border: none; border-top: 1px solid var(--neutral-stroke-rest); margin: 24px 0;\" />"));
 
-        // Markdown body from index.md — PreRenderedHtml is set by MarkdownFileParser
-        // for any .md file; MarkdownView handles mermaid, code blocks, math, UCR links
+        // Body priority:
+        //   1. node.PreRenderedHtml — the content's own index.md (authored per-org).
+        //   2. org.Body — user-editable markdown on the Organization entity.
+        //   3. WelcomeMarkdown — plain-markdown default.
+        // Followed by a chat input so new organizations can start a conversation immediately.
+        var bodyStyle = "max-width: 1280px; margin: 0 auto; padding: 0 24px 24px 24px;";
         if (!string.IsNullOrWhiteSpace(node?.PreRenderedHtml))
         {
             container = container.WithView(
-                new MarkdownControl("") { Html = node.PreRenderedHtml }
-                    .WithStyle("max-width: 1280px; margin: 0 auto; padding: 0 24px 48px 24px;"));
+                new MarkdownControl("") { Html = node.PreRenderedHtml }.WithStyle(bodyStyle));
         }
+        else if (!string.IsNullOrWhiteSpace(org?.Body))
+        {
+            container = container.WithView(Controls.Markdown(org!.Body!).WithStyle(bodyStyle));
+        }
+        else
+        {
+            container = container.WithView(
+                Controls.Markdown(OrganizationNodeType.WelcomeMarkdown).WithStyle(bodyStyle));
+        }
+
+        // Chat invite — one-line prompt plus an actual chat control seeded with the org's path.
+        var orgPath = node?.Path ?? host.Hub.Address.ToString();
+        var orgName = node?.Name ?? org?.Name ?? orgPath;
+        var chatStyle = "max-width: 1280px; margin: 0 auto; padding: 0 24px 48px 24px; display: flex; flex-direction: column; gap: 12px;";
+        container = container.WithView(Controls.Stack
+            .WithStyle(chatStyle)
+            .WithView(Controls.Markdown("### Ask the organization"))
+            .WithView(new ThreadChatControl()
+                .WithInitialContext(orgPath)
+                .WithInitialContextDisplayName(orgName)));
 
         // Use LayoutAreaControl to render the standard Catalog view for children
         container = container.WithView(
