@@ -44,11 +44,14 @@ public interface IAssemblyStore
 /// </summary>
 public sealed class NullAssemblyStore : IAssemblyStore
 {
+    /// <summary>Shared singleton — stateless so there is no reason to instantiate.</summary>
     public static readonly NullAssemblyStore Instance = new();
 
+    /// <inheritdoc />
     public IObservable<string?> TryGetAssemblyPath(string nodeTypePath, long version) =>
         Observable.Return<string?>(null);
 
+    /// <inheritdoc />
     public IObservable<string> Put(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes) =>
         Observable.Return(string.Empty);
 }
