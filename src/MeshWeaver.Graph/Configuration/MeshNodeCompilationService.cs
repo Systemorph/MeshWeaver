@@ -31,70 +31,9 @@ internal class MeshNodeCompilationService(
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
 
-    /// <summary>
-    /// Resolve one Sources entry into one-or-more concrete queries, ready to hand
-    /// to <see cref="IMeshService.QueryAsync{T}"/>. Rules:
-    /// <list type="bullet">
-    ///   <item><c>$self</c> expands to <paramref name="selfPath"/>.</item>
-    ///   <item>A leading <c>@@</c> or <c>@</c> marks a shorthand that yields both a
-    ///     <c>path:X</c> exact match and a <c>namespace:X scope:subtree</c> folder
-    ///     match (de-duplicated downstream by the caller).</item>
-    ///   <item>A <c>namespace:X</c> value that is a single relative segment (no
-    ///     <c>/</c>, no absolute root) is rebased onto <paramref name="selfPath"/>,
-    ///     so the default <c>namespace:Source</c> reads as "my own Source folder".</item>
-    ///   <item>Every emitted query is ANDed with <c>nodeType:Code</c> so non-code
-    ///     children can never leak into the compilation.</item>
-    /// </list>
-    /// </summary>
-    private static IEnumerable<string> ExpandSourceQuery(string rawQuery, string selfPath)
-    {
-        var expanded = rawQuery.Replace("$self", selfPath).Trim();
-
-        var isAt = expanded.StartsWith("@@") || expanded.StartsWith("@");
-        if (isAt)
-        {
-            var stripped = expanded.TrimStart('@').TrimStart();
-            if (stripped.Length == 0) yield break;
-            if (stripped.Contains(':'))
-            {
-                // "@namespace:X scope:subtree" — already qualified, pass through.
-                yield return WithCodeTypeFilter(stripped);
-                yield break;
-            }
-            yield return WithCodeTypeFilter($"path:{stripped}");
-            yield return WithCodeTypeFilter($"namespace:{stripped} scope:subtree");
-            yield break;
-        }
-
-        // Rebase relative "namespace:X" values onto selfPath. A value without '/' is
-        // assumed to be a subfolder of the NodeType (the default "Source" case).
-        var rebased = RebaseRelativeNamespace(expanded, selfPath);
-        yield return WithCodeTypeFilter(rebased);
-    }
-
-    private static string RebaseRelativeNamespace(string query, string selfPath)
-    {
-        const string nsKey = "namespace:";
-        var idx = query.IndexOf(nsKey, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0) return query;
-
-        var valueStart = idx + nsKey.Length;
-        var valueEnd = valueStart;
-        while (valueEnd < query.Length && !char.IsWhiteSpace(query[valueEnd]))
-            valueEnd++;
-        var value = query.Substring(valueStart, valueEnd - valueStart);
-
-        // Relative iff it contains no path separator (e.g. "Source").
-        if (value.Length == 0 || value.Contains('/')) return query;
-
-        var rebased = $"{selfPath}/{value}";
-        return query.Substring(0, valueStart) + rebased + query.Substring(valueEnd);
-    }
-
-    private static string WithCodeTypeFilter(string query) =>
-        query.Contains("nodeType:", StringComparison.OrdinalIgnoreCase)
-            ? query
-            : $"{query} nodeType:{CodeNodeType.NodeType}";
+    // Query expansion lives in CodeQueryResolver now so the NodeType Configuration
+    // side menu can evaluate the *same* queries the compiler uses — the Sources /
+    // Tests lists displayed in the UI are guaranteed to match the files compiled.
     private readonly List<MetadataReference> _references = GetDefaultReferences();
 
     private static List<MetadataReference> GetDefaultReferences()
@@ -313,42 +252,38 @@ internal class MeshNodeCompilationService(
             }
         }
 
-        // Collect Code nodes from each configured source query.
-        // Default: "Source" subtree directly under the NodeType (implicitly self-relative).
-        var sourceQueries = ntDef?.Sources is { Count: > 0 } configured
-            ? configured
-            : (IReadOnlyList<string>)[$"namespace:{CodeNodeType.SourceSubNamespace} scope:subtree"];
-
+        // Collect Code nodes from each configured source query (and from Tests, so
+        // test files compile alongside production code and can reference it).
+        // Default: "Source" and "Test" subtrees directly under the NodeType.
         var codeFiles = new List<CodeConfiguration>();
         var matchedCodePaths = new List<string>();
         var executedQueries = new List<string>();
         if (meshQuery != null)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var rawQuery in sourceQueries)
-            {
-                if (string.IsNullOrWhiteSpace(rawQuery)) continue;
+            var queriesToRun = CodeQueryResolver
+                .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
+                .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath));
 
-                foreach (var finalQuery in ExpandSourceQuery(rawQuery, selfPath))
+            foreach (var finalQuery in queriesToRun)
+            {
+                executedQueries.Add(finalQuery);
+                var matchesForThisQuery = 0;
+                await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(finalQuery, ct: ct).WithCancellation(ct))
                 {
-                    executedQueries.Add(finalQuery);
-                    var matchesForThisQuery = 0;
-                    await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(finalQuery, ct: ct).WithCancellation(ct))
+                    if (codeNode.Content is CodeConfiguration cf
+                        && !string.IsNullOrWhiteSpace(cf.Code)
+                        && seen.Add(codeNode.Path ?? cf.Code!))
                     {
-                        if (codeNode.Content is CodeConfiguration cf
-                            && !string.IsNullOrWhiteSpace(cf.Code)
-                            && seen.Add(codeNode.Path ?? cf.Code!))
-                        {
-                            codeFiles.Add(cf);
-                            if (!string.IsNullOrEmpty(codeNode.Path))
-                                matchedCodePaths.Add(codeNode.Path);
-                            matchesForThisQuery++;
-                        }
+                        codeFiles.Add(cf);
+                        if (!string.IsNullOrEmpty(codeNode.Path))
+                            matchedCodePaths.Add(codeNode.Path);
+                        matchesForThisQuery++;
                     }
-                    logger.LogInformation(
-                        "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
-                        node.Path, finalQuery, matchesForThisQuery);
                 }
+                logger.LogInformation(
+                    "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
+                    node.Path, finalQuery, matchesForThisQuery);
             }
         }
 

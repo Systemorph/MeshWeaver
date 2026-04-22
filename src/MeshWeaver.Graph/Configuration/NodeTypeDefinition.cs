@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -138,4 +139,57 @@ public record NodeTypeDefinition
     /// separate feature — inline include — handled during code-content resolution.)
     /// </remarks>
     public IReadOnlyList<string>? Sources { get; init; }
+
+    /// <summary>
+    /// Locations of the Code nodes classified as tests for this NodeType. Same
+    /// query syntax and expansion rules as <see cref="Sources"/> — see
+    /// <see cref="CodeQueryResolver"/>. Shown under "Tests" in the Configuration
+    /// side menu alongside Sources, and compiled together so tests can reference
+    /// the NodeType's production code.
+    /// </summary>
+    /// <remarks>
+    /// If null or empty, defaults to <c>["namespace:Test scope:subtree"]</c>
+    /// — the conventional <c>Test/</c> sibling folder. Mirrors <see cref="Sources"/>
+    /// so a NodeType with a bespoke Sources list usually wants a bespoke Tests list too.
+    /// </remarks>
+    public IReadOnlyList<string>? Tests { get; init; }
+
+    /// <summary>
+    /// Current lifecycle state of the NodeType's compile. Written through by
+    /// <c>NodeTypeService</c> on every transition (start / success / failure / invalidate),
+    /// so anyone who can address / stream this MeshNode can observe the compile status
+    /// directly — no polling, no auxiliary service call. Callers that want to wait for a
+    /// settled state subscribe with <c>hub.GetRemoteStream(new MeshNodeReference(path))</c>
+    /// and filter for <see cref="CompilationStatus.Ok"/> or <see cref="CompilationStatus.Error"/>.
+    /// </summary>
+    public CompilationStatus? CompilationStatus { get; init; }
+
+    /// <summary>
+    /// Formatted Roslyn diagnostics when <see cref="CompilationStatus"/> is
+    /// <see cref="Mesh.Services.CompilationStatus.Error"/>; otherwise <c>null</c>.
+    /// </summary>
+    public string? CompilationError { get; init; }
+
+    /// <summary>
+    /// UTC timestamp when the currently-running compile started. Non-null only while
+    /// <see cref="CompilationStatus"/> is <see cref="Mesh.Services.CompilationStatus.Compiling"/>.
+    /// </summary>
+    public DateTimeOffset? LastCompileStartedAt { get; init; }
+
+    /// <summary>
+    /// UTC timestamp of the last compile that completed successfully. Non-null only when
+    /// <see cref="CompilationStatus"/> is <see cref="Mesh.Services.CompilationStatus.Ok"/>;
+    /// cleared on invalidation so the state correctly reflects "never compiled since reset".
+    /// </summary>
+    public DateTimeOffset? LastCompileSucceededAt { get; init; }
+
+    /// <summary>
+    /// The NodeType <see cref="Mesh.MeshNode.Version"/> that produced the currently-cached
+    /// assembly. Compared against the live <c>MeshNode.Version</c> on every read — if they
+    /// differ, the cached assembly is stale and a fresh compile is required. This is the
+    /// cache key into <see cref="Mesh.Services.IAssemblyStore"/>: one entry per historical
+    /// version of the NodeType, not a single "latest" slot that can drift out of sync
+    /// across replicas.
+    /// </summary>
+    public long? LastCompiledVersion { get; init; }
 }
