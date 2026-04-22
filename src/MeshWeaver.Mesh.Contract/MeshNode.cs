@@ -184,12 +184,27 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public DateTimeOffset CreatedDate { get; init; }
 
     /// <summary>
+    /// Identity (ObjectId / email) of the user or system that created this node.
+    /// Stamped at creation time and never changed. Null for nodes that pre-date
+    /// the field (e.g. seeded by file-system import without an authenticated user).
+    /// </summary>
+    [Editable(false)]
+    public string? CreatedBy { get; init; }
+
+    /// <summary>
     /// Timestamp when this node was last modified.
     /// Used for cache invalidation of dynamically compiled assemblies.
     /// When reading from file system, defaults to file's last modified time if not specified in JSON.
     /// </summary>
     [Editable(false)]
     public DateTimeOffset LastModified { get; init; }
+
+    /// <summary>
+    /// Identity (ObjectId / email) of the user or system that last modified this node.
+    /// Stamped at every successful update; equal to <see cref="CreatedBy"/> immediately after creation.
+    /// </summary>
+    [Editable(false)]
+    public string? LastModifiedBy { get; init; }
 
     /// <summary>
     /// The hub version when this node was last saved.

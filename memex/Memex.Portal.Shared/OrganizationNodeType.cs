@@ -24,6 +24,13 @@ public record Organization
 
     public string? Description { get; init; }
 
+    /// <summary>
+    /// Long-form markdown body shown on the organization's Overview. Leave empty
+    /// to fall back to the default welcome message; fill it to author the page
+    /// yourself (mission statement, team intros, curated links, etc.).
+    /// </summary>
+    public string? Body { get; init; }
+
     public string? Website { get; init; }
 
     [ContentItem]
@@ -50,6 +57,32 @@ public record Organization
 public static class OrganizationNodeType
 {
     public const string NodeType = "Organization";
+
+    /// <summary>
+    /// Default welcome body rendered for an Organization when the node has no PreRenderedHtml of its own.
+    /// Plain markdown — no pseudo-HTML. Per-organization overrides live in each organization's
+    /// own <c>index.md</c> (set on <see cref="MeshNode.PreRenderedHtml"/>), e.g. the Systemorph
+    /// organization ships its own bespoke landing page that replaces this text.
+    /// </summary>
+    public const string WelcomeMarkdown = """
+        # Welcome
+
+        This is your organization's home page.
+
+        Start by structuring the content you want to share here — a short introduction,
+        a mission statement, links to the teams and projects that matter to you.
+
+        ## Tips to get started
+
+        - **Create some content.** Use the menu above to add pages, demos, or documents.
+          You can always come back and ask the assistant to summarize what's inside.
+        - **Bring in existing files.** Drop markdown, images, or documents into the
+          content collection; they show up automatically.
+        - **Chat with your organization.** Use the chat input below to ask questions,
+          kick off an agent, or draft content together.
+
+        Once you're ready, replace this text with whatever fits your organization best.
+        """;
 
     public static TBuilder AddOrganizationType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {

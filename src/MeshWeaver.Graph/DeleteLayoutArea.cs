@@ -8,6 +8,7 @@ using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
@@ -94,13 +95,14 @@ public static class DeleteLayoutArea
 
     private static UiControl BuildDeletePage(LayoutAreaHost host, string nodePath, string backHref, int descendantCount)
     {
-        // Set up data binding for confirmation field
+        // Form + progress state.
         var dataId = $"delete_nodes_{nodePath.Replace("/", "_")}";
-        var formData = new Dictionary<string, object?>
+        host.UpdateData(dataId, new Dictionary<string, object?>
         {
             ["confirmation"] = ""
-        };
-        host.UpdateData(dataId, formData);
+        });
+        var progressId = $"delete_progress_{nodePath.Replace("/", "_")}";
+        host.UpdateData(progressId, DeleteStatus.Idle);
 
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
 
@@ -115,7 +117,6 @@ public static class DeleteLayoutArea
                 .WithNavigateToHref(backHref))
             .WithView(Controls.H2("Delete Node").WithStyle("margin: 0; color: var(--error);")));
 
-        // Warning
         var warningText = descendantCount > 0
             ? $"This will permanently delete this node and <strong>{descendantCount} descendant node(s)</strong> under <code>{nodePath}</code>."
             : $"This will permanently delete the node at <code>{nodePath}</code>.";
@@ -127,7 +128,6 @@ public static class DeleteLayoutArea
             $"<p style=\"margin: 0;\">{warningText}</p>" +
             "</div>"));
 
-        // Confirmation field
         stack = stack.WithView(Controls.Stack
             .WithWidth("100%")
             .WithStyle("margin-bottom: 24px;")
@@ -139,8 +139,12 @@ public static class DeleteLayoutArea
                 DataContext = LayoutAreaReference.GetDataPointer(dataId)
             }.WithStyle("width: 300px;")));
 
-        // Button row — uses IMeshService.DeleteNodeAsync
-        // and runs validators (including RlsNodeValidator)
+        // Progress / status banner — driven by the progressId data stream.
+        stack = stack.WithView((h, _) => h.Stream.GetDataStream<DeleteStatus>(progressId)
+            .Select(status => (UiControl?)RenderStatus(status, nodePath)));
+
+        // Button row: Cancel + Delete. Delete is gated by an in-flight status so the user
+        // can't double-submit; during the request we render a progress indicator above.
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
@@ -152,41 +156,98 @@ public static class DeleteLayoutArea
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("background: var(--error, #d32f2f); color: white;")
                 .WithIconStart(FluentIcons.Delete())
-                .WithClickAction(ctx =>
-                {
-                    // Fully reactive: no await anywhere on the hub thread.
-                    // 1) Read the form data synchronously via Take(1).Subscribe
-                    // 2) Validate
-                    // 3) Call IMeshService.DeleteNode (Post + RegisterCallback under the hood)
-                    //    and propagate onNext/onError via Subscribe.
-                    ctx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(dataId)
-                        .Take(1)
-                        .Subscribe(formValues =>
-                        {
-                            var confirmation = formValues.GetValueOrDefault("confirmation")?.ToString()?.Trim();
-                            if (confirmation != "DELETE")
-                            {
-                                ShowDialog(ctx, "Confirmation Required",
-                                    "Please type **DELETE** in the confirmation field to proceed.");
-                                return;
-                            }
-
-                            host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
-                                .DeleteNode(nodePath)
-                                .Subscribe(
-                                    _ =>
-                                    {
-                                        // Empty the area in-place — no redirect. The user can navigate via menu/back.
-                                        ctx.Host.UpdateArea(MeshNodeLayoutAreas.DeleteArea, null);
-                                    },
-                                    ex => ShowDialog(ctx, "Delete Failed", $"Could not delete node: {ex.Message}"));
-                        });
-
-                    return Task.CompletedTask;
-                })));
+                .WithClickAction(ctx => StartDelete(ctx, host, nodePath, dataId, progressId, backHref))));
 
         return stack;
+    }
+
+    /// <summary>
+    /// Kicks off the delete via Post + RegisterCallback — no <c>await</c>. Drives the progressId
+    /// data stream so the user sees "Deleting…" while the callback is pending, and "Deleted" /
+    /// "Failed" once the response arrives. See Doc/Architecture/AsynchronousCalls.
+    /// </summary>
+    private static Task StartDelete(
+        UiActionContext ctx,
+        LayoutAreaHost host,
+        string nodePath,
+        string dataId,
+        string progressId,
+        string backHref)
+    {
+        ctx.Host.Stream
+            .GetDataStream<Dictionary<string, object?>>(dataId)
+            .Take(1)
+            .Subscribe(formValues =>
+            {
+                var confirmation = formValues.GetValueOrDefault("confirmation")?.ToString()?.Trim();
+                if (confirmation != "DELETE")
+                {
+                    ShowDialog(ctx, "Confirmation Required",
+                        "Please type **DELETE** in the confirmation field to proceed.");
+                    return;
+                }
+
+                ctx.Host.UpdateData(progressId, DeleteStatus.InFlight);
+
+                // Post the DeleteNodeRequest to the node's own hub. We register a non-awaiting
+                // callback that flips the progress stream to Done / Failed when the response
+                // arrives — no blocking on the hub scheduler anywhere.
+                var delivery = host.Hub.Post(
+                    new DeleteNodeRequest(nodePath) { Recursive = true },
+                    o => o.WithTarget(new Address(nodePath)))!;
+
+                host.Hub.RegisterCallback(delivery, response =>
+                {
+                    if (response is IMessageDelivery<DeleteNodeResponse> r && r.Message.Success)
+                    {
+                        ctx.Host.UpdateData(progressId, DeleteStatus.Done);
+                        // Navigate back — the node we were looking at no longer exists.
+                        ctx.Host.UpdateArea(ctx.Area, new RedirectControl(backHref));
+                    }
+                    else
+                    {
+                        var err = response is IMessageDelivery<DeleteNodeResponse> rr
+                            ? rr.Message.Error
+                            : "Delete response not received.";
+                        ctx.Host.UpdateData(progressId, DeleteStatus.Failed(err));
+                    }
+                    return response;
+                });
+            });
+
+        return Task.CompletedTask;
+    }
+
+    private static UiControl? RenderStatus(DeleteStatus status, string nodePath)
+    {
+        if (status.Kind == DeleteStatusKind.Idle)
+            return null;
+
+        if (status.Kind == DeleteStatusKind.InFlight)
+            return Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("align-items: center; gap: 12px; padding: 12px 16px; background: var(--neutral-layer-2); border-radius: 6px; margin-bottom: 16px;")
+                .WithView(Controls.Progress("Deleting…", 0))
+                .WithView(Controls.Body($"Deleting {nodePath}. Waiting for confirmation…"));
+
+        if (status.Kind == DeleteStatusKind.Done)
+            return Controls.Html(
+                "<div style=\"padding: 12px 16px; background: var(--success-container, #e6f7e6); color: var(--success, #107c10); border-radius: 6px; margin-bottom: 16px;\">Node deleted. Redirecting…</div>");
+
+        // Failed
+        var message = System.Web.HttpUtility.HtmlEncode(status.ErrorMessage ?? "Unknown error");
+        return Controls.Html(
+            $"<div style=\"padding: 12px 16px; background: var(--error-container, #fde8e8); color: var(--error, #d32f2f); border-radius: 6px; margin-bottom: 16px;\"><strong>Delete failed:</strong> {message}</div>");
+    }
+
+    private enum DeleteStatusKind { Idle, InFlight, Done, Failed }
+
+    private record DeleteStatus(DeleteStatusKind Kind, string? ErrorMessage = null)
+    {
+        public static DeleteStatus Idle { get; } = new(DeleteStatusKind.Idle);
+        public static DeleteStatus InFlight { get; } = new(DeleteStatusKind.InFlight);
+        public static DeleteStatus Done { get; } = new(DeleteStatusKind.Done);
+        public static DeleteStatus Failed(string? msg) => new(DeleteStatusKind.Failed, msg);
     }
 
     private static void ShowDialog(UiActionContext ctx, string title, string message)

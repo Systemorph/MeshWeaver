@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -272,7 +273,9 @@ public static class NodeTypeLayoutAreas
 
     /// <summary>
     /// Builds the left navigation menu with Configuration, Code files, Node Types, and Agents entries.
-    /// Code files are shown as links that navigate to the Code node's own address.
+    /// Code files are shown in a hierarchical tree grouped by namespace (relative to the NodeType root).
+    /// Search link is placed at the bottom so the MeshSearch children listing is reachable from there
+    /// without visually competing with the configuration-focused entries at the top.
     /// </summary>
     private static UiControl BuildLeftMenu(
         LayoutAreaHost host,
@@ -286,49 +289,19 @@ public static class NodeTypeLayoutAreas
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false))
             .WithStyle("overflow-y: auto; height: 100%;");
 
-        // Search link
-        var searchHref = new LayoutAreaReference(SearchArea).ToHref(hubAddress);
-        navMenu = navMenu.WithView(
-            new NavLinkControl("Search", FluentIcons.Search(), searchHref)
-        );
-
-        // Overview link
-        var overviewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
-        navMenu = navMenu.WithView(
-            new NavLinkControl("Overview", FluentIcons.Home(), overviewHref)
-        );
-
-        // Configuration link
-        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
+        // Configuration link at top — it's the landing area for this view.
         var configHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
         navMenu = navMenu.WithView(
             new NavLinkControl("Configuration", FluentIcons.Settings(), configHref)
         );
 
-        // Code section - entries navigate to each Code node's own address
-        var codeGroup = new NavGroupControl("Code")
-            .WithIcon(FluentIcons.Code())
-            .WithSkin(s => s.WithExpanded(true));
-
-        if (codeNodes != null && codeNodes.Count > 0)
-        {
-            foreach (var codeNode in codeNodes)
-            {
-                var codeConfig = codeNode.Content as CodeConfiguration;
-                var codeHref = new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(codeNode.Path);
-                codeGroup = codeGroup.WithView(
-                    new NavLinkControl(codeNode.Name ?? codeNode.Id, CustomIcons.CSharp(), codeHref)
-                );
-            }
-        }
-        else
-        {
-            codeGroup = codeGroup.WithView(
-                Controls.Body("No code files").WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);")
-            );
-        }
-
-        navMenu = navMenu.WithNavGroup(codeGroup);
+        // Sources + Tests sections — hierarchical trees grouped by namespace relative to
+        // the NodeType's root. Code lives under {node.Path}/Source and {node.Path}/Test
+        // (see CodeNodeType.SourceSubNamespace / TestSubNamespace).
+        navMenu = navMenu.WithNavGroup(BuildCodeNavGroup(
+            "Sources", FluentIcons.Code(), node.Path, CodeNodeType.SourceSubNamespace, codeNodes));
+        navMenu = navMenu.WithNavGroup(BuildCodeNavGroup(
+            "Tests", FluentIcons.Beaker(), node.Path, CodeNodeType.TestSubNamespace, codeNodes));
 
         // Node Types section (if any NodeType nodes exist under this namespace)
         if (nodeTypes != null && nodeTypes.Count > 0)
@@ -383,12 +356,144 @@ public static class NodeTypeLayoutAreas
             navMenu = navMenu.WithNavGroup(depsGroup);
         }
 
+        // Search at the bottom — inlines with the MeshSearch children listing.
+        var searchHref = new LayoutAreaReference(SearchArea).ToHref(hubAddress);
+        navMenu = navMenu.WithView(
+            new NavLinkControl("Search", FluentIcons.Search(), searchHref)
+        );
+
         return navMenu;
     }
 
     /// <summary>
-    /// Builds the main pane showing the node name as title
-    /// and the Configuration property in a read-only CodeEditorControl.
+    /// Builds a hierarchical navigation group for either Sources or Tests. Code nodes
+    /// under <c>{rootPath}/{subNamespace}</c> are bucketed by namespace; each directory
+    /// becomes a nested <see cref="NavGroupControl"/>, leaves are <see cref="NavLinkControl"/>s
+    /// pointing at the code node's own address. Code nodes OUTSIDE <c>{rootPath}/{subNamespace}</c>
+    /// are ignored — callers filter by <see cref="CodeNodeType.SourceSubNamespace"/> or
+    /// <see cref="CodeNodeType.TestSubNamespace"/>, so foreign nodes (e.g. pulled in by
+    /// <c>@path</c> shorthand or cross-NodeType <c>namespace:</c> queries) don't leak into
+    /// the Sources/Tests sections.
+    /// </summary>
+    internal static NavGroupControl BuildCodeNavGroup(
+        string groupLabel,
+        Icon groupIcon,
+        string rootPath,
+        string subNamespace,
+        IReadOnlyCollection<MeshNode>? codeNodes)
+    {
+        var root = new NavGroupControl(groupLabel)
+            .WithIcon(groupIcon)
+            .WithSkin(s => s.WithExpanded(true));
+
+        var subPrefix = $"{rootPath}/{subNamespace}/";
+        var matching = codeNodes?
+            .Where(n => n.Path.StartsWith(subPrefix, StringComparison.Ordinal))
+            .ToList();
+
+        if (matching == null || matching.Count == 0)
+        {
+            return root.WithView(
+                Controls.Body($"No {groupLabel.ToLowerInvariant()} yet")
+                    .WithStyle("padding: 4px 16px; display: block; color: var(--neutral-foreground-hint);"));
+        }
+
+        var tree = new CodeTreeFolder("");
+        foreach (var codeNode in matching.OrderBy(n => n.Path, StringComparer.Ordinal))
+        {
+            var relative = codeNode.Path.Substring(subPrefix.Length);
+            var segments = relative.Split('/');
+            tree.Insert(segments, 0, codeNode);
+        }
+
+        foreach (var child in tree.OrderedChildren())
+            root = AppendCodeTreeNode(root, child);
+
+        return root;
+    }
+
+    private static NavGroupControl AppendCodeTreeNode(NavGroupControl parent, CodeTreeNode node)
+    {
+        if (node is CodeTreeLeaf leaf)
+        {
+            var href = new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(leaf.Node.Path);
+            return parent.WithView(new NavLinkControl(leaf.Node.Name ?? leaf.Node.Id, CustomIcons.CSharp(), href));
+        }
+
+        var folder = (CodeTreeFolder)node;
+        var group = new NavGroupControl(folder.Name)
+            .WithIcon(FluentIcons.Folder())
+            .WithSkin(s => s.WithExpanded(true));
+        foreach (var child in folder.OrderedChildren())
+            group = AppendCodeTreeNode(group, child);
+        return parent.WithGroup(group);
+    }
+
+    /// <summary>
+    /// Testable pure helper: builds a <see cref="CodeTreeFolder"/> representing the
+    /// hierarchy a caller would render as a <see cref="NavGroupControl"/>. Filters by
+    /// <paramref name="subPrefix"/> exactly like <see cref="BuildCodeNavGroup"/> so
+    /// tests can assert the bucketing (outside-namespace files filtered, nested folders
+    /// grouped, alphabetical order) without walking the UI control tree.
+    /// </summary>
+    internal static CodeTreeFolder BuildCodeTree(string rootPath, string subNamespace, IReadOnlyCollection<MeshNode> nodes)
+    {
+        var subPrefix = $"{rootPath}/{subNamespace}/";
+        var tree = new CodeTreeFolder("");
+        foreach (var node in nodes
+                     .Where(n => n.Path.StartsWith(subPrefix, StringComparison.Ordinal))
+                     .OrderBy(n => n.Path, StringComparer.Ordinal))
+        {
+            var relative = node.Path.Substring(subPrefix.Length);
+            tree.Insert(relative.Split('/'), 0, node);
+        }
+        return tree;
+    }
+
+    internal abstract class CodeTreeNode
+    {
+        public string Name { get; init; } = "";
+    }
+
+    internal sealed class CodeTreeLeaf : CodeTreeNode
+    {
+        public MeshNode Node { get; init; } = null!;
+    }
+
+    internal sealed class CodeTreeFolder : CodeTreeNode
+    {
+        private readonly Dictionary<string, CodeTreeFolder> _folders = new(StringComparer.Ordinal);
+        private readonly List<CodeTreeLeaf> _leaves = new();
+
+        public CodeTreeFolder(string name) { Name = name; }
+
+        public IReadOnlyDictionary<string, CodeTreeFolder> Folders => _folders;
+        public IReadOnlyList<CodeTreeLeaf> Leaves => _leaves;
+
+        public void Insert(string[] segments, int index, MeshNode node)
+        {
+            if (index == segments.Length - 1)
+            {
+                _leaves.Add(new CodeTreeLeaf { Name = segments[index], Node = node });
+                return;
+            }
+            var folderName = segments[index];
+            if (!_folders.TryGetValue(folderName, out var folder))
+                _folders[folderName] = folder = new CodeTreeFolder(folderName);
+            folder.Insert(segments, index + 1, node);
+        }
+
+        public IEnumerable<CodeTreeNode> OrderedChildren()
+            => _folders.Values.OrderBy(f => f.Name, StringComparer.Ordinal)
+                .Cast<CodeTreeNode>()
+                .Concat(_leaves.OrderBy(l => l.Name, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Builds the main Configuration pane: an editable settings form for the NodeType
+    /// (Name, Description, Icon, ChildrenQuery, DefaultNamespace, PageMaxWidth) with
+    /// auto-save, plus a read-only preview of the Configuration lambda with an Edit
+    /// button that opens the dedicated Monaco editor.
     /// </summary>
     private static UiControl BuildConfigurationPane(LayoutAreaHost host, object hubAddress, MeshNode node)
     {
@@ -398,22 +503,81 @@ public static class NodeTypeLayoutAreas
 
         var stack = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("padding: 24px; height: 100%; overflow: auto;");
+            .WithStyle("padding: 24px; height: 100%; overflow: auto; gap: 20px;");
 
-        // Title with edit button
-        var headerRow = Controls.Stack
+        stack = stack.WithView(Controls.H2(node.Name ?? nodeId ?? "Unknown").WithStyle("margin: 0;"));
+
+        // Editable settings form — auto-saves to MeshNode.Content as NodeTypeDefinition.
+        var dataId = $"nodeTypeConfig_{node.Path.Replace('/', '_')}";
+        var form = NodeTypeConfigForm.FromNode(node, definition);
+        host.UpdateData(dataId, form);
+        SetupNodeTypeConfigAutoSave(host, dataId, form, node, definition);
+
+        var dataPointer = LayoutAreaReference.GetDataPointer(dataId);
+        var formGrid = Controls.Stack
+            .WithStyle("display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;");
+
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.Name)))
+        {
+            Label = "Display Name",
+            Immediate = true,
+            DataContext = dataPointer
+        });
+
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.Icon)))
+        {
+            Label = "Icon",
+            Placeholder = "content:icon.svg, /static/…, <svg>…</svg>, or URL",
+            Immediate = true,
+            DataContext = dataPointer
+        });
+
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.ChildrenQuery)))
+        {
+            Label = "Children Query",
+            Placeholder = "e.g. nodeType:Person scope:descendants",
+            Immediate = true,
+            DataContext = dataPointer
+        });
+
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.DefaultNamespace)))
+        {
+            Label = "Default Namespace",
+            Placeholder = "Pre-selected namespace in Create form",
+            Immediate = true,
+            DataContext = dataPointer
+        });
+
+        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeConfigForm.PageMaxWidth)))
+        {
+            Label = "Page Max Width",
+            Placeholder = "e.g. 1200px or 100%",
+            Immediate = true,
+            DataContext = dataPointer
+        });
+
+        stack = stack.WithView(formGrid);
+
+        stack = stack.WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeConfigForm.Description)))
+        {
+            Label = "Description",
+            Placeholder = "Long-form description shown in the Overview and Create dialog.",
+            Immediate = true,
+            DataContext = dataPointer
+        }.WithRows(4));
+
+        // Configuration lambda — read-only preview, with button to open the dedicated editor.
+        var configHeader = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.H2(node.Name ?? nodeId ?? "Unknown"))
-            .WithView(
-                Controls.Button("")
-                    .WithIconStart(FluentIcons.Edit())
-                    .WithNavigateToHref(editHref)
-            );
+            .WithStyle("justify-content: space-between; align-items: center; margin-top: 8px;")
+            .WithView(Controls.H3("Configuration Lambda").WithStyle("margin: 0;"))
+            .WithView(Controls.Button("Edit")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.Edit())
+                .WithNavigateToHref(editHref));
 
-        stack = stack.WithView(headerRow);
+        stack = stack.WithView(configHeader);
 
-        // Configuration in CodeEditorControl
         var configCode = definition?.Configuration ?? "";
         if (!string.IsNullOrEmpty(configCode))
         {
@@ -422,7 +586,7 @@ public static class NodeTypeLayoutAreas
 
             var configEditor = new CodeEditorControl()
                 .WithLanguage("csharp")
-                .WithHeight("calc(100vh - 220px)")
+                .WithHeight("280px")
                 .WithLineNumbers(true)
                 .WithMinimap(false)
                 .WithWordWrap(true)
@@ -438,11 +602,62 @@ public static class NodeTypeLayoutAreas
         }
         else
         {
-            stack = stack.WithView(Controls.Body("No configuration defined.")
+            stack = stack.WithView(Controls.Body("No configuration lambda defined.")
                 .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
         }
 
         return stack;
+    }
+
+    /// <summary>
+    /// Debounced autosave for the NodeType Configuration form. On changes, writes
+    /// the form values back through <see cref="MeshNodeExtensions.UpdateMeshNode(IWorkspace, Func{MeshNode, MeshNode}, Address?, string?)"/>
+    /// so the edits flow through the live MeshNode stream (GetStream on <see cref="MeshNodeReference"/>)
+    /// — the standard reactive write path. Using <c>UpdateNodeRequest</c> targeted at the local hub
+    /// address would skip the stream patch and leave subscribed views showing stale state.
+    /// No <c>await</c>: composed via Subscribe.
+    /// </summary>
+    private static void SetupNodeTypeConfigAutoSave(
+        LayoutAreaHost host,
+        string dataId,
+        NodeTypeConfigForm initial,
+        MeshNode node,
+        NodeTypeDefinition? originalDefinition)
+    {
+        var current = (object)initial;
+
+        host.RegisterForDisposal($"autosave_{dataId}",
+            host.Stream.GetDataStream<object>(dataId)
+                .Throttle(TimeSpan.FromMilliseconds(400))
+                .Subscribe(updated =>
+                {
+                    if (Equals(current, updated)) return;
+                    current = updated;
+                    if (updated is not NodeTypeConfigForm form) return;
+
+                    // Write through the live stream — this is what GetStream(new MeshNodeReference())
+                    // subscribers observe. UpdateMeshNode reads the latest node, applies the lambda,
+                    // and emits a patch on the MeshNode data-source stream.
+                    host.Workspace.UpdateMeshNode(liveNode =>
+                    {
+                        var baseDef = (liveNode.Content as NodeTypeDefinition)
+                            ?? originalDefinition
+                            ?? new NodeTypeDefinition();
+                        var nextDefinition = baseDef with
+                        {
+                            Description = string.IsNullOrWhiteSpace(form.Description) ? null : form.Description,
+                            ChildrenQuery = string.IsNullOrWhiteSpace(form.ChildrenQuery) ? null : form.ChildrenQuery,
+                            DefaultNamespace = string.IsNullOrWhiteSpace(form.DefaultNamespace) ? null : form.DefaultNamespace,
+                            PageMaxWidth = string.IsNullOrWhiteSpace(form.PageMaxWidth) ? null : form.PageMaxWidth,
+                        };
+                        return liveNode with
+                        {
+                            Name = string.IsNullOrWhiteSpace(form.Name) ? liveNode.Name : form.Name,
+                            Icon = string.IsNullOrWhiteSpace(form.Icon) ? null : form.Icon,
+                            Content = nextDefinition
+                        };
+                    }, nodePath: node.Path);
+                }));
     }
 
     /// <summary>
@@ -774,4 +989,30 @@ public static class NodeTypeLayoutAreas
         => Controls.Stack
             .WithStyle("padding: 24px; display: flex; align-items: center; justify-content: center;")
             .WithView(Controls.Progress(message, 0));
+}
+
+/// <summary>
+/// Form DTO for the NodeType Configuration pane — carries the subset of MeshNode
+/// and NodeTypeDefinition fields that the user can edit directly inline (Name, Icon,
+/// Description, ChildrenQuery, DefaultNamespace, PageMaxWidth). The Configuration
+/// lambda and Dependencies are edited in the dedicated HubConfigEdit Monaco view.
+/// </summary>
+public record NodeTypeConfigForm
+{
+    public string? Name { get; init; }
+    public string? Icon { get; init; }
+    public string? Description { get; init; }
+    public string? ChildrenQuery { get; init; }
+    public string? DefaultNamespace { get; init; }
+    public string? PageMaxWidth { get; init; }
+
+    public static NodeTypeConfigForm FromNode(MeshNode node, NodeTypeDefinition? def) => new()
+    {
+        Name = node.Name,
+        Icon = node.Icon,
+        Description = def?.Description,
+        ChildrenQuery = def?.ChildrenQuery,
+        DefaultNamespace = def?.DefaultNamespace,
+        PageMaxWidth = def?.PageMaxWidth,
+    };
 }

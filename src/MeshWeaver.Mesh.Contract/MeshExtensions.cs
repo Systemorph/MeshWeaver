@@ -259,8 +259,19 @@ public static class MeshExtensions
                                 return Observable.Empty<(string mode, MeshNode node)>();
                             }
 
-                            // 4. Active state.
-                            var newNode = node with { State = MeshNodeState.Active };
+                            // 4. Active state + creation stamps (Created/LastModified + identity).
+                            //    Always stamp CreatedDate so the UI never has to guess a creation
+                            //    time; if the caller pre-set it (import flow) we preserve it.
+                            var now = DateTimeOffset.UtcNow;
+                            var identity = capturedRequest.CreatedBy;
+                            var newNode = node with
+                            {
+                                State = MeshNodeState.Active,
+                                CreatedDate = node.CreatedDate == default ? now : node.CreatedDate,
+                                CreatedBy = string.IsNullOrEmpty(node.CreatedBy) ? identity : node.CreatedBy,
+                                LastModified = node.LastModified == default ? now : node.LastModified,
+                                LastModifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? identity : node.LastModifiedBy,
+                            };
 
                             // 5. Enrich (optional service).
                             var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
@@ -680,21 +691,20 @@ public static class MeshExtensions
         IMeshStorage persistence,
         ILogger logger)
     {
-        // Post the response AFTER the storage delete actually commits so callers see a
-        // consistent view: an awaited DeleteNode returns only once the node is gone from
-        // persistence. Without this, race conditions occur — e.g. tests (and UI flows)
-        // that query right after the delete can still observe the pre-delete node.
-        //
-        // The previous "reply first" approach guarded against Orleans/monolith hub
-        // teardown during self-deletion. HandleDeleteNodeRequest runs on the mesh hub,
-        // and a child-node delete does not tear down that hub — so the teardown concern
-        // does not apply here. If a true self-teardown case emerges we post Fail from
-        // OnError and the caller still unblocks.
+        // Reply FIRST, then issue the storage delete. Validators have already passed,
+        // so we've reached the commit point. Reply-first is essential for the recursive
+        // self-delete case: when this handler runs on the node's OWN hub (not the mesh
+        // hub), the storage delete + subsequent DisposeRequest tears the hub down. Any
+        // response posted AFTER that teardown starts may race with callback disposal
+        // and never reach the caller — the recursive delete tests hang because of this.
+        // If the storage write itself fails (rare — persistence is durable before we
+        // arrive here), the error is logged; the Ok reply cannot be walked back.
+        hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+
         persistence.DeleteNode(path, recursive: false)
             .Subscribe(
                 _ =>
                 {
-                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()
                         ?.Publish(MeshChangeEvent.Deleted(path));
 
@@ -708,14 +718,9 @@ public static class MeshExtensions
                         "Node deleted at {Path} by {DeletedBy}",
                         path, capturedRequest.DeletedBy ?? "system");
                 },
-                ex =>
-                {
-                    logger.LogError(ex, "Storage delete failed for {Path}", path);
-                    hub.Post(
-                        DeleteNodeResponse.Fail($"Storage delete failed: {ex.Message}",
-                            NodeDeletionRejectionReason.Unknown),
-                        o => o.ResponseFor(request));
-                });
+                ex => logger.LogError(ex,
+                    "Storage delete failed for {Path} after Ok response was already sent — response cannot be walked back",
+                    path));
     }
 
     /// <summary>
@@ -849,10 +854,17 @@ public static class MeshExtensions
                             return Observable.Empty<MeshNode>();
                         }
 
+                        // Preserve creation stamps, refresh modification stamps.
                         var nodeToSave = updatedNode with
                         {
                             State = updatedNode.State != default ? updatedNode.State : existingNode.State,
-                            HubConfiguration = existingNode.HubConfiguration
+                            HubConfiguration = existingNode.HubConfiguration,
+                            CreatedDate = existingNode.CreatedDate != default ? existingNode.CreatedDate : updatedNode.CreatedDate,
+                            CreatedBy = existingNode.CreatedBy ?? updatedNode.CreatedBy,
+                            LastModified = DateTimeOffset.UtcNow,
+                            LastModifiedBy = capturedRequest.UpdatedBy
+                                ?? updatedNode.LastModifiedBy
+                                ?? existingNode.LastModifiedBy
                         };
 
                         return persistence.SaveNode(nodeToSave);

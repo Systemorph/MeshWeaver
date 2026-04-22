@@ -255,51 +255,31 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
-    /// Builds the header with the node's icon and title.
-    /// When canEdit is true, the title is click-to-edit (icon edits live in Settings &gt; Display).
+    /// Builds the header: icon + title + identity action row (Move/Copy/Delete/Edit,
+    /// plus Configuration on NodeType nodes), followed by a meta row with the node-type
+    /// link and the Created/LastModified/LastModifiedBy timestamps.
+    /// Clicking the icon opens an icon-picker dialog; clicking the title (when the
+    /// content has a Title property and the user can edit) switches it to inline edit.
     /// </summary>
     internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
-        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var title = node?.Name ?? node?.Id ?? host.Hub.Address.ToString();
+        var hubPath = host.Hub.Address.ToString();
+        var nodePath = node?.Path ?? hubPath;
+        var title = node?.Name ?? node?.Id ?? hubPath;
         var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node);
+        var rawIcon = node?.Icon;
 
-        // Build title with icon.
-        // Extra top margin separates the icon+title row from whatever sits above it
-        // (e.g. the parent back-link / breadcrumb rendered by the surrounding page).
-        var titleContent = Controls.Stack
+        // Row 1 — icon + title (+ action buttons on the right)
+        var identityRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
             .WithStyle("align-items: center; gap: 20px; margin-top: 16px;");
 
-        // Add icon/image if available
-        if (!string.IsNullOrEmpty(iconValue))
-        {
-            UiControl iconControl;
-            if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
-            {
-                iconControl = Controls.Html(
-                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {(iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover")};\" />");
-            }
-            else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            {
-                iconControl = Controls.Html(
-                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;\">{iconValue}</div>");
-            }
-            else if (MeshNodeImageHelper.IsFluentIconName(iconValue))
-            {
-                iconControl = Controls.Icon(new Icon(FluentIcons.Provider, iconValue)).WithStyle("font-size: 48px; color: var(--accent-fill-rest);");
-            }
-            else
-            {
-                // Emoji or other text — render as-is
-                iconControl = Controls.Html(
-                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 36px;\">{System.Web.HttpUtility.HtmlEncode(iconValue)}</div>");
-            }
+        identityRow = identityRow.WithView(BuildClickableIcon(host, node, iconValue, rawIcon, canEdit));
 
-            titleContent = titleContent.WithView(iconControl);
-        }
+        // Title column takes remaining width so action buttons sit at the far right.
+        var titleColumn = Controls.Stack.WithStyle("flex: 1; min-width: 0;");
 
-        // Check if content has Title property for click-to-edit
         bool hasTitleProperty = false;
         if (node?.Content is JsonElement jsonElement && jsonElement.TryGetProperty("$type", out var typeProperty))
         {
@@ -309,25 +289,170 @@ public static class MeshNodeLayoutAreas
             hasTitleProperty = contentType?.GetProperty("Title") != null;
         }
 
-        // Title - click-to-edit if we have Title property, otherwise static
         if (hasTitleProperty && node != null)
         {
-            var dataId = EditLayoutArea.GetDataId(nodePath);
-            // Data will be set up by OverviewLayoutArea.BuildPropertyOverview, just use the same ID
-            titleContent = titleContent.WithView(OverviewLayoutArea.BuildTitle(host, node, dataId, canEdit));
+            var dataId = EditLayoutArea.GetDataId(node.Namespace ?? hubPath);
+            titleColumn = titleColumn.WithView(OverviewLayoutArea.BuildTitle(host, node, dataId, canEdit));
         }
         else
         {
-            titleContent = titleContent.WithView(Controls.Html(
+            titleColumn = titleColumn.WithView(Controls.Html(
                 $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;\">" +
                 $"{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
         }
 
+        identityRow = identityRow.WithView(titleColumn);
+        identityRow = identityRow.WithView(BuildHeaderActionRow(host, node, nodePath, canEdit));
+
+        // Row 2 — node-type link + timestamps
+        var metaRow = BuildHeaderMetaRow(host, node);
+
         return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("align-items: center; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
-            .WithView(titleContent);
+            .WithStyle("padding-bottom: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); gap: 8px;")
+            .WithView(identityRow)
+            .WithView(metaRow);
+    }
+
+    /// <summary>
+    /// Renders the node icon as a clickable tile that opens the icon-picker dialog when the
+    /// user has edit rights. Falls back to a placeholder (dashed border) when no icon is set.
+    /// </summary>
+    private static UiControl BuildClickableIcon(
+        LayoutAreaHost host, MeshNode? node, string? iconValue, string? rawIcon, bool canEdit)
+    {
+        const string tileStyle = "width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2); flex-shrink: 0;";
+
+        UiControl tile;
+        if (!string.IsNullOrEmpty(iconValue))
+        {
+            if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
+            {
+                var fit = iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover";
+                tile = Controls.Html(
+                    $"<div style=\"{tileStyle}\"><img src=\"{iconValue}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {fit};\" /></div>");
+            }
+            else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            {
+                tile = Controls.Html($"<div style=\"{tileStyle}\">{iconValue}</div>");
+            }
+            else if (rawIcon != null && MeshNodeImageHelper.IsFluentIconName(rawIcon))
+            {
+                tile = Controls.Stack.WithStyle(tileStyle)
+                    .WithView(Controls.Icon(new Icon(FluentIcons.Provider, rawIcon))
+                        .WithStyle("font-size: 36px; color: var(--accent-fill-rest);"));
+            }
+            else
+            {
+                tile = Controls.Html(
+                    $"<div style=\"{tileStyle} font-size: 30px;\">{System.Web.HttpUtility.HtmlEncode(iconValue)}</div>");
+            }
+        }
+        else
+        {
+            tile = Controls.Html(
+                $"<div style=\"{tileStyle} border: 2px dashed var(--neutral-stroke-rest); background: transparent; color: var(--neutral-foreground-hint); font-size: 20px;\">+</div>");
+        }
+
+        if (!canEdit || node == null)
+            return tile;
+
+        // Wrap in a clickable stack that opens the icon-picker dialog.
+        return Controls.Stack
+            .WithStyle("cursor: pointer;")
+            .WithView(tile)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateArea(DialogControl.DialogArea, NodeIconPickerDialog.Build(host, node));
+                return Task.CompletedTask;
+            });
+    }
+
+    /// <summary>
+    /// Builds the right-aligned button row: Edit, Move, Copy, Delete, plus Configuration on
+    /// NodeType nodes and a node-type Configuration link on instance nodes.
+    /// All buttons use anchor-style navigation (no <c>await</c>); Delete routes through the
+    /// dedicated Delete area which uses Post + RegisterCallback with a progress indicator.
+    /// </summary>
+    private static UiControl BuildHeaderActionRow(
+        LayoutAreaHost host, MeshNode? node, string nodePath, bool canEdit)
+    {
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end;");
+
+        // Configuration button for NodeType definition nodes — points at their own Configuration area.
+        if (node?.NodeType == MeshNode.NodeTypePath)
+        {
+            row = row.WithView(Controls.Button("Configuration")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.Settings())
+                .WithNavigateToHref(BuildUrl(nodePath, NodeTypeLayoutAreas.ConfigurationArea)));
+        }
+
+        if (canEdit)
+        {
+            row = row.WithView(Controls.Button("Edit")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Edit())
+                .WithNavigateToHref(BuildUrl(nodePath, EditArea)));
+
+            row = row.WithView(Controls.Button("Copy")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.Copy())
+                .WithNavigateToHref(BuildUrl(nodePath, CopyArea)));
+
+            row = row.WithView(Controls.Button("Move")
+                .WithAppearance(Appearance.Neutral)
+                .WithIconStart(FluentIcons.ArrowMove())
+                .WithNavigateToHref(BuildUrl(nodePath, MoveArea)));
+
+            row = row.WithView(Controls.Button("Delete")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle("color: var(--error, #d32f2f);")
+                .WithIconStart(FluentIcons.Delete())
+                .WithNavigateToHref(BuildUrl(nodePath, DeleteArea)));
+        }
+
+        return row;
+    }
+
+    /// <summary>
+    /// Meta row under the identity row: shows node-type as a link to the type's Configuration
+    /// area and the Created / LastModified / LastModifiedBy timestamps when present.
+    /// </summary>
+    private static UiControl BuildHeaderMetaRow(LayoutAreaHost host, MeshNode? node)
+    {
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 24px; flex-wrap: wrap; font-size: 0.85rem; color: var(--neutral-foreground-hint);");
+
+        if (node != null && !string.IsNullOrEmpty(node.NodeType) && node.NodeType != MeshNode.NodeTypePath)
+        {
+            var typeHref = BuildUrl(node.NodeType, NodeTypeLayoutAreas.ConfigurationArea);
+            var typeLabel = node.NodeType.Contains('/') ? node.NodeType.Split('/').Last() : node.NodeType;
+            row = row.WithView(Controls.Html(
+                "<span style=\"display: inline-flex; align-items: center; gap: 6px;\">" +
+                "<span>Type:</span>" +
+                $"<a href=\"{typeHref}\" style=\"color: var(--accent-fill-rest); font-weight: 500;\">{System.Web.HttpUtility.HtmlEncode(typeLabel)}</a>" +
+                "</span>"));
+        }
+
+        if (node != null && node.CreatedDate != default)
+        {
+            var created = node.CreatedDate.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+            var createdBy = string.IsNullOrEmpty(node.CreatedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.CreatedBy)}";
+            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Created:</span> {created}{createdBy}</span>"));
+        }
+
+        if (node != null && node.LastModified != default)
+        {
+            var modified = node.LastModified.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+            var modifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.LastModifiedBy)}";
+            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Updated:</span> {modified}{modifiedBy}</span>"));
+        }
+
+        return row;
     }
 
 
