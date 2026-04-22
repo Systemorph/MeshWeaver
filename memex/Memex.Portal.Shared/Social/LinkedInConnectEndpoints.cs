@@ -610,7 +610,9 @@ public static class LinkedInConnectEndpoints
 
     private static (string ActorUrn, string? ActorName, string? ActorProfileUrl, DateTimeOffset CreatedAt) ExtractEngager(MeshNode node)
     {
-        string actor = "", name = null!, url = null!;
+        string actor = "";
+        string? name = null;
+        string? url = null;
         DateTimeOffset ts = DateTimeOffset.UtcNow;
 
         if (node.Content is JsonElement je)
