@@ -52,13 +52,15 @@ public record PartitionDefinition
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
     /// <summary>
-    /// Standard satellite table mappings shared by all content partitions (User, org partitions).
-    /// Activity and UserActivity get dedicated tables for high-volume, time-series queries.
-    /// Thread and ThreadMessage share a dedicated "threads" table.
-    /// Access gets its own table (used by permission rebuild functions).
-    /// Source and Test code share a dedicated "code" table.
-    /// All other satellite types (comments, approvals, tracking)
+    /// Standard table mappings shared by all content partitions (User, org partitions).
+    /// Satellite types (metadata attached to primary nodes): Activity and UserActivity
+    /// get dedicated tables for high-volume, time-series queries; Thread and
+    /// ThreadMessage share a dedicated "threads" table; Access gets its own table
+    /// (used by permission rebuild functions); comments, approvals, and tracking
     /// share the "annotations" table to simplify schema maintenance.
+    /// Non-satellite content: Source and Test are first-class code files that
+    /// share a dedicated "code" table as a storage optimization (not because they
+    /// are satellites — they are primary content with their own paths).
     /// The main mesh_nodes table only contains primary entities (MainNode == Path).
     /// </summary>
     public static Dictionary<string, string> StandardTableMappings => new()
@@ -71,8 +73,8 @@ public record PartitionDefinition
         ["_Tracking"] = "annotations",
         ["_Approval"] = "annotations",
         ["_Comment"] = "annotations",
-        ["_Source"] = "code",
-        ["_Test"] = "code",
+        ["Source"] = "code",
+        ["Test"] = "code",
     };
 
     /// <summary>

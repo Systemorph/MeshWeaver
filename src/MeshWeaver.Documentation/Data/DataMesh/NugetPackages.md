@@ -74,7 +74,7 @@ If the package id is unknown, the version does not exist, or the kernel cannot r
 
 ## Also in node types
 
-The same directive works at the top of any `_Source/*.cs` file in a node type. See [NuGet Packages in Node Types](NodeTypeWithNuGet) for the end-to-end walkthrough.
+The same directive works at the top of any `Source/*.cs` file in a node type. See [NuGet Packages in Node Types](NodeTypeWithNuGet) for the end-to-end walkthrough.
 
 ## Deployment — no SDK required
 
@@ -86,5 +86,5 @@ The restore is a library operation on `NuGet.Protocol` + `NuGet.Packaging` + `Nu
 ## Related
 
 - [Interactive Markdown](InteractiveMarkdown) — how code cells and `--render` areas work
-- [NuGet Packages in Node Types](NodeTypeWithNuGet) — same directive in `_Source/*.cs`
+- [NuGet Packages in Node Types](NodeTypeWithNuGet) — same directive in `Source/*.cs`
 - [Data Modeling](DataModeling) — referencing your own schema types from a code cell

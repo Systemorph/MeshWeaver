@@ -26,24 +26,29 @@ public static class CodeNodeType
     }
 
     /// <summary>
+    /// The sub-namespace for source code files. Code nodes live under
+    /// <c>{NodeTypePath}/Source/</c> alongside (not inside) their parent NodeType.
+    /// This is a content folder, not a satellite namespace.
+    /// </summary>
+    public const string SourceSubNamespace = "Source";
+
+    /// <summary>
+    /// The sub-namespace for test code files. Tests live under
+    /// <c>{NodeTypePath}/Test/</c> alongside (not inside) their parent NodeType.
+    /// This is a content folder, not a satellite namespace.
+    /// </summary>
+    public const string TestSubNamespace = "Test";
+
+    /// <summary>
     /// Creates a MeshNode definition for the Code node type.
-    /// This provides HubConfiguration for nodes with nodeType="Code".
+    /// Code nodes are primary content (source files), not satellite metadata —
+    /// they are browsable, addressable, and first-class children of their NodeType.
     /// </summary>
-    /// <summary>
-    /// The sub-namespace for source code files.
-    /// </summary>
-    public const string SourceSubNamespace = "_Source";
-
-    /// <summary>
-    /// The sub-namespace for test code files.
-    /// </summary>
-    public const string TestSubNamespace = "_Test";
-
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Code",
         Icon = "/static/NodeTypeIcons/code.svg",
-        IsSatelliteType = true,
+        IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(CodeNodeType).Assembly.Location,
         HubConfiguration = config => config

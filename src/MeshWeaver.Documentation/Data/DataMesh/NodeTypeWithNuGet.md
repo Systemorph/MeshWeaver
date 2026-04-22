@@ -1,16 +1,16 @@
 ---
 Name: NuGet Packages in Node Types
 Category: Documentation
-Description: Reference any NuGet package from a node type's _Source/*.cs file using the #r "nuget:..." directive. No redeploy, no SDK on the container.
+Description: Reference any NuGet package from a node type's Source/*.cs file using the #r "nuget:..." directive. No redeploy, no SDK on the container.
 ---
 
-When a node type needs a library that isn't already referenced by the portal — statistics, charting, PDF, a cloud SDK — you don't want to redeploy. Add a `#r "nuget:..."` directive at the top of any file under the node type's `_Source/` folder and the compiler restores the package in-process before compiling.
+When a node type needs a library that isn't already referenced by the portal — statistics, charting, PDF, a cloud SDK — you don't want to redeploy. Add a `#r "nuget:..."` directive at the top of any file under the node type's `Source/` folder and the compiler restores the package in-process before compiling.
 
-This works for both **node type compilation** (C# sources under `_Source/`) and **interactive markdown** code cells (see [NuGet Packages](NugetPackages)). The same resolver handles both.
+This works for both **node type compilation** (C# sources under `Source/`) and **interactive markdown** code cells (see [NuGet Packages](NugetPackages)). The same resolver handles both.
 
 ## The directive
 
-At the top of any `.cs` file under `_Source/`, before `using` statements:
+At the top of any `.cs` file under `Source/`, before `using` statements:
 
 ```csharp
 #r "nuget:MathNet.Numerics, 5.0.0"
@@ -39,12 +39,12 @@ samples/Graph/Data/
   MathDemo/
     Matrix.json              # NodeType definition
     Matrix/
-      _Source/
+      Source/
         Matrix.cs            # Content record — references MathNet
         MatrixLayoutAreas.cs # Layout area that invokes MathNet
 ```
 
-### 2. `_Source/Matrix.cs`
+### 2. `Source/Matrix.cs`
 
 ```csharp
 // <meshweaver>
@@ -79,7 +79,7 @@ public record Matrix
 }
 ```
 
-### 3. `_Source/MatrixLayoutAreas.cs`
+### 3. `Source/MatrixLayoutAreas.cs`
 
 ```csharp
 // <meshweaver>
@@ -120,7 +120,7 @@ public static class MatrixLayoutAreas
 }
 ```
 
-Pin the same package version across every `_Source/` file that uses it — each file is resolved independently, so mismatched versions would produce conflicting assemblies.
+Pin the same package version across every `Source/` file that uses it — each file is resolved independently, so mismatched versions would produce conflicting assemblies.
 
 ### 4. `Matrix.json`
 
@@ -145,7 +145,7 @@ Pin the same package version across every `_Source/` file that uses it — each 
 
 ## See it run
 
-The deployed sample lives at `MathDemo/Matrix/Example`. Its `Inverse` layout area — rendered by `MatrixLayoutAreas.Inverse` compiled from `_Source/` with the `#r "nuget:MathNet.Numerics, 5.0.0"` directive — embeds directly below:
+The deployed sample lives at `MathDemo/Matrix/Example`. Its `Inverse` layout area — rendered by `MatrixLayoutAreas.Inverse` compiled from `Source/` with the `#r "nuget:MathNet.Numerics, 5.0.0"` directive — embeds directly below:
 
 @MathDemo/Matrix/Example/Inverse
 

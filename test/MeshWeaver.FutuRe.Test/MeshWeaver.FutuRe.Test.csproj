@@ -15,15 +15,15 @@
 
   <ItemGroup>
     <!-- Include mesh node source files for compile-time unit testing -->
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\GroupAnalysis\_Source\FutuReDataCube.cs" Link="MeshNodeSources\FutuReDataCube.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\TransactionMapping\_Source\TransactionMapping.cs" Link="MeshNodeSources\TransactionMapping.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\LineOfBusiness\_Source\LineOfBusiness.cs" Link="MeshNodeSources\LineOfBusiness.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\ExchangeRate\_Source\ExchangeRate.cs" Link="MeshNodeSources\ExchangeRate.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\BusinessUnit\_Source\BusinessUnit.cs" Link="MeshNodeSources\BusinessUnit.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\AmountType\_Source\AmountType.cs" Link="MeshNodeSources\AmountType.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\Currency\_Source\Currency.cs" Link="MeshNodeSources\Currency.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\Country\_Source\Country.cs" Link="MeshNodeSources\Country.cs" />
-    <Compile Include="..\..\samples\Graph\Data\FutuRe\GroupAnalysis\_Source\FutuReDataLoader.cs" Link="MeshNodeSources\FutuReDataLoader.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\GroupAnalysis\Source\FutuReDataCube.cs" Link="MeshNodeSources\FutuReDataCube.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\TransactionMapping\Source\TransactionMapping.cs" Link="MeshNodeSources\TransactionMapping.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\LineOfBusiness\Source\LineOfBusiness.cs" Link="MeshNodeSources\LineOfBusiness.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\ExchangeRate\Source\ExchangeRate.cs" Link="MeshNodeSources\ExchangeRate.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\BusinessUnit\Source\BusinessUnit.cs" Link="MeshNodeSources\BusinessUnit.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\AmountType\Source\AmountType.cs" Link="MeshNodeSources\AmountType.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\Currency\Source\Currency.cs" Link="MeshNodeSources\Currency.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\Country\Source\Country.cs" Link="MeshNodeSources\Country.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\GroupAnalysis\Source\FutuReDataLoader.cs" Link="MeshNodeSources\FutuReDataLoader.cs" />
   </ItemGroup>
 
   <ItemGroup>

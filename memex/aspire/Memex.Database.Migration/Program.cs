@@ -503,6 +503,7 @@ if (currentVersion < 7)
     {
         "admin", "portal", "kernel",
         "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        "source", "test",
         "login", "markdown", "onboarding", "welcome", "settings", "storage",
         "p", "mesh", "thread", "agent", "partition", "organization", "vuser",
         "public", "information_schema", "pg_catalog", "pg_toast"

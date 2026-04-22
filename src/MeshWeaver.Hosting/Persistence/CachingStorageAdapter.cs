@@ -516,7 +516,9 @@ public class CachingStorageAdapter : IStorageAdapter
     }
 
     private static bool IsCodeSubNamespace(string? name) =>
-        string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
+        string.Equals(name, "Source", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "Test", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
         || string.Equals(name, "_Test", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>

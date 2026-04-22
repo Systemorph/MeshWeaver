@@ -99,8 +99,8 @@ Satellite entities are stored in dedicated sub-namespaces within the node hierar
 | `_Approval` | `approvals` | Approval | Approval workflow records |
 | `_Access` | `access` | AccessAssignment | Permission grants/denials |
 | `_Comment` | `comments` | Comment | Document comments |
-| `_Source` | (file system only) | Code | Source code files (.cs) |
-| `_Test` | (file system only) | Code | Test code files (.cs) |
+| `Source` | `code` | Code | Source code files (.cs) — **primary content, not a satellite**. Routed to the `code` table as a storage optimization. |
+| `Test` | `code` | Code | Test code files (.cs) — **primary content, not a satellite**. Routed to the `code` table as a storage optimization. |
 
 ## File System Layout
 
@@ -115,7 +115,7 @@ ACME/
   Projects/
     Alpha/
       index.md                      ← Main Alpha node
-      _Source/
+      Source/
         Alpha.cs                    ← Source code
         AlphaLayoutAreas.cs         ← Layout area definitions
       _Comment/

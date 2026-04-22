@@ -113,7 +113,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                         }
 
                         // Owning-NodeType match: the changed node lives under a NodeType's
-                        // _Source/ folder (convention: {NodeTypePath}/_Source/{File}). Updates
+                        // Source/ folder (convention: {NodeTypePath}/Source/{File}). Updates
                         // to these Code pieces change what the NodeType compiles to, so the
                         // owning NodeType's cache (in-memory + on-disk DLL) must be flushed —
                         // otherwise the stale DLL keeps being served because the NodeType's
@@ -327,7 +327,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         // Also delete the on-disk DLL/PDB/source so the next access forces a fresh
         // compile. Without this, IsCacheValid can still return true when the NodeType's
-        // own LastModified hasn't changed (e.g. a _Source/ child was edited).
+        // own LastModified hasn't changed (e.g. a Source/ child was edited).
         try
         {
             var nodeName = cacheService.SanitizeNodeName(nodeTypePath);
@@ -346,9 +346,10 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     }
 
     /// <summary>
-    /// Resolves the owning NodeType path for a node whose path contains a "_Source"
+    /// Resolves the owning NodeType path for a node whose path contains a "Source"
     /// segment (the established convention for source-code pieces). Returns the parent
-    /// of "_Source". Example: "Org/MyType/_Source/Foo" → "Org/MyType". Returns null if
+    /// of "Source". Example: "Org/MyType/Source/Foo" → "Org/MyType". Legacy
+    /// "_Source" paths are recognised for backward compatibility. Returns null if
     /// the path doesn't follow the convention.
     /// </summary>
     private static string? TryResolveOwningNodeTypePath(string path)
@@ -357,7 +358,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         var segments = path.Split('/');
         for (var i = 1; i < segments.Length; i++)
         {
-            if (string.Equals(segments[i], "_Source", StringComparison.Ordinal))
+            if (string.Equals(segments[i], "Source", StringComparison.Ordinal)
+                || string.Equals(segments[i], "_Source", StringComparison.Ordinal))
                 return string.Join("/", segments.Take(i));
         }
         return null;
@@ -646,12 +648,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// Turns the NodeType's <see cref="NodeTypeDefinition.Sources"/> list into concrete
     /// storage paths to probe for Code nodes. Lines understood:
     /// <list type="bullet">
-    ///   <item><c>"_Source"</c> (or any value without <c>/</c>) — rebased onto <paramref name="nodeTypePath"/>.</item>
+    ///   <item><c>"Source"</c> (or any value without <c>/</c>) — rebased onto <paramref name="nodeTypePath"/>.</item>
     ///   <item><c>"namespace:X"</c> / <c>"path:X"</c> — the X part is used as a storage path.</item>
     ///   <item><c>"@X"</c> / <c>"@@X"</c> — shorthand for the path X.</item>
     ///   <item><c>$self</c> inside any entry — expanded to <paramref name="nodeTypePath"/>.</item>
     /// </list>
-    /// If the list is null or empty, defaults to <c>"{nodeTypePath}/_Source"</c>.
+    /// If the list is null or empty, defaults to <c>"{nodeTypePath}/Source"</c>.
     /// Query-syntax decoration like <c>scope:subtree</c> and <c>nodeType:Code</c> is
     /// stripped — this helper is only concerned with the path segment, since we feed
     /// <see cref="IMeshStorage.GetDescendantsAsync"/> below.
@@ -661,7 +663,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         string nodeTypePath)
     {
         if (sources == null || sources.Count == 0)
-            return [$"{nodeTypePath}/_Source"];
+            return [$"{nodeTypePath}/{CodeNodeType.SourceSubNamespace}"];
 
         var result = new List<string>(sources.Count);
         foreach (var raw in sources)
@@ -695,7 +697,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             if (value.Length > 0)
                 result.Add(value);
         }
-        return result.Count > 0 ? result : [$"{nodeTypePath}/_Source"];
+        return result.Count > 0 ? result : [$"{nodeTypePath}/{CodeNodeType.SourceSubNamespace}"];
     }
 
     /// <summary>
@@ -727,12 +729,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return (null, null);
         }
 
-        // Collect Code nodes from the configured sources. Default: the sibling "_Source"
-        // subtree. `GetAllDescendantsAsync` (not `GetDescendantsAsync`) is used because
-        // Code nodes are persisted as satellites — CreateNodeRequest auto-sets
-        // MainNode to the parent namespace for any NodeType registered as satellite.
-        // The regular `GetDescendantsAsync` in InMemoryPersistenceService excludes
-        // satellites from browsing; the `All` variant includes them.
+        // Collect Code nodes from the configured sources. Default: the sibling "Source"
+        // subtree. `GetAllDescendantsAsync` (not `GetDescendantsAsync`) is used as a
+        // belt-and-braces include — Code nodes are primary content (IsSatelliteType =
+        // false), but historic data may still carry satellite-style MainNode values
+        // from when Code was registered as a satellite type.
         // We also check the parent path as a single-node fetch so `path:X` shorthand
         // with a leaf Code node path works.
         var codeFiles = new List<string>();
@@ -765,7 +766,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             "NodeType '{NodeTypePath}' source discovery: {Count} Code nodes from [{Paths}]",
             nodeTypePath, codeFiles.Count, string.Join(", ", codeFilePaths));
 
-        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
+        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Source/LineOfBusiness)
         if (compilationService != null)
         {
             for (int i = 0; i < codeFiles.Count; i++)
@@ -776,7 +777,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         if (codeFiles.Count == 0)
         {
-            logger.LogWarning("NodeType '{NodeTypePath}' has no code files under /_Source. Hub will use default configuration only.", nodeTypePath);
+            logger.LogWarning("NodeType '{NodeTypePath}' has no code files under /Source. Hub will use default configuration only.", nodeTypePath);
         }
 
         var code = codeFiles.Count > 0 ? string.Join("\n\n", codeFiles) : null;

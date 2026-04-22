@@ -670,8 +670,8 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     [Fact]
     public async Task GetPartitionObjects_ReadsCSharpFiles()
     {
-        // Arrange - Create a _Source partition with .cs files
-        var codeDir = Path.Combine(_testDirectory, "Type", "Person", "_Source");
+        // Arrange - Create a Source partition with .cs files
+        var codeDir = Path.Combine(_testDirectory, "Type", "Person", "Source");
         Directory.CreateDirectory(codeDir);
         await File.WriteAllTextAsync(Path.Combine(codeDir, "Person.cs"), """
             public record Person
@@ -682,7 +682,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
             """);
 
         // Act
-        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Person", "_Source", JsonOptions).ToListAsync();
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Person", "Source", JsonOptions).ToListAsync();
 
         // Assert
         objects.Should().HaveCount(1);
@@ -695,7 +695,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GetPartitionObjects_ReadsCSharpFilesWithMetadata()
     {
         // Arrange
-        var codeDir = Path.Combine(_testDirectory, "Type", "Org", "_Source");
+        var codeDir = Path.Combine(_testDirectory, "Type", "Org", "Source");
         Directory.CreateDirectory(codeDir);
         await File.WriteAllTextAsync(Path.Combine(codeDir, "Organization.cs"), """
             // <meshweaver>
@@ -711,7 +711,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
             """);
 
         // Act
-        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Org", "_Source", JsonOptions).ToListAsync();
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Org", "Source", JsonOptions).ToListAsync();
 
         // Assert
         objects.Should().HaveCount(1);
@@ -730,10 +730,10 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         };
 
         // Act
-        await _storageAdapter.SavePartitionObjectsAsync("Type/Test", "_Source", [codeConfig], JsonOptions);
+        await _storageAdapter.SavePartitionObjectsAsync("Type/Test", "Source", [codeConfig], JsonOptions);
 
         // Assert
-        var csPath = Path.Combine(_testDirectory, "Type", "Test", "_Source", "MyClass.cs");
+        var csPath = Path.Combine(_testDirectory, "Type", "Test", "Source", "MyClass.cs");
         File.Exists(csPath).Should().BeTrue();
         var content = await File.ReadAllTextAsync(csPath);
         content.Should().Contain("public class MyClass { }");
@@ -744,7 +744,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GetPartitionObjects_HandlesMixedJsonAndCsFiles()
     {
         // Arrange
-        var codeDir = Path.Combine(_testDirectory, "Type", "Mixed", "_Source");
+        var codeDir = Path.Combine(_testDirectory, "Type", "Mixed", "Source");
         Directory.CreateDirectory(codeDir);
 
         // Add a .cs file
@@ -756,7 +756,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
             """);
 
         // Act
-        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Mixed", "_Source", JsonOptions).ToListAsync();
+        var objects = await _storageAdapter.GetPartitionObjectsAsync("Type/Mixed", "Source", JsonOptions).ToListAsync();
 
         // Assert
         objects.Should().HaveCount(2);

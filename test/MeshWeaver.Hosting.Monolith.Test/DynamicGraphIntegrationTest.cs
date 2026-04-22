@@ -583,12 +583,12 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Verifies the parent path derivation logic used by CodeLayoutAreas.Overview.
-    /// For a code node at "ACME/Project/_Source/code", the parent NodeType path should be "ACME/Project".
+    /// For a code node at "ACME/Project/Source/code", the parent NodeType path should be "ACME/Project".
     /// </summary>
     [Theory]
-    [InlineData("ACME/Project/_Source/code", "ACME/Project")]
-    [InlineData("Organization/_Source/Organization", "Organization")]
-    [InlineData("a/b/_Source/c", "a/b")]
+    [InlineData("ACME/Project/Source/code", "ACME/Project")]
+    [InlineData("Organization/Source/Organization", "Organization")]
+    [InlineData("a/b/Source/c", "a/b")]
     public void CodeNode_ParentPathParsing_StripsTwoSegments(string codePath, string expectedParent)
     {
         var segments = codePath.Split('/');
@@ -602,7 +602,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Verifies that IMeshService with scope:descendants finds Code nodes that are 2 levels deep.
-    /// Code nodes at "ACME/Project/_Source/code" are NOT immediate children of "ACME/Project" (they're
+    /// Code nodes at "ACME/Project/Source/code" are NOT immediate children of "ACME/Project" (they're
     /// grandchildren), so namespace: would miss them. scope:descendants is required.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -616,7 +616,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         foreach (var node in nodes)
             Output.WriteLine($"Found Code node: {node.Path} (NodeType={node.NodeType})");
 
-        // Assert: should find the code nodes from ACME/Project/_Source/
+        // Assert: should find the code nodes from ACME/Project/Source/
         nodes.Should().NotBeEmpty("scope:descendants should find Code nodes 2 levels deep");
         nodes.Should().OnlyContain(n => n.NodeType == "Code", "All results should be Code nodes");
     }
@@ -636,7 +636,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         foreach (var node in nodes)
             Output.WriteLine($"Found with namespace: {node.Path}");
 
-        // Assert: namespace: only checks 1 level deep — Code nodes are at depth 2 (ACME/Project/_Source/id)
+        // Assert: namespace: only checks 1 level deep — Code nodes are at depth 2 (ACME/Project/Source/id)
         nodes.Should().BeEmpty("namespace: only finds immediate children; Code nodes are 2 levels deep");
     }
 
@@ -657,7 +657,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
             Output.WriteLine($"ACME/Project -> Code node: {node.Path}");
 
         // Assert
-        nodes.Should().NotBeEmpty("ACME/Project should have Code descendants from _Source/ directory");
+        nodes.Should().NotBeEmpty("ACME/Project should have Code descendants from Source/ directory");
         nodes.Should().OnlyContain(n => n.NodeType == "Code");
         nodes.Should().OnlyContain(n => n.Content is CodeConfiguration,
             "Code node Content should be CodeConfiguration");
@@ -726,15 +726,15 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
 
-        // 2. Create Type/Organizations/_Source/codeConfiguration.json - Code as child MeshNode
+        // 2. Create Type/Organizations/Source/codeConfiguration.json - Code as child MeshNode
         var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
-        var codeDir = Path.Combine(organizationsTypeDir, "_Source");
+        var codeDir = Path.Combine(organizationsTypeDir, "Source");
         Directory.CreateDirectory(codeDir);
 
         var codeConfigJson = """
         {
           "id": "codeConfiguration",
-          "namespace": "Type/Organizations/_Source",
+          "namespace": "Type/Organizations/Source",
           "name": "Code",
           "nodeType": "Code",
           "content": {
@@ -793,13 +793,13 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeGraphDir, "graph.json"), graphTypeJson);
 
-        var graphCodeDir = Path.Combine(typeGraphDir, "graph", "_Source");
+        var graphCodeDir = Path.Combine(typeGraphDir, "graph", "Source");
         Directory.CreateDirectory(graphCodeDir);
 
         var graphCodeConfigJson = """
         {
           "id": "codeConfiguration",
-          "namespace": "type/graph/_Source",
+          "namespace": "type/graph/Source",
           "name": "Code",
           "nodeType": "Code",
           "content": {
@@ -875,7 +875,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     public async Task FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
         // Act - get children of the Code path
-        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Type/Organizations/_Source", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Type/Organizations/Source", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         codeChildren.Should().NotBeEmpty("Code path should have child MeshNodes with CodeConfiguration");
@@ -971,25 +971,25 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 20000)]
     public async Task Project_QueryAsync_ScopeDescendants_FindsCodeNodes()
     {
-        var queryString = $"namespace:{ProjectNodeTypePath}/_Source nodeType:Code";
+        var queryString = $"namespace:{ProjectNodeTypePath}/Source nodeType:Code";
         var results = await MeshQuery.QueryAsync<MeshNode>(queryString)
             .ToListAsync(TestContext.Current.CancellationToken);
         Output.WriteLine($"Query '{queryString}' returned {results.Count} results");
         foreach (var r in results)
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
-        results.Should().NotBeEmpty("Project should have Code nodes under _Source");
+        results.Should().NotBeEmpty("Project should have Code nodes under Source");
     }
 
     [Fact(Timeout = 20000)]
     public async Task Todo_QueryAsync_FindsCodeNodes()
     {
-        var queryString = $"namespace:{TodoNodeTypePath}/_Source nodeType:Code";
+        var queryString = $"namespace:{TodoNodeTypePath}/Source nodeType:Code";
         var results = await MeshQuery.QueryAsync<MeshNode>(queryString)
             .ToListAsync(TestContext.Current.CancellationToken);
         Output.WriteLine($"Query '{queryString}' returned {results.Count} results");
         foreach (var r in results)
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
-        results.Should().NotBeEmpty("Todo should have Code nodes under _Source");
+        results.Should().NotBeEmpty("Todo should have Code nodes under Source");
     }
 
     [Fact(Timeout = 20000)]
