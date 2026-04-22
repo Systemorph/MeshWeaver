@@ -3,6 +3,29 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
+/// Distinct lifecycle states of a NodeType's compile. Consumers (e.g. MCP
+/// <c>GetDiagnostics</c>) must distinguish <see cref="Unknown"/> — "nothing
+/// is recorded because no compile has run since the last invalidation" —
+/// from <see cref="Ok"/> — "the last compile actually succeeded". Returning
+/// the former as the latter causes false-green diagnostics (edit → recycle →
+/// diagnostics reports Ok → user navigates → fresh compile fails).
+/// </summary>
+public enum CompilationStatus
+{
+    /// <summary>No compile has completed since the last invalidation.</summary>
+    Unknown,
+
+    /// <summary>A compile is currently running.</summary>
+    Compiling,
+
+    /// <summary>The most recent compile completed successfully.</summary>
+    Ok,
+
+    /// <summary>The most recent compile failed; <c>GetCompilationError</c> has the text.</summary>
+    Error
+}
+
+/// <summary>
 /// Service for managing NodeType data with caching and compilation.
 /// </summary>
 public interface INodeTypeService
@@ -80,4 +103,55 @@ public interface INodeTypeService
     /// blocked waiting on a compile.
     /// </summary>
     IReadOnlyCollection<string> GetCompilingPaths() => Array.Empty<string>();
+
+    /// <summary>
+    /// When the last successful compile for <paramref name="nodeTypePath"/>
+    /// completed (UTC). Returns <c>null</c> if no compile has succeeded since
+    /// the NodeType was last invalidated. Paired with <see cref="GetStatus"/>
+    /// to let diagnostics distinguish "never compiled" from "compiled cleanly".
+    /// </summary>
+    DateTimeOffset? GetLastSuccessfulCompileAt(string nodeTypePath) => null;
+
+    /// <summary>
+    /// Four-state lifecycle of a NodeType's compile. Precedence:
+    /// <list type="number">
+    ///   <item><see cref="CompilationStatus.Compiling"/> if a compile is running.</item>
+    ///   <item><see cref="CompilationStatus.Error"/> if the most recent compile failed
+    ///     (<see cref="GetCompilationError"/> returns the text).</item>
+    ///   <item><see cref="CompilationStatus.Ok"/> if a compile has succeeded since
+    ///     the last invalidation (<see cref="GetLastSuccessfulCompileAt"/> is set).</item>
+    ///   <item><see cref="CompilationStatus.Unknown"/> otherwise — no compile has
+    ///     completed since invalidation; the caller should trigger one (e.g.
+    ///     navigate to a layout area) before trusting any prior state.</item>
+    /// </list>
+    /// </summary>
+    CompilationStatus GetStatus(string nodeTypePath)
+    {
+        if (IsCompiling(nodeTypePath)) return CompilationStatus.Compiling;
+        if (!string.IsNullOrEmpty(GetCompilationError(nodeTypePath))) return CompilationStatus.Error;
+        return GetLastSuccessfulCompileAt(nodeTypePath) is null
+            ? CompilationStatus.Unknown
+            : CompilationStatus.Ok;
+    }
+
+    /// <summary>
+    /// Fully-reactive assembly path lookup. Per the rules in
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>, callers must compose this with
+    /// <c>SelectMany</c> / <c>Subscribe</c> — never <c>await</c> — because the flow
+    /// runs through the hub pipeline (<c>GetDataRequest</c> for the current NodeType
+    /// node, <see cref="IAssemblyStore"/> for the cached bytes, and a hub-dispatched
+    /// compile on cache miss) and any <c>await</c> on that path will deadlock.
+    ///
+    /// Contract: emits a single local filesystem path the caller can feed to
+    /// <c>AssemblyLoadContext.LoadFromAssemblyPath</c>. The path corresponds to the
+    /// assembly for the NodeType's current <see cref="Mesh.MeshNode.Version"/> — if the
+    /// store has it, the path comes straight from there; otherwise the service compiles,
+    /// stores, and emits the resulting path.
+    /// </summary>
+    IObservable<string> GetAssemblyPath(string nodeTypePath) =>
+        System.Reactive.Linq.Observable.Throw<string>(
+            new System.NotSupportedException(
+                "IAssemblyStore-backed GetAssemblyPath is not wired on this INodeTypeService — "
+                + "register a concrete store (AddFileSystemAssemblyStore / AddBlobAssemblyStore) "
+                + "and a NodeTypeService that consumes it."));
 }

@@ -385,6 +385,11 @@ public static class MemexConfiguration
                 .AddMarkdownExport()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
+                // Shared NodeType assembly cache (versioned, cross-replica consistent).
+                // Requires `AddKeyedAzureBlobServiceClient("nodetype-cache")` to have
+                // registered a keyed BlobServiceClient — Aspire wires this via the
+                // `nodetype-cache` container reference on the portal resource.
+                .ConfigureServices(services => services.AddBlobAssemblyStore())
                 // Register the mesh catalog and its public interfaces
                 .ConfigureServices(services => services.AddMeshCatalog())
                 // Configure default views and content collections for each node hub

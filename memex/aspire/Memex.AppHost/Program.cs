@@ -188,6 +188,11 @@ if (appInsights is not null)
     portal = portal.WithReference(appInsights);
 
 // --- Azure Blob Storage ---
+// Two blob containers share the `memexblobs` storage account:
+//   `storage`         — content collections (files uploaded by users, article assets, etc.)
+//   `nodetype-cache`  — content-addressed NodeType compiled assemblies (keyed by SHA-256
+//                       of source + config + runtime), replacing the in-memory compile cache
+//                       with a durable, cross-replica-consistent lookup.
 if (useLocalDb)
 {
     // Local emulated storage
@@ -198,7 +203,9 @@ if (useLocalDb)
                 .WithLifetime(ContainerLifetime.Persistent)
                 .WithExternalHttpEndpoints());
     var storageBlobs = contentStorage.AddBlobs("storage");
+    var nodeTypeCache = contentStorage.AddBlobs("nodetype-cache");
     portal.WithReference(storageBlobs).WaitFor(storageBlobs);
+    portal.WithReference(nodeTypeCache).WaitFor(nodeTypeCache);
 }
 else if (mode is "local-test" or "local-prod")
 {
@@ -207,7 +214,9 @@ else if (mode is "local-test" or "local-prod")
     var contentStorage = builder.AddAzureStorage("memexblobs")
         .RunAsExisting(storageName, null);
     var storageBlobs = contentStorage.AddBlobs("storage");
+    var nodeTypeCache = contentStorage.AddBlobs("nodetype-cache");
     portal.WithReference(storageBlobs);
+    portal.WithReference(nodeTypeCache);
 }
 else
 {
@@ -221,7 +230,9 @@ else
             storageAccount.Location = new Azure.Core.AzureLocation("swedencentral");
         });
     var storageBlobs = contentStorage.AddBlobs("storage");
+    var nodeTypeCache = contentStorage.AddBlobs("nodetype-cache");
     portal.WithReference(storageBlobs).WaitFor(storageBlobs);
+    portal.WithReference(nodeTypeCache).WaitFor(nodeTypeCache);
 }
 
 // --- PostgreSQL ---

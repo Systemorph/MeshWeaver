@@ -20,6 +20,9 @@ builder.AddServiceDefaults();
 builder.AddKeyedAzureTableServiceClient("orleans-clustering");
 builder.AddKeyedAzureBlobServiceClient("storage");
 builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
+// Shared NodeType compile cache — versioned assemblies live here, replacing the
+// per-replica in-memory compile cache with a durable cross-replica lookup.
+builder.AddKeyedAzureBlobServiceClient("nodetype-cache");
 
 // Persistent NuGet package cache backed by the content-storage account. Each resolved
 // package is stored as a .zip blob under container "nuget-cache" keyed by {id}/{version}.

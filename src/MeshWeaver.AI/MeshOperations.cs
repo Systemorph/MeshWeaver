@@ -1054,27 +1054,85 @@ public class MeshOperations
                 new { status = "Unknown", message = $"Not found: {resolvedPath}" },
                 hub.JsonSerializerOptions);
 
-        // Compiling has priority over any prior error — the error we're seeing is stale
-        // and a fresh result is on its way. Tell the caller to wait and retry.
-        if (nodeTypeService.IsCompiling(nodeTypePath))
-        {
-            var startedAt = nodeTypeService.GetCompilationStartedAt(nodeTypePath);
-            var elapsedMs = startedAt is null
-                ? (long?)null
-                : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
-            return JsonSerializer.Serialize(
-                new { status = "Compiling", nodeTypePath, elapsedMs },
-                hub.JsonSerializerOptions);
-        }
-
-        var err = nodeTypeService.GetCompilationError(nodeTypePath);
-        if (string.IsNullOrEmpty(err))
-            return JsonSerializer.Serialize(
-                new { status = "Ok", nodeTypePath },
-                hub.JsonSerializerOptions);
-
-        return JsonSerializer.Serialize(
-            new { status = "Error", nodeTypePath, error = err },
+        // Four-state lifecycle: Compiling, Error, Ok, Unknown. The last one
+        // matters — before this fix, "no compile has run since invalidation"
+        // was reported as Ok, so diagnostics right after a Recycle lied.
+        var status = nodeTypeService.GetStatus(nodeTypePath);
+        return FormatDiagnostics(
+            status,
+            nodeTypePath,
+            error: status == CompilationStatus.Error ? nodeTypeService.GetCompilationError(nodeTypePath) : null,
+            startedAt: status == CompilationStatus.Compiling ? nodeTypeService.GetCompilationStartedAt(nodeTypePath) : null,
+            lastCompiledAt: status == CompilationStatus.Ok ? nodeTypeService.GetLastSuccessfulCompileAt(nodeTypePath) : null,
             hub.JsonSerializerOptions);
+    }
+
+    /// <summary>
+    /// Pure JSON formatter for <see cref="GetDiagnostics"/>. Lives on its own so a unit
+    /// test can lock in the exact wording: in particular, the Ok branch must explicitly
+    /// say "Compile SUCCEEDED" (not just "status: Ok") so that agents and humans reading
+    /// the response can't confuse "no error recorded" with "compile actually ran cleanly".
+    /// </summary>
+    public static string FormatDiagnostics(
+        CompilationStatus status,
+        string nodeTypePath,
+        string? error,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? lastCompiledAt,
+        JsonSerializerOptions options)
+    {
+        switch (status)
+        {
+            case CompilationStatus.Compiling:
+            {
+                var elapsedMs = startedAt is null
+                    ? (long?)null
+                    : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Compiling",
+                        nodeTypePath,
+                        elapsedMs,
+                        message = "Compile is IN PROGRESS. The NodeType assembly is not yet available — "
+                            + "wait and re-call GetDiagnostics."
+                    },
+                    options);
+            }
+            case CompilationStatus.Error:
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Error",
+                        nodeTypePath,
+                        error,
+                        message = "Compile FAILED. The NodeType assembly was NOT built — see `error` "
+                            + "for the Roslyn diagnostics. Fix the source and recycle the NodeType."
+                    },
+                    options);
+            case CompilationStatus.Ok:
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Ok",
+                        nodeTypePath,
+                        lastCompiledAt,
+                        message = "Compile SUCCEEDED at " + lastCompiledAt?.ToString("u")
+                            + ". The NodeType assembly was built without errors and is loaded."
+                    },
+                    options);
+            case CompilationStatus.Unknown:
+            default:
+                return JsonSerializer.Serialize(
+                    new
+                    {
+                        status = "Unknown",
+                        nodeTypePath,
+                        message = "NO compile has run since the last invalidation (this is NOT 'Ok'). "
+                            + "The assembly state is unknown — trigger a compile (e.g. navigate to a "
+                            + "layout area on an instance) and re-call GetDiagnostics."
+                    },
+                    options);
+        }
     }
 }

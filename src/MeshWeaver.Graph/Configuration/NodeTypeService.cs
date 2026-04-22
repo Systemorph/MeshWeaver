@@ -28,6 +28,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     private readonly MeshConfiguration meshConfiguration;
     private readonly ICompilationCacheService cacheService;
     private readonly CompilationCacheOptions cacheOptions;
+    private readonly IAssemblyStore assemblyStore;
 
     // Compilation tasks by nodeTypePath - uses Task (not Lazy<Task>) to allow retry on failure
     private readonly ConcurrentDictionary<string, Task<NodeTypeCacheEntry?>> _compilationTasks = new();
@@ -55,6 +56,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // GetDiagnostics / progress overlays so callers can show "Compiling…" while they wait.
     private readonly ConcurrentDictionary<string, DateTimeOffset> _compilingInProgress = new();
 
+    /// <summary>
+    /// Timestamp of the last successful compile per NodeType path. Set when a compile
+    /// finishes without errors; cleared by <see cref="InvalidateCache"/> and by a new
+    /// compile failure. Distinguishes "compiled cleanly at least once" (status = Ok)
+    /// from "no compile has run since invalidation" (status = Unknown).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _compilationSucceededAt = new();
+
     // Cached access rules extracted from hub configurations
     private readonly ConcurrentDictionary<string, INodeTypeAccessRule> _accessRules = new();
 
@@ -70,7 +79,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         ICompilationCacheService cacheService,
         IOptions<CompilationCacheOptions> cacheOptions,
         MeshNodeCompilationService? compilationService = null,
-        IMeshChangeFeed? changeFeed = null)
+        IMeshChangeFeed? changeFeed = null,
+        IAssemblyStore? assemblyStore = null)
     {
         this.hub = hub;
         this.queryProviders = queryProviders;
@@ -80,6 +90,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         this.cacheService = cacheService;
         this.cacheOptions = cacheOptions.Value;
         this.compilationService = compilationService;
+        // Optional store: when present, compiled bytes are persisted and served from the
+        // content-addressed (well, version-addressed) shared cache; when absent, fall back
+        // to the legacy per-replica in-memory compile cache. DI registers a concrete
+        // store via AddFileSystemAssemblyStore / AddBlobAssemblyStore — consumers that
+        // don't register one keep the old behaviour.
+        this.assemblyStore = assemblyStore ?? NullAssemblyStore.Instance;
 
         // Initialize cache from pre-registered nodes in MeshConfiguration
         InitializeFromMeshConfiguration();
@@ -239,6 +255,84 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     public IReadOnlyCollection<string> GetCompilingPaths() =>
         _compilingInProgress.Keys.ToArray();
 
+    /// <inheritdoc />
+    public DateTimeOffset? GetLastSuccessfulCompileAt(string nodeTypePath) =>
+        _compilationSucceededAt.TryGetValue(nodeTypePath, out var ts) ? ts : null;
+
+    /// <summary>
+    /// Fully-reactive assembly path lookup. The flow:
+    /// <list type="number">
+    ///   <item>Fetch the current NodeType MeshNode (reactive — wraps the mesh read).</item>
+    ///   <item>Ask <see cref="IAssemblyStore"/> for an assembly cached under the node's
+    ///     current <see cref="MeshNode.Version"/>.</item>
+    ///   <item>On hit — emit the local path straight away; no compile runs.</item>
+    ///   <item>On miss — trigger a compile, read the produced DLL/PDB bytes, push them
+    ///     into the store, and emit the store's path.</item>
+    /// </list>
+    /// Per <c>Doc/Architecture/AsynchronousCalls.md</c>: all steps return
+    /// <see cref="IObservable{T}"/>; callers must <c>.Subscribe(...)</c>, not <c>await</c>.
+    /// </summary>
+    public IObservable<string> GetAssemblyPath(string nodeTypePath) =>
+        Observable.FromAsync(ct => meshStorage.GetNodeAsync(nodeTypePath, ct))
+            .SelectMany(node =>
+            {
+                if (node is null)
+                {
+                    return Observable.Throw<string>(
+                        new InvalidOperationException($"NodeType not found at path: {nodeTypePath}"));
+                }
+                var version = node.Version;
+                return assemblyStore.TryGetAssemblyPath(nodeTypePath, version)
+                    .SelectMany(cached =>
+                    {
+                        if (!string.IsNullOrEmpty(cached))
+                        {
+                            logger.LogDebug(
+                                "Assembly cache hit for {NodeTypePath}@v{Version} at {Path}",
+                                nodeTypePath, version, cached);
+                            return Observable.Return(cached);
+                        }
+                        // Cache miss: run the existing compile path, then persist the
+                        // produced bytes to the shared store so every subsequent lookup
+                        // (this replica, other replicas, next restart) gets a hit.
+                        return CompileAndStore(nodeTypePath, version);
+                    });
+            });
+
+    private IObservable<string> CompileAndStore(string nodeTypePath, long version) =>
+        Observable.FromAsync(async ct =>
+        {
+            var compiled = await GetAssemblyPathAsync(nodeTypePath, ct);
+            if (string.IsNullOrEmpty(compiled))
+                throw new InvalidOperationException(
+                    $"Compilation returned no assembly path for {nodeTypePath}");
+            return compiled;
+        })
+        .SelectMany(compiledPath =>
+        {
+            // If no store is wired (NullAssemblyStore), skip the Put round-trip and
+            // just emit the locally-compiled path — same as the pre-refactor behaviour.
+            if (assemblyStore is NullAssemblyStore)
+                return Observable.Return(compiledPath);
+
+            try
+            {
+                var dllBytes = File.ReadAllBytes(compiledPath);
+                var pdbPath = Path.ChangeExtension(compiledPath, ".pdb");
+                var pdbBytes = File.Exists(pdbPath) ? File.ReadAllBytes(pdbPath) : null;
+                return assemblyStore.Put(nodeTypePath, version, dllBytes, pdbBytes);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Failed to persist compiled assembly for {NodeTypePath}@v{Version}; " +
+                    "returning local path. Next lookup on this replica hits local disk, " +
+                    "other replicas will recompile.",
+                    nodeTypePath, version);
+                return Observable.Return(compiledPath);
+            }
+        });
+
     private Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
         var wasNewCompile = false;
@@ -264,6 +358,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 _compilationTasks.TryRemove(nodeTypePath, out _);
                 _releaseKeys.TryRemove(nodeTypePath, out _);
+                // A new failure supersedes any prior success — clear the success marker so
+                // diagnostics flip back to Error instead of reporting stale Ok.
+                _compilationSucceededAt.TryRemove(nodeTypePath, out _);
                 // Track the compilation error for error reporting in UI
                 if (t.Exception?.InnerException is CompilationException compEx)
                     _compilationErrors[nodeTypePath] = compEx.Message;
@@ -272,6 +369,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 return null;
             }
             _compilationErrors.TryRemove(nodeTypePath, out _);
+            _compilationSucceededAt[nodeTypePath] = DateTimeOffset.UtcNow;
             return t.Result?.AssemblyPath;
         }, TaskContinuationOptions.ExecuteSynchronously);
     }
@@ -319,6 +417,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _compilationTasks.TryRemove(nodeTypePath, out _);
         _compilationErrors.TryRemove(nodeTypePath, out _);
         _compilingInProgress.TryRemove(nodeTypePath, out _);
+        // Clearing the success marker here is what makes GetStatus() flip to Unknown
+        // after Recycle instead of lingering on a stale Ok.
+        _compilationSucceededAt.TryRemove(nodeTypePath, out _);
         _releaseKeys.TryRemove(nodeTypePath, out _);
         _hubConfigurations.TryRemove(nodeTypePath, out _);
         _creatableTypesRules.TryRemove(nodeTypePath, out _);
