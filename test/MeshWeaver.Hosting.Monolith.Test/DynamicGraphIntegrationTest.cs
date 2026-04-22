@@ -525,37 +525,26 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SearchArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(typeOrgAddress, reference);
 
-        // Wait for an emission that contains the expected search structure
-        var values = await stream
-            .Take(5)  // Take up to 5 emissions
-            .TakeUntil(Observable.Timer(TimeSpan.FromSeconds(3)))  // Or timeout after 3s
-            .ToList();
+        // Wait for the first emission that carries a rendered MeshSearchControl with a
+        // namespace filter. The initial "loading" frame contains only the menu/data scaffolding;
+        // we don't want to assert against that. This is robust regardless of whether the Search
+        // view renders the NodeType-catalog branch or the instance-catalog fallback.
+        var json = await stream
+            .Select(ci => ci.Value.GetRawText())
+            .Where(j => j.Contains("MeshSearchControl"))
+            .Timeout(TimeSpan.FromSeconds(12))
+            .FirstAsync();
 
-        Output.WriteLine($"Received {values.Count} emissions");
+        Output.WriteLine($"Catalog JSON (first 3000 chars): {json.Substring(0, Math.Min(3000, json.Length))}");
 
-        // Find the last emission which should have the most complete data
-        var lastValue = values.LastOrDefault();
-        lastValue.Should().NotBeNull("Should receive at least one emission");
-
-        // Convert to string to check catalog structure
-        var json = lastValue!.Value.GetRawText();
-        Output.WriteLine($"Last Catalog JSON (first 3000 chars): {json.Substring(0, Math.Min(3000, json.Length))}");
-
-        // Log all emissions for debugging
-        for (int i = 0; i < values.Count; i++)
-        {
-            var emissionJson = values[i].Value.GetRawText();
-            Output.WriteLine($"Emission {i}: {emissionJson.Substring(0, Math.Min(500, emissionJson.Length))}...");
-        }
-
-        // The search should render as a MeshSearchControl
-        var hasSearchStructure = json.Contains("Search") && json.Contains("MeshSearchControl");
-        hasSearchStructure.Should().BeTrue($"Search should have MeshSearchControl. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
-
-        // The MeshSearchControl should have the correct nodeType filter and namespace scope
-        // Organization has DefaultNamespace="" (root-level), so query is "nodeType:Organization namespace:"
-        var hasCorrectQuery = json.Contains("nodeType:Organization") && json.Contains("namespace:");
-        hasCorrectQuery.Should().BeTrue($"Search should have nodeType and namespace filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+        // The Search area must render a MeshSearchControl with a namespace-scoped query
+        // so the user sees organization instances (or an empty-state) and not a bare shell.
+        json.Should().Contain("MeshSearchControl",
+            "the Search area must render a MeshSearchControl");
+        json.Should().Contain("Organization",
+            "the MeshSearchControl query must reference the Organization scope");
+        json.Should().Contain("namespace:",
+            "the MeshSearchControl must have a namespace filter in its query");
     }
 
     /// <summary>

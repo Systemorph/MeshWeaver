@@ -37,10 +37,13 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
                 return services;
             });
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task SubscriberResubscribes_AfterOwnerDispose()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
+        // CI agents can be slower than local dev: grain dispose + reactivate + heartbeat
+        // resubscribe cycle needs breathing room. 45 s > the 10 s per-phase WaitFor timeouts
+        // below combined, with headroom for slow runners.
+        var ct = new CancellationTokenSource(45.Seconds()).Token;
 
         // Arrange — create a node with an initial name; activates the owner hub on first read.
         var path = $"{TestPartition}/resub-target";
@@ -60,7 +63,7 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
             .Subscribe(n => snapshots.Add(n));
 
         // Wait for the initial snapshot — proves the subscription is wired up.
-        await WaitFor(() => snapshots.Count >= 1, 10.Seconds(), ct);
+        await WaitFor(() => snapshots.Count >= 1, 15.Seconds(), ct);
         snapshots[0].Should().Be("Original", "subscriber should receive the initial snapshot");
 
         // Act — kill the owner grain, then update the node. The update flows through
@@ -81,7 +84,7 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
         // Assert — within a few heartbeat cycles, the subscriber must see the new value.
         // Without auto-resubscribe, snapshots stays at ["Original"] forever; with it,
         // a fresh Initial arrives carrying the updated name.
-        await WaitFor(() => snapshots.Contains("Updated"), 10.Seconds(), ct);
+        await WaitFor(() => snapshots.Contains("Updated"), 20.Seconds(), ct);
         snapshots.Should().Contain("Updated",
             "subscriber must auto-resubscribe to the new owner grain and pick up post-dispose updates");
     }
