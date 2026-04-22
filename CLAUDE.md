@@ -238,6 +238,22 @@ public async Task<IMessageDelivery> HandleFoo(IMessageDelivery<FooRequest> req)
 
 **Everywhere else, the shape is `Subscribe(onNext, onError)`.** If a service you need only exposes `…Async` / `Task<T>`, add a reactive overload that returns `IObservable<T>` and refactor.
 
+## `@/` is Local-Only — Never in HTTP URLs or href Attributes
+
+The `@/path` prefix is a **Unified Content Reference (UCR)** used exclusively for:
+- Native markdown link syntax: `[text](@/Path)` — Markdig's `LinkUrlCleanupExtension` strips the `@` and resolves the path to an absolute URL.
+- Autocomplete / path pickers inside the mesh (chat, mention fields).
+- Tool arguments for agent plugins (`Get('@/Path')`, `Search(...)`, `NavigateTo(...)`).
+
+`@/` **MUST NOT** appear in:
+- `href="..."` attributes when writing raw HTML inside markdown (the markdown renderer does NOT reach inside `<a href>` — the `@/` will leak to the browser and produce `https://host/@/Path`, which 404s or misroutes).
+- External / HTTP URLs anywhere in code, content, or documentation.
+- Razor component navigation targets (`NavigateTo("/path")`, not `NavigateTo("/@/path")`).
+
+**Rule of thumb:** `@/` is for things the mesh resolves locally. Once it's in a URL bar or an `href`, the `@` is wrong. Write `href="/Systemorph/X"` — not `href="@/Systemorph/X"`.
+
+A safety-net redirect `GET /@/X → GET /X` (301) is in place in `MemexConfiguration.StartMemexApplication`, but authoring content with `@/` in raw HTML hrefs is still a bug — fix it at the source.
+
 ## Collections Policy
 
 **NEVER use mutable collections.** Always use `System.Collections.Immutable`:

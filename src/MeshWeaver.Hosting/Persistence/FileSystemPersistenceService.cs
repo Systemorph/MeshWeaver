@@ -177,8 +177,8 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         var descendants = new List<MeshNode>();
         await CollectDescendantsAsync(sourcePath, options, descendants, ct);
 
-        // Move descendants first (children before parents are deleted)
-        foreach (var descendant in descendants)
+        // Compute the moved-descendant projections once; these are pure.
+        var moves = descendants.Select(descendant =>
         {
             var newDescPath = targetPath + descendant.Path[sourcePath.Length..];
             var movedDesc = MeshNode.FromPath(newDescPath) with
@@ -192,16 +192,27 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
                 HubConfiguration = descendant.HubConfiguration,
                 GlobalServiceConfigurations = descendant.GlobalServiceConfigurations
             };
+            return (Old: descendant, Moved: movedDesc, NewPath: newDescPath);
+        }).ToList();
 
-            await _storageAdapter.WriteAsync(movedDesc, options, ct);
-            await _storageAdapter.DeleteAsync(descendant.Path, ct);
+        // Parallelize per-descendant I/O — on remote/high-latency adapters
+        // serial foreach turns a 3-node subtree into a multi-minute move.
+        await Task.WhenAll(moves.Select(async m =>
+        {
+            await _storageAdapter.WriteAsync(m.Moved, options, ct);
+            await _storageAdapter.DeleteAsync(m.Old.Path, ct);
+        }));
 
-            var descSourceKey = NormalizePath(descendant.Path);
-            var descTargetKey = NormalizePath(newDescPath);
+        // Cache + change-notifier updates are fast and single-threaded by design,
+        // so keep them serial after the I/O wave to avoid concurrent mutations.
+        foreach (var m in moves)
+        {
+            var descSourceKey = NormalizePath(m.Old.Path);
+            var descTargetKey = NormalizePath(m.NewPath);
             _cache.Remove(descSourceKey);
-            _cache.Set(descTargetKey, movedDesc, _cacheOptions);
-            _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(descSourceKey, descendant));
-            _changeNotifier?.NotifyChange(DataChangeNotification.Created(descTargetKey, movedDesc));
+            _cache.Set(descTargetKey, m.Moved, _cacheOptions);
+            _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(descSourceKey, m.Old));
+            _changeNotifier?.NotifyChange(DataChangeNotification.Created(descTargetKey, m.Moved));
         }
 
         // Move the root node

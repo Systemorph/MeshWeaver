@@ -460,6 +460,21 @@ public static class MemexConfiguration
                              | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
         });
 
+        // `@/` is a markdown-authoring / autocomplete prefix — not a URL segment.
+        // Authors occasionally leak `@/` into raw HTML hrefs or users paste broken links.
+        // Permanent-redirect `/@/X` → `/X` so those never 404.
+        app.Use((ctx, next) =>
+        {
+            var path = ctx.Request.Path.Value;
+            if (path != null && path.StartsWith("/@/", StringComparison.Ordinal))
+            {
+                var target = path.Substring(2) + ctx.Request.QueryString;
+                ctx.Response.Redirect(target, permanent: true);
+                return Task.CompletedTask;
+            }
+            return next();
+        });
+
         // Static files middleware must run before routing to serve _content/* paths from RCLs
         app.UseStaticFiles();
 

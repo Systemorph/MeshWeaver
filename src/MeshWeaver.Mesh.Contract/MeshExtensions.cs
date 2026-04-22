@@ -51,6 +51,19 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Overrides the default 30-second ceiling applied to mesh persistence operations
+    /// (create, update, delete, move). Raise this for long-running tests or batch jobs;
+    /// lower it to fail faster in environments where slow ops are suspicious.
+    /// </summary>
+    public static MessageHubConfiguration WithMeshOperationTimeout(
+        this MessageHubConfiguration config, TimeSpan timeout)
+        => config.WithServices(services =>
+        {
+            services.AddSingleton(new MeshOperationOptions { Timeout = timeout });
+            return services;
+        });
+
+    /// <summary>
     /// Registers handlers for mesh node operations.
     /// </summary>
     public static MessageHubConfiguration WithNodeOperationHandlers(this MessageHubConfiguration config)
@@ -1018,7 +1031,13 @@ public static class MeshExtensions
             }
 
             // 4. Move the node — subscribe and post response in the callback.
+            //    Timeout is enforced at the Observable layer so a stuck storage
+            //    adapter cannot hang the caller forever. Default is 30s; raise via
+            //    WithMeshOperationTimeout for long-running tests or batch jobs.
+            var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
+
             persistence.MoveNode(moveRequest.SourcePath, moveRequest.TargetPath)
+                .Timeout(opts.Timeout)
                 .Subscribe(
                     movedNode =>
                     {
@@ -1031,10 +1050,17 @@ public static class MeshExtensions
                     },
                     ex =>
                     {
-                        logger.LogError(ex, "Error moving node from {Source} to {Target}",
-                            moveRequest.SourcePath, moveRequest.TargetPath);
+                        var timedOut = ex is TimeoutException;
+                        if (timedOut)
+                            logger.LogError(ex, "Move exceeded {Timeout}s for {Source} -> {Target}",
+                                opts.Timeout.TotalSeconds, moveRequest.SourcePath, moveRequest.TargetPath);
+                        else
+                            logger.LogError(ex, "Error moving node from {Source} to {Target}",
+                                moveRequest.SourcePath, moveRequest.TargetPath);
                         hub.Post(
-                            MoveNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                            MoveNodeResponse.Fail(timedOut
+                                ? $"Move operation exceeded the configured timeout of {opts.Timeout.TotalSeconds:0}s"
+                                : $"Unexpected error: {ex.Message}"),
                             o => o.ResponseFor(request));
                     });
 

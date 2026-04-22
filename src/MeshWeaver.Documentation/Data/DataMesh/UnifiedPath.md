@@ -68,6 +68,22 @@ Content collections store files (images, documents, markdown, etc.) associated w
 
 **Important:** References must be at the **start of a line**.
 
+# ⚠️ `@/` Is Not a URL — Local References Only
+
+The `@` prefix is a **Unified Content Reference** — it lives inside markdown, autocomplete, and tool calls. It is **never** part of an HTTP URL or an `href` attribute.
+
+| Where | Correct | Wrong |
+|-------|---------|-------|
+| Native markdown link | `[Reinsurance](@/Systemorph/Reinsurance)` | — (Markdig strips the `@` automatically) |
+| Raw HTML inside markdown | `<a href="/Systemorph/Reinsurance">` | `<a href="@/Systemorph/Reinsurance">` |
+| HTTP URL bar / shared link | `https://memex.meshweaver.cloud/Systemorph/Reinsurance` | `https://memex.meshweaver.cloud/@/Systemorph/Reinsurance` |
+| Tool call from agent | `Get('@/Systemorph/Reinsurance')` | — |
+| Autocomplete search | `@Syst…` | — |
+
+**Why it matters:** Markdig's `LinkUrlCleanupExtension` strips the leading `@` from `[text](@/X)` and resolves it into a proper `/X` URL at render time. But that extension **does not reach inside raw HTML** — any `<a href="@/X">` in an HTML block or a raw `<div>` hero passes through verbatim, producing a broken `https://host/@/X` link.
+
+**Safety net:** The portal registers a redirect middleware that permanently redirects `GET /@/X` → `GET /X` (301). Broken links still navigate correctly, but fix the source whenever you see `@/` in an `href`.
+
 ---
 
 # Understanding Unified Path Syntax
