@@ -17,4 +17,12 @@ public record CodeConfiguration
     /// Defaults to "csharp".
     /// </summary>
     public string Language { get; init; } = "csharp";
+
+    /// <summary>
+    /// When <c>true</c>, the Content layout surfaces a Run button next to Edit that
+    /// posts a <c>SubmitCodeRequest</c> to the kernel and streams output into a
+    /// result pane below the code block. Default <c>false</c> — Code nodes that
+    /// aren't marked executable stay read-only.
+    /// </summary>
+    public bool IsExecutable { get; init; }
 }
