@@ -584,6 +584,91 @@ if (currentVersion < 8)
     logger.LogInformation("Repair v8 completed — fixed {Total} ThreadMessage MainNode(s)", totalFixed);
 }
 
+// ── Data repair v9: Rename "_Source"/"_Test" path segments to "Source"/"Test" ──
+// Code nodes were renamed from satellite-style "_Source"/"_Test" sub-namespaces to
+// first-class "Source"/"Test" content folders (commit 0280084e7). Existing DB rows
+// still carry the old segment names in `namespace` and `main_node`; the app now
+// looks them up under the new names and finds nothing.
+// Fix: rewrite the path segment in place across every content partition's tables
+// and their `_versions` history. `path` is a GENERATED column and recomputes itself.
+// The routing target is unchanged ("code" table before and after), so rows stay put.
+if (currentVersion < 9)
+{
+    logger.LogInformation("Running repair v9: Rename _Source/_Test path segments to Source/Test...");
+
+    // Discover every schema (content partitions + their _versions mirrors) that
+    // has at least one table with a `namespace` column.
+    var sourceTestSchemas = new List<string>();
+    await using (var listCmd = dataSource.CreateCommand("""
+        SELECT DISTINCT s.schema_name
+        FROM information_schema.schemata s
+        JOIN information_schema.columns c
+          ON c.table_schema = s.schema_name AND c.column_name = 'namespace'
+        WHERE s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+        ORDER BY s.schema_name
+        """))
+    {
+        await using var rdr = await listCmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync()) sourceTestSchemas.Add(rdr.GetString(0));
+    }
+
+    var totalRowsUpdated = 0;
+    foreach (var schema in sourceTestSchemas)
+    {
+        // Find all tables in this schema that have both `namespace` and `main_node`
+        // columns (mesh_nodes, code, access, threads, annotations, activities, ...,
+        // and mesh_node_history in _versions schemas).
+        var tables = new List<string>();
+        await using (var tblCmd = dataSource.CreateCommand("""
+            SELECT table_name
+            FROM information_schema.columns
+            WHERE table_schema = $1 AND column_name IN ('namespace', 'main_node')
+            GROUP BY table_name
+            HAVING COUNT(DISTINCT column_name) = 2
+            ORDER BY table_name
+            """))
+        {
+            tblCmd.Parameters.AddWithValue(schema);
+            await using var rdr = await tblCmd.ExecuteReaderAsync();
+            while (await rdr.ReadAsync()) tables.Add(rdr.GetString(0));
+        }
+
+        foreach (var table in tables)
+        {
+            // Rewrite `_Source` / `_Test` as whole path segments (anchored at
+            // string start/end or bounded by '/'), preserving case and neighbours.
+            // Only rewrite main_node when it is non-null — otherwise leave NULL alone.
+            await using var fixCmd = dataSource.CreateCommand($"""
+                UPDATE "{schema}"."{table}" SET
+                    namespace = regexp_replace(
+                        regexp_replace(namespace, '(^|/)_Source($|/)', '\1Source\2', 'g'),
+                        '(^|/)_Test($|/)', '\1Test\2', 'g'
+                    ),
+                    main_node = CASE
+                        WHEN main_node IS NULL THEN NULL
+                        ELSE regexp_replace(
+                            regexp_replace(main_node, '(^|/)_Source($|/)', '\1Source\2', 'g'),
+                            '(^|/)_Test($|/)', '\1Test\2', 'g'
+                        )
+                    END
+                WHERE namespace ~ '(^|/)_(Source|Test)($|/)'
+                   OR main_node ~ '(^|/)_(Source|Test)($|/)'
+                """);
+            var affected = await fixCmd.ExecuteNonQueryAsync();
+            if (affected > 0)
+            {
+                logger.LogInformation(
+                    "Repair v9: {Schema}.{Table} — renamed {Count} row(s)",
+                    schema, table, affected);
+                totalRowsUpdated += affected;
+            }
+        }
+    }
+
+    currentVersion = 9;
+    logger.LogInformation("Repair v9 completed — updated {Total} row(s) across all schemas", totalRowsUpdated);
+}
+
 // Save current version
 await using (var saveVersion = dataSource.CreateCommand("""
     INSERT INTO admin.mesh_nodes (namespace, id, name, node_type, state, content, last_modified, main_node)
