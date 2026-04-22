@@ -161,7 +161,7 @@ public class MyHandler
 Register the handler in your hub configuration:
 
 ```csharp
-config.AddHandler<ClickedEvent>(HandleMapClick)
+config.WithHandler<ClickedEvent>(HandleMapClick)
 ```
 
 ## GoogleMapsConfiguration

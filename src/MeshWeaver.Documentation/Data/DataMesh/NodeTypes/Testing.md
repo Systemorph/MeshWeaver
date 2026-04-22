@@ -9,7 +9,7 @@ A node type isn't "done" until there's a test that drives it. MeshWeaver ships a
 This doc walks through two archetypes of test you'll write for every node type:
 
 1. **Layout-area rendering** — prove the `Details`, `Thumbnail`, `Overview` etc. views render for an instance. Pattern from `test/MeshWeaver.Acme.Test/TodoViewsTest.cs`.
-2. **Request/response functionality** — prove a node-type-specific request is handled and its response is correct. Useful for simulations, computations, or any hub handler you wire in via `config => config.AddHandler<MyRequest>(...)`.
+2. **Request/response functionality** — prove a node-type-specific request is handled and its response is correct. Useful for simulations, computations, or any hub handler you wire in via `config => config.WithHandler<MyRequest>(...)`.
 
 ## Test project layout
 
@@ -124,7 +124,7 @@ See `TodoViewsTest.CreateArea_WithTypeParam_ShouldRenderCreateForm` for a full e
 
 ## Archetype 2 — request/response / simulation
 
-When your node type wires in a custom handler — `config.AddHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it the same way the UI would invoke it: `client.AwaitResponse<TResponse>(request, o => o.WithTarget(address))`.
+When your node type wires in a custom handler — `config.WithHandler<RunSimulationRequest>(HandleRunSimulation)` in `Source/MyHub.cs` — test it the same way the UI would invoke it: `client.AwaitResponse<TResponse>(request, o => o.WithTarget(address))`.
 
 ```csharp
 [Fact(Timeout = 15_000)]

@@ -384,8 +384,8 @@ public static class NorthwindHubConfiguration
 {
     public static MessageHubConfiguration AddNorthwindHub(this MessageHubConfiguration config)
     {
-        return config.AddHandler<MyRequestAsync>(HandleMyRequestAsync)
-                     .AddHandler<MyRequest>(HandleMyRequest);
+        return config.WithHandler<MyRequestAsync>(HandleMyRequestAsync)
+                     .WithHandler<MyRequest>(HandleMyRequest);
 
     }
 
