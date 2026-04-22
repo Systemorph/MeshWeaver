@@ -110,8 +110,12 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             }
         }
 
-        // Inline parameter values into the SQL string
-        foreach (var (name, value) in parameters.OrderByDescending(p => p.Key.Length))
+        // Inline parameter values into the SQL string. Filter out null/empty keys
+        // defensively — a malformed parameter (rare but observed in prod when an
+        // unscoped query path adds a placeholder without a name) used to NRE here.
+        foreach (var (name, value) in parameters
+            .Where(p => !string.IsNullOrEmpty(p.Key))
+            .OrderByDescending(p => p.Key.Length))
         {
             var sqlValue = value switch
             {
