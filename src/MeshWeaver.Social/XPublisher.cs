@@ -172,6 +172,31 @@ public sealed class XPublisher : IPlatformPublisher
         }
     }
 
+    public async IAsyncEnumerable<EngagementComment> ListCommentsAsync(
+        string urn,
+        PlatformCredential credential,
+        int maxItems,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        // X v2 user-context only exposes aggregate `reply_count` on a tweet, not the
+        // replies themselves with author identities. To enumerate replies we'd need
+        // to query /2/tweets/search/recent with conversation_id, which requires
+        // Pro tier. Yield nothing for now so the UI degrades gracefully.
+        await Task.CompletedTask;
+        yield break;
+    }
+
+    public async IAsyncEnumerable<EngagementLike> ListLikesAsync(
+        string urn,
+        PlatformCredential credential,
+        int maxItems,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        // Same story: /2/tweets/{id}/liking_users is on the Pro tier. Skip for v1.
+        await Task.CompletedTask;
+        yield break;
+    }
+
     private async Task<PlatformCredential> EnsureFreshAsync(PlatformCredential credential, CancellationToken ct)
     {
         if (!credential.IsExpired || string.IsNullOrEmpty(credential.RefreshToken))

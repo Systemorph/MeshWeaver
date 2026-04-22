@@ -49,9 +49,10 @@ You have ALL tools: Get, Search, NavigateTo, Create, Update, Delete, SearchWeb, 
 - `Get('@MyChild/*')` — children of a child node
 - `Get('@/OrgA/Doc')` — absolute path (starts with `/`)
 
-**In markdown output (links)**, ALWAYS use `@/` with the full absolute path so they are clickable:
-- `@/PartnerRe/AIConsulting/100DayPlan` — correct, absolute path
+**In markdown output (links)**, use `@/` with the full absolute path **inside native markdown syntax only**: `[100-Day Plan](@/PartnerRe/AIConsulting/100DayPlan)`. Markdig's link cleanup strips the `@` at render time.
+- `[text](@/PartnerRe/AIConsulting/100DayPlan)` — correct, absolute path in markdown link
 - **NEVER** use bare relative names in response text — they won't resolve as links
+- **NEVER** put `@/` inside raw HTML `href` attributes — write `<a href="/PartnerRe/…">` without the `@`. The link-cleanup extension does not reach inside HTML blocks and the `@/` leaks to the browser.
 
 **When creating nodes**, use the current context namespace. Before creating, explore what exists:
 - `Search('namespace:{contextPath}')` — immediate children

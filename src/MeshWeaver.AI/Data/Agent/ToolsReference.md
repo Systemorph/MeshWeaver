@@ -33,9 +33,17 @@ Every user message carries a **"Current Application Context"** header with the c
 
 ### Output links
 
-**LINKS in markdown output**: Always use **absolute paths** starting with `@/` so they are clickable regardless of where the message is viewed.
-- Correct: `@/OrgA/Projects/my-doc`, `@/User/rbuergi/my-page`
+**LINKS in markdown output**: Always use **absolute paths** starting with `@/` inside **native markdown link syntax** — `[text](@/OrgA/Projects/my-doc)`. Markdig's `LinkUrlCleanupExtension` strips the leading `@` at render time and produces a clean `/OrgA/Projects/my-doc` URL.
+- Correct: `[Final Report](@/OrgA/Projects/my-doc)`, `[My Page](@/User/rbuergi/my-page)`
 - **Wrong**: `my-doc`, `../Projects/my-doc`, `@my-doc` (relative links break when viewed from another context)
+
+**⚠️ DO NOT put `@/` inside raw HTML `href` attributes.** The link-cleanup extension does not reach inside HTML blocks. A raw `<a href="@/X">` leaks the `@/` to the browser, producing a broken `https://host/@/X` URL. When writing HTML-in-markdown (hero banners, styled cards, etc.), use plain paths: `<a href="/OrgA/Projects/my-doc">`.
+
+| Context | Correct | Wrong |
+|---------|---------|-------|
+| Markdown link | `[text](@/X)` | `[text](/X)` also works, but `@/` gives mesh UCR semantics |
+| Raw HTML href | `<a href="/X">` | `<a href="@/X">` — leaks `@/` to browser |
+| HTTP URL / external | `https://host/X` | `https://host/@/X` |
 
 ### Choosing relative vs. absolute in tool calls
 

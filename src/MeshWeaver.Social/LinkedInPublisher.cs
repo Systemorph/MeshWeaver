@@ -236,6 +236,130 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         }
     }
 
+    public async IAsyncEnumerable<EngagementComment> ListCommentsAsync(
+        string urn,
+        PlatformCredential credential,
+        int maxItems,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        credential = await EnsureFreshAsync(credential, ct);
+
+        // /v2/socialActions/{urn}/comments?count=N&start=M
+        // Member-scope (r_member_social) returns comments on posts the caller authored.
+        var pageSize = Math.Min(100, maxItems);
+        var start = 0;
+        var yielded = 0;
+        while (yielded < maxItems)
+        {
+            var url = $"v2/socialActions/{Uri.EscapeDataString(urn)}/comments?count={pageSize}&start={start}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, new Uri(ApiBase, url));
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
+            req.Headers.Add("X-Restli-Protocol-Version", "2.0.0");
+
+            using var resp = await _http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger?.LogWarning("LinkedIn list-comments failed {Status} for {Urn}", (int)resp.StatusCode, urn);
+                yield break;
+            }
+
+            using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            if (!doc.RootElement.TryGetProperty("elements", out var elems) || elems.GetArrayLength() == 0)
+                yield break;
+
+            var count = 0;
+            foreach (var el in elems.EnumerateArray())
+            {
+                count++;
+                var commentUrn = el.TryGetProperty("id", out var idEl) ? (idEl.GetString() ?? Guid.NewGuid().ToString("N")) : Guid.NewGuid().ToString("N");
+                var actor = el.TryGetProperty("actor", out var aEl) ? (aEl.GetString() ?? "") : "";
+                var text = el.TryGetProperty("message", out var mEl) && mEl.TryGetProperty("text", out var tEl)
+                    ? (tEl.GetString() ?? "")
+                    : "";
+                var createdAt = el.TryGetProperty("created", out var cEl) && cEl.TryGetProperty("time", out var ctTime)
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(ctTime.GetInt64())
+                    : DateTimeOffset.UtcNow;
+
+                yield return new EngagementComment(
+                    Urn: commentUrn,
+                    ActorUrn: actor,
+                    ActorName: null,
+                    ActorProfileUrl: ActorProfileUrl(actor),
+                    Text: text,
+                    CreatedAt: createdAt);
+
+                yielded++;
+                if (yielded >= maxItems) yield break;
+            }
+
+            if (count < pageSize) yield break;
+            start += pageSize;
+        }
+    }
+
+    public async IAsyncEnumerable<EngagementLike> ListLikesAsync(
+        string urn,
+        PlatformCredential credential,
+        int maxItems,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        credential = await EnsureFreshAsync(credential, ct);
+
+        var pageSize = Math.Min(100, maxItems);
+        var start = 0;
+        var yielded = 0;
+        while (yielded < maxItems)
+        {
+            var url = $"v2/socialActions/{Uri.EscapeDataString(urn)}/likes?count={pageSize}&start={start}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, new Uri(ApiBase, url));
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
+            req.Headers.Add("X-Restli-Protocol-Version", "2.0.0");
+
+            using var resp = await _http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger?.LogWarning("LinkedIn list-likes failed {Status} for {Urn}", (int)resp.StatusCode, urn);
+                yield break;
+            }
+
+            using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            if (!doc.RootElement.TryGetProperty("elements", out var elems) || elems.GetArrayLength() == 0)
+                yield break;
+
+            var count = 0;
+            foreach (var el in elems.EnumerateArray())
+            {
+                count++;
+                var actor = el.TryGetProperty("actor", out var aEl) ? (aEl.GetString() ?? "") : "";
+                var likeUrn = el.TryGetProperty("id", out var idEl) ? (idEl.GetString() ?? actor) : actor;
+                var reaction = el.TryGetProperty("reactionType", out var rEl) ? rEl.GetString() : "LIKE";
+                var createdAt = el.TryGetProperty("created", out var cEl) && cEl.TryGetProperty("time", out var ctTime)
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(ctTime.GetInt64())
+                    : DateTimeOffset.UtcNow;
+
+                yield return new EngagementLike(
+                    Urn: likeUrn,
+                    ActorUrn: actor,
+                    ActorName: null,
+                    ActorProfileUrl: ActorProfileUrl(actor),
+                    CreatedAt: createdAt,
+                    ReactionType: reaction);
+
+                yielded++;
+                if (yielded >= maxItems) yield break;
+            }
+
+            if (count < pageSize) yield break;
+            start += pageSize;
+        }
+    }
+
+    // For person URNs LinkedIn doesn't expose a stable web link without resolving the
+    // vanity name (which requires connection-graph scope). The deep link below routes
+    // through LinkedIn's URN resolver page in the browser even without name resolution.
+    private static string? ActorProfileUrl(string actorUrn) =>
+        string.IsNullOrEmpty(actorUrn) ? null : $"https://www.linkedin.com/in/{Uri.EscapeDataString(actorUrn)}/";
+
     private async Task<PlatformCredential> EnsureFreshAsync(PlatformCredential credential, CancellationToken ct)
     {
         if (!credential.IsExpired || string.IsNullOrEmpty(credential.RefreshToken))

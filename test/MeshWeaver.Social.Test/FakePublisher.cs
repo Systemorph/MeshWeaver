@@ -25,6 +25,11 @@ public sealed class FakePublisher : IPlatformPublisher
     public Func<string, PostStats>? StatsImpl { get; set; }
     public IReadOnlyList<PastPost> History { get; set; } = Array.Empty<PastPost>();
 
+    public ConcurrentBag<string> CommentsCalls { get; } = new();
+    public ConcurrentBag<string> LikesCalls { get; } = new();
+    public IReadOnlyDictionary<string, IReadOnlyList<EngagementComment>> CommentsByUrn { get; set; } = new Dictionary<string, IReadOnlyList<EngagementComment>>();
+    public IReadOnlyDictionary<string, IReadOnlyList<EngagementLike>> LikesByUrn { get; set; } = new Dictionary<string, IReadOnlyList<EngagementLike>>();
+
     public FakePublisher(string platform = "LinkedIn") => Platform = platform;
 
     public Task<PublishResult> PublishAsync(PlatformPublishRequest request, CancellationToken ct)
@@ -56,6 +61,40 @@ public sealed class FakePublisher : IPlatformPublisher
             if (sinceInclusive is { } s && p.PublishedAt < s) continue;
             yield return p;
             await Task.Yield();
+        }
+    }
+
+    public async IAsyncEnumerable<EngagementComment> ListCommentsAsync(
+        string urn, PlatformCredential credential, int maxItems,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        CommentsCalls.Add(urn);
+        if (CommentsByUrn.TryGetValue(urn, out var list))
+        {
+            var n = 0;
+            foreach (var c in list)
+            {
+                if (n++ >= maxItems) yield break;
+                yield return c;
+                await Task.Yield();
+            }
+        }
+    }
+
+    public async IAsyncEnumerable<EngagementLike> ListLikesAsync(
+        string urn, PlatformCredential credential, int maxItems,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        LikesCalls.Add(urn);
+        if (LikesByUrn.TryGetValue(urn, out var list))
+        {
+            var n = 0;
+            foreach (var l in list)
+            {
+                if (n++ >= maxItems) yield break;
+                yield return l;
+                await Task.Yield();
+            }
         }
     }
 }

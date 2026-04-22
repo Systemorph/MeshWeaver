@@ -313,7 +313,371 @@ public static class LinkedInConnectEndpoints
             return Results.Redirect($"/{profile}?pull=linkedin&count={imported}");
         });
 
+        endpoints.MapGet("/connect/linkedin/pull-engagement/me", (HttpContext http) =>
+        {
+            if (!http.User.Identity?.IsAuthenticated ?? true)
+                return Results.Challenge(new AuthenticationProperties { RedirectUri = "/connect/linkedin/pull-engagement/me" });
+            var user = http.User.Identity!.Name ?? "anonymous";
+            return Results.Redirect($"/connect/linkedin/pull-engagement?profile=User/{Uri.EscapeDataString(user)}");
+        }).RequireAuthorization();
+
+        // Pull comments + likes for the most recent N posts under a profile and
+        // upsert them as satellites under each post node ({post}/comments/*, {post}/likes/*).
+        endpoints.MapGet("/connect/linkedin/pull-engagement", async (
+            HttpContext http,
+            [Microsoft.AspNetCore.Mvc.FromQuery] string profile,
+            [Microsoft.AspNetCore.Mvc.FromQuery] int? maxPostsPerCall,
+            IServiceProvider sp,
+            IMeshService mesh,
+            ILoggerFactory loggers) =>
+        {
+            if (!http.User.Identity?.IsAuthenticated ?? true)
+                return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.Path + http.Request.QueryString });
+
+            var logger = loggers.CreateLogger("LinkedInEngagement");
+            var maxPosts = Math.Clamp(maxPostsPerCall ?? 20, 1, 100);
+
+            // Load credential.
+            MeshNode? credNode = null;
+            await foreach (var n in mesh.QueryAsync<MeshNode>($"path:{profile}/_ApiCredentials/linkedin", ct: http.RequestAborted))
+            {
+                credNode = n;
+                break;
+            }
+            if (credNode is null)
+                return Results.BadRequest($"No LinkedIn credential found at {profile}/_ApiCredentials/linkedin. Use /connect/linkedin?profile={profile} first.");
+
+            PlatformCredential? credential = null;
+            if (credNode.Content is PlatformCredential typed)
+                credential = typed;
+            else if (credNode.Content is JsonElement je)
+                credential = je.Deserialize<PlatformCredential>(new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+            if (credential is null)
+                return Results.Problem("Credential node has unexpected content shape.");
+
+            var publisher = sp.GetService<LinkedInPublisher>();
+            if (publisher is null)
+                return Results.Problem("LinkedInPublisher not registered.", statusCode: 500);
+
+            // Collect Post nodes under {profile}/posts/* with platformUrn set, newest first.
+            var posts = new List<(MeshNode Node, string Urn)>();
+            await foreach (var p in mesh.QueryAsync<MeshNode>($"namespace:{profile}/posts nodeType:Systemorph/Post", ct: http.RequestAborted))
+            {
+                var urn = TryGetUrn(p);
+                if (string.IsNullOrEmpty(urn)) continue;
+                posts.Add((p, urn!));
+            }
+            posts = posts
+                .OrderByDescending(t => TryGetPublishedAt(t.Node) ?? DateTimeOffset.MinValue)
+                .Take(maxPosts)
+                .ToList();
+
+            int totalComments = 0, totalLikes = 0;
+            foreach (var (postNode, urn) in posts)
+            {
+                // Comments.
+                var commentCount = 0;
+                await foreach (var c in publisher.ListCommentsAsync(urn, credential, maxItems: 200, http.RequestAborted))
+                {
+                    commentCount++;
+                    var commentId = SanitizeUrn(c.Urn);
+                    var commentPath = $"{postNode.Path}/comments/{commentId}";
+
+                    bool exists = false;
+                    await foreach (var _ in mesh.QueryAsync<MeshNode>($"path:{commentPath}", ct: http.RequestAborted))
+                    {
+                        exists = true;
+                        break;
+                    }
+                    if (exists) continue;
+
+                    var commentNode = new MeshNode(commentId, $"{postNode.Path}/comments")
+                    {
+                        Name = TruncateForName(c.Text),
+                        NodeType = "Systemorph/PostComment",
+                        State = MeshNodeState.Active,
+                        Content = new Dictionary<string, object?>
+                        {
+                            ["$type"] = "PostComment",
+                            ["urn"] = c.Urn,
+                            ["actor"] = c.ActorUrn,
+                            ["actorName"] = c.ActorName,
+                            ["actorProfileUrl"] = c.ActorProfileUrl,
+                            ["text"] = c.Text,
+                            ["createdAt"] = c.CreatedAt
+                        }
+                    };
+                    try { await mesh.CreateNodeAsync(commentNode, http.RequestAborted); totalComments++; }
+                    catch (Exception ex) { logger.LogWarning(ex, "Failed to create comment node {Path}", commentPath); }
+                }
+
+                // Likes.
+                var likeCount = 0;
+                await foreach (var lk in publisher.ListLikesAsync(urn, credential, maxItems: 500, http.RequestAborted))
+                {
+                    likeCount++;
+                    var likeId = SanitizeUrn(lk.Urn);
+                    var likePath = $"{postNode.Path}/likes/{likeId}";
+
+                    bool exists = false;
+                    await foreach (var _ in mesh.QueryAsync<MeshNode>($"path:{likePath}", ct: http.RequestAborted))
+                    {
+                        exists = true;
+                        break;
+                    }
+                    if (exists) continue;
+
+                    var likeNode = new MeshNode(likeId, $"{postNode.Path}/likes")
+                    {
+                        Name = lk.ActorName ?? lk.ActorUrn,
+                        NodeType = "Systemorph/PostLike",
+                        State = MeshNodeState.Active,
+                        Content = new Dictionary<string, object?>
+                        {
+                            ["$type"] = "PostLike",
+                            ["urn"] = lk.Urn,
+                            ["actor"] = lk.ActorUrn,
+                            ["actorName"] = lk.ActorName,
+                            ["actorProfileUrl"] = lk.ActorProfileUrl,
+                            ["createdAt"] = lk.CreatedAt,
+                            ["reactionType"] = lk.ReactionType
+                        }
+                    };
+                    try { await mesh.CreateNodeAsync(likeNode, http.RequestAborted); totalLikes++; }
+                    catch (Exception ex) { logger.LogWarning(ex, "Failed to create like node {Path}", likePath); }
+                }
+
+                logger.LogInformation("Engagement pull for {Post}: {Comments} comments, {Likes} likes", postNode.Path, commentCount, likeCount);
+
+                // Recompute analytics for this post by aggregating its satellites.
+                // Stored as a Systemorph/PostAnalytics node at {post}/analytics so the
+                // analytics dashboard reads pre-computed data rather than recomputing live.
+                await UpsertPostAnalyticsAsync(mesh, postNode, urn, http.RequestAborted, logger);
+            }
+
+            logger.LogInformation("Engagement pull complete for {Profile}: {NewComments} new comments, {NewLikes} new likes across {Posts} posts", profile, totalComments, totalLikes, posts.Count);
+            return Results.Redirect($"/{profile}?engagement-pull=ok&posts={posts.Count}&comments={totalComments}&likes={totalLikes}");
+        });
+
         return endpoints;
+    }
+
+    private static async Task UpsertPostAnalyticsAsync(
+        IMeshService mesh, MeshNode postNode, string urn, CancellationToken ct, ILogger logger)
+    {
+        // Pull all comment + like satellites for this post via mesh query syntax.
+        var commentList = new List<(string ActorUrn, string? ActorName, string? ActorProfileUrl, DateTimeOffset CreatedAt)>();
+        await foreach (var c in mesh.QueryAsync<MeshNode>(
+            $"namespace:{postNode.Path}/comments nodeType:Systemorph/PostComment", ct: ct))
+        {
+            var (actor, name, url, ts) = ExtractEngager(c);
+            commentList.Add((actor, name, url, ts));
+        }
+
+        var likeBuckets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var likeList = new List<(string ActorUrn, string? ActorName, string? ActorProfileUrl, DateTimeOffset CreatedAt, string ReactionType)>();
+        await foreach (var l in mesh.QueryAsync<MeshNode>(
+            $"namespace:{postNode.Path}/likes nodeType:Systemorph/PostLike", ct: ct))
+        {
+            var (actor, name, url, ts) = ExtractEngager(l);
+            var reaction = ExtractReactionType(l) ?? "LIKE";
+            likeBuckets[reaction] = likeBuckets.TryGetValue(reaction, out var v) ? v + 1 : 1;
+            likeList.Add((actor, name, url, ts, reaction));
+        }
+
+        // Top engagers: aggregate likes + comments by actor URN.
+        var byActor = new Dictionary<string, (string? Name, string? Url, int Count, DateTimeOffset LastAt)>();
+        foreach (var c in commentList)
+        {
+            if (string.IsNullOrEmpty(c.ActorUrn)) continue;
+            var existing = byActor.TryGetValue(c.ActorUrn, out var v) ? v : (c.ActorName, c.ActorProfileUrl, 0, DateTimeOffset.MinValue);
+            byActor[c.ActorUrn] = (
+                existing.Name ?? c.ActorName,
+                existing.Url ?? c.ActorProfileUrl,
+                existing.Count + 1,
+                c.CreatedAt > existing.LastAt ? c.CreatedAt : existing.LastAt);
+        }
+        foreach (var l in likeList)
+        {
+            if (string.IsNullOrEmpty(l.ActorUrn)) continue;
+            var existing = byActor.TryGetValue(l.ActorUrn, out var v) ? v : (l.ActorName, l.ActorProfileUrl, 0, DateTimeOffset.MinValue);
+            byActor[l.ActorUrn] = (
+                existing.Name ?? l.ActorName,
+                existing.Url ?? l.ActorProfileUrl,
+                existing.Count + 1,
+                l.CreatedAt > existing.LastAt ? l.CreatedAt : existing.LastAt);
+        }
+
+        var topEngagers = byActor
+            .OrderByDescending(kv => kv.Value.Count)
+            .ThenByDescending(kv => kv.Value.LastAt)
+            .Take(20)
+            .Select(kv => new Dictionary<string, object?>
+            {
+                ["actorUrn"] = kv.Key,
+                ["actorName"] = kv.Value.Name,
+                ["actorProfileUrl"] = kv.Value.Url,
+                ["engagementCount"] = kv.Value.Count,
+                ["lastEngagedAt"] = kv.Value.LastAt
+            })
+            .ToList();
+
+        var topReaction = likeBuckets.OrderByDescending(kv => kv.Value).Select(kv => kv.Key).FirstOrDefault();
+        var impressions = TryGetImpressions(postNode);
+        var totalEngagements = commentList.Count + likeList.Count;
+        var engagementRate = impressions > 0 ? (double)totalEngagements / impressions : 0d;
+
+        var analyticsNode = new MeshNode("analytics", postNode.Path)
+        {
+            Name = "Engagement analytics",
+            NodeType = "Systemorph/PostAnalytics",
+            State = MeshNodeState.Active,
+            Content = new Dictionary<string, object?>
+            {
+                ["$type"] = "PostAnalytics",
+                ["postPath"] = postNode.Path,
+                ["postUrn"] = urn,
+                ["totalLikes"] = likeList.Count,
+                ["totalComments"] = commentList.Count,
+                ["totalImpressions"] = impressions,
+                ["engagementRate"] = engagementRate,
+                ["topReactionType"] = topReaction,
+                ["reactionBreakdown"] = likeBuckets,
+                ["topEngagers"] = topEngagers,
+                ["lastComputedAt"] = DateTimeOffset.UtcNow
+            }
+        };
+
+        // Upsert: query existing, then create or update.
+        MeshNode? existingAnalytics = null;
+        await foreach (var n in mesh.QueryAsync<MeshNode>($"path:{postNode.Path}/analytics", ct: ct))
+        {
+            existingAnalytics = n;
+            break;
+        }
+        try
+        {
+            if (existingAnalytics is null)
+                await mesh.CreateNodeAsync(analyticsNode, ct);
+            else
+                await mesh.UpdateNodeAsync(analyticsNode with { Id = existingAnalytics.Id, Namespace = existingAnalytics.Namespace }, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to upsert analytics node for {PostPath}", postNode.Path);
+        }
+    }
+
+    private static (string ActorUrn, string? ActorName, string? ActorProfileUrl, DateTimeOffset CreatedAt) ExtractEngager(MeshNode node)
+    {
+        string actor = "", name = null!, url = null!;
+        DateTimeOffset ts = DateTimeOffset.UtcNow;
+
+        if (node.Content is JsonElement je)
+        {
+            actor = TryString(je, "actor", "Actor") ?? "";
+            name = TryString(je, "actorName", "ActorName");
+            url = TryString(je, "actorProfileUrl", "ActorProfileUrl");
+            var tsStr = TryString(je, "createdAt", "CreatedAt");
+            if (!string.IsNullOrEmpty(tsStr) && DateTimeOffset.TryParse(tsStr, out var parsed)) ts = parsed;
+        }
+        else if (node.Content is IDictionary<string, object?> d)
+        {
+            actor = (d.TryGetValue("actor", out var a) || d.TryGetValue("Actor", out a)) ? a as string ?? "" : "";
+            name = (d.TryGetValue("actorName", out var n) || d.TryGetValue("ActorName", out n)) ? n as string : null;
+            url = (d.TryGetValue("actorProfileUrl", out var u) || d.TryGetValue("ActorProfileUrl", out u)) ? u as string : null;
+            if (d.TryGetValue("createdAt", out var t) || d.TryGetValue("CreatedAt", out t))
+            {
+                ts = t switch
+                {
+                    DateTimeOffset dto => dto,
+                    string s when DateTimeOffset.TryParse(s, out var p) => p,
+                    _ => ts
+                };
+            }
+        }
+        return (actor, name, url, ts);
+    }
+
+    private static string? ExtractReactionType(MeshNode node)
+    {
+        if (node.Content is JsonElement je) return TryString(je, "reactionType", "ReactionType");
+        if (node.Content is IDictionary<string, object?> d &&
+            (d.TryGetValue("reactionType", out var v) || d.TryGetValue("ReactionType", out v)))
+            return v as string;
+        return null;
+    }
+
+    private static int TryGetImpressions(MeshNode node)
+    {
+        if (node.Content is JsonElement je)
+        {
+            if ((je.TryGetProperty("impressions", out var p) || je.TryGetProperty("Impressions", out p)) &&
+                p.ValueKind == JsonValueKind.Number) return p.GetInt32();
+        }
+        if (node.Content is IDictionary<string, object?> d &&
+            (d.TryGetValue("impressions", out var v) || d.TryGetValue("Impressions", out v)))
+        {
+            return v switch
+            {
+                int i => i,
+                long l => (int)l,
+                _ => 0
+            };
+        }
+        return 0;
+    }
+
+    private static string? TryString(JsonElement je, string a, string b)
+    {
+        if (je.TryGetProperty(a, out var x) && x.ValueKind == JsonValueKind.String) return x.GetString();
+        if (je.TryGetProperty(b, out var y) && y.ValueKind == JsonValueKind.String) return y.GetString();
+        return null;
+    }
+
+    private static string? TryGetUrn(MeshNode node)
+    {
+        if (node.Content is JsonElement je)
+        {
+            if (je.TryGetProperty("platformUrn", out var u) && u.ValueKind == JsonValueKind.String)
+                return u.GetString();
+            if (je.TryGetProperty("PlatformUrn", out var u2) && u2.ValueKind == JsonValueKind.String)
+                return u2.GetString();
+        }
+        if (node.Content is IDictionary<string, object?> d)
+        {
+            if (d.TryGetValue("platformUrn", out var v) && v is string s) return s;
+            if (d.TryGetValue("PlatformUrn", out var v2) && v2 is string s2) return s2;
+        }
+        return null;
+    }
+
+    private static DateTimeOffset? TryGetPublishedAt(MeshNode node)
+    {
+        if (node.Content is JsonElement je)
+        {
+            JsonElement p;
+            if (je.TryGetProperty("publishedAt", out p) || je.TryGetProperty("PublishedAt", out p))
+            {
+                if (p.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(p.GetString(), out var dt)) return dt;
+            }
+        }
+        if (node.Content is IDictionary<string, object?> d)
+        {
+            if (d.TryGetValue("publishedAt", out var v) || d.TryGetValue("PublishedAt", out v))
+            {
+                return v switch
+                {
+                    DateTimeOffset dto => dto,
+                    string str when DateTimeOffset.TryParse(str, out var dt) => dt,
+                    _ => null
+                };
+            }
+        }
+        return null;
     }
 
     private static string SanitizeUrn(string urn) =>

@@ -44,6 +44,29 @@ public interface IPlatformPublisher
         System.DateTimeOffset? sinceInclusive,
         int maxItems,
         CancellationToken ct);
+
+    /// <summary>
+    /// Streams comments on a single previously-published post. Used by the engagement
+    /// pull endpoint to materialize per-commenter satellites under the post node.
+    /// Implementations that don't support per-comment author lookup should yield
+    /// nothing (not throw) so the caller can simply move on.
+    /// </summary>
+    IAsyncEnumerable<EngagementComment> ListCommentsAsync(
+        string urn,
+        PlatformCredential credential,
+        int maxItems,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Streams likes/reactions on a single previously-published post. Same contract
+    /// as <see cref="ListCommentsAsync"/>: yield-nothing when the platform doesn't
+    /// expose per-actor identity, instead of throwing.
+    /// </summary>
+    IAsyncEnumerable<EngagementLike> ListLikesAsync(
+        string urn,
+        PlatformCredential credential,
+        int maxItems,
+        CancellationToken ct);
 }
 
 /// <summary>
@@ -91,3 +114,27 @@ public sealed record PastPost(
     System.Collections.Generic.IReadOnlyList<string> MediaUrls,
     System.DateTimeOffset PublishedAt,
     PostStats? Stats);
+
+/// <summary>
+/// A single comment on a post. <see cref="ActorName"/> and <see cref="ActorProfileUrl"/>
+/// are best-effort: many platforms only return the actor URN for non-connections.
+/// </summary>
+public sealed record EngagementComment(
+    string Urn,
+    string ActorUrn,
+    string? ActorName,
+    string? ActorProfileUrl,
+    string Text,
+    System.DateTimeOffset CreatedAt);
+
+/// <summary>
+/// A single reaction/like on a post. <see cref="ReactionType"/> defaults to "LIKE"
+/// for platforms without typed reactions.
+/// </summary>
+public sealed record EngagementLike(
+    string Urn,
+    string ActorUrn,
+    string? ActorName,
+    string? ActorProfileUrl,
+    System.DateTimeOffset CreatedAt,
+    string? ReactionType);
