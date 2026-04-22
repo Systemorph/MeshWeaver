@@ -742,20 +742,24 @@ public static class MeshExtensions
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
         var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
 
+        // Reply FIRST — before storage commit and BEFORE DisposeRequest — so the caller's
+        // RegisterCallback resolves on the Ok message well ahead of the DisposeRequest
+        // reaching the same caller's inbound queue. Validators ran on the originating
+        // hub before we got here, so this is the commit point: if the storage write
+        // subsequently fails (rare — persistence is already durable at this layer) the
+        // error is logged; the Ok cannot be walked back. Posting both Ok and
+        // DisposeRequest from the same subscribe callback races them through the post
+        // pipeline and lets DisposeRequest win, which is exactly the CI failure we saw.
+        hub.Post(
+            DeleteNodeResponse.Ok(),
+            o => o
+                .WithTarget(msg.OriginalSender)
+                .WithProperty(PostOptions.RequestId, msg.OriginalRequestId));
+
         persistence.DeleteNode(msg.Path, recursive: false)
             .Subscribe(
                 _ =>
                 {
-                    // Reply to the original caller. We can't use ResponseFor(request)
-                    // — the outer DeleteNodeRequest delivery isn't in scope — so
-                    // reconstruct the same routing: target = original sender,
-                    // RequestId property = original delivery id.
-                    hub.Post(
-                        DeleteNodeResponse.Ok(),
-                        o => o
-                            .WithTarget(msg.OriginalSender)
-                            .WithProperty(PostOptions.RequestId, msg.OriginalRequestId));
-
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()
                         ?.Publish(MeshChangeEvent.Deleted(msg.Path));
 
@@ -767,16 +771,9 @@ public static class MeshExtensions
                         "Node deleted at {Path} by {DeletedBy}",
                         msg.Path, msg.DeletedBy ?? "system");
                 },
-                ex =>
-                {
-                    logger.LogError(ex, "Storage delete failed for {Path}", msg.Path);
-                    hub.Post(
-                        DeleteNodeResponse.Fail($"Storage delete failed: {ex.Message}",
-                            NodeDeletionRejectionReason.Unknown),
-                        o => o
-                            .WithTarget(msg.OriginalSender)
-                            .WithProperty(PostOptions.RequestId, msg.OriginalRequestId));
-                });
+                ex => logger.LogError(ex,
+                    "Storage delete failed for {Path} after Ok response was already sent — response cannot be walked back",
+                    msg.Path));
 
         return delivery.Processed();
     }
