@@ -411,15 +411,13 @@ public static class LinkedInConnectEndpoints
             int totalComments = 0, totalLikes = 0;
             foreach (var (postNode, urn) in posts)
             {
-                // Comments — stored flat under the post namespace as {post}/c-{urn}
-                // so a single mesh query namespace:{post.Path} surfaces every satellite
-                // (comments, likes, telemetry) without sub-namespace gymnastics.
+                // Comments.
                 var commentCount = 0;
                 await foreach (var c in publisher.ListCommentsAsync(urn, credential, maxItems: 200, http.RequestAborted))
                 {
                     commentCount++;
-                    var commentId = "c-" + SanitizeUrn(c.Urn);
-                    var commentPath = $"{postNode.Path}/{commentId}";
+                    var commentId = SanitizeUrn(c.Urn);
+                    var commentPath = $"{postNode.Path}/comments/{commentId}";
 
                     bool exists = false;
                     await foreach (var _ in mesh.QueryAsync<MeshNode>($"path:{commentPath}", ct: http.RequestAborted))
@@ -429,7 +427,7 @@ public static class LinkedInConnectEndpoints
                     }
                     if (exists) continue;
 
-                    var commentNode = new MeshNode(commentId, postNode.Path)
+                    var commentNode = new MeshNode(commentId, $"{postNode.Path}/comments")
                     {
                         Name = TruncateForName(c.Text),
                         NodeType = "Systemorph/PostComment",
@@ -449,13 +447,13 @@ public static class LinkedInConnectEndpoints
                     catch (Exception ex) { logger.LogWarning(ex, "Failed to create comment node {Path}", commentPath); }
                 }
 
-                // Likes — same flat layout as {post}/l-{urn}.
+                // Likes.
                 var likeCount = 0;
                 await foreach (var lk in publisher.ListLikesAsync(urn, credential, maxItems: 500, http.RequestAborted))
                 {
                     likeCount++;
-                    var likeId = "l-" + SanitizeUrn(lk.Urn);
-                    var likePath = $"{postNode.Path}/{likeId}";
+                    var likeId = SanitizeUrn(lk.Urn);
+                    var likePath = $"{postNode.Path}/likes/{likeId}";
 
                     bool exists = false;
                     await foreach (var _ in mesh.QueryAsync<MeshNode>($"path:{likePath}", ct: http.RequestAborted))
@@ -465,7 +463,7 @@ public static class LinkedInConnectEndpoints
                     }
                     if (exists) continue;
 
-                    var likeNode = new MeshNode(likeId, postNode.Path)
+                    var likeNode = new MeshNode(likeId, $"{postNode.Path}/likes")
                     {
                         Name = lk.ActorName ?? lk.ActorUrn,
                         NodeType = "Systemorph/PostLike",
@@ -491,10 +489,6 @@ public static class LinkedInConnectEndpoints
                 // Stored as a Systemorph/PostAnalytics node at {post}/analytics so the
                 // analytics dashboard reads pre-computed data rather than recomputing live.
                 await UpsertPostAnalyticsAsync(mesh, postNode, urn, http.RequestAborted, logger);
-
-                // Append a time-series snapshot at {post}/telemetry/{timestamp} so
-                // trend charts can read history via mesh queries (no separate store).
-                await AppendPostTelemetryAsync(mesh, postNode, urn, http.RequestAborted, logger);
             }
 
             logger.LogInformation("Engagement pull complete for {Profile}: {NewComments} new comments, {NewLikes} new likes across {Posts} posts", profile, totalComments, totalLikes, posts.Count);
@@ -504,56 +498,13 @@ public static class LinkedInConnectEndpoints
         return endpoints;
     }
 
-    private static async Task AppendPostTelemetryAsync(
-        IMeshService mesh, MeshNode postNode, string urn, CancellationToken ct, ILogger logger)
-    {
-        // Count engagement satellites freshly so the snapshot reflects the just-pulled state.
-        // Satellites live flat under the post namespace, distinguished by node-type.
-        var commentCount = 0;
-        await foreach (var _ in mesh.QueryAsync<MeshNode>(
-            $"namespace:{postNode.Path} nodeType:Systemorph/PostComment", ct: ct))
-        {
-            commentCount++;
-        }
-        var likeCount = 0;
-        await foreach (var _ in mesh.QueryAsync<MeshNode>(
-            $"namespace:{postNode.Path} nodeType:Systemorph/PostLike", ct: ct))
-        {
-            likeCount++;
-        }
-
-        var sampledAt = DateTimeOffset.UtcNow;
-        // ISO-8601 sortable id with t- prefix so it sorts apart from c-/l- siblings.
-        var sampleId = "t-" + sampledAt.ToString("yyyyMMddTHHmmssZ");
-        var telemetryNode = new MeshNode(sampleId, postNode.Path)
-        {
-            Name = sampledAt.ToString("yyyy-MM-dd HH:mm:ss") + " UTC",
-            NodeType = "Systemorph/PostTelemetry",
-            State = MeshNodeState.Active,
-            Content = new Dictionary<string, object?>
-            {
-                ["$type"] = "PostTelemetry",
-                ["postPath"] = postNode.Path,
-                ["postUrn"] = urn,
-                ["sampledAt"] = sampledAt,
-                ["impressions"] = TryGetImpressions(postNode),
-                ["likes"] = likeCount,
-                ["comments"] = commentCount,
-                ["shares"] = 0
-            }
-        };
-        try { await mesh.CreateNodeAsync(telemetryNode, ct); }
-        catch (Exception ex) { logger.LogWarning(ex, "Failed to append telemetry sample for {PostPath}", postNode.Path); }
-    }
-
     private static async Task UpsertPostAnalyticsAsync(
         IMeshService mesh, MeshNode postNode, string urn, CancellationToken ct, ILogger logger)
     {
         // Pull all comment + like satellites for this post via mesh query syntax.
-        // Satellites live flat under the post namespace; node-type filter separates them.
         var commentList = new List<(string ActorUrn, string? ActorName, string? ActorProfileUrl, DateTimeOffset CreatedAt)>();
         await foreach (var c in mesh.QueryAsync<MeshNode>(
-            $"namespace:{postNode.Path} nodeType:Systemorph/PostComment", ct: ct))
+            $"namespace:{postNode.Path}/comments nodeType:Systemorph/PostComment", ct: ct))
         {
             var (actor, name, url, ts) = ExtractEngager(c);
             commentList.Add((actor, name, url, ts));
@@ -562,7 +513,7 @@ public static class LinkedInConnectEndpoints
         var likeBuckets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var likeList = new List<(string ActorUrn, string? ActorName, string? ActorProfileUrl, DateTimeOffset CreatedAt, string ReactionType)>();
         await foreach (var l in mesh.QueryAsync<MeshNode>(
-            $"namespace:{postNode.Path} nodeType:Systemorph/PostLike", ct: ct))
+            $"namespace:{postNode.Path}/likes nodeType:Systemorph/PostLike", ct: ct))
         {
             var (actor, name, url, ts) = ExtractEngager(l);
             var reaction = ExtractReactionType(l) ?? "LIKE";
