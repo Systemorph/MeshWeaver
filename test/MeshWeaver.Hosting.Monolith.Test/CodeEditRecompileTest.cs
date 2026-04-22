@@ -200,6 +200,6 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             .FirstAsync(x => x is HtmlControl)
             .ToTask(ct);
 
-        return ((HtmlControl)control).Data?.ToString() ?? string.Empty;
+        return (control as HtmlControl)?.Data?.ToString() ?? string.Empty;
     }
 }
