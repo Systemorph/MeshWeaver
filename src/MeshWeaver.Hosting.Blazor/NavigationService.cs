@@ -68,8 +68,14 @@ internal class NavigationService : INavigationService
         _retryDelays = retryDelays ?? DefaultRetryDelays;
 
         // Start with a descriptive status so the very first render has a label —
-        // never a blank spinner.
-        _status.OnNext(NavigationStatus.LookingUp(CurrentPath));
+        // never a blank spinner. `CurrentPath` reads `NavigationManager.Uri`, which
+        // throws "RemoteNavigationManager has not been initialized" if accessed
+        // during DI construction (Blazor Server circuit activation). Fall back to
+        // an empty path in that case — InitializeAsync re-emits LookingUp with the
+        // real path once the NavigationManager is wired up.
+        string? initialPath = null;
+        try { initialPath = CurrentPath; } catch (InvalidOperationException) { /* not yet initialized */ }
+        _status.OnNext(NavigationStatus.LookingUp(initialPath));
     }
 
     /// <inheritdoc />
