@@ -4,6 +4,7 @@ using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -71,16 +72,50 @@ public static class CodeLayoutAreas
         var codeConfig = node?.Content as CodeConfiguration;
         var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
-        // Header with title and edit button
+        // Header with title and action buttons. Right-side actions stacked horizontally
+        // so Run (when executable) sits to the left of the existing Edit button, both
+        // fully on the right via `justify-content: space-between` on the outer stack.
         var title = node?.Name ?? node?.Id ?? "Code";
+        var isExecutable = codeConfig?.IsExecutable == true;
+
+        // Stable kernel address per Code node — same id across clicks so script state
+        // (variables, using directives) persists between runs. The kernel auto-disposes
+        // after 15 min idle and re-creates on the next Run.
+        var kernelAddress = AddressExtensions.CreateKernelAddress(
+            "code-" + hubAddress.ToString().Replace('/', '-'));
+
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; align-items: center;");
+
+        if (isExecutable)
+        {
+            actions = actions.WithView(Controls.Button("Run")
+                .WithIconStart(FluentIcons.Play())
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(ctx =>
+                {
+                    // Per AsynchronousCalls.md: no await inside click action. Post the
+                    // SubmitCodeRequest to the kernel and let the result pane below
+                    // stream events into LayoutAreaReference("output").
+                    var code = codeConfig?.Code ?? string.Empty;
+                    ctx.Host.Hub.Post(
+                        new SubmitCodeRequest(code) { Id = "output" },
+                        o => o.WithTarget(kernelAddress));
+                    return Task.CompletedTask;
+                }));
+        }
+
+        actions = actions.WithView(Controls.Button("")
+            .WithIconStart(FluentIcons.Edit())
+            .WithAppearance(Appearance.Accent)
+            .WithNavigateToHref(new LayoutAreaReference(EditArea).ToHref(hubAddress)));
+
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
             .WithView(Controls.H1(title))
-            .WithView(Controls.Button("")
-                .WithIconStart(FluentIcons.Edit())
-                .WithAppearance(Appearance.Accent)
-                .WithNavigateToHref(new LayoutAreaReference(EditArea).ToHref(hubAddress)));
+            .WithView(actions);
 
         stack = stack.WithView(headerRow);
 
@@ -99,6 +134,18 @@ public static class CodeLayoutAreas
         {
             stack = stack.WithView(Controls.Body("No code defined.")
                 .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
+        }
+
+        // Result pane for executable Code nodes. The kernel hub serves any
+        // LayoutAreaReference via its area stream — we render the "output" area
+        // that the Run button writes to via SubmitCodeRequest.Id = "output".
+        // Every click replaces the previous output value (last-write-wins), which is
+        // the expected behaviour for a single-shot run.
+        if (isExecutable)
+        {
+            stack = stack.WithView(Controls.Html("<h3 style=\"margin-top: 32px;\">Output</h3>"));
+            stack = stack.WithView(new LayoutAreaControl(kernelAddress, new LayoutAreaReference("output"))
+                .WithStyle("margin-top: 8px; padding: 12px; background: var(--neutral-layer-3); border-radius: 4px; min-height: 48px;"));
         }
 
         return stack;
