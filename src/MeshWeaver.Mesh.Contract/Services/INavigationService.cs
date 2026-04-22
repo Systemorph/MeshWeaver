@@ -55,6 +55,14 @@ public interface INavigationService : IDisposable
     bool IsResolving { get; }
 
     /// <summary>
+    /// Observable stream of <see cref="NavigationStatus"/> values describing the
+    /// page-lookup pipeline. Always has a current value (BehaviorSubject semantics)
+    /// and every emitted <see cref="NavigationStatus.Message"/> is a non-empty,
+    /// human-readable string — this is the "no endless spinner" contract.
+    /// </summary>
+    IObservable<NavigationStatus> Status { get; }
+
+    /// <summary>
     /// Event raised when the navigation context changes due to location change.
     /// </summary>
     event Action<NavigationContext?>? OnNavigationContextChanged;

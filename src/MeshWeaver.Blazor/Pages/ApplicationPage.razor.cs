@@ -27,24 +27,13 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     [Inject]
     private IMeshService MeshService { get; set; } = null!;
 
-    // Resolved lazily from the service provider so the page still renders when
-    // INodeTypeService isn't registered. A hard [Inject] would throw during
-    // component construction and leave the user with a black screen.
-    [Inject]
-    private IServiceProvider Services { get; set; } = null!;
-    private INodeTypeService? NodeTypeService => Services.GetService<INodeTypeService>();
-
     /// <summary>
-    /// Path of any NodeType currently compiling. Used by the razor template to flip
-    /// the "Looking up …" placeholder into "Compiling &lt;path&gt; (Ns)…" during the
-    /// navigation blocking phase, so the user sees activity instead of a blank spinner.
+    /// Current status of the page-lookup pipeline. Always set to a non-null
+    /// value so every render branch can safely display <see cref="NavigationStatus.Message"/>.
     /// </summary>
-    private string? CompilingPath { get; set; }
+    private NavigationStatus Status { get; set; } = NavigationStatus.Idle();
 
-    /// <summary>Elapsed seconds since the current compile started.</summary>
-    private int CompilingSeconds { get; set; }
-
-    private System.Threading.Timer? _compileProgressTimer;
+    private IDisposable? _statusSubscription;
 
     /// <summary>
     /// Catch-all path parameter - the entire URL path is matched against registered namespace patterns.
@@ -92,34 +81,15 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         base.OnInitialized();
         NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
 
-        // Poll NodeTypeService.GetCompilingPaths while the page is in "Looking up"
-        // state so the user sees "Compiling <path> (Ns)…" rather than a blank spinner.
-        // Stopped once IsLoading flips to false. Two-second granularity is enough —
-        // most compiles are sub-second; the tick is for reassurance on slow ones.
-        _compileProgressTimer = new System.Threading.Timer(_ =>
+        // Subscribe to the status pipeline so the page header always reflects
+        // the latest phase. Every emission is guaranteed to have a non-empty
+        // Message by the NavigationStatus contract — this is the "no endless
+        // spinner" guarantee at the UI.
+        _statusSubscription = NavigationService.Status.Subscribe(status =>
         {
-            try
-            {
-                if (!IsLoading) return;
-                var paths = NodeTypeService?.GetCompilingPaths();
-                var first = paths?.FirstOrDefault();
-                if (first != CompilingPath)
-                {
-                    CompilingPath = first;
-                    CompilingSeconds = 0;
-                }
-                else if (first != null)
-                {
-                    CompilingSeconds++;
-                }
-                _ = InvokeAsync(StateHasChanged);
-            }
-            catch
-            {
-                // Timer tick should never take down the page. The worst-case is a stale
-                // "Compiling…" message; that's better than a crashed circuit.
-            }
-        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            Status = status;
+            _ = InvokeAsync(StateHasChanged);
+        });
     }
 
     protected override async Task OnParametersSetAsync()
@@ -204,10 +174,19 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             Id = id,
         };
 
+        // Seed the layout-area progress message with "Subscribing to area …" so
+        // that the LayoutAreaView never renders a labelless spinner while waiting
+        // for its first stream emission. CompileProgressIndicator still wins when
+        // a node-type compile is running (more specific signal).
+        var progressMessage = NavigationStatus
+            .Subscribing(context.Address.ToString() ?? string.Empty, area)
+            .Message;
+
         ViewModel = Controls.LayoutArea(context.Address, Reference)
             with
         {
-            ShowProgress = true
+            ShowProgress = true,
+            ProgressMessage = progressMessage
         };
 
         // Use node name for the page title, falling back to the last address segment
@@ -227,6 +206,6 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     public void Dispose()
     {
         NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
-        _compileProgressTimer?.Dispose();
+        _statusSubscription?.Dispose();
     }
 }

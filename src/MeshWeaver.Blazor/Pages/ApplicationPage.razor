@@ -1,52 +1,50 @@
 @* Routes for application pages - entire path is matched against registered namespace patterns *@
 @* The :nonfile constraint prevents matching static file paths like _content, _framework, etc. *@
 @page "/{*Path:nonfile}"
+@using MeshWeaver.Blazor.Components
+@using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
 <PageTitle>@PageTitle</PageTitle>
 <CascadingValue Value="@Mode" Name="ThemeMode">
+    @*
+        Rule enforced here: every branch renders a descriptive text label.
+        There is no bare spinner — the NavigationProgressBar always pairs
+        the FluentProgressRing with a non-empty Status.Message.
+    *@
     @if (!IsInteractive && PreRenderedHtml is not null)
     {
-        @* Prerender: cached HTML from MeshNode for instant display *@
+        @* Prerender with cached HTML: show content immediately, keep a
+           compact overlay so the user sees that interactive mode is still
+           warming up instead of a silent transition. *@
+        <NavigationProgressBar Status="@Status" Compact="true" CssClass="overlay" />
         <article class="markdown-body" style="background-color: var(--neutral-layer-1)">
             @((MarkupString)PreRenderedHtml)
         </article>
     }
-    else if (!IsInteractive || IsLoading)
+    else if (Status.Phase == NavigationPhase.NotFound)
     {
-        @* Pre-render (no cached HTML) or interactive still resolving.
-           While navigation is blocked, peek at NodeTypeService to show a richer
-           progress message: "Looking up" → "Compiling <path> (<N>s)" so the user
-           sees what the hub is actually busy with. *@
-        <div class="resolving-container">
-            <FluentProgressRing style="width: 40px; height: 40px;" />
-            @if (CompilingPath is not null)
-            {
-                <p>
-                    Compiling <strong>@CompilingPath</strong>
-                    @if (CompilingSeconds > 0)
-                    {
-                        <text> (@CompilingSeconds s)</text>
-                    }
-                    ...
-                </p>
-            }
-            else
-            {
-                <p>Looking up <strong>@Path</strong>...</p>
-            }
-        </div>
-    }
-    else if (NavigationService.Context is null)
-    {
-        @* Interactive phase, resolution exhausted: page not found *@
         <div class="error-container">
             <h2>Page Not Found</h2>
-            <p>The path '<strong>@Path</strong>' does not match any registered address pattern.</p>
+            <p>@Status.Message</p>
             <p>Please double-check the url you have entered.</p>
         </div>
+    }
+    else if (Status.Phase == NavigationPhase.Error)
+    {
+        <div class="error-container">
+            <h2>Something went wrong</h2>
+            <p>@Status.Message</p>
+        </div>
+    }
+    else if (!IsInteractive || IsLoading || NavigationService.Context is null)
+    {
+        @* Prerender without cached HTML, or interactive resolution in flight.
+           NavigationProgressBar always renders a non-empty message so there
+           is no endless-spinner state. *@
+        <NavigationProgressBar Status="@Status" />
     }
     else
     {

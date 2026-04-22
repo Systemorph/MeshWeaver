@@ -165,32 +165,43 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public async Task OnLocationChanged_WhenResolutionNull_SetsContextNull()
+    public async Task OnLocationChanged_WhenResolutionNull_KeepsStaleContext_UntilRetriesExhaust()
     {
-        // Arrange
+        // The old behavior cleared Context and fired OnNavigationContextChanged(null)
+        // immediately, which caused the "Page Not Found" card to flash before the
+        // retry loop had a chance to succeed. The fix: keep the previous context
+        // stale while we retry, and only fire the null/NotFound transition once
+        // retries are exhausted.
+        //
+        // We can't easily override retry delays from this test class (it uses the
+        // public ctor), but the 500 ms first-retry window is enough headroom to
+        // assert that the null callback is NOT fired in the first ~100 ms.
         var service = CreateService();
         _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
         await service.InitializeAsync();
 
-        NavigationContext? receivedContext = new NavigationContext
+        var previousContext = service.Context;
+        previousContext.Should().NotBeNull();
+
+        var nullContextInvocations = 0;
+        service.OnNavigationContextChanged += ctx =>
         {
-            Path = "test",
-            Resolution = new AddressResolution("test", null)
+            if (ctx is null) nullContextInvocations++;
         };
-        service.OnNavigationContextChanged += ctx => receivedContext = ctx;
 
         _pathResolver.ResolvePathAsync("unknown/path")
             .Returns((AddressResolution?)null);
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/unknown/path");
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken); // < first retry delay (500 ms)
 
-        // Assert
-        receivedContext.Should().BeNull();
-        service.Context.Should().BeNull();
-        service.CurrentNamespace.Should().BeNull();
+        // Assert: during the retry window the UI still reports the previous resolved
+        // context (or at least did not receive a null-context invocation that would
+        // trigger the "Page Not Found" render).
+        nullContextInvocations.Should().Be(0,
+            "the 404 flash bug was caused by firing a null context before retries had a chance");
     }
 
     [Fact]

@@ -1,0 +1,40 @@
+@using MeshWeaver.Mesh.Services
+@using Microsoft.FluentUI.AspNetCore.Components
+
+@*
+    Central "what is the page doing right now" indicator. Renders a spinner
+    PLUS the NavigationStatus.Message — never a spinner without a label. This
+    component is what enforces the "no endless spinner" invariant at the UI.
+*@
+<div class="nav-progress @CssClass">
+    <FluentProgressRing style="@RingStyle" />
+    <p class="nav-progress-message">@Status.Message</p>
+    @if (!string.IsNullOrWhiteSpace(Status.Detail))
+    {
+        <p class="nav-progress-detail">@Status.Detail</p>
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// The status to render. Must never be null — parent is responsible for
+    /// supplying a current value (<c>BehaviorSubject</c> semantics guarantee this
+    /// for <c>INavigationService.Status</c>).
+    /// </summary>
+    [Parameter, EditorRequired] public NavigationStatus Status { get; set; } = null!;
+
+    /// <summary>
+    /// When true, render a small inline strip (used as an overlay on top of
+    /// prerendered content) instead of a centered full-page spinner.
+    /// </summary>
+    [Parameter] public bool Compact { get; set; }
+
+    /// <summary>
+    /// Optional extra CSS class to apply to the container.
+    /// </summary>
+    [Parameter] public string? CssClass { get; set; }
+
+    private string RingStyle => Compact
+        ? "width: 20px; height: 20px;"
+        : "width: 40px; height: 40px;";
+}

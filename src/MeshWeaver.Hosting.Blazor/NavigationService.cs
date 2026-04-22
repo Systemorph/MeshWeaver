@@ -26,9 +26,15 @@ internal class NavigationService : INavigationService
     private readonly IMeshService _meshQuery;
     private readonly IMessageHub _hub;
     private readonly ILogger<NavigationService>? _logger;
+    private readonly int[] _retryDelays;
+
+    // Production retry schedule — ~11.5 s total. Tests override via the internal
+    // ctor overload with short delays so the full retry-exhaustion path runs fast.
+    private static readonly int[] DefaultRetryDelays = [500, 1000, 2000, 3000, 5000];
 
     private NavigationContext? _context;
     private readonly BehaviorSubject<CreatableTypesSnapshot> _creatableTypes = new(CreatableTypesSnapshot.Empty);
+    private readonly BehaviorSubject<NavigationStatus> _status = new(NavigationStatus.Idle());
     private string? _lastLoadedNodePath;
     private CancellationTokenSource? _loadingCts;
     private bool _isInitialized;
@@ -39,12 +45,31 @@ internal class NavigationService : INavigationService
         IPathResolver pathResolver,
         IMeshService meshQuery,
         IMessageHub hub)
+        : this(navigationManager, pathResolver, meshQuery, hub, DefaultRetryDelays)
+    {
+    }
+
+    /// <summary>
+    /// Test-only overload that accepts a custom retry schedule so the
+    /// retry-exhaustion path runs fast.
+    /// </summary>
+    internal NavigationService(
+        NavigationManager navigationManager,
+        IPathResolver pathResolver,
+        IMeshService meshQuery,
+        IMessageHub hub,
+        int[] retryDelays)
     {
         _navigationManager = navigationManager;
         _pathResolver = pathResolver;
         _meshQuery = meshQuery;
         _hub = hub;
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
+        _retryDelays = retryDelays ?? DefaultRetryDelays;
+
+        // Start with a descriptive status so the very first render has a label —
+        // never a blank spinner.
+        _status.OnNext(NavigationStatus.LookingUp(CurrentPath));
     }
 
     /// <inheritdoc />
@@ -58,6 +83,9 @@ internal class NavigationService : INavigationService
 
     /// <inheritdoc />
     public bool IsResolving { get; private set; } = true;
+
+    /// <inheritdoc />
+    public IObservable<NavigationStatus> Status => _status;
 
     /// <inheritdoc />
     public event Action<NavigationContext?>? OnNavigationContextChanged;
@@ -152,17 +180,18 @@ internal class NavigationService : INavigationService
     private async Task ProcessLocationChangeAsync(string path)
     {
         IsResolving = true;
+        // Emit "Looking up …" so every rendered frame carries a label.
+        _status.OnNext(NavigationStatus.LookingUp(path));
 
         // Resolve the path using pattern matching
         var resolution = await _pathResolver.ResolvePathAsync(path);
 
         if (resolution is null)
         {
-            // Clear context immediately so callers see null for unresolvable paths.
-            // Then retry in background (catalog may still be initializing).
-            _context = null;
-            CurrentNamespace = null;
-            OnNavigationContextChanged?.Invoke(null);
+            // Do NOT fire OnNavigationContextChanged(null) here — that causes the
+            // "Page Not Found" card to flash while retries are still running.
+            // Keep the prior context stale and retry in the background; only flip
+            // to NotFound once all retries are exhausted (see RetryResolutionAsync).
             _ = RetryResolutionAsync(path);
             return;
         }
@@ -172,13 +201,19 @@ internal class NavigationService : INavigationService
 
     private async Task ProcessResolvedPathAsync(string path, AddressResolution resolution)
     {
-        IsResolving = false;
-
         // Parse remainder into area and id
         var (area, id) = ParseRemainder(resolution.Remainder);
 
+        // The page has been resolved — tell the user we're redirecting to the
+        // concrete address (and area, if any) before we spend time loading the
+        // node. This is the message that replaces "Looking up …".
+        _status.OnNext(NavigationStatus.Redirecting(resolution.Prefix, area));
+
         // Load the MeshNode for pre-rendered HTML and satellite detection
+        _status.OnNext(NavigationStatus.Loading(resolution.Prefix));
         var node = await LoadNodeWithPreRenderedHtmlAsync(resolution);
+
+        IsResolving = false;
 
         // Create the navigation context
         var context = new NavigationContext
@@ -202,6 +237,11 @@ internal class NavigationService : INavigationService
 
         OnNavigationContextChanged?.Invoke(context);
 
+        // Signal the page/layout-area stack that the address+area is bound.
+        // LayoutAreaView will take over progress from here (showing "Compiling …"
+        // or "Subscribing to area …" until the first stream emission).
+        _status.OnNext(NavigationStatus.Ready(resolution.Prefix));
+
         // Load creatable types in background when namespace changes
         var currentNodePath = context.PrimaryPath ?? "";
         if (currentNodePath != _lastLoadedNodePath)
@@ -217,8 +257,7 @@ internal class NavigationService : INavigationService
     /// </summary>
     private async Task RetryResolutionAsync(string path)
     {
-        var delays = new[] { 500, 1000, 2000, 3000, 5000 };
-        foreach (var delay in delays)
+        foreach (var delay in _retryDelays)
         {
             await Task.Delay(delay);
 
@@ -235,10 +274,13 @@ internal class NavigationService : INavigationService
             }
         }
 
-        // All retries exhausted — show "Page Not Found"
+        // All retries exhausted — flip to "Page Not Found". This is the only
+        // place that fires OnNavigationContextChanged(null); ProcessLocationChangeAsync
+        // no longer flashes a null context while retries are still pending.
         IsResolving = false;
         _context = null;
         CurrentNamespace = null;
+        _status.OnNext(NavigationStatus.NotFound(path));
         OnNavigationContextChanged?.Invoke(null);
     }
 
@@ -413,6 +455,7 @@ internal class NavigationService : INavigationService
         _loadingCts?.Cancel();
         _loadingCts?.Dispose();
         _creatableTypes.Dispose();
+        _status.Dispose();
 
         // Only unsubscribe if we actually subscribed (InitializeAsync was called)
         // Wrap in try-catch because NavigationManager may not be initialized if circuit was never established
