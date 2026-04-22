@@ -36,11 +36,99 @@
         <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
         <Routes @rendermode="RenderMode.InteractiveServer" />
     </CascadingValue>
+
+    @*
+        Custom Blazor Server reconnect UI. Blazor adds one of these classes to
+        the container while handling a lost circuit:
+        - components-reconnect-show      → attempting to reconnect
+        - components-reconnect-hide      → hidden (reconnected)
+        - components-reconnect-retrying  → retry in flight
+        - components-reconnect-failed    → retries exhausted
+        - components-reconnect-rejected  → server doesn't know this circuit (redeploy)
+        A deploy invalidates every circuit on the server, so stale clients hit
+        `rejected` (404 on reconnect). Instead of keeping the user stuck on a
+        generic "Reconnecting…" modal for minutes, auto-reload on the terminal
+        states so the user is back on a fresh circuit within a few seconds.
+    *@
+    <div id="components-reconnect-modal" class="reconnect-modal">
+        <div class="reconnect-card">
+            <div class="reconnect-spinner"></div>
+            <div class="reconnect-title">Reconnecting…</div>
+            <div class="reconnect-detail">The server was updated. Reloading the page to pick up the latest version.</div>
+        </div>
+    </div>
+    <style>
+        #components-reconnect-modal { display: none; }
+        #components-reconnect-modal.components-reconnect-show,
+        #components-reconnect-modal.components-reconnect-retrying,
+        #components-reconnect-modal.components-reconnect-failed,
+        #components-reconnect-modal.components-reconnect-rejected {
+            display: flex;
+            position: fixed; inset: 0;
+            align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.35); z-index: 10000;
+        }
+        .reconnect-card {
+            background: var(--neutral-layer-1, #fff);
+            color: var(--neutral-foreground-rest, #222);
+            padding: 24px 32px; border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+            display: flex; flex-direction: column; align-items: center; gap: 12px;
+            min-width: 280px; text-align: center;
+        }
+        .reconnect-spinner {
+            width: 32px; height: 32px; border-radius: 50%;
+            border: 3px solid #ccc; border-top-color: #2b6cb0;
+            animation: reconnect-spin 1s linear infinite;
+        }
+        .reconnect-title { font-size: 1.1rem; font-weight: 600; }
+        .reconnect-detail { font-size: 0.9rem; opacity: 0.8; }
+        @@keyframes reconnect-spin { to { transform: rotate(360deg); } }
+    </style>
+    <script>
+        (function () {
+            // When Blazor marks the circuit as dead (rejected) or exhausts its
+            // retry schedule (failed), do a hard reload. A new circuit fires up
+            // with the new server version and the user is back on a live page.
+            var modal = null;
+            function checkState() {
+                modal = modal || document.getElementById('components-reconnect-modal');
+                if (!modal) return;
+                var cls = modal.classList;
+                if (cls.contains('components-reconnect-rejected') ||
+                    cls.contains('components-reconnect-failed')) {
+                    // Small delay so the user sees the message before the reload
+                    // and to coalesce multiple class-change events.
+                    setTimeout(function () { location.reload(); }, 800);
+                }
+            }
+            document.addEventListener('DOMContentLoaded', function () {
+                modal = document.getElementById('components-reconnect-modal');
+                if (!modal) return;
+                new MutationObserver(checkState).observe(modal, { attributes: true, attributeFilter: ['class'] });
+            });
+        })();
+    </script>
+
     <script src="_content/BlazorMonaco/jsInterop.js"></script>
     <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
     <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/editor/editor.main.js"></script>
     <script src="_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js" type="module"></script>
-    <script src="_framework/blazor.web.js"></script>
+    <script src="_framework/blazor.web.js" autostart="false"></script>
+    <script>
+        Blazor.start({
+            circuit: {
+                // Short, bounded retries so the "rejected/failed" state arrives
+                // in seconds rather than minutes when a deploy invalidates the
+                // circuit. On terminal failure, the mutation observer above
+                // reloads the page to pick up a fresh circuit on the new server.
+                reconnectionOptions: {
+                    maxRetries: 3,
+                    retryIntervalMilliseconds: 2000
+                }
+            }
+        });
+    </script>
 </body>
 
 </html>

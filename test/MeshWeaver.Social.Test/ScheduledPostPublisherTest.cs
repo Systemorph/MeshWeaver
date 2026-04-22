@@ -72,7 +72,7 @@ public class ScheduledPostPublisherTest
         using var cts = new CancellationTokenSource();
         _ = svc.StartAsync(cts.Token);
 
-        await Task.Delay(400);
+        await Task.Delay(400, TestContext.Current.CancellationToken);
         await svc.StopAsync(CancellationToken.None);
 
         publisher.PublishedCalls.Should().BeEmpty("post scheduled 10 minutes from now must not be drained");
@@ -125,7 +125,7 @@ public class ScheduledPostPublisherTest
         var svc = new ScheduledPostPublisher(queue, new[] { (IPlatformPublisher)publisher }, bridge, opts, NullLogger<ScheduledPostPublisher>.Instance);
         using var cts = new CancellationTokenSource();
         _ = svc.StartAsync(cts.Token);
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
         await svc.StopAsync(CancellationToken.None);
 
         publisher.PublishedCalls.Should().BeEmpty();
