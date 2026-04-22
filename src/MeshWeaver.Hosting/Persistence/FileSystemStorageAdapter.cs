@@ -195,15 +195,31 @@ public class FileSystemStorageAdapter : IStorageAdapter
             File.Delete(indexMdDelPath);
         }
 
-        // Also try to clean up empty directories
+        // Also try to clean up empty directories. This is concurrency-tolerant:
+        // when callers parallelize recursive deletes (e.g. FileSystemPersistenceService
+        // descendant moves via Task.WhenAll), two threads can race to remove the same
+        // newly-empty directory. Swallow the expected races so the delete remains idempotent.
         var basePath = GetFilePath(path, ".json");
         var directory = Path.GetDirectoryName(basePath);
         while (!string.IsNullOrEmpty(directory) &&
                directory != _baseDirectory &&
-               Directory.Exists(directory) &&
-               !Directory.EnumerateFileSystemEntries(directory).Any())
+               Directory.Exists(directory))
         {
-            Directory.Delete(directory);
+            try
+            {
+                if (Directory.EnumerateFileSystemEntries(directory).Any())
+                    break;
+                Directory.Delete(directory);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // Another thread won the race — directory is already gone.
+            }
+            catch (IOException)
+            {
+                // Non-empty (another thread wrote into it) or in-use — stop ascending.
+                break;
+            }
             directory = Path.GetDirectoryName(directory);
         }
 

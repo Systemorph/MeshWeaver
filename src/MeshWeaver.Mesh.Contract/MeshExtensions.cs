@@ -39,6 +39,10 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(MoveNodeResponse), nameof(MoveNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeMoveRejectionReason), nameof(NodeMoveRejectionReason));
 
+        // Internal relay used by HandleDeleteNodeRequest to forward the terminal
+        // storage commit + reply to the mesh hub (see CommitNodeDeletionMessage.cs).
+        config.TypeRegistry.WithType(typeof(CommitNodeDeletionMessage), nameof(CommitNodeDeletionMessage));
+
         // Import/Delete types
         config.TypeRegistry.WithType(typeof(ImportNodesRequest), nameof(ImportNodesRequest));
         config.TypeRegistry.WithType(typeof(ImportNodesResponse), nameof(ImportNodesResponse));
@@ -72,6 +76,7 @@ public static class MeshExtensions
             .AddMeshTypes()
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
+            .WithHandler<CommitNodeDeletionMessage>(HandleCommitNodeDeletion)
             .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
             .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest)
             .WithHandler<HeartBeatEvent>(HandleHeartBeat);
@@ -691,36 +696,89 @@ public static class MeshExtensions
         IMeshStorage persistence,
         ILogger logger)
     {
-        // Reply FIRST, then issue the storage delete. Validators have already passed,
-        // so we've reached the commit point. Reply-first is essential for the recursive
-        // self-delete case: when this handler runs on the node's OWN hub (not the mesh
-        // hub), the storage delete + subsequent DisposeRequest tears the hub down. Any
-        // response posted AFTER that teardown starts may race with callback disposal
-        // and never reach the caller — the recursive delete tests hang because of this.
-        // If the storage write itself fails (rare — persistence is durable before we
-        // arrive here), the error is logged; the Ok reply cannot be walked back.
-        hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+        // Post the terminal commit (storage delete + reply + DisposeRequest) FROM the
+        // mesh hub — not from the node's own hub.
+        //
+        // Why: when this runs on the node's own hub (recursive self-delete — the outer
+        // DeleteNodeRequest targeted parentPath, so the handler is running on parentHub),
+        // the subsequent DisposeRequest tears that same hub down. A reply posted from
+        // the dying hub races callback disposal and is lost — the recursive delete
+        // tests time out for exactly that reason.
+        //
+        // Resolving up to the mesh hub (the topmost hub, which never disposes itself)
+        // makes Sender = mesh. Ok and DisposeRequest both travel mesh → caller on one
+        // routing path; FIFO on the caller's inbound queue guarantees the Ok fires the
+        // RegisterCallback before DisposeRequest disposes the hub.
+        var meshHub = ResolveMeshHub(hub);
+        meshHub.Post(
+            new CommitNodeDeletionMessage(path, request.Id, request.Sender, capturedRequest.DeletedBy));
+    }
 
-        persistence.DeleteNode(path, recursive: false)
+    /// <summary>
+    /// Walks up <see cref="MessageHubConfiguration.ParentHub"/> to the topmost hub —
+    /// the mesh hub, which is never torn down by its own operations and is therefore
+    /// the stable place to post terminal delete commits from.
+    /// </summary>
+    private static IMessageHub ResolveMeshHub(IMessageHub hub)
+    {
+        var current = hub;
+        while (current.Configuration.ParentHub is { } parent && !ReferenceEquals(parent, current))
+            current = parent;
+        return current;
+    }
+
+    /// <summary>
+    /// Handler for the mesh-hub relay that commits the actual storage delete, replies
+    /// to the original caller, and disposes the deleted address's grain. See
+    /// <see cref="CommitNodeDeletionMessage"/> for the rationale. Registered via
+    /// <see cref="WithNodeOperationHandlers"/>; in practice only the mesh hub ever
+    /// receives this message because callers always target <c>catalog.MeshAddress</c>.
+    /// </summary>
+    private static IMessageDelivery HandleCommitNodeDeletion(
+        IMessageHub hub,
+        IMessageDelivery<CommitNodeDeletionMessage> delivery)
+    {
+        var msg = delivery.Message;
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
+        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+
+        persistence.DeleteNode(msg.Path, recursive: false)
             .Subscribe(
                 _ =>
                 {
-                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                        ?.Publish(MeshChangeEvent.Deleted(path));
+                    // Reply to the original caller. We can't use ResponseFor(request)
+                    // — the outer DeleteNodeRequest delivery isn't in scope — so
+                    // reconstruct the same routing: target = original sender,
+                    // RequestId property = original delivery id.
+                    hub.Post(
+                        DeleteNodeResponse.Ok(),
+                        o => o
+                            .WithTarget(msg.OriginalSender)
+                            .WithProperty(PostOptions.RequestId, msg.OriginalRequestId));
 
-                    // Dispose the grain at the deleted address so a subsequent recreate at
-                    // the same path doesn't keep the old node's HubConfiguration. Without
-                    // this, delete+create with a different nodeType leaves the grain bound
-                    // to the previous nodeType's config until the next idle deactivation.
-                    hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
+                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                        ?.Publish(MeshChangeEvent.Deleted(msg.Path));
+
+                    // Dispose the grain at the deleted address so a subsequent recreate
+                    // at the same path doesn't keep the old node's HubConfiguration.
+                    hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(msg.Path)));
 
                     logger.LogInformation(
                         "Node deleted at {Path} by {DeletedBy}",
-                        path, capturedRequest.DeletedBy ?? "system");
+                        msg.Path, msg.DeletedBy ?? "system");
                 },
-                ex => logger.LogError(ex,
-                    "Storage delete failed for {Path} after Ok response was already sent — response cannot be walked back",
-                    path));
+                ex =>
+                {
+                    logger.LogError(ex, "Storage delete failed for {Path}", msg.Path);
+                    hub.Post(
+                        DeleteNodeResponse.Fail($"Storage delete failed: {ex.Message}",
+                            NodeDeletionRejectionReason.Unknown),
+                        o => o
+                            .WithTarget(msg.OriginalSender)
+                            .WithProperty(PostOptions.RequestId, msg.OriginalRequestId));
+                });
+
+        return delivery.Processed();
     }
 
     /// <summary>

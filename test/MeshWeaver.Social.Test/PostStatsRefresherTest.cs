@@ -66,7 +66,10 @@ public class PostStatsRefresherTest
         var deadline = DateTime.UtcNow + timeout;
         while (!predicate())
         {
-            if (DateTime.UtcNow > deadline) return;
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException(
+                    $"Predicate did not become true within {timeout.TotalMilliseconds:F0} ms. " +
+                    "The awaited stats-refresh side-effect never occurred.");
             await Task.Delay(25);
         }
     }
