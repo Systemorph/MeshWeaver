@@ -62,13 +62,16 @@ var googleClientId = builder.AddParameter("google-client-id", secret: false);
 var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
 
 // Social publishing — LinkedIn OAuth app used for publishing posts on behalf
-// of the signed-in user (scopes: w_member_social + r_member_social). Client Id
-// is public (shown in the consent screen URL) so it's inlined; the secret is
-// read from the AppHost's configuration (user-secrets locally, GitHub Actions
-// secret in deploy). Key: Social:LinkedIn:ClientSecret
-//   dotnet user-secrets set "Social:LinkedIn:ClientSecret" "<value>" --project memex/aspire/Memex.AppHost
+// of the signed-in user. Client Id is public (shown on the consent screen URL)
+// so it's inlined. The secret is wrapped as an AddParameter so Aspire resolves
+// it at deploy time from user-secrets / GitHub Actions secrets and projects it
+// into the container as a proper secret reference — a plain
+// `builder.Configuration[...]` read was silently losing the value in prod
+// (the env var was shipped empty and LinkedIn rejected token exchange with
+// "client_secret missing").
+//   dotnet user-secrets set "Parameters:linkedin-client-secret" "<value>" --project memex/aspire/Memex.AppHost
 const string LinkedInClientId = "780dsuvyxglmc4";
-var linkedinClientSecret = builder.Configuration["Social:LinkedIn:ClientSecret"] ?? "";
+var linkedinClientSecret = builder.AddParameter("linkedin-client-secret", secret: true);
 
 // --- Custom domain (for deployed modes) ---
 var customDomain = builder.AddParameter("custom-domain", secret: false);
