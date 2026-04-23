@@ -42,6 +42,7 @@ public static class GraphConfigurationExtensions
                 .AddActivityType()
                 .AddUserActivityType()
                 .AddKernel()
+                .AddMcp()
                 .AddApiTokenType()
                 .AddMeshDataSourceType()
                 .AddPartitionType()

@@ -1,6 +1,8 @@
 using System.ComponentModel;
+using System.Security.Claims;
 using MeshWeaver.AI;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -10,7 +12,19 @@ namespace MeshWeaver.Blazor.AI;
 
 /// <summary>
 /// MCP wrapper exposing mesh operations as MCP tools.
-/// Thin wrapper over MeshOperations with MCP attributes and URL-based NavigateTo.
+/// Thin wrapper over <see cref="MeshOperations"/> with MCP attributes and
+/// URL-based NavigateTo.
+///
+/// <para>
+/// <b>Session hub</b>: on construction, the plugin resolves a session-scoped
+/// satellite hub at address <c>mcp/{sessionId}</c> (materialised by the
+/// <c>RouteAddressToHostedHub</c> rule from <see cref="Graph.Configuration.McpNodeType"/>)
+/// and hands that to <see cref="MeshOperations"/>. All posts from MCP tools
+/// therefore originate "outside" the grain scope — same as the Blazor client
+/// hub pattern — so routing rules like the kernel's fire correctly and
+/// side-effects land predictably. Each authenticated caller × MCP session id
+/// gets its own hub; idle hubs dispose themselves.
+/// </para>
 /// </summary>
 [McpServerToolType]
 public class McpMeshPlugin
@@ -21,11 +35,68 @@ public class McpMeshPlugin
 
     public McpMeshPlugin(
         IMessageHub hub,
-        IOptions<McpConfiguration>? config = null)
+        IOptions<McpConfiguration>? config = null,
+        IHttpContextAccessor? httpContextAccessor = null)
     {
-        ops = new MeshOperations(hub);
         logger = hub.ServiceProvider.GetRequiredService<ILogger<McpMeshPlugin>>();
         baseUrl = config?.Value.BaseUrl ?? "http://localhost:5000";
+
+        // Resolve the session id from the inbound request:
+        //   1. Standard MCP header Mcp-Session-Id (sent by protocol-compliant clients)
+        //   2. Auth claim oid / sub (falls back to caller identity)
+        //   3. "anonymous" sentinel (only in dev scenarios without auth)
+        // Once resolved, materialise a hub at mcp/{sessionId} on the root hub. The
+        // RouteAddressToHostedHub rule from McpNodeType creates it on demand and
+        // disposes it after idle timeout.
+        var sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, logger);
+        ops = new MeshOperations(sessionHub);
+    }
+
+    private static IMessageHub ResolveSessionHub(IMessageHub rootHub, HttpContext? ctx, ILogger logger)
+    {
+        var sessionId = ResolveSessionId(ctx);
+        if (sessionId is null)
+        {
+            logger.LogWarning(
+                "No MCP session id resolvable from request — falling back to root hub. "
+                + "Some routing rules (kernel dispatch, etc.) will not fire.");
+            return rootHub;
+        }
+        var address = AddressExtensions.CreateMcpAddress(sessionId);
+        logger.LogDebug("MCP session hub at {Address}", address);
+        return rootHub.GetHostedHub(address, c => c, HostedHubCreation.Always);
+    }
+
+    private static string? ResolveSessionId(HttpContext? ctx)
+    {
+        if (ctx is null) return null;
+
+        // Prefer the standard MCP protocol header. Clients (Claude Desktop,
+        // Claude Code, etc.) set this per connection.
+        var protocolSession = ctx.Request.Headers["Mcp-Session-Id"].FirstOrDefault();
+
+        // Scope within the authenticated caller so two different users can't
+        // collide on a chosen Mcp-Session-Id. Fall through oid → sub → name.
+        var callerId = ctx.User?.FindFirst("oid")?.Value
+                    ?? ctx.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                    ?? ctx.User?.FindFirst(ClaimTypes.Email)?.Value
+                    ?? ctx.User?.Identity?.Name;
+
+        if (!string.IsNullOrEmpty(callerId) && !string.IsNullOrEmpty(protocolSession))
+            return $"{Sanitize(callerId)}-{Sanitize(protocolSession)}";
+        if (!string.IsNullOrEmpty(callerId))
+            return Sanitize(callerId);
+        if (!string.IsNullOrEmpty(protocolSession))
+            return $"anon-{Sanitize(protocolSession)}";
+        return null;
+    }
+
+    private static string Sanitize(string s)
+    {
+        // Address segments must be safe — strip characters that break hosted-hub
+        // grain key lookup. Keep alphanumerics, '-', '_'; replace everything else.
+        var chars = s.Select(c => char.IsLetterOrDigit(c) || c == '-' || c == '_' ? c : '-').ToArray();
+        return new string(chars);
     }
 
     [McpServerTool]

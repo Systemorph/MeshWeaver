@@ -114,6 +114,7 @@ public static class AddressExtensions
     public const string UiType = "ui";
     public const string SignalRType = "signalr";
     public const string KernelType = "kernel";
+    public const string McpType = "mcp";
     public const string NotebookType = "nb";
     public const string ArticlesType = "articles";
     public const string PortalType = "portal";
@@ -128,6 +129,7 @@ public static class AddressExtensions
     public static Address CreateUiAddress(string? id = null) => new(UiType, id ?? Guid.NewGuid().AsString());
     public static Address CreateSignalRAddress(string? id = null) => new(SignalRType, id ?? Guid.NewGuid().AsString());
     public static Address CreateKernelAddress(string? id = null) => new(KernelType, id ?? Guid.NewGuid().AsString());
+    public static Address CreateMcpAddress(string? id = null) => new(McpType, id ?? Guid.NewGuid().AsString());
     public static Address CreateNotebookAddress(string? id = null) => new(NotebookType, id ?? Guid.NewGuid().AsString());
     public static Address CreateArticlesAddress(string id) => new(ArticlesType, id);
     public static Address CreatePortalAddress(string? id = null) => new(PortalType, id ?? Guid.NewGuid().AsString());
