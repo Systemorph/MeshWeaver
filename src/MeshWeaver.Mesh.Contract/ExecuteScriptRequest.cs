@@ -40,6 +40,9 @@ public record ExecuteScriptResponse
     /// </summary>
     public string? OutputAreaReference { get; init; }
 
+    /// <summary>Path to the <c>ActivityLog</c> MeshNode for this dispatch.</summary>
+    public string? ActivityLog { get; init; }
+
     /// <summary>Human-readable error when <c>Success == false</c>.</summary>
     public string? Error { get; init; }
 }
