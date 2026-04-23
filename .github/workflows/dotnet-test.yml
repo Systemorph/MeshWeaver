@@ -42,6 +42,19 @@ jobs:
           ! -path '*FutuRe*' \
           -exec dotnet test {} --no-build --verbosity normal -l:trx \
                 --blame-hang-timeout 3m --blame-hang-dump-type mini \; 2>&1 | tee test/test-results.log
+    - name: Fail on hang / aborted test run
+      # `dotnet test --blame-hang-timeout 3m` aborts the test host on hang and
+      # writes "Test Run Aborted" + "Total tests: Unknown" to stdout. The trx
+      # produced has no Failed records, so Publish Test Results below sees only
+      # what completed and reports green — masking the hang. This step makes the
+      # masking explicit: if any "Total tests: Unknown" or hang-dump line is
+      # present in the log, fail the job.
+      run: |
+        if grep -qE "Total tests: Unknown|Test host process crashed|Collecting hang dumps" test/test-results.log; then
+          echo "::error::A test process hung or crashed during the run — see test-results.log for the hang dump."
+          grep -E "Total tests: Unknown|Test host process crashed|Collecting hang dumps|Test Run Aborted" test/test-results.log || true
+          exit 1
+        fi
     - name: Collect test logs for artifact
       if: always()
       run: |
