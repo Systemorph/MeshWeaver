@@ -494,6 +494,14 @@ public class MeshOperations
         }
     }
 
+    /// <summary>
+    /// Pretty-prints a MeshNode for inclusion in diff output. Indented JSON keeps each
+    /// field on its own line so the unified diff shows field-level changes rather than
+    /// one massive minified line.
+    /// </summary>
+    private string SerialisePretty(MeshNode node) =>
+        JsonSerializer.Serialize(node, new JsonSerializerOptions(hub.JsonSerializerOptions) { WriteIndented = true });
+
     public async Task<string> Patch(string path, string fields)
     {
         logger.LogInformation("Patch called for path={Path}", path);
@@ -553,6 +561,7 @@ public class MeshOperations
                        "Provide a non-empty human-readable display name, or omit the 'name' key to keep the current name.";
 
             var versionBefore = existing.Version;
+            var beforeJson = SerialisePretty(existing);
             var patchTcs = new TaskCompletionSource<string>();
             mesh.UpdateNode(merged).Subscribe(
                 updated =>
@@ -573,10 +582,16 @@ public class MeshOperations
                     // when persistence did commit the change (verified by re-fetching
                     // the node). Trust the Subscribe onNext as success; if the write
                     // actually failed, the onError branch below fires.
+                    var afterJson = SerialisePretty(updated);
+                    var diff = DiffUtil.UnifiedDiff(beforeJson, afterJson, updated.Path);
+                    var versionText = updated.Version > versionBefore
+                        ? $" (v{versionBefore} → v{updated.Version})"
+                        : "";
+                    // Plain-text status on the first line keeps the response legible
+                    // when rendered raw; the ```diff fence below lets any MCP client
+                    // (or chat agent) render the delta with proper syntax highlight.
                     patchTcs.TrySetResult(
-                        updated.Version > versionBefore
-                            ? $"Patched: {updated.Path} (v{versionBefore} → v{updated.Version})"
-                            : $"Patched: {updated.Path}");
+                        $"Patched: {updated.Path}{versionText}\n\n```diff\n{diff}```");
                 },
                 ex => patchTcs.TrySetResult($"Error patching {merged.Path}: {ex.Message}"));
             return await patchTcs.Task;

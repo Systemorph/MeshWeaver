@@ -32,7 +32,7 @@ public static class McpNodeType
 {
     public const string NodeType = "mcp";
 
-    public static TBuilder AddMcp<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    public static TBuilder AddMcpSatelliteType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
