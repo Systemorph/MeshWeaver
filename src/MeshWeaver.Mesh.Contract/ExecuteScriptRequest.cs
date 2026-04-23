@@ -40,7 +40,14 @@ public record ExecuteScriptResponse
     /// </summary>
     public string? OutputAreaReference { get; init; }
 
-    /// <summary>Path to the <c>ActivityLog</c> MeshNode for this dispatch.</summary>
+    /// <summary>
+    /// Path to the <c>ActivityLog</c> MeshNode created at dispatch time. Because
+    /// script execution is truly async (fires on the kernel; response returns on
+    /// submit, not on completion), the log is delivered by reference: callers
+    /// subscribe via <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> to
+    /// watch progress messages land and the final status flip. Same pattern as
+    /// Thread streams.
+    /// </summary>
     public string? ActivityLog { get; init; }
 
     /// <summary>Human-readable error when <c>Success == false</c>.</summary>
