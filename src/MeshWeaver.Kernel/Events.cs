@@ -15,6 +15,15 @@ public record SubmitCodeRequest(string Code) : IRequest<SubmitCodeResponse>
 {
     public string? IFrameUrl { get; init; }
     public string Id { get; init; } = Guid.NewGuid().AsString();
+
+    /// <summary>
+    /// Path to the <c>ActivityLog</c> MeshNode created by the caller before dispatch.
+    /// The kernel resolves an ILogger targeting this node and injects it as the
+    /// script's <c>Log</c> global — all <c>Log.LogInformation(...)</c> etc. calls
+    /// append to the node's <c>Messages</c> list, and subscribers to the node's
+    /// <c>MeshNodeReference</c> stream see them land live.
+    /// </summary>
+    public string? ActivityLogPath { get; init; }
 }
 
 /// <summary>

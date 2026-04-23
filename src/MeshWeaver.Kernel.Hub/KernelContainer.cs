@@ -486,6 +486,18 @@ using MeshWeaver.Messaging;
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
 
+        // If the caller passed an ActivityLogPath, swap the script's `Log` global
+        // to a logger that appends to that node. Messages stream through the
+        // node's MeshNodeReference for subscribers watching the run.
+        ActivityLogLogger? activityLogger = null;
+        if (!string.IsNullOrEmpty(request.Message.ActivityLogPath))
+        {
+            activityLogger = new ActivityLogLogger(hub, request.Message.ActivityLogPath!);
+            var kernel = await hub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
+            await Task.WhenAll(kernel.ChildKernels.OfType<CSharpKernel>()
+                .Select(k => k.SetValueAsync("Log", activityLogger, typeof(ILogger))));
+        }
+
         string? error = null;
         try
         {
@@ -494,12 +506,15 @@ using MeshWeaver.Messaging;
         catch (Exception ex)
         {
             error = ex.Message;
+            activityLogger?.LogError(ex, "Script dispatch failed");
         }
+
+        // Finalize the activity log: flush pending messages and flip the terminal
+        // status on the node so subscribers see the run as Succeeded / Failed.
+        activityLogger?.Complete(error is null ? ActivityStatus.Succeeded : ActivityStatus.Failed);
 
         // Post a completion response so callers using RegisterCallback / AwaitResponse
         // (e.g. MeshOperations.ExecuteScript from MCP) see SubmitCodeRequest finish.
-        // Processed() alone does not round-trip back to the sender — a posted response
-        // with ResponseFor(request) is what fires the callback.
         hub.Post(
             new SubmitCodeResponse(submissionId, error is null) { Error = error },
             o => o.ResponseFor(request));
