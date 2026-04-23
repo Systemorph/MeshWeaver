@@ -76,6 +76,27 @@ Displays a node's visual layout area in the chat UI.
 User asks: "Show me the organization chart"
 Action: Call `NavigateTo('@ACME/Organization')`, respond: "Here's the organization chart."
 
+## RenderArea
+
+Returns an interactive rendering of a layout area as an MCP-UI embedded resource. Hosts that support MCP-UI (Claude.ai web/desktop, ChatGPT Apps) render this inline as an iframe widget; text-only hosts (Claude Code CLI) see the URL as a fallback.
+
+### Parameters
+
+- `path` (string, required) — Path to the node hosting the area (e.g., `@Systemorph/FutuRe/EuropeRe/AcmeSubmission2025`)
+- `areaName` (string, required) — Layout area name on that node (e.g., `Triangle`)
+
+### When to use RenderArea vs NavigateTo vs Get
+
+- `RenderArea` — the user will benefit from seeing the **live interactive view** embedded in the conversation (charts, grids, dashboards, triangles). Best for hosts that support MCP-UI.
+- `NavigateTo` — return a clickable URL to open in a new browser tab.
+- `Get(.../area/Name)` — structured JSON of the rendered payload for downstream programmatic use.
+
+### Example
+
+```
+RenderArea('@Systemorph/FutuRe/EuropeRe/AcmeSubmission2025', 'Triangle')
+```
+
 ## Create
 
 Creates a new node in the mesh. The node is validated before being persisted.
