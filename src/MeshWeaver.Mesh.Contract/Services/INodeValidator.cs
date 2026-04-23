@@ -63,14 +63,33 @@ public record NodeValidationContext
 }
 
 /// <summary>
-/// Unified validation result for all node operations.
+/// Unified validation result for all node operations. A result carries either an error
+/// (<see cref="IsValid"/>=false + <see cref="ErrorMessage"/>) or an advisory warning
+/// (<see cref="IsValid"/>=true + non-null <see cref="Warning"/>) — the latter is used
+/// by delete handlers to require explicit user confirmation via
+/// <c>DeleteNodeRequest.ConfirmWarnings</c>.
 /// </summary>
 public record NodeValidationResult(bool IsValid, string? ErrorMessage = null, NodeRejectionReason Reason = NodeRejectionReason.Unknown)
 {
     /// <summary>
+    /// Advisory message from a validator that accepts the operation but wants the caller
+    /// to be aware of a condition (e.g., "the subtree contains 50 nodes — proceed?").
+    /// Only meaningful when <see cref="IsValid"/> is true. Delete handlers gate warnings
+    /// behind <c>DeleteNodeRequest.ConfirmWarnings</c> — first request returns the
+    /// warnings so the UI can confirm, second request (with flag set) proceeds.
+    /// </summary>
+    public string? Warning { get; init; }
+
+    /// <summary>
     /// Creates a successful validation result.
     /// </summary>
     public static NodeValidationResult Valid() => new(true);
+
+    /// <summary>
+    /// Creates a successful validation result carrying an advisory warning.
+    /// </summary>
+    public static NodeValidationResult ValidWithWarning(string warning) =>
+        new(true) { Warning = warning };
 
     /// <summary>
     /// Creates a failed validation result with an error message.
