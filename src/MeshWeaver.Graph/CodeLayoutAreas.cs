@@ -10,6 +10,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -59,14 +60,20 @@ public static class CodeLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        return nodeStream.Select(nodes =>
+        // Combine node data + caller's effective permissions so the Run button
+        // only renders when the caller has Execute. Permission stream is cached
+        // (5-min TTL) in PermissionHelper so this doesn't hit the security
+        // service on every node update.
+        var permissionStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+
+        return nodeStream.CombineLatest(permissionStream, (nodes, perms) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildContent(host, node);
+            return (UiControl?)BuildContent(host, node, perms);
         });
     }
 
-    private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node)
+    private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, Permission callerPermissions = Permission.All)
     {
         var hubAddress = host.Hub.Address;
         var codeConfig = node?.Content as CodeConfiguration;
@@ -77,6 +84,7 @@ public static class CodeLayoutAreas
         // fully on the right via `justify-content: space-between` on the outer stack.
         var title = node?.Name ?? node?.Id ?? "Code";
         var isExecutable = codeConfig?.IsExecutable == true;
+        var canExecute = callerPermissions.HasFlag(Permission.Execute);
 
         // Stable kernel address per Code node — same id across clicks so script state
         // (variables, using directives) persists between runs. The kernel auto-disposes
@@ -88,20 +96,21 @@ public static class CodeLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; align-items: center;");
 
-        if (isExecutable)
+        if (isExecutable && canExecute)
         {
+            // Per AsynchronousCalls.md: no await inside click action. Post the
+            // ExecuteScriptRequest to the Code node's own hub — the handler creates
+            // the ActivityLog node, dispatches to the kernel, and responds with the
+            // log's path. The result pane below subscribes to that path's
+            // MeshNodeReference stream for live progress.
             actions = actions.WithView(Controls.Button("Run")
                 .WithIconStart(FluentIcons.Play())
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {
-                    // Per AsynchronousCalls.md: no await inside click action. Post the
-                    // SubmitCodeRequest to the kernel and let the result pane below
-                    // stream events into LayoutAreaReference("output").
-                    var code = codeConfig?.Code ?? string.Empty;
                     ctx.Host.Hub.Post(
-                        new SubmitCodeRequest(code) { Id = "output" },
-                        o => o.WithTarget(kernelAddress));
+                        new ExecuteScriptRequest(),
+                        o => o.WithTarget(hubAddress));
                     return Task.CompletedTask;
                 }));
         }
