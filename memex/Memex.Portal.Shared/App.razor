@@ -107,26 +107,61 @@
     </style>
     <script>
         (function () {
-            // When Blazor marks the circuit as dead (rejected) or exhausts its
-            // retry schedule (failed), do a hard reload. A new circuit fires up
-            // with the new server version and the user is back on a live page.
-            var modal = null;
-            function checkState() {
-                modal = modal || document.getElementById('components-reconnect-modal');
-                if (!modal) return;
-                var cls = modal.classList;
-                if (cls.contains('components-reconnect-rejected') ||
-                    cls.contains('components-reconnect-failed')) {
-                    // Small delay so the user sees the message before the reload
-                    // and to coalesce multiple class-change events.
-                    setTimeout(function () { location.reload(); }, 800);
-                }
+            // Fast-fail reconnect after a deploy.
+            //
+            // When the server pod holding a Blazor Server circuit dies, the
+            // browser keeps retrying the old SignalR connection id through
+            // every transport fallback (WebSocket → LongPolling → WebSocket)
+            // before Blazor's reconnectionOptions.maxRetries counts it as a
+            // single failure. In production that adds up to 2–4 minutes of a
+            // stale "Reconnecting…" modal for every user whose tab was open
+            // during the deploy.
+            //
+            // Two independent signals trigger a reload:
+            //   1) The Blazor reconnect modal enters its terminal state
+            //      (`rejected` = server forgot the circuit, `failed` =
+            //      retries exhausted). Caught via MutationObserver.
+            //   2) A /_blazor?id=<stale> fetch returns 404. That's the
+            //      unambiguous "this circuit is gone" signal — reload now
+            //      without waiting for Blazor's retry schedule.
+            var reloaded = false;
+            function reloadOnce(reason) {
+                if (reloaded) return;
+                reloaded = true;
+                console.info('[blazor-reconnect] reloading: ' + reason);
+                setTimeout(function () { location.reload(); }, 800);
             }
+
+            // (1) Terminal reconnect state via CSS class changes on the modal.
             document.addEventListener('DOMContentLoaded', function () {
-                modal = document.getElementById('components-reconnect-modal');
+                var modal = document.getElementById('components-reconnect-modal');
                 if (!modal) return;
-                new MutationObserver(checkState).observe(modal, { attributes: true, attributeFilter: ['class'] });
+                new MutationObserver(function () {
+                    var cls = modal.classList;
+                    if (cls.contains('components-reconnect-rejected') ||
+                        cls.contains('components-reconnect-failed')) {
+                        reloadOnce('modal=' + modal.className);
+                    }
+                }).observe(modal, { attributes: true, attributeFilter: ['class'] });
             });
+
+            // (2) 404 from /_blazor?id=<id> — the Long Polling transport's
+            //     request against a dead circuit. The initial /_blazor/negotiate
+            //     has no `id=` query param, so this only fires for an already
+            //     established connection that the server has since forgotten.
+            var origFetch = window.fetch;
+            if (typeof origFetch === 'function') {
+                window.fetch = function (input, init) {
+                    var url = typeof input === 'string' ? input : (input && input.url) || '';
+                    var p = origFetch.apply(this, arguments);
+                    if (/\/_blazor\?id=/.test(url)) {
+                        p.then(function (res) {
+                            if (res && res.status === 404) reloadOnce('signalr 404');
+                        }).catch(function () { /* network errors: let Blazor retry handle */ });
+                    }
+                    return p;
+                };
+            }
         })();
     </script>
 
