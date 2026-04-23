@@ -51,8 +51,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
                     .AddDefaultLayoutAreas()
             });
 
-    [Fact(Timeout = 30_000, Skip = "PatchDataRequest handler commits on the reduced MeshNodeReference stream; " +
-        "doesn't propagate to the source InstanceCollection yet. Task #60 follow-up: route through the source stream.")]
+    [Fact(Timeout = 30_000)]
     public async Task PatchDataRequest_MergesPartialFields_LeavesOmittedIntact()
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

@@ -499,8 +499,6 @@ public static class DataExtensions
                 ?? throw new InvalidOperationException(
                     $"Reference {reference.GetType().Name} does not inherit from WorkspaceReference<T>");
 
-            // Find IWorkspace.GetStream<T>(WorkspaceReference<T>, ...) — the 2-arg overload
-            // with optional config. We pass null for the config and rely on its default.
             var getStream = typeof(IWorkspace).GetMethods()
                 .First(m => m.Name == nameof(IWorkspace.GetStream)
                     && m.IsGenericMethodDefinition
@@ -519,23 +517,25 @@ public static class DataExtensions
                 return request.Processed();
             }
 
-            var jsonOpts = hub.JsonSerializerOptions;
-            var patchText = request.Message.Patch.Content ?? "{}";
-            var streamId = (string?)stream.StreamId;
-            var version = hub.Version;
-
-            // Build a properly typed update delegate via MakeGenericMethod on the helper below.
+            // Applying the patch is fire-and-forget relative to the handler —
+            // the helper reads the stream reactively (.Take(1).Subscribe), merges,
+            // and commits via workspace.RequestChange. The response is posted from
+            // inside the subscribe callback so the caller's RegisterCallback fires
+            // AFTER the commit (otherwise a racing read sees pre-patch state).
             var applyPatch = typeof(DataExtensions)
                 .GetMethod(nameof(ApplyJsonMergePatchAndUpdate),
                     System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
                 .MakeGenericMethod(tReduced);
             applyPatch.Invoke(null, new object?[]
             {
-                stream, patchText, jsonOpts, streamId, version
+                stream,
+                request.Message.Patch.Content ?? "{}",
+                hub.JsonSerializerOptions,
+                (string?)stream.StreamId,
+                hub.Version,
+                hub,
+                request
             });
-
-            hub.Post(new PatchDataResponse(true, version),
-                o => o.ResponseFor(request));
         }
         catch (Exception ex)
         {
@@ -546,37 +546,73 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Typed helper for <see cref="HandlePatchDataRequest"/> — applies a JSON merge
-    /// patch to the stream's current value. Runs inside <c>stream.Update</c> so the
-    /// commit + downstream fan-out is handled by the synchronization stream machinery.
+    /// Typed helper for <see cref="HandlePatchDataRequest"/>. Reads the stream's
+    /// current value synchronously via <c>.Take(1)</c>, applies the JSON merge
+    /// patch, then posts the merged instance through the hub's regular
+    /// <see cref="DataChangeRequest"/> pipeline. This routes through the source
+    /// data-source stream (not the reduced reference stream), so the
+    /// <see cref="InstanceCollection{T}"/> update + persistence + reduced-view
+    /// propagation all happen exactly once — same as a normal Update would do.
+    /// Subscribers to any reduced reference over the same data source see the
+    /// change tick on their stream for free.
     /// </summary>
     private static void ApplyJsonMergePatchAndUpdate<T>(
         ISynchronizationStream<T> stream,
         string patchText,
         System.Text.Json.JsonSerializerOptions jsonOpts,
         string? streamId,
-        long version)
+        long version,
+        IMessageHub hub,
+        IMessageDelivery<PatchDataRequest> request)
     {
-        stream.Update(current =>
-        {
-            var currentJson = System.Text.Json.JsonSerializer.Serialize(current, jsonOpts);
-            var currentNode = System.Text.Json.Nodes.JsonNode.Parse(currentJson) as System.Text.Json.Nodes.JsonObject
-                ?? new System.Text.Json.Nodes.JsonObject();
-            var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText) as System.Text.Json.Nodes.JsonObject
-                ?? throw new InvalidOperationException("Patch must be a JSON object");
-
-            foreach (var kvp in patchNode.ToArray())
+        stream
+            .Take(1)
+            .Subscribe(change =>
             {
-                if (kvp.Value is null)
-                    currentNode.Remove(kvp.Key);
-                else
-                    currentNode[kvp.Key] = kvp.Value.DeepClone();
-            }
+                try
+                {
+                    var current = change.Value;
+                    var currentJson = System.Text.Json.JsonSerializer.Serialize(current, jsonOpts);
+                    var currentNode = System.Text.Json.Nodes.JsonNode.Parse(currentJson) as System.Text.Json.Nodes.JsonObject
+                        ?? new System.Text.Json.Nodes.JsonObject();
+                    var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText) as System.Text.Json.Nodes.JsonObject
+                        ?? throw new InvalidOperationException("Patch must be a JSON object");
 
-            var mergedJson = currentNode.ToJsonString(jsonOpts);
-            var merged = System.Text.Json.JsonSerializer.Deserialize<T>(mergedJson, jsonOpts);
-            return new ChangeItem<T>(merged, streamId, version);
-        });
+                    foreach (var kvp in patchNode.ToArray())
+                    {
+                        if (kvp.Value is null)
+                            currentNode.Remove(kvp.Key);
+                        else
+                            currentNode[kvp.Key] = kvp.Value.DeepClone();
+                    }
+
+                    var mergedJson = currentNode.ToJsonString(jsonOpts);
+                    var merged = System.Text.Json.JsonSerializer.Deserialize<T>(mergedJson, jsonOpts);
+                    if (merged is null)
+                    {
+                        hub.Post(new PatchDataResponse(false, hub.Version)
+                            { Error = "Merged value deserialised to null" },
+                            o => o.ResponseFor(request));
+                        return;
+                    }
+
+                    // Route via the hub's DataChangeRequest pipeline — the workspace
+                    // writes through the data-source stream (which owns the typed
+                    // InstanceCollection + persistence + reduction fan-out).
+                    hub.GetWorkspace().RequestChange(
+                        DataChangeRequest.Update([merged]), null, null);
+
+                    // Response posts AFTER the commit so caller's RegisterCallback
+                    // fires on a state where a subsequent Get sees the patch.
+                    hub.Post(new PatchDataResponse(true, hub.Version),
+                        o => o.ResponseFor(request));
+                }
+                catch (Exception ex)
+                {
+                    hub.Post(new PatchDataResponse(false, hub.Version) { Error = ex.Message },
+                        o => o.ResponseFor(request));
+                }
+            });
     }
 
     private static Type? WalkBaseForGeneric(Type type, Type genericDef)
