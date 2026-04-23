@@ -241,10 +241,18 @@ public class MeshOperations
 
                 hub.RegisterCallback(delivery, (d, _) =>
                 {
+                    MeshNode? node = null;
                     if (d is IMessageDelivery<GetDataResponse> gdr)
-                        EmitOnce(gdr.Message.Data as MeshNode);
-                    else
-                        EmitOnce(null);
+                        node = gdr.Message.Data as MeshNode;
+
+                    // Verify path match — the mesh router resolves non-existent paths
+                    // to their nearest ancestor hub, which then answers with ITS OWN
+                    // MeshNode. Treat mismatches as not-found so callers don't end up
+                    // patching the wrong node.
+                    if (node != null && !string.Equals(node.Path, resolvedPath, StringComparison.Ordinal))
+                        node = null;
+
+                    EmitOnce(node);
                     return Task.FromResult(d);
                 }, cts.Token);
 
@@ -668,25 +676,23 @@ public class MeshOperations
             if (jsonObj == null)
                 return Observable.Return("Error: fields must be a JSON object");
 
-            if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
-                return Observable.Return(
-                    $"Error: cannot patch {resolvedPath}: 'content' is null. " +
-                    "Fetch the node first with Get, modify the returned content in-place, " +
-                    "and resend the complete node. Never send null content.");
-
             if (jsonObj.ContainsKey("name") && string.IsNullOrWhiteSpace(jsonObj["name"]?.ToString()))
                 return Observable.Return(
                     $"Error: cannot patch {resolvedPath}: 'name' is empty. " +
                     "Provide a non-empty human-readable display name, or omit the 'name' key.");
 
-            // Fall back to read-merge-write via DataChangeRequest — the new
-            // PatchDataRequest handler commits to a reduced stream that doesn't yet
-            // propagate back to the source InstanceCollection (see task #60 note).
-            // When that's fixed, switch to PatchViaDataRequest(resolvedPath, rawPatch).
+            // Read-merge-write via DataChangeRequest. FetchNode returns null when the
+            // path doesn't resolve (now with path-match verification so we don't
+            // accidentally patch an ancestor hub).
             return FetchNode(resolvedPath).SelectMany(existing =>
             {
                 if (existing == null)
                     return Observable.Return($"Error: node not found at {resolvedPath}");
+
+                // Content-specific rejections carry the expected schema so agents
+                // can recover on the next call without guessing.
+                if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
+                    return Observable.Return(BuildNullContentError(existing.Path, existing.NodeType!));
 
                 var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
                     ?? new MeshNode(existing.Id, existing.Namespace);
@@ -700,6 +706,16 @@ public class MeshOperations
                     Content = jsonObj.ContainsKey("content") ? partial.Content : existing.Content,
                     PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
                 };
+
+                // Validate merged content against the NodeType's schema when the
+                // caller touched content. Surface the schema in the error so an
+                // agent can fix its payload on the retry.
+                if (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
+                {
+                    var validationError = ValidateContentWithSchema(merged);
+                    if (validationError != null)
+                        return Observable.Return(validationError);
+                }
 
                 var versionBefore = existing.Version;
                 return UpdateViaDataChange(merged)
