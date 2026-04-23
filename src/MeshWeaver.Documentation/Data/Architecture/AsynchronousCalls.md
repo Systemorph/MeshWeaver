@@ -2,6 +2,36 @@
 
 MeshWeaver uses a **truly asynchronous** message-passing model. This is fundamentally different from C#'s `async/await` pattern, which is better described as "fake async" — you still block the calling context waiting for a result.
 
+## 🚨 Hard rule — never read `.Current` off a stream
+
+Streams (`ISynchronizationStream<T>`, any `workspace.GetStream(...)` /
+`GetRemoteStream(...)` result) **must be consumed reactively**. That means
+`.Select(...)` / `.Where(...)` / `.Take(1)` / `.Subscribe(...)` — never
+`.Current` / `.Current?.Value`.
+
+`Current` is a snapshot that is only populated *after* the stream has emitted its
+first value. Inside a handler that has just caused the hub to activate, the
+workspace may not have loaded its data yet — `Current` will be null and you will
+ship a wrong answer. The reactive chain handles this correctly: Subscribe fires
+once the stream actually emits.
+
+```csharp
+// ❌ NEVER — looks sync, returns wrong answer on cold workspaces.
+var node = hub.GetWorkspace().GetStream(new MeshNodeReference())?.Current?.Value;
+
+// ✅ ALWAYS — reactive chain, fires when the stream emits.
+hub.GetWorkspace().GetStream(new MeshNodeReference())
+    ?.Select(change => change.Value)
+    .Where(node => node is not null)
+    .Take(1)
+    .Subscribe(node => { /* handler body */ });
+```
+
+The handler method itself still returns `request.Processed()` immediately —
+the Subscribe callback fires later, posts the response via
+`hub.Post(response, o => o.ResponseFor(request))`. The caller blocks on
+`RegisterCallback`, not on the handler method.
+
 ## 🚨 Related rule, read this first
 
 **Queries are for sets and existence — never for reading a specific node's content.**

@@ -191,7 +191,12 @@ public class MeshOperations
                 });
         }
 
-        // Unified path first, then fall back to direct node lookup via ObserveQuery.
+        // Unified path first, then direct node lookup via ObserveQuery. NOTE: per
+        // CqrsAndContentAccess.md, content reads should route through GetDataRequest
+        // + RegisterCallback; that refactor is tracked in task #57 but was reverted
+        // after read-your-writes tests revealed the hub's workspace can serve stale
+        // state after a cross-hub write. Restore when we land the per-request hub
+        // model (task #59) that keeps one hub alive for the full call chain.
         return TryResolveUnifiedPath(resolvedPath)
             .SelectMany(unified => unified != null
                 ? Observable.Return(unified)
@@ -215,6 +220,51 @@ public class MeshOperations
                 return Observable.Return($"Error: {ex.Message}");
             });
     }
+
+    /// <summary>
+    /// One-shot read of the MeshNode at <paramref name="resolvedPath"/> via
+    /// <c>GetDataRequest</c> + <c>MeshNodeReference</c>. The target hub activates
+    /// on receipt and posts a <c>GetDataResponse</c>. Emits the MeshNode (or
+    /// null if the response carried no MeshNode) within <paramref name="timeoutSeconds"/>.
+    /// </summary>
+    private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10) =>
+        Observable.Create<MeshNode?>(observer =>
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var completed = 0;
+
+            void EmitOnce(MeshNode? node)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnNext(node);
+                observer.OnCompleted();
+            }
+
+            try
+            {
+                var delivery = hub.Post(
+                    new GetDataRequest(new MeshNodeReference()),
+                    o => o.WithTarget(new Address(resolvedPath)))!;
+
+                hub.RegisterCallback(delivery, (d, _) =>
+                {
+                    if (d is IMessageDelivery<GetDataResponse> gdr)
+                        EmitOnce(gdr.Message.Data as MeshNode);
+                    else
+                        EmitOnce(null);
+                    return Task.FromResult(d);
+                }, cts.Token);
+
+                cts.Token.Register(() => EmitOnce(null));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "FetchNode: Post/RegisterCallback failed for {Path}", resolvedPath);
+                EmitOnce(null);
+            }
+
+            return () => cts.Dispose();
+        });
 
     /// <summary>
     /// Tries to resolve a path as a Unified Path with prefix (schema/, model/, data/, content/).
@@ -538,9 +588,7 @@ public class MeshOperations
             if (string.IsNullOrWhiteSpace(resolvedPath))
                 return Observable.Return("Error: path is required.");
 
-            // Read the current node reactively via ObserveQuery (not QueryAsync +
-            // FromAsync, which queues an await on the hub). Take(1) completes as soon
-            // as the first snapshot arrives.
+            // See Get: GetDataRequest-based reads reverted pending task #59.
             return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
                 .Take(1)
                 .Select(change => change.Items.FirstOrDefault())
@@ -1074,6 +1122,7 @@ public class MeshOperations
                 new { status = "Unknown", message = "INodeTypeService not registered on this hub" },
                 hub.JsonSerializerOptions));
 
+        // See Get: GetDataRequest-based reads reverted pending task #59.
         return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
             .Take(1)
             .Select(change =>
@@ -1185,135 +1234,82 @@ public class MeshOperations
 
         var resolvedPath = ResolvePath(path);
 
-        // Content read goes through the owning hub's workspace (not a query) so we
-        // never see a stale index hit. Take(1) grabs the current committed state,
-        // Timeout guards against a missing node (GetRemoteStream stays live forever
-        // otherwise — no "not found" emission).
-        var workspace = hub.GetWorkspace();
-        var nodeAddress = new Address(resolvedPath);
-        return workspace
-            .GetRemoteStream<MeshNode, MeshNodeReference>(nodeAddress, new MeshNodeReference())
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Select(change => change.Value)
-            .Catch((TimeoutException _) => Observable.Return<MeshNode?>(null))
-            .SelectMany(node =>
+        // Kernel is NOT addressed from here. Post ExecuteScriptRequest to the Code
+        // node's own hub — the Code hub reads its CodeConfiguration from its own
+        // workspace (sync), validates IsExecutable, and dispatches to the internal
+        // kernel. Response carries submissionId + outputAreaReference so the caller
+        // can subscribe to live progress.
+        return Observable.Create<string>(observer =>
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var completed = 0;
+
+            void EmitOnce(object payload)
             {
-                if (node is null)
-                    return Observable.Return(JsonSerializer.Serialize(
-                        new { status = "Error", message = $"Node not found: {resolvedPath}" },
-                        hub.JsonSerializerOptions));
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnNext(JsonSerializer.Serialize(payload, hub.JsonSerializerOptions));
+                observer.OnCompleted();
+            }
 
-                string? code = null;
-                bool isExecutable = false;
-                if (node.Content is Mesh.CodeConfiguration cc)
+            try
+            {
+                var delivery = hub.Post(
+                    new ExecuteScriptRequest(),
+                    o => o.WithTarget(new Address(resolvedPath)))!;
+
+                hub.RegisterCallback(delivery, (d, _) =>
                 {
-                    code = cc.Code;
-                    isExecutable = cc.IsExecutable;
-                }
-                else if (node.Content is System.Text.Json.JsonElement je)
-                {
-                    if (je.TryGetProperty("code", out var codeProp)) code = codeProp.GetString();
-                    if (je.TryGetProperty("isExecutable", out var execProp)) isExecutable = execProp.GetBoolean();
-                }
-
-                if (string.IsNullOrWhiteSpace(code))
-                    return Observable.Return(JsonSerializer.Serialize(
-                        new { status = "Error", message = $"Node at {resolvedPath} has no Code content" },
-                        hub.JsonSerializerOptions));
-
-                if (!isExecutable)
-                    return Observable.Return(JsonSerializer.Serialize(
-                        new { status = "Error", message = $"Node at {resolvedPath} is not marked IsExecutable=true" },
-                        hub.JsonSerializerOptions));
-
-                var kernelAddress = AddressExtensions.CreateKernelAddress(
-                    "code-" + resolvedPath.Replace('/', '-'));
-                var submissionId = Guid.NewGuid().ToString("N");
-
-                return Observable.Create<string>(observer =>
-                {
-                    var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-                    var completed = 0;
-
-                    void EmitOnce(Func<object> payloadFactory)
+                    if (d is IMessageDelivery<ExecuteScriptResponse> resp)
                     {
-                        if (Interlocked.Exchange(ref completed, 1) != 0) return;
-                        try
+                        var r = resp.Message;
+                        EmitOnce(new
                         {
-                            observer.OnNext(JsonSerializer.Serialize(payloadFactory(), hub.JsonSerializerOptions));
-                        }
-                        catch (Exception ex) { observer.OnError(ex); return; }
-                        observer.OnCompleted();
-                    }
-
-                    try
-                    {
-                        var delivery = hub.Post(
-                            new SubmitCodeRequest(code) { Id = submissionId },
-                            o => o.WithTarget(kernelAddress))!;
-
-                        hub.RegisterCallback(delivery, (d, _) =>
-                        {
-                            if (d is IMessageDelivery<SubmitCodeResponse> resp)
-                            {
-                                var r = resp.Message;
-                                EmitOnce(() => new
-                                {
-                                    status = r.Success ? "Executed" : "Error",
-                                    path = resolvedPath,
-                                    submissionId = r.SubmissionId,
-                                    kernelAddress = kernelAddress.ToString(),
-                                    outputUrl = $"{kernelAddress}/{r.SubmissionId}",
-                                    error = r.Error,
-                                    message = r.Success
-                                        ? "Code dispatched and kernel signalled completion. Side effects "
-                                          + "(e.g. mesh.CreateNode calls inside the script) have happened. "
-                                          + "Console output / return value is at the kernel layout area path above."
-                                        : $"Kernel reported failure: {r.Error}"
-                                });
-                            }
-                            else if (d is IMessageDelivery<DeliveryFailure> failure)
-                            {
-                                EmitOnce(() => new
-                                {
-                                    status = "Error",
-                                    path = resolvedPath,
-                                    submissionId,
-                                    message = $"Delivery failed: {failure.Message.Message ?? "unknown"}"
-                                });
-                            }
-                            else
-                            {
-                                EmitOnce(() => new
-                                {
-                                    status = "Executed",
-                                    path = resolvedPath,
-                                    submissionId,
-                                    kernelAddress = kernelAddress.ToString(),
-                                    outputUrl = $"{kernelAddress}/{submissionId}",
-                                    message = $"Unexpected response {d.Message?.GetType().Name} — check kernel progress area for status."
-                                });
-                            }
-                            return Task.FromResult(d);
-                        }, cts.Token);
-
-                        cts.Token.Register(() => EmitOnce(() => new
-                        {
-                            status = "Timeout",
+                            status = r.Success ? "Dispatched" : "Error",
                             path = resolvedPath,
-                            timeoutSeconds,
-                            message = $"Kernel did not signal completion within {timeoutSeconds}s. Side effects may still have happened — check the kernel's progress area."
-                        }));
+                            submissionId = r.SubmissionId,
+                            outputUrl = r.Success ? $"{resolvedPath}/area/{r.OutputAreaReference}" : null,
+                            error = r.Error,
+                            message = r.Success
+                                ? "Script dispatched. Subscribe to the output area for live progress."
+                                : $"Dispatch failed: {r.Error}"
+                        });
                     }
-                    catch (Exception ex)
+                    else if (d is IMessageDelivery<DeliveryFailure> failure)
                     {
-                        logger.LogError(ex, "ExecuteScript failed for {Path}", resolvedPath);
-                        EmitOnce(() => new { status = "Error", path = resolvedPath, message = ex.Message });
+                        EmitOnce(new
+                        {
+                            status = "Error",
+                            path = resolvedPath,
+                            message = $"Delivery failed: {failure.Message.Message ?? "unknown"}"
+                        });
                     }
+                    else
+                    {
+                        EmitOnce(new
+                        {
+                            status = "Error",
+                            path = resolvedPath,
+                            message = $"Unexpected response {d.Message?.GetType().Name}"
+                        });
+                    }
+                    return Task.FromResult(d);
+                }, cts.Token);
 
-                    return () => cts.Dispose();
-                });
-            });
+                cts.Token.Register(() => EmitOnce(new
+                {
+                    status = "Timeout",
+                    path = resolvedPath,
+                    timeoutSeconds,
+                    message = $"Code node did not acknowledge dispatch within {timeoutSeconds}s."
+                }));
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "ExecuteScript failed for {Path}", resolvedPath);
+                EmitOnce(new { status = "Error", path = resolvedPath, message = ex.Message });
+            }
+
+            return () => cts.Dispose();
+        });
     }
 }
