@@ -1,4 +1,7 @@
 using System.ComponentModel;
+using System.Net;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using MeshWeaver.AI;
 using MeshWeaver.Kernel;
@@ -8,6 +11,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace MeshWeaver.Blazor.AI;
@@ -149,46 +153,46 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
   @Doc/Architecture/content/icon.svg            (file)
   @Cornerstone/schema/TypeName                  (schema)
   @Cornerstone/model/                           (full model)")] string path)
-        => ops.Get(path);
+        => ops.Get(path).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Searches the mesh using GitHub-style query syntax. Returns up to 50 matching nodes.")]
     public Task<string> Search(
         [Description("Query string (e.g., 'nodeType:Agent', 'laptop', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
-        => ops.Search(query, basePath);
+        => ops.Search(query, basePath).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Creates a new node in the mesh. Pass a JSON MeshNode object with id, namespace, name, nodeType, and content fields.")]
     public Task<string> Create(
         [Description("JSON MeshNode object to create (e.g., {\"id\": \"NewOrg\", \"namespace\": \"ACME\", \"name\": \"New Org\", \"nodeType\": \"Organization\", \"content\": {}})")] string node)
-        => ops.Create(node);
+        => ops.Create(node).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Updates existing nodes in the mesh. Pass a JSON array of complete MeshNode objects. Always Get before Update — the entire node is replaced, not merged.")]
     public Task<string> Update(
         [Description("JSON array of MeshNode objects with all fields (get existing node first, modify, then pass here)")] string nodes)
-        => ops.Update(nodes);
+        => ops.Update(nodes).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless overwriting — never set 'content' to null. Prefer this over Update for small edits like icon/name/category.")]
     public Task<string> Patch(
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
         [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}.")] string fields)
-        => ops.Patch(path, fields);
+        => ops.Patch(path, fields).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Deletes one or more nodes from the mesh by path. Recursive: deleting a parent removes all descendants. To remove a subtree, just pass the root path — children do not need to be enumerated.")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete (e.g., [\"ACME/OldProject\", \"ACME/ArchivedTask\"])")] string paths)
-        => ops.Delete(paths);
+        => ops.Delete(paths).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Moves a node and its descendants to a new path. Equivalent to the Move menu item. Requires Delete on the source namespace and Create on the target. Source and target are full paths (namespace + id), e.g. 'OrgA/Child' -> 'OrgB/Child'.")]
     public Task<string> Move(
         [Description("Current path of the node (e.g., @OrgA/Child)")] string sourcePath,
         [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath)
-        => ops.Move(sourcePath, targetPath);
+        => ops.Move(sourcePath, targetPath).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Copies a node and all its descendants to a target namespace. Equivalent to the Copy menu item. Source ids are preserved; paths are rewritten under the target namespace.")]
@@ -196,7 +200,7 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
         [Description("Current path of the node to copy (e.g., @OrgA/Child)")] string sourcePath,
         [Description("Target namespace to copy under (e.g., @OrgB)")] string targetNamespace,
         [Description("Overwrite existing nodes at the target. Default: false.")] bool force = false)
-        => ops.Copy(sourcePath, targetNamespace, force);
+        => ops.Copy(sourcePath, targetNamespace, force).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Returns a URL to view a node in the MeshWeaver UI. The URL shape is `{baseUrl}/{path}` — the mesh path is appended directly to the base URL with no intermediate segment (no `/node/`) and without URL-escaping the path separators. Use this when you want to give a user a link to open in their browser. For the base URL on its own, use `GetBaseUrl`.")]
@@ -217,20 +221,98 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
     [Description("Returns compilation diagnostics for a NodeType (or any instance of one). Status is 'Ok' when the type compiled cleanly, 'Error' with details when it failed, 'Compiling' while a compile is in progress (with elapsedMs), or 'Unknown' when no compile has happened yet. Use after creating/updating a NodeType to verify it actually compiles — a NodeType that doesn't compile is not 'done'.")]
     public Task<string> GetDiagnostics(
         [Description("Path to a NodeType (e.g., @Systemorph/SocialMedia/Profile) or to any instance of one")] string path)
-        => ops.GetDiagnostics(path);
+        => ops.GetDiagnostics(path).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Recycles the hub at the given path by posting DisposeRequest. Forces a fresh hub initialization on the next access — use after fixing a broken NodeType, after editing the `sources` list, or whenever a grain is stuck in a cached bad state. Returns {status:'Recycled', path}. Wait ~100ms before the next access so the grain teardown completes.")]
     public Task<string> Recycle(
         [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
-        => ops.Recycle(path);
+        => ops.Recycle(path).FirstAsync().ToTask();
 
     [McpServerTool]
     [Description("Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive) and returns stdout / return value / errors. The target node must have `CodeConfiguration.IsExecutable == true`. Blocks until the kernel signals completion (side-effects — e.g. mesh.CreateNode calls inside the script — have happened by the time this returns). Use to run import/test scripts from MCP without needing a UI click.")]
     public Task<string> ExecuteScript(
         [Description("Path to an executable Code node (e.g., @Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Script/ImportLargeClaims). Must be `IsExecutable=true`.")] string path,
         [Description("Timeout in seconds. Default 120.")] int timeoutSeconds = 120)
-        => ops.ExecuteScript(path, timeoutSeconds);
+        => ops.ExecuteScript(path, timeoutSeconds).FirstAsync().ToTask();
+
+    [McpServerTool]
+    [Description(@"Returns an interactive rendering of a layout area as an MCP-UI embedded resource. Hosts that support MCP-UI (Claude.ai web/desktop, ChatGPT Apps) render this inline as an iframe widget; text-only hosts see the URL as a fallback.
+
+Use this when the user would benefit from seeing the live view — charts, grids, dashboards, triangles — rather than a JSON dump. For plain data inspection keep using `Get`.
+
+Examples:
+  RenderArea('@Systemorph/FutuRe/EuropeRe/AcmeSubmission2025', 'Triangle')
+  RenderArea('Northwind', 'SalesByCategory')")]
+    public CallToolResult RenderArea(
+        [Description("Path to the node hosting the layout area (e.g., @Systemorph/FutuRe/EuropeRe/AcmeSubmission2025). Leading `@` is stripped.")] string path,
+        [Description("Layout area name on that node (e.g., 'Triangle', 'Overview', 'Dashboard').")] string areaName)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return ErrorResult("Error: path is required.");
+        if (string.IsNullOrWhiteSpace(areaName))
+            return ErrorResult("Error: areaName is required.");
+
+        var resolvedPath = MeshOperations.ResolvePath(path).TrimStart('/');
+        var areaUrl = $"{baseUrl.TrimEnd('/')}/{resolvedPath}/{Uri.EscapeDataString(areaName).Replace("%2F", "/")}";
+        var resourceUri = $"ui://mesh/{resolvedPath}/{areaName}";
+
+        logger.LogInformation("MCP RenderArea path={Path} areaName={Area} url={Url}", resolvedPath, areaName, areaUrl);
+
+        var iframeHtml = BuildIframeHtml(areaUrl, areaName);
+
+        return new CallToolResult
+        {
+            Content =
+            [
+                new EmbeddedResourceBlock
+                {
+                    Resource = new TextResourceContents
+                    {
+                        Uri = resourceUri,
+                        MimeType = "text/html",
+                        Text = iframeHtml,
+                    },
+                },
+                new ResourceLinkBlock
+                {
+                    Uri = areaUrl,
+                    Name = areaName,
+                    Title = $"{areaName} — {resolvedPath}",
+                    MimeType = "text/html",
+                },
+                new TextContentBlock
+                {
+                    Text = $"Open in browser: {areaUrl}",
+                },
+            ],
+        };
+    }
+
+    private static CallToolResult ErrorResult(string message) => new()
+    {
+        IsError = true,
+        Content = [new TextContentBlock { Text = message }],
+    };
+
+    private static string BuildIframeHtml(string areaUrl, string areaName)
+    {
+        var src = WebUtility.HtmlEncode(areaUrl);
+        var title = WebUtility.HtmlEncode(areaName);
+        return $$"""
+            <!doctype html>
+            <html>
+            <head>
+              <meta charset="utf-8">
+              <title>{{title}}</title>
+              <style>html,body{margin:0;padding:0;height:100%;width:100%}iframe{border:0;width:100%;height:100%;min-height:600px;display:block}</style>
+            </head>
+            <body>
+              <iframe src="{{src}}" title="{{title}}" allow="clipboard-read; clipboard-write"></iframe>
+            </body>
+            </html>
+            """;
+    }
 }
 
 /// <summary>

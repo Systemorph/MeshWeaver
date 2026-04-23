@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -706,7 +707,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         // MeshOperations.Get with "ACME/ProductLaunch/content/report.md"
         // should recognize content/ as UCR prefix, not treat it as a node path
         var ops = new AI.MeshOperations(Mesh);
-        var result = await ops.Get("@ACME/ProductLaunch/content/report.md");
+        var result = await ops.Get("@ACME/ProductLaunch/content/report.md").FirstAsync();
         Output.WriteLine($"Get('@ACME/ProductLaunch/content/report.md'): {result[..Math.Min(200, result.Length)]}");
 
         // Should NOT be "Not found: ACME/ProductLaunch/content/report.md" (node lookup)
@@ -720,7 +721,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
     {
         // Legacy colon format should also work
         var ops = new AI.MeshOperations(Mesh);
-        var result = await ops.Get("@ACME/ProductLaunch/content:report.md");
+        var result = await ops.Get("@ACME/ProductLaunch/content:report.md").FirstAsync();
         Output.WriteLine($"Get('@ACME/ProductLaunch/content:report.md'): {result[..Math.Min(200, result.Length)]}");
 
         result.Should().NotStartWith("Not found:",
