@@ -1,7 +1,7 @@
 ---
 NodeType: "Doc/Article"
 Title: "Executing Scripts via MCP"
-Abstract: "Run an executable Code node's C# through the kernel from any MCP client — how to mark a node IsExecutable, call ExecuteScript, and observe Progress output."
+Abstract: "Run an executable Code node's C# through the kernel from any MCP client — how to mark a node IsExecutable, call ExecuteScript, and stream the run's ActivityLog for live progress."
 Icon: "Play"
 Published: "2026-04-23"
 Thumbnail: "images/agenticai.svg"
@@ -96,24 +96,33 @@ paths are resolved against the current chat context.
 means the kernel didn't signal completion within `timeoutSeconds` — **side effects
 may still have happened**; re-query the mesh to confirm.
 
-### Watching Progress
+### Watching progress — via the ActivityLog stream
 
-Scripts can push live updates via the kernel's `Progress` global:
+Scripts emit live updates through the standard logger:
 
 ```csharp
-Progress.Report("Fetched " + bytes.Length + " bytes. Parsing...");
+Log.LogInformation("Fetched {Bytes} bytes. Parsing...", bytes.Length);
+Log.LogWarning("Row {Row} skipped: {Reason}", i, reason);
+Log.LogError("Import failed: {Message}", ex.Message);
 ```
 
-Each call pushes into the kernel hub's `progress` layout area. Subscribers (Blazor
-result pane, MCP `Get`) see the stream update live. To poll it from MCP:
+Each call appends a message to the run's `ActivityLog` MeshNode. The
+`ExecuteScriptResponse` returned on dispatch carries the log's path
+(`activityLog` field). Clients subscribe to that path via
+`GetRemoteStream<MeshNode, MeshNodeReference>` and see each `ActivityLog.Messages`
+entry land in real time — same shape as Thread streams. When the script
+finishes, the `ActivityLog.Status` flips to `Succeeded` / `Warning` / `Failed`,
+which is the terminal signal UIs watch for.
+
+From MCP:
 
 ```jsonc
-{ "name": "Get", "arguments": { "path": "@kernel/code-…/area/progress" } }
+{ "name": "Get", "arguments": { "path": "<activityLog-path-from-ExecuteScript-response>" } }
 ```
 
-The kernel address is stable per Code node (derived from the node path), so the same
-`progress` URL works across runs — each new submission replaces the previous
-progress string.
+Each run gets its own `ActivityLog` node — no replacement, no bleed between
+submissions. Previous runs remain browsable under the Code node's activity
+history.
 
 ## Authoring scripts that agents can run
 
@@ -134,13 +143,14 @@ A few rules of thumb learned from the scripts that ship with the FutuRe demo:
    `Observable.FromAsync(() => contentService.GetContentAsync(...)).Subscribe(...)`
    keeps the kernel's action block free while the fetch runs on the task pool.
 
-4. **Report liberally.** `Progress.Report` is best-effort and cheap — one hashtable
-   write per call. The agent watching the run has no other visibility, so tell it
-   what you're doing.
+4. **Log liberally.** `Log.LogInformation(...)` / `LogWarning(...)` / `LogError(...)`
+   append to the run's ActivityLog. Agents and users watching the log have no
+   other visibility, so tell them what you're doing.
 
-5. **End with a terminal marker.** `Progress.Report("DONE: created N nodes")` or
-   `Progress.Report("FAIL: <reason>")` lets consumers (and you, scrolling through
-   the progress area) see at a glance whether the run succeeded.
+5. **Let the ActivityLog status speak for you.** On a clean run the log's
+   `Status` ends at `Succeeded`; a `LogWarning` flips it to `Warning`; an
+   exception or `LogError` flips to `Failed`. Consumers watch that field for the
+   terminal signal — no need for synthetic DONE / FAIL markers.
 
 ## Typical flow for an agent
 
@@ -161,8 +171,8 @@ A few rules of thumb learned from the scripts that ship with the FutuRe demo:
           basePath="@Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Claims")
    → should now return the created claim nodes
 
-5. (Optional) Fetch Progress stream for the human-readable trace:
-   Get("@kernel/code-…/area/progress")
+5. (Optional) Fetch the ActivityLog node for the human-readable trace:
+   Get(<activityLog path from the ExecuteScript response>)
 ```
 
 ## Security

@@ -337,16 +337,15 @@ public class KernelContainer(IServiceProvider serviceProvider)
         await Task.WhenAll(composite.ChildKernels.OfType<CSharpKernel>()
             .Select(k => k.SetValueAsync(nameof(Mesh), hub, typeof(IMessageHub))));
 
-        // Expose a `Progress` global that scripts can call to push observable updates
-        // to the kernel's area stream at the stable view id "progress". Clients
-        // (Blazor result pane, MCP ExecuteScript progress channel) subscribe to
-        // that area and surface each report. Per Doc/Architecture/AsynchronousCalls
-        // a script should emit progress and never `await` hub-routed calls — the
-        // await would deadlock the kernel's action block waiting for a response
-        // that has to traverse the same block to return.
-        var progressReporter = new KernelProgressReporter(hub, this);
+        // Expose a `Log` global (ILogger). Scripts call `Log.LogInformation(...)` /
+        // `Log.LogWarning(...)` etc. — the messages land on the current activity log
+        // node streamed by the hub (once the ActivityLog plumbing in task #60 is
+        // wired up). Until then, messages go to the standard logger infrastructure.
+        // No more IProgress<string> Progress global — that was replaced by ActivityLog.
+        var scriptLogger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("MeshWeaver.Kernel.Script");
         await Task.WhenAll(composite.ChildKernels.OfType<CSharpKernel>()
-            .Select(k => k.SetValueAsync("Progress", progressReporter, typeof(IProgress<string>))));
+            .Select(k => k.SetValueAsync("Log", scriptLogger, typeof(ILogger))));
 
         // Add default using directives for interactive markdown
         // Note: We don't include "using static MeshWeaver.Layout.Controls;" because
@@ -358,6 +357,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using Microsoft.Extensions.Logging;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.DataGrid;
@@ -528,19 +528,4 @@ using MeshWeaver.Messaging;
         return request.Processed();
     }
 
-    /// <summary>
-    /// Bridges <c>IProgress&lt;string&gt;</c> calls inside scripts to the kernel hub's
-    /// area stream. Scripts call <c>Progress.Report("...")</c>; subscribers at the
-    /// layout-area reference <c>"progress"</c> on the kernel hub see each update.
-    /// Per-call cost is one hashtable write — cheap enough that scripts can report
-    /// liberally.
-    /// </summary>
-    private sealed class KernelProgressReporter(IMessageHub hub, KernelContainer container) : IProgress<string>
-    {
-        public void Report(string value)
-        {
-            try { container.UpdateView(hub, "progress", value); }
-            catch { /* progress is best-effort — never let it break script execution */ }
-        }
-    }
 }
