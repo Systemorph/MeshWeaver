@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -23,7 +25,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Path to data. Relative: @content/file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content/file.docx. For spaces: \"@content/My File.docx\"")] string path)
     {
         RestoreAccessContext();
-        return ops.Get(ResolveContextPath(path));
+        return ops.Get(ResolveContextPath(path)).FirstAsync().ToTask();
     }
 
     [Description("Searches the mesh using GitHub-style query syntax.")]
@@ -32,7 +34,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
     {
         RestoreAccessContext();
-        return ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null);
+        return ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null).FirstAsync().ToTask();
     }
 
     [Description("Creates a new node in the mesh. ALWAYS set the 'name' property to a human-readable display name.")]
@@ -40,7 +42,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
     {
         RestoreAccessContext();
-        return ops.Create(node);
+        return ops.Create(node).FirstAsync().ToTask();
     }
 
     [Description("Full replacement update of existing nodes. ALWAYS Get the node first, modify the returned object, then send it back here unchanged-except-for-edits. The 'content' field MUST be present and non-null — null content is rejected and the response will include the expected schema. Prefer Patch for small changes.")]
@@ -48,7 +50,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("JSON array of complete MeshNode objects fetched via Get and then modified")] string nodes)
     {
         RestoreAccessContext();
-        return ops.Update(nodes);
+        return ops.Update(nodes).FirstAsync().ToTask();
     }
 
     [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless you intend to overwrite it — and never set 'content' to null (will be rejected with the schema). Prefer this over Update for small edits like icon/name/category.")]
@@ -57,7 +59,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}. Include 'content' only if overwriting — and never as null.")] string fields)
     {
         RestoreAccessContext();
-        return ops.Patch(ResolveContextPath(path), fields);
+        return ops.Patch(ResolveContextPath(path), fields).FirstAsync().ToTask();
     }
 
     [Description("Deletes nodes from the mesh by path. Recursive: deleting a parent removes all descendants — pass the subtree root, no need to enumerate children.")]
@@ -65,7 +67,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("JSON array of path strings to delete")] string paths)
     {
         RestoreAccessContext();
-        return ops.Delete(paths);
+        return ops.Delete(paths).FirstAsync().ToTask();
     }
 
     [Description("Returns compilation diagnostics for a NodeType or an instance of one. Status is 'Ok' when the type compiled cleanly, 'Error' with a detailed message when it failed, or 'Unknown' when no compile has happened yet. Use this after creating/updating a NodeType to verify it actually compiles — a NodeType that doesn't compile is not 'done'.")]
@@ -73,7 +75,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Path to a NodeType (e.g., @Systemorph/SocialMedia/Profile) or to any instance of one")] string path)
     {
         RestoreAccessContext();
-        return ops.GetDiagnostics(ResolveContextPath(path));
+        return ops.GetDiagnostics(ResolveContextPath(path)).FirstAsync().ToTask();
     }
 
     [Description("Recycles the hub at the given path by posting DisposeRequest. Forces a fresh hub initialization on the next access — use this after fixing a broken NodeType, after editing the `sources` list, or whenever a grain is stuck. Returns {status:'Recycled', path}. Wait ~100ms before the next access so the grain teardown completes.")]
@@ -81,7 +83,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
     {
         RestoreAccessContext();
-        return ops.Recycle(ResolveContextPath(path));
+        return ops.Recycle(ResolveContextPath(path)).FirstAsync().ToTask();
     }
 
     [Description("Moves a node and its descendants to a new path. Equivalent to the Move menu item. Requires Delete on the source namespace and Create on the target. Source and target are full paths (namespace + id), e.g. 'OrgA/Child' -> 'OrgB/Child'.")]
@@ -90,7 +92,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath)
     {
         RestoreAccessContext();
-        return ops.Move(ResolveContextPath(sourcePath), ResolveContextPath(targetPath));
+        return ops.Move(ResolveContextPath(sourcePath), ResolveContextPath(targetPath)).FirstAsync().ToTask();
     }
 
     [Description("Copies a node and all its descendants to a target namespace. Equivalent to the Copy menu item. Source ids are preserved; paths are rewritten under the target namespace.")]
@@ -100,7 +102,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Overwrite existing nodes at the target. Default: false (skip if any target path already exists).")] bool force = false)
     {
         RestoreAccessContext();
-        return ops.Copy(ResolveContextPath(sourcePath), ResolveContextPath(targetNamespace), force);
+        return ops.Copy(ResolveContextPath(sourcePath), ResolveContextPath(targetNamespace), force).FirstAsync().ToTask();
     }
 
     /// <summary>

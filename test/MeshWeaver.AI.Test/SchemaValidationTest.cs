@@ -316,11 +316,11 @@ public class SchemaValidationTest : MonolithMeshTestBase
     #region Schema Helper API
 
     [Fact]
-    public async Task GetContentSchemaAsync_ForRegisteredType_ReturnsSchema()
+    public void GetContentSchema_ForRegisteredType_ReturnsSchema()
     {
         var ops = new MeshOperations(Mesh);
 
-        var schema = await ops.GetContentSchemaAsync(TestNodeType);
+        var schema = ops.GetContentSchema(TestNodeType);
 
         schema.Should().NotBeNullOrEmpty();
         schema!.Should().Contain("name");
@@ -329,11 +329,11 @@ public class SchemaValidationTest : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task GetContentSchemaAsync_ForUnknownType_ReturnsNull()
+    public void GetContentSchema_ForUnknownType_ReturnsNull()
     {
         var ops = new MeshOperations(Mesh);
 
-        var schema = await ops.GetContentSchemaAsync("NonExistentType");
+        var schema = ops.GetContentSchema("NonExistentType");
 
         schema.Should().BeNull();
     }
@@ -367,7 +367,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
     #region Schema-Based Validation Helper
 
     [Fact]
-    public async Task ValidateContent_ValidContent_ReturnsNull()
+    public void ValidateContent_ValidContent_ReturnsNull()
     {
         var ops = new MeshOperations(Mesh);
         var node = new MeshNode("test", "ACME")
@@ -377,13 +377,13 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new TestProduct { Name = "Widget", Price = 9.99m, Quantity = 5 }
         };
 
-        var result = await ops.ValidateContentAgainstSchemaAsync(node);
+        var result = ops.ValidateContentAgainstSchema(node);
 
         result.Should().BeNull(because: "valid content should not produce validation errors");
     }
 
     [Fact]
-    public async Task ValidateContent_NoNodeType_SkipsValidation()
+    public void ValidateContent_NoNodeType_SkipsValidation()
     {
         var ops = new MeshOperations(Mesh);
         var node = new MeshNode("test", "ACME")
@@ -392,13 +392,13 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new { random = "data" }
         };
 
-        var result = await ops.ValidateContentAgainstSchemaAsync(node);
+        var result = ops.ValidateContentAgainstSchema(node);
 
         result.Should().BeNull(because: "no nodeType means validation is skipped");
     }
 
     [Fact]
-    public async Task ValidateContent_UnknownNodeType_SkipsValidation()
+    public void ValidateContent_UnknownNodeType_SkipsValidation()
     {
         var ops = new MeshOperations(Mesh);
         var node = new MeshNode("test", "ACME")
@@ -408,7 +408,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new { anything = "goes" }
         };
 
-        var result = await ops.ValidateContentAgainstSchemaAsync(node);
+        var result = ops.ValidateContentAgainstSchema(node);
 
         result.Should().BeNull(because: "unknown node type means no schema to validate against");
     }

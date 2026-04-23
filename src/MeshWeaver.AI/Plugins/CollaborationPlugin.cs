@@ -56,7 +56,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         // Read the document off the hub scheduler, then fan into Post + RegisterCallback.
         // No `await` anywhere — the subscription runs the read on TaskPoolScheduler and
         // the write's callback fires on the response thread. Both resolve the TCS.
-        Observable.FromAsync(() => ops.Get(resolvedInput))
+        ops.Get(resolvedInput)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 docJson => AddCommentContinuation(
@@ -132,7 +132,7 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         var resolvedPath = MeshOperations.ResolvePath(resolvedInput);
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Observable.FromAsync(() => ops.Get(resolvedInput))
+        ops.Get(resolvedInput)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 docJson => SuggestEditContinuation(
