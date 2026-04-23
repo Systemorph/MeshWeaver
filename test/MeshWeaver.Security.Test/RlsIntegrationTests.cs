@@ -199,9 +199,13 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             o => o.WithTarget(Mesh.Address),
             TestTimeout);
 
-        // Assert - Should fail due to insufficient permissions
+        // Assert - Should fail due to insufficient permissions. Phase 2 of the delete
+        // orchestrator now returns Unauthorized for this case; Phase 3 (RLS INodeValidator)
+        // would surface the same refusal as ValidationFailed — accept either.
         deleteResponse.Message.Success.Should().BeFalse();
-        deleteResponse.Message.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
+        deleteResponse.Message.RejectionReason.Should().BeOneOf(
+            NodeDeletionRejectionReason.Unauthorized,
+            NodeDeletionRejectionReason.ValidationFailed);
     }
 
     [Fact]
@@ -561,9 +565,13 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             o => o.WithTarget(Mesh.Address),
             TestTimeout);
 
-        // Assert — must be rejected (NodeNotFound is also acceptable since anonymous can't even see the node)
+        // Assert — must be rejected. Acceptable reasons:
+        //   Unauthorized       — Phase 2 permission check denied (the new preferred shape)
+        //   ValidationFailed   — INodeValidator (RLS) denied during Phase 3
+        //   NodeNotFound       — anonymous can't even see the node
         deleteResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to delete nodes");
         deleteResponse.Message.RejectionReason.Should().BeOneOf(
+            NodeDeletionRejectionReason.Unauthorized,
             NodeDeletionRejectionReason.ValidationFailed,
             NodeDeletionRejectionReason.NodeNotFound);
     }
@@ -690,9 +698,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             o => o.WithTarget(Mesh.Address),
             TestTimeout);
 
-        // Assert
+        // Assert — Phase 2 (permission) or Phase 3 (RLS validator) both valid denial shapes.
         deleteResponse.Message.Success.Should().BeFalse("Editor lacks Delete permission");
-        deleteResponse.Message.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
+        deleteResponse.Message.RejectionReason.Should().BeOneOf(
+            NodeDeletionRejectionReason.Unauthorized,
+            NodeDeletionRejectionReason.ValidationFailed);
     }
 
     [Fact]
