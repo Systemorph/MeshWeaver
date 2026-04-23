@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -183,7 +185,7 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
     {
         // Arrange - create a node via IMeshService
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNodeAsync(
+        await meshService.CreateNode(
             MeshNode.FromPath("ForceTest/Existing") with { Name = "Original", NodeType = "Markdown" });
 
         // Create source with updated version
@@ -213,9 +215,9 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
     {
         // Arrange - create nodes via IMeshService
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNodeAsync(
+        await meshService.CreateNode(
             MeshNode.FromPath("RemoveTest/Keep") with { Name = "Keep", NodeType = "Markdown" });
-        await meshService.CreateNodeAsync(
+        await meshService.CreateNode(
             MeshNode.FromPath("RemoveTest/Remove") with { Name = "Remove", NodeType = "Markdown" });
 
         // Source only has "Keep" (will be remapped to RemoveTest/Keep by targetRootPath)

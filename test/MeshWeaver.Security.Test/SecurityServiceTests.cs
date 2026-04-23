@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -246,7 +248,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         {
             Id = "Auditor",
             Permissions = Permission.Read
-        }, TestTimeout);
+        });
 
         var roles = await securityService.GetRolesAsync(TestTimeout).ToListAsync();
 
@@ -419,8 +421,8 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
         // Grant admin permission so CreateNodeAsync doesn't fail on the RLS check.
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync("Roland", "Admin", "", "system", TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("TestHub") { Name = "Test Hub" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("TestHub") { Name = "Test Hub" });
     }
 
     /// <summary>
@@ -579,7 +581,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
 
         // Set read-only policy on Documentation
         await securityService.SetPolicyAsync("MeshWeaver/Documentation",
-            new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
+            new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false });
 
         var canEdit = await securityService.HasPermissionAsync(nodePath, userId, Permission.Update, TestTimeout);
         var canRead = await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, TestTimeout);
@@ -612,7 +614,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         const string ns = "org/docs";
 
         await securityService.AddUserRoleAsync(userId, "Editor", ns, "system", TestTimeout);
-        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
+        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false });
 
         var permissions = await securityService.GetEffectivePermissionsAsync(ns, userId, TestTimeout);
         permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export);
@@ -627,7 +629,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         const string docNs = "platform/docs";
 
         await securityService.AddUserRoleAsync(userId, "Admin", globalNs, "system", TestTimeout);
-        await securityService.SetPolicyAsync(docNs, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
+        await securityService.SetPolicyAsync(docNs, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false });
 
         // At the policy namespace, admin should only have Read + Execute + Api + Export
         var docPermissions = await securityService.GetEffectivePermissionsAsync(docNs, userId, TestTimeout);
@@ -649,7 +651,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         const string userId = "user2";
 
         await securityService.AddUserRoleAsync(userId, "Admin", "ACME", "system", TestTimeout);
-        await securityService.SetPolicyAsync("Doc", new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
+        await securityService.SetPolicyAsync("Doc", new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false });
 
         var acmePermissions = await securityService.GetEffectivePermissionsAsync("ACME/Project", userId, TestTimeout);
         acmePermissions.Should().Be(Permission.All, "ACME should not be affected by Doc policy");
@@ -662,8 +664,8 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         const string userId = "user3";
 
         await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
-        await securityService.SetPolicyAsync("org", new PartitionAccessPolicy { Create = false, Update = false, Delete = false }, TestTimeout);
-        await securityService.SetPolicyAsync("org/restricted", new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
+        await securityService.SetPolicyAsync("org", new PartitionAccessPolicy { Create = false, Update = false, Delete = false });
+        await securityService.SetPolicyAsync("org/restricted", new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false });
 
         var orgPermissions = await securityService.GetEffectivePermissionsAsync("org/general", userId, TestTimeout);
         orgPermissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export, "org level allows Read + Comment + Execute + Thread + Api + Export");
@@ -680,7 +682,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
 
         await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
         await securityService.SetPolicyAsync("isolated",
-            new PartitionAccessPolicy { BreaksInheritance = true }, TestTimeout);
+            new PartitionAccessPolicy { BreaksInheritance = true });
 
         // No local role at "isolated", and inheritance is broken, so no permissions
         var permissions = await securityService.GetEffectivePermissionsAsync("isolated/item", userId, TestTimeout);
@@ -695,7 +697,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
 
         await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
         await securityService.SetPolicyAsync("scoped",
-            new PartitionAccessPolicy { BreaksInheritance = true }, TestTimeout);
+            new PartitionAccessPolicy { BreaksInheritance = true });
         await securityService.AddUserRoleAsync(userId, "Editor", "scoped", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("scoped/item", userId, TestTimeout);
@@ -711,7 +713,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         const string ns = "org/removable";
 
         await securityService.AddUserRoleAsync(userId, "Admin", ns, "system", TestTimeout);
-        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
+        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false });
 
         var cappedPerms = await securityService.GetEffectivePermissionsAsync(ns, userId, TestTimeout);
         cappedPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export, "permissions should be capped");
@@ -755,7 +757,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         const string ns = "org/public_capped";
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", ns, "system", TestTimeout);
-        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Read = false, Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
+        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Read = false, Create = false, Update = false, Delete = false, Comment = false, Thread = false });
 
         var permissions = await securityService.GetEffectivePermissionsAsync(ns, WellKnownUsers.Public, TestTimeout);
         permissions.Should().Be(Permission.Execute | Permission.Api, "Public user permissions should be capped to Execute + Api only (Read denied by policy)");
@@ -768,7 +770,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         const string userId = "user7";
 
         await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
-        await securityService.SetPolicyAsync("", new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
+        await securityService.SetPolicyAsync("", new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false });
 
         var permissions = await securityService.GetEffectivePermissionsAsync("any/random/path", userId, TestTimeout);
         permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export, "global policy should cap all namespaces to Read + Execute + Api + Export");

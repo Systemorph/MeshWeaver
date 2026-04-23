@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using Memex.Portal.Shared;
@@ -41,7 +43,7 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
         };
 
         // Act
-        var created = await NodeFactory.CreateNodeAsync(node, TestTimeout);
+        var created = await NodeFactory.CreateNode(node);
 
         // Assert
         created.Should().NotBeNull("Admin should be able to create Organization nodes");
@@ -57,7 +59,7 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
         fetched!.NodeType.Should().Be("Organization");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgPath);
     }
 
     [Fact(Timeout = 30000)]
@@ -85,7 +87,7 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
         };
 
         // Act
-        var created = await NodeFactory.CreateNodeAsync(node, TestTimeout);
+        var created = await NodeFactory.CreateNode(node);
 
         // Assert
         created.Should().NotBeNull();
@@ -94,6 +96,6 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
         Output.WriteLine($"Organization with content created at: {created.Path}");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgPath);
     }
 }

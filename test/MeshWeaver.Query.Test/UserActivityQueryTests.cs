@@ -1,6 +1,8 @@
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
@@ -36,19 +38,19 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         var p = P();
 
         // Create main content nodes (both Markdown — Code is a satellite type excluded from search)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc1") with
         {
             Name = "My Document",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc2") with
         {
             Name = "My Notes",
             NodeType = "Markdown"
         });
 
         // Create a Thread satellite (satellite type → MainNode auto-set to namespace)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Thread/thread1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/thread1") with
         {
             Name = "Discussion Thread",
             NodeType = "Thread"
@@ -71,19 +73,19 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         var p = P();
 
         // Main content
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/notes") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/notes") with
         {
             Name = "Notes",
             NodeType = "Markdown"
         });
 
         // Thread + ThreadMessage satellites
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Thread/t1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Thread 1",
             NodeType = "Thread"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Thread/t1/msg1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1/msg1") with
         {
             Name = "Message 1",
             NodeType = "ThreadMessage"
@@ -105,14 +107,14 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         var p = P();
 
         // Main content
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/project") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project") with
         {
             Name = "My Project",
             NodeType = "Markdown"
         });
 
         // AccessAssignment satellite
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Access/user1_Access") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/user1_Access") with
         {
             Name = "User1 Access",
             NodeType = "AccessAssignment",
@@ -143,36 +145,36 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         var p = P();
 
         // Main content nodes (Code is a satellite type excluded from search, so use Markdown for both)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/doc") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc") with
         {
             Name = "Document", NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/notes") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/notes") with
         {
             Name = "Notes", NodeType = "Markdown"
         });
 
         // Satellite: Thread
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Thread/t1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Thread", NodeType = "Thread"
         });
 
         // Satellite: ThreadMessage
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Thread/t1/m1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1/m1") with
         {
             Name = "Message", NodeType = "ThreadMessage"
         });
 
         // Satellite: AccessAssignment
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Access/a1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
         {
             Name = "Access", NodeType = "AccessAssignment",
             Content = new AccessAssignment { AccessObject = "u1", Roles = [new RoleAssignment { Role = "Reader" }] }
         });
 
         // Satellite: Activity log
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_activity/log1") with
         {
             Name = "Activity", NodeType = "Activity",
             MainNode = p,
@@ -180,7 +182,7 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         });
 
         // Satellite: Comment
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/doc/_Comment/c1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc/_Comment/c1") with
         {
             Name = "Comment", NodeType = "Comment",
             MainNode = $"{p}/doc"
@@ -211,13 +213,13 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
     {
         var p = P();
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/main") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/main") with
         {
             Name = "Main Node", NodeType = "Markdown"
         });
 
         // Manually create a node with MainNode pointing elsewhere
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/satellite") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/satellite") with
         {
             Name = "Satellite Node", NodeType = "Markdown",
             MainNode = $"{p}/main"
@@ -240,11 +242,11 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         var p = P();
 
         // Main content node with activity log
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/project") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project") with
         {
             Name = "Project", NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/project/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project/_activity/log1") with
         {
             Name = "Project Activity", NodeType = "Activity",
             MainNode = $"{p}/project",
@@ -252,12 +254,12 @@ public class UserActivityQueryTests(ITestOutputHelper output) : MonolithMeshTest
         });
 
         // AccessAssignment with activity log — should NOT appear in activity feed
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Access/a1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
         {
             Name = "Access", NodeType = "AccessAssignment",
             Content = new AccessAssignment { AccessObject = "u1", Roles = [new RoleAssignment { Role = "Reader" }] }
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Access/a1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1/_activity/log1") with
         {
             Name = "Access Activity", NodeType = "Activity",
             MainNode = $"{p}/_Access/a1",
@@ -296,11 +298,11 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
     {
         var p = P();
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/doc") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc") with
         {
             Name = "Document", NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/doc/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/doc/_activity/log1") with
         {
             Name = "Edit activity", NodeType = "Activity",
             MainNode = $"{p}/doc",
@@ -325,13 +327,13 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         var p = P();
 
         // Create parent node first
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(p) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(p) with
         {
             Name = "Parent", NodeType = "Markdown"
         });
 
         // Create AccessAssignment (satellite type)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Access/u1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/u1") with
         {
             Name = "User1 Access", NodeType = "AccessAssignment",
             Content = new AccessAssignment { AccessObject = "u1", Roles = [new RoleAssignment { Role = "Reader" }] }
@@ -357,13 +359,13 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         var p = P();
 
         // Create parent
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(p) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(p) with
         {
             Name = "Parent", NodeType = "Markdown"
         });
 
         // Create Thread (satellite type)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Thread/t1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Discussion", NodeType = "Thread"
         });
@@ -387,11 +389,11 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         var p = P();
 
         // Create satellite nodes via the normal CreateNodeAsync path
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Thread/t1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Thread/t1") with
         {
             Name = "Thread", NodeType = "Thread"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/_Access/a1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/_Access/a1") with
         {
             Name = "Access", NodeType = "AccessAssignment",
             Content = new AccessAssignment { AccessObject = "u1", Roles = [new RoleAssignment { Role = "Reader" }] }

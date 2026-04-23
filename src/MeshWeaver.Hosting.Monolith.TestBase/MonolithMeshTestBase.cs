@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
@@ -97,7 +98,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// override <see cref="ConfigureMesh"/> and use <c>builder.AddMeshNodes(...)</c> instead.
     /// </summary>
     protected Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
-        => NodeFactory.CreateNodeAsync(node, ct);
+        => NodeFactory.CreateNode(node).ToTask(ct);
 
     protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {

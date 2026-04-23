@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -56,7 +58,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act
-        var created = await NodeFactory.CreateNodeAsync(node, TestTimeout);
+        var created = await NodeFactory.CreateNode(node);
 
         // Assert
         created.Should().NotBeNull();
@@ -72,7 +74,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         fetched.Should().NotBeNull("node should be retrievable from persistence");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(nodePath);
     }
 
     /// <summary>
@@ -100,7 +102,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         try
         {
             // Act & Assert — should throw UnauthorizedAccessException
-            var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
+            var act = async () => await NodeFactory.CreateNode(node);
             await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
             // Verify node does NOT exist
@@ -133,7 +135,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act & Assert — should throw InvalidOperationException
-        var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
+        var act = async () => await NodeFactory.CreateNode(node);
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*NodeType*");
     }
@@ -164,7 +166,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         // Act — create via ImpersonateAsHub scope (uses hub identity, not user identity)
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            var created = await NodeFactory.CreateNodeAsync(node, ct: TestTimeout);
+            var created = await NodeFactory.CreateNode(node);
 
             // Assert
             created.Should().NotBeNull();
@@ -172,7 +174,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             created.State.Should().Be(MeshNodeState.Active);
 
             // Cleanup — still within hub scope, so hub has permission on "Impersonate" namespace
-            await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+            await NodeFactory.DeleteNode(nodePath);
         }
     }
 
@@ -202,7 +204,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         // Create via impersonation scope (hub has access)
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            await NodeFactory.CreateNodeAsync(node, ct: TestTimeout);
+            await NodeFactory.CreateNode(node);
         }
 
         try
@@ -228,7 +230,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             TestUsers.DevLogin(Mesh);
             using (accessService.ImpersonateAsHub(Mesh))
             {
-                await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+                await NodeFactory.DeleteNode(nodePath);
             }
         }
     }
@@ -258,7 +260,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         // Create via impersonation scope (hub has access)
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            await NodeFactory.CreateNodeAsync(node, ct: TestTimeout);
+            await NodeFactory.CreateNode(node);
         }
 
         try
@@ -281,7 +283,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             // Cleanup
             using (accessService.ImpersonateAsHub(Mesh))
             {
-                await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+                await NodeFactory.DeleteNode(nodePath);
             }
         }
     }

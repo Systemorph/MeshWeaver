@@ -26,8 +26,7 @@ public class NuGetAssemblyResolverTest
 
         var result = await resolver.ResolveAsync(
             [new NuGetPackageReference("Humanizer", "2.14.1")],
-            targetFramework: null,
-            TestContext.Current.CancellationToken);
+            targetFramework: null);
 
         result.AssemblyPaths.Should().NotBeEmpty();
         result.AssemblyPaths.Should().OnlyContain(p => File.Exists(p));
@@ -43,8 +42,7 @@ public class NuGetAssemblyResolverTest
 
         var result = await resolver.ResolveAsync(
             [new NuGetPackageReference("MathNet.Numerics", "5.0.0")],
-            targetFramework: null,
-            TestContext.Current.CancellationToken);
+            targetFramework: null);
 
         result.AssemblyPaths.Should().Contain(p =>
             p.EndsWith("MathNet.Numerics.dll", StringComparison.OrdinalIgnoreCase));
@@ -59,8 +57,7 @@ public class NuGetAssemblyResolverTest
 
         var act = () => resolver.ResolveAsync(
             [new NuGetPackageReference("This.Package.Does.Not.Exist.Really", "1.0.0")],
-            targetFramework: null,
-            TestContext.Current.CancellationToken);
+            targetFramework: null);
 
         await act.Should().ThrowAsync<Exception>();
     }

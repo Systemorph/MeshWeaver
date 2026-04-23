@@ -161,8 +161,7 @@ public class DataCreateValidatorTest(ITestOutputHelper output) : DataValidationT
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -180,8 +179,7 @@ public class DataCreateValidatorTest(ITestOutputHelper output) : DataValidationT
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -222,8 +220,7 @@ public class DataUpdateValidatorTest(ITestOutputHelper output) : DataValidationT
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -241,8 +238,7 @@ public class DataUpdateValidatorTest(ITestOutputHelper output) : DataValidationT
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -290,8 +286,7 @@ public class DataDeleteValidatorTest(ITestOutputHelper output) : DataValidationT
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Delete([protectedItem], "TestUser"),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -323,8 +318,7 @@ public class DataDeleteValidatorTest(ITestOutputHelper output) : DataValidationT
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Delete([unprotectedItem], "TestUser"),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -364,8 +358,7 @@ public class DataReadValidatorTest(ITestOutputHelper output) : DataValidationTes
         // Act
         var response = await client.AwaitResponse(
             new GetDataRequest(entityRef),
-            o => o.WithTarget(CreateHostAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateHostAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
@@ -383,8 +376,7 @@ public class DataReadValidatorTest(ITestOutputHelper output) : DataValidationTes
         // Act
         var response = await client.AwaitResponse(
             new GetDataRequest(entityRef),
-            o => o.WithTarget(CreateHostAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateHostAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
@@ -422,8 +414,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -440,8 +431,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -464,8 +454,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Delete([protectedItem], "TestUser"),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -482,8 +471,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         var newItem = new ValidatableData("6", "New Valid Item", "general");
         var createResponse = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert create succeeded
         var createDataResponse = createResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -493,8 +481,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         var updatedItem = new ValidatableData("6", "Updated Valid Item", "general");
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert update succeeded
         var updateDataResponse = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -504,8 +491,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         var itemToDelete = new ValidatableData("6", "Updated Valid Item", "general");
         var deleteResponse = await client.AwaitResponse(
             DataChangeRequest.Delete([itemToDelete], "TestUser"),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert delete succeeded
         var deleteDataResponse = deleteResponse.Message.Should().BeOfType<DataChangeResponse>().Which;

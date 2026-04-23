@@ -233,21 +233,19 @@ public static class AccessControlLayoutArea
     /// <summary>
     /// Deletes an AccessAssignment node.
     /// </summary>
-    internal static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
+    internal static void DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
     {
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        try
-        {
-            await nodeFactory.DeleteNodeAsync(nodePath);
-        }
-        catch (Exception ex)
-        {
-            var dialog = Controls.Dialog(
-                Controls.Markdown($"Failed to delete: {ex.Message}"),
-                "Error"
-            ).WithSize("S").WithClosable(true);
-            ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-        }
+        nodeFactory.DeleteNode(nodePath).Subscribe(
+            _ => { },
+            ex =>
+            {
+                var dialog = Controls.Dialog(
+                    Controls.Markdown($"Failed to delete: {ex.Message}"),
+                    "Error"
+                ).WithSize("S").WithClosable(true);
+                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+            });
     }
 
     /// <summary>

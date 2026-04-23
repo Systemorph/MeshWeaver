@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -141,7 +142,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             }
         };
 
-        var created = await NodeFactory.CreateNodeAsync(replyNode);
+        var created = await NodeFactory.CreateNode(replyNode);
         created.Path.Should().Be($"{CommentC1Path}/{replyId}");
 
         try
@@ -155,7 +156,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         }
         finally
         {
-            await NodeFactory.DeleteNodeAsync(created.Path!);
+            await NodeFactory.DeleteNode(created.Path!);
         }
     }
 
@@ -182,7 +183,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 Status = CommentStatus.Active
             }
         };
-        var createdComment = await NodeFactory.CreateNodeAsync(commentNode);
+        var createdComment = await NodeFactory.CreateNode(commentNode);
         var commentPath = createdComment.Path!;
 
         try
@@ -205,7 +206,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                     Status = CommentStatus.Active
                 }
             };
-            var createdReply = await NodeFactory.CreateNodeAsync(replyNode);
+            var createdReply = await NodeFactory.CreateNode(replyNode);
             createdReply.Path.Should().Be($"{commentPath}/{replyId}");
 
             var updatedReply = createdReply with
@@ -213,7 +214,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 State = MeshNodeState.Active,
                 Content = ((Comment)createdReply.Content!) with { Text = "I agree!" }
             };
-            await NodeFactory.UpdateNodeAsync(updatedReply);
+            await NodeFactory.UpdateNode(updatedReply);
 
             var finalReply = await MeshQuery
                 .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{createdReply.Path}"))
@@ -224,11 +225,11 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
             ((Comment)finalReply.Content!).Author.Should().Be("TestReplier");
 
-            await NodeFactory.DeleteNodeAsync(createdReply.Path!);
+            await NodeFactory.DeleteNode(createdReply.Path!);
         }
         finally
         {
-            await NodeFactory.DeleteNodeAsync(commentPath);
+            await NodeFactory.DeleteNode(commentPath);
         }
     }
 
@@ -255,7 +256,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 Status = CommentStatus.Active
             }
         };
-        var created = await NodeFactory.CreateNodeAsync(commentNode);
+        var created = await NodeFactory.CreateNode(commentNode);
 
         try
         {
@@ -267,7 +268,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             {
                 Content = content with { Status = CommentStatus.Resolved }
             };
-            await NodeFactory.UpdateNodeAsync(resolved);
+            await NodeFactory.UpdateNode(resolved);
 
             var updated = await MeshQuery
                 .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{commentPath}"))
@@ -280,7 +281,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         }
         finally
         {
-            await NodeFactory.DeleteNodeAsync(commentPath);
+            await NodeFactory.DeleteNode(commentPath);
         }
     }
 
@@ -296,8 +297,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(commentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(commentAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Thumbnail");
@@ -320,8 +320,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(commentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(commentAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(CommentLayoutAreas.OverviewArea);
@@ -345,8 +344,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(docAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);

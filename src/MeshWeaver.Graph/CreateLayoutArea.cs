@@ -67,7 +67,7 @@ public static class CreateLayoutArea
                 // the Edit view is itself the authoring surface, so flip transient→Active and jump there.
                 if (IsDirectEditContentType(host, currentNode))
                 {
-                    ConfirmTransientAsync(host, currentNode);
+                    ConfirmTransient(host, currentNode);
                     var editHref = MeshNodeLayoutAreas.BuildUrl(currentNode.Path, MeshNodeLayoutAreas.EditArea);
                     return (UiControl?)new RedirectControl(editHref);
                 }
@@ -96,18 +96,16 @@ public static class CreateLayoutArea
     }
 
     /// <summary>
-    /// Flips a transient node to Active state. Fire-and-forget — subscribers handle errors via logger.
+    /// Flips a transient node to Active state. Fire-and-forget Subscribe — no await in the click path.
     /// </summary>
-    private static void ConfirmTransientAsync(LayoutAreaHost host, MeshNode transient)
+    private static void ConfirmTransient(LayoutAreaHost host, MeshNode transient)
     {
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
         var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var active = transient with { State = MeshNodeState.Active };
-        meshService.CreateNodeAsync(active).ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-                logger?.LogWarning(t.Exception, "Failed to confirm transient node {Path}", transient.Path);
-        });
+        meshService.CreateNode(active).Subscribe(
+            _ => { /* fire-and-forget success */ },
+            ex => logger?.LogWarning(ex, "Failed to confirm transient node {Path}", transient.Path));
     }
 
     /// <summary>
@@ -195,10 +193,12 @@ public static class CreateLayoutArea
                 .WithStyle("margin-top: 24px; justify-content: flex-start;")
                 .WithView(Controls.Button("Cancel")
                     .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(async ctx =>
+                    .WithClickAction(ctx =>
                     {
-                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
-                        ctx.NavigateTo(cancelUrl);
+                        nodeFactory.DeleteNode(nodePath).Subscribe(
+                            _ => ctx.NavigateTo(cancelUrl),
+                            _ => ctx.NavigateTo(cancelUrl));
+                        return Task.CompletedTask;
                     }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
@@ -262,10 +262,12 @@ public static class CreateLayoutArea
                 .WithStyle("margin-top: 12px; flex-shrink: 0; justify-content: flex-start;")
                 .WithView(Controls.Button("Cancel")
                     .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(async ctx =>
+                    .WithClickAction(ctx =>
                     {
-                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
-                        ctx.NavigateTo(cancelUrl);
+                        nodeFactory.DeleteNode(nodePath).Subscribe(
+                            _ => ctx.NavigateTo(cancelUrl),
+                            _ => ctx.NavigateTo(cancelUrl));
+                        return Task.CompletedTask;
                     }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
@@ -306,10 +308,12 @@ public static class CreateLayoutArea
                 .WithStyle("margin-top: 24px; justify-content: flex-start;")
                 .WithView(Controls.Button("Cancel")
                     .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(async ctx =>
+                    .WithClickAction(ctx =>
                     {
-                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
-                        ctx.NavigateTo(cancelUrl);
+                        nodeFactory.DeleteNode(nodePath).Subscribe(
+                            _ => ctx.NavigateTo(cancelUrl),
+                            _ => ctx.NavigateTo(cancelUrl));
+                        return Task.CompletedTask;
                     }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
@@ -369,21 +373,19 @@ public static class CreateLayoutArea
             nodePath, contentType?.Name ?? "none");
 
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        nodeFactory.CreateNodeAsync(updatedNode)
-            .ContinueWith(task =>
-            {
-                if (task.IsCompletedSuccessfully)
+        nodeFactory.CreateNode(updatedNode)
+            .Subscribe(
+                _ =>
                 {
                     logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
                     ctx.NavigateTo($"/{nodePath}");
-                }
-                else if (task.IsFaulted)
+                },
+                ex =>
                 {
-                    var error = task.Exception?.InnerException?.Message ?? "Unknown error";
+                    var error = ex.Message ?? "Unknown error";
                     logger?.LogWarning("CreateNodeRequest failed for {NodePath}: {Error}", nodePath, error);
                     ShowErrorDialog(ctx, "Creation Failed", error);
-                }
-            });
+                });
     }
 
     /// <summary>
@@ -418,34 +420,26 @@ public static class CreateLayoutArea
         logger?.LogInformation("Creating new node at {NewPath} (Id changed from transient {TransientPath})",
             newPath, transientPath);
 
-        nodeFactory.CreateNodeAsync(newNode)
-            .ContinueWith(task =>
-            {
-                if (task.IsCompletedSuccessfully)
+        nodeFactory.CreateNode(newNode)
+            .Subscribe(
+                _ =>
                 {
                     logger?.LogInformation("Successfully created node at {NewPath}", newPath);
 
-                    // Delete the transient node on the hub's execution pipeline
-                    host.Hub.InvokeAsync(async ct =>
-                    {
-                        await nodeFactory.DeleteNodeAsync(transientPath);
-                        logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
-                    }, ex =>
-                    {
-                        logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath);
-                        return Task.CompletedTask;
-                    });
+                    // Delete the transient node via its own Observable — no await, no InvokeAsync.
+                    nodeFactory.DeleteNode(transientPath).Subscribe(
+                        __ => logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath),
+                        ex => logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath));
 
                     // Navigate to the new node
                     ctx.NavigateTo($"/{newPath}");
-                }
-                else if (task.IsFaulted)
+                },
+                ex =>
                 {
-                    var error = task.Exception?.InnerException?.Message ?? "Unknown error";
+                    var error = ex.Message ?? "Unknown error";
                     logger?.LogWarning("CreateNodeRequest failed for {NewPath}: {Error}", newPath, error);
                     ShowErrorDialog(ctx, "Creation Failed", error);
-                }
-            });
+                });
     }
 
     private static void ShowErrorDialog(UiActionContext ctx, string title, string message)
@@ -758,109 +752,84 @@ public static class CreateLayoutArea
 
         buttonRow = buttonRow.WithView(Controls.Button("Create")
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(async actx =>
+            .WithClickAction(actx =>
             {
-                var formValues = await actx.Host.Stream
-                    .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                var ns = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
-                var selectedType = formValues.GetValueOrDefault("type")?.ToString()?.Trim();
-                var name = formValues.GetValueOrDefault("name")?.ToString()?.Trim();
-                var id = formValues.GetValueOrDefault("id")?.ToString()?.Trim();
-                var description = formValues.GetValueOrDefault("description")?.ToString()?.Trim();
-                var icon = formValues.GetValueOrDefault("icon")?.ToString()?.Trim();
-
-                if (string.IsNullOrWhiteSpace(selectedType))
-                {
-                    ShowErrorDialog(actx, "Validation Error", "Type is required.");
-                    return;
-                }
-                if (string.IsNullOrWhiteSpace(name))
-                {
-                    ShowErrorDialog(actx, "Validation Error", "Name is required.");
-                    return;
-                }
-
-                if (string.IsNullOrWhiteSpace(id))
-                    id = GenerateIdFromName(name);
-
-                // For satellite types, inject _TypeName segment (e.g. MyProject/_Thread/MyThread)
-                string nodePath;
-                if (meshConfiguration.IsSatelliteNodeType(selectedType))
-                {
-                    var typeSegment = $"_{selectedType}";
-                    nodePath = string.IsNullOrEmpty(ns) ? $"{typeSegment}/{id}" : $"{ns}/{typeSegment}/{id}";
-                }
-                else
-                {
-                    nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
-                }
-
-                try
-                {
-                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                    var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-                    MeshNode? existingNode = null;
-                    if (meshQuery != null)
+                // Reactive click — read form, CreateTransient (which completes after persist),
+                // then navigate. No await on the click path (AsynchronousCalls.md).
+                actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                    .Take(1)
+                    .Subscribe(formValues =>
                     {
-                        await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{nodePath}"))
+                        var ns = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
+                        var selectedType = formValues.GetValueOrDefault("type")?.ToString()?.Trim();
+                        var name = formValues.GetValueOrDefault("name")?.ToString()?.Trim();
+                        var id = formValues.GetValueOrDefault("id")?.ToString()?.Trim();
+                        var description = formValues.GetValueOrDefault("description")?.ToString()?.Trim();
+                        var icon = formValues.GetValueOrDefault("icon")?.ToString()?.Trim();
+
+                        if (string.IsNullOrWhiteSpace(selectedType))
                         {
-                            existingNode = n;
-                            break;
+                            ShowErrorDialog(actx, "Validation Error", "Type is required.");
+                            return;
                         }
-                    }
-                    if (existingNode != null && existingNode.State != MeshNodeState.Transient)
-                    {
-                        ShowErrorDialog(actx, "Node Already Exists",
-                            $"A node already exists at path: {nodePath}. Please choose a different name or id.");
-                        return;
-                    }
+                        if (string.IsNullOrWhiteSpace(name))
+                        {
+                            ShowErrorDialog(actx, "Validation Error", "Name is required.");
+                            return;
+                        }
 
-                    // Pull Icon/Category from the registered NodeType definition so the transient
-                    // has a usable appearance immediately (before ConfigResolver enrichment kicks in).
-                    var typeRegistration = meshConfiguration.Nodes.Values
-                        .FirstOrDefault(n => n.Path == selectedType);
+                        if (string.IsNullOrWhiteSpace(id))
+                            id = GenerateIdFromName(name);
 
-                    var newNode = MeshNode.FromPath(nodePath) with
-                    {
-                        Name = name.Trim(),
-                        Description = string.IsNullOrEmpty(description) ? null : description,
-                        NodeType = selectedType,
-                        Icon = string.IsNullOrEmpty(icon) ? typeRegistration?.Icon : icon,
-                        Category = typeRegistration?.Category,
-                        DesiredId = id,
-                        State = MeshNodeState.Transient
-                    };
+                        string nodePath;
+                        if (meshConfiguration.IsSatelliteNodeType(selectedType))
+                        {
+                            var typeSegment = $"_{selectedType}";
+                            nodePath = string.IsNullOrEmpty(ns) ? $"{typeSegment}/{id}" : $"{ns}/{typeSegment}/{id}";
+                        }
+                        else
+                        {
+                            nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+                        }
 
-                    logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, selectedType);
-                    await nodeFactory.CreateTransientAsync(newNode, CancellationToken.None);
-                    logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
+                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-                    // Wait for the workspace stream to observe the new node before navigating,
-                    // otherwise /{nodePath}/Create races replication and renders an empty form.
-                    try
-                    {
-                        await host.Workspace.GetStream<MeshNode>()!
-                            .Where(ns => ns?.Any(n => n.Path == nodePath) == true)
-                            .Take(1)
-                            .Timeout(TimeSpan.FromSeconds(5))
-                            .ToTask();
-                    }
-                    catch (TimeoutException)
-                    {
-                        logger?.LogWarning("Timed out waiting for workspace to observe {NodePath}", nodePath);
-                    }
+                        var typeRegistration = meshConfiguration.Nodes.Values
+                            .FirstOrDefault(n => n.Path == selectedType);
 
-                    var createUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
-                    actx.NavigateTo(createUrl);
-                }
-                catch (Exception ex)
-                {
-                    var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
-                        ? "You do not have permission to create nodes in this namespace."
-                        : $"Failed to create node: {ex.Message}";
-                    ShowErrorDialog(actx, "Creation Failed", errorMsg);
-                }
+                        var newNode = MeshNode.FromPath(nodePath) with
+                        {
+                            Name = name!.Trim(),
+                            Description = string.IsNullOrEmpty(description) ? null : description,
+                            NodeType = selectedType,
+                            Icon = string.IsNullOrEmpty(icon) ? typeRegistration?.Icon : icon,
+                            Category = typeRegistration?.Category,
+                            DesiredId = id,
+                            State = MeshNodeState.Transient
+                        };
+
+                        logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, selectedType);
+
+                        // CreateTransient surfaces "Node already exists" via OnError when a non-transient
+                        // node sits at this path — caught below and shown as a friendly error. No pre-flight
+                        // existence query (those go through the lagged read index — AsynchronousCalls.md).
+                        nodeFactory.CreateTransient(newNode)
+                        .Subscribe(
+                            _ =>
+                            {
+                                logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
+                                var createUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
+                                actx.NavigateTo(createUrl);
+                            },
+                            ex =>
+                            {
+                                var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
+                                    ? "You do not have permission to create nodes in this namespace."
+                                    : $"Failed to create node: {ex.Message}";
+                                ShowErrorDialog(actx, "Creation Failed", errorMsg);
+                            });
+                    });
+                return Task.CompletedTask;
             }));
 
         stack = stack.WithView(buttonRow);

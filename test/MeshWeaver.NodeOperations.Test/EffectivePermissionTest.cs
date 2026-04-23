@@ -1,6 +1,8 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using Memex.Portal.Shared;
@@ -48,7 +50,7 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Systemorph" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // 3) Ask ISecurityService.HasPermission for this node
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();

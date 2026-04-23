@@ -2,6 +2,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -41,7 +42,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             Content = assignment,
             MainNode = "Admin",
         };
-        return await NodeFactory.CreateNodeAsync(node);
+        return await NodeFactory.CreateNode(node);
     }
 
     private static Address NodeAddress(string id)
@@ -339,7 +340,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         // Update the node's AccessObject via NodeFactory
         var updatedAssignment = assignment with { AccessObject = "User/eve" };
         var updatedNode = created with { Content = updatedAssignment };
-        await NodeFactory.UpdateNodeAsync(updatedNode, TestContext.Current.CancellationToken);
+        await NodeFactory.UpdateNode(updatedNode);
 
         // Verify the update was persisted
         var ct = TestContext.Current.CancellationToken;
@@ -400,12 +401,12 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             Name = "Engineering",
             NodeType = "Group",
         };
-        await NodeFactory.CreateNodeAsync(groupNode, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(groupNode);
 
         // Change AccessObject from a User to a Group path
         var updatedAssignment = assignment with { AccessObject = "Admin/engineering" };
         var updatedNode = created with { Content = updatedAssignment };
-        await NodeFactory.UpdateNodeAsync(updatedNode, TestContext.Current.CancellationToken);
+        await NodeFactory.UpdateNode(updatedNode);
 
         // Verify the update was persisted — AccessObject can be any mesh node path
         var ct = TestContext.Current.CancellationToken;

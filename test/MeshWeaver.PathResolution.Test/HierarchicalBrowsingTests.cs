@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
@@ -25,51 +27,51 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         // Create the Marketing story hierarchy similar to sample data
         // Parent stories
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing") with
         {
             Name = "Marketing",
             NodeType = "Group"
         });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
         {
             Name = "Claims Processing",
             NodeType = "Markdown"
         });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy") with
         {
             Name = "Data Ingestion Strategy",
             NodeType = "Markdown"
         });
 
         // Sub-stories of ClaimsProcessing
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
         {
             Name = "Email Triage",
             NodeType = "Markdown"
         });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/DocumentExtraction") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/DocumentExtraction") with
         {
             Name = "Document Extraction",
             NodeType = "Markdown"
         });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/ClientCorrespondence") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/ClientCorrespondence") with
         {
             Name = "Client Correspondence",
             NodeType = "Markdown"
         });
 
         // Sub-stories of DataIngestionStrategy
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/AnnotatedDataModel") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/AnnotatedDataModel") with
         {
             Name = "Annotated Data Model",
             NodeType = "Markdown"
         });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/HistoricIngestion") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/HistoricIngestion") with
         {
             Name = "Historic Ingestion",
             NodeType = "Markdown"
@@ -323,9 +325,9 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_ReturnsTypedResults()
     {
         // Arrange - save MeshNodes with nodeType
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/inventory/1") with { Name = "Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/inventory/2") with { Name = "Phone", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/inventory/order-1") with { Name = "Order 1", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/1") with { Name = "Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/2") with { Name = "Phone", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/inventory/order-1") with { Name = "Order 1", NodeType = "Code" });
 
         // Act - query for Product nodes only
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -341,8 +343,8 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_WithNodeType_FiltersCorrectly()
     {
         // Arrange - save nodes with different types
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/data/1") with { Name = "Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/data/order-1") with { Name = "Order 1", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/data/1") with { Name = "Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/data/order-1") with { Name = "Order 1", NodeType = "Code" });
 
         // Act - query for Product nodeType
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -360,7 +362,7 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // Arrange - save 10 product nodes
         for (int i = 1; i <= 10; i++)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"catalog/products/{i}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"catalog/products/{i}") with
             {
                 Name = $"Product {i}",
                 NodeType = "Markdown"
@@ -382,10 +384,10 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_WithAdditionalFilters_CombinesFilters()
     {
         // Arrange - save nodes with different names and types
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/all/1") with { Name = "Gaming Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/all/2") with { Name = "Business Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/all/3") with { Name = "Phone", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/all/order-1") with { Name = "Order 1", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/all/1") with { Name = "Gaming Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/all/2") with { Name = "Business Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/all/3") with { Name = "Phone", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/all/order-1") with { Name = "Order 1", NodeType = "Code" });
 
         // Act - query for Product nodes with name filter
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -401,8 +403,8 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_NoMatchingNodeType_ReturnsEmpty()
     {
         // Arrange - save only Order nodes
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/orders/order-1") with { Name = "Order 1", NodeType = "Code" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/orders/order-2") with { Name = "Order 2", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/orders/order-1") with { Name = "Order 1", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("shop/orders/order-2") with { Name = "Order 2", NodeType = "Code" });
 
         // Act - query for Product nodeType (none exist)
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -417,8 +419,8 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_MeshNode_WorksWithNodes()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
 
         // Act - query for MeshNode type
         var results = await MeshQuery.QueryAsync<MeshNode>(

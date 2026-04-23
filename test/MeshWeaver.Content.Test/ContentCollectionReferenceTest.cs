@@ -109,14 +109,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize Alice hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(aliceAddress));
 
         // Request the "attachments" collection configuration
         var response = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference(["attachments"])),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(aliceAddress));
 
         response.Should().NotBeNull();
         response.Message.Should().NotBeNull();
@@ -143,13 +141,11 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(aliceAddress));
 
         var response = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference()),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(aliceAddress));
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -170,13 +166,11 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         var response = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference(["attachments"])),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -202,14 +196,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         // Request collection:attachments from ACME hub using prefix:path format
         var response = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference("collection:attachments")),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -230,14 +222,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         // Request content:attachments/test.txt from ACME hub using prefix:path format
         var response = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference("content:attachments/test.txt")),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         response.Should().NotBeNull();
         response.Message.Data.Should().NotBeNull();
@@ -258,14 +248,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         // Request data without prefix (defaults to data:) from ACME hub
         var response = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference("data:")),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         // Should return default data (may be null or empty store)
         response.Should().NotBeNull();
@@ -297,8 +285,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
             tasks.Add(client.AwaitResponse(
                 new GetDataRequest(new UnifiedReference("collection:attachments")),
-                o => o.WithTarget(address),
-                TestContext.Current.CancellationToken));
+                o => o.WithTarget(address)));
         }
 
         // Wait for all requests to complete
@@ -334,8 +321,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         {
             tasks.Add(client.AwaitResponse(
                 new GetDataRequest(new UnifiedReference("content:attachments/test.txt")),
-                o => o.WithTarget(acmeAddress),
-                TestContext.Current.CancellationToken));
+                o => o.WithTarget(acmeAddress)));
         }
 
         // Wait for all requests to complete
@@ -373,19 +359,16 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize both hubs
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(systemorphAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(systemorphAddress));
 
         // Step 1: Get collection config from ACME (like BlazorHostingExtensions does)
         var acmeConfigResponse = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference(["attachments"])),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         var acmeConfigs = ParseCollectionConfigs(acmeConfigResponse.Message.Data);
         acmeConfigs.Should().NotBeNull();
@@ -395,8 +378,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Step 2: Get collection config from Systemorph
         var systemorphConfigResponse = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference(["attachments"])),
-            o => o.WithTarget(systemorphAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(systemorphAddress));
 
         var systemorphConfigs = ParseCollectionConfigs(systemorphConfigResponse.Message.Data);
         systemorphConfigs.Should().NotBeNull();
@@ -457,14 +439,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize the UCR node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(ucrAddress));
 
         // Request the "content" collection configuration
         var response = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference(["content"])),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(ucrAddress));
 
         response.Should().NotBeNull();
         response.Message.Should().NotBeNull();
@@ -499,8 +479,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize the UCR node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(ucrAddress));
         Output.WriteLine("Hub initialized");
 
         // Request the $Content area with icon.svg as the id
@@ -540,8 +519,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize the UCR node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(ucrAddress));
         Output.WriteLine("Hub initialized");
 
         // Request the $Content area with sample.md as the id
@@ -579,8 +557,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize the UCR node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(ucrAddress));
         Output.WriteLine("Hub initialized");
 
         // Request the $Content area with a non-existent file
@@ -619,8 +596,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize the UCR node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(ucrAddress));
         Output.WriteLine("Hub initialized");
 
         // Request the $Schema area with empty id (self-reference)
@@ -659,8 +635,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize the UCR node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(ucrAddress));
         Output.WriteLine("Hub initialized");
 
         // Request the $Data area with empty id (self-reference)
@@ -700,8 +675,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         // Initialize the UCR node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(ucrAddress));
         Output.WriteLine("Hub initialized");
 
         // Request the default area (empty string) - should resolve to $Content for Markdown nodes

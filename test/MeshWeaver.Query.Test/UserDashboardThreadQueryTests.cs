@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -48,10 +50,10 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     public async Task LatestThreads_FindsThreadsAcrossNamespaces_ByCreator()
     {
         // Arrange: create context nodes in different namespaces
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("PartnerRe") { Name = "Partner Re", NodeType = "Markdown" }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("ACME") { Name = "ACME Corp", NodeType = "Markdown" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("PartnerRe") { Name = "Partner Re", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(
+            new MeshNode("ACME") { Name = "ACME Corp", NodeType = "Markdown" });
 
         // Create threads in two different namespaces via CreateNodeRequest
         var client = GetClient();
@@ -93,8 +95,8 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         // only finds threads under the user's own namespace.
 
         // Arrange: create context node in a different namespace
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("External") { Name = "External Org", NodeType = "Markdown" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("External") { Name = "External Org", NodeType = "Markdown" });
 
         var client = GetClient();
         var resp = await client.AwaitResponse(
@@ -127,7 +129,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         // Arrange: create a thread with a different creator
         var otherUserId = "other-user";
         var threadPath = $"Shared/_Thread/other-thread-{Guid.NewGuid():N}";
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(threadPath) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(threadPath) with
         {
             Name = "Other user's thread",
             NodeType = "Thread",
@@ -136,7 +138,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
             {
                 CreatedBy = otherUserId
             }
-        }, TestTimeout);
+        });
 
         // Act: query for current user's threads
         var myThreads = await MeshQuery
@@ -154,33 +156,33 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     public async Task ActivityFeed_FindsNodesWithActivityAcrossNamespaces()
     {
         // Arrange: create nodes with activity in different namespaces
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("OrgA/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("OrgA/doc1") with
         {
             Name = "Org A Document", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("OrgA/doc1/_activity/log1") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("OrgA/doc1/_activity/log1") with
         {
             Name = "Edit activity", NodeType = "Activity",
             MainNode = "OrgA/doc1",
             Content = new ActivityLog("DataUpdate") { HubPath = "OrgA/doc1" }
-        }, TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("OrgB/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("OrgB/doc2") with
         {
             Name = "Org B Document", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("OrgB/doc2/_activity/log2") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("OrgB/doc2/_activity/log2") with
         {
             Name = "Edit activity", NodeType = "Activity",
             MainNode = "OrgB/doc2",
             Content = new ActivityLog("Approval") { HubPath = "OrgB/doc2" }
-        }, TestTimeout);
+        });
 
         // Node without activity (should NOT appear)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("OrgC/doc3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("OrgC/doc3") with
         {
             Name = "No Activity Doc", NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: the dashboard activity feed query
         var results = await MeshQuery
@@ -204,27 +206,27 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     public async Task ActivityFeed_ScopedToNamespace_FindsOnlyThatNamespace()
     {
         // Arrange: activity in two namespaces
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("nsA/item1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("nsA/item1") with
         {
             Name = "Item A", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("nsA/item1/_activity/log1") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("nsA/item1/_activity/log1") with
         {
             Name = "Log", NodeType = "Activity",
             MainNode = "nsA/item1",
             Content = new ActivityLog("DataUpdate") { HubPath = "nsA/item1" }
-        }, TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("nsB/item2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("nsB/item2") with
         {
             Name = "Item B", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("nsB/item2/_activity/log2") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("nsB/item2/_activity/log2") with
         {
             Name = "Log", NodeType = "Activity",
             MainNode = "nsB/item2",
             Content = new ActivityLog("Approval") { HubPath = "nsB/item2" }
-        }, TestTimeout);
+        });
 
         // Act: scoped to nsA only
         var results = await MeshQuery
@@ -242,8 +244,8 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     public async Task CreateNodeRequest_Thread_StoresCreatedByInContent()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("TestCtx") { Name = "Test Context", NodeType = "Markdown" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("TestCtx") { Name = "Test Context", NodeType = "Markdown" });
 
         // Act: create thread via the production CreateNodeRequest path
         var client = GetClient();

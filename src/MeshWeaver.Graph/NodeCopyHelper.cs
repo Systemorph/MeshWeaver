@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -13,63 +15,84 @@ public static class NodeCopyHelper
     /// <summary>
     /// Copies a node and all its descendants to a target namespace.
     /// The source node's Id is preserved; paths are rewritten under the target namespace.
+    /// Returns an IObservable that emits the count of copied nodes when the operation completes.
     /// </summary>
-    public static async Task<int> CopyNodeTreeAsync(
+    public static IObservable<int> CopyNodeTree(
         IMeshService meshQuery,
         IMeshService nodeFactory,
         IMessageHub hub,
         string sourcePath,
         string targetNamespace,
         bool force,
-        ILogger? logger = null,
-        CancellationToken ct = default)
+        ILogger? logger = null)
     {
-        var sourceNode = await meshQuery.QueryAsync<MeshNode>($"path:{sourcePath}").FirstOrDefaultAsync(ct);
-        if (sourceNode == null)
-            throw new InvalidOperationException($"Source node not found: {sourcePath}");
+        // Pull the source + descendants as a single reactive snapshot via ObserveQuery (initial emission).
+        var source = meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{sourcePath}"))
+            .Take(1)
+            .Select(c => c.Items.FirstOrDefault());
 
-        // Collect source node + all descendants
-        var nodesToCopy = new List<MeshNode> { sourceNode };
-        await foreach (var descendant in meshQuery.QueryAsync<MeshNode>($"path:{sourcePath} scope:descendants").WithCancellation(ct))
-        {
-            nodesToCopy.Add(descendant);
-        }
+        var descendants = meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{sourcePath} scope:descendants"))
+            .Take(1)
+            .Select(c => c.Items.ToArray());
 
-        // Compute the prefix to replace
-        var sourceNamespace = sourceNode.Namespace ?? "";
-
-        var nodesCopied = 0;
-        foreach (var node in nodesToCopy)
-        {
-            var newPath = RemapPath(node.Path, sourceNamespace, targetNamespace);
-
-            if (!force)
+        return source
+            .SelectMany(sourceNode => descendants.Select(desc =>
             {
-                var existing = await meshQuery.QueryAsync<MeshNode>($"path:{newPath}").FirstOrDefaultAsync(ct);
-                if (existing != null)
+                if (sourceNode == null)
+                    throw new InvalidOperationException($"Source node not found: {sourcePath}");
+                return new { sourceNode, descendants = desc };
+            }))
+            .SelectMany(pair =>
+            {
+                var sourceNamespace = pair.sourceNode.Namespace ?? "";
+                var nodesToCopy = new[] { pair.sourceNode }.Concat(pair.descendants);
+
+                var copyOps = nodesToCopy.Select(node =>
                 {
-                    logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
-                    continue;
-                }
-            }
+                    var newPath = RemapPath(node.Path, sourceNamespace, targetNamespace);
+                    var copiedNode = MeshNode.FromPath(newPath) with
+                    {
+                        Name = node.Name,
+                        NodeType = node.NodeType,
+                        Icon = node.Icon,
+                        Category = node.Category,
+                        Content = node.Content,
+                        State = MeshNodeState.Active,
+                        PreRenderedHtml = node.PreRenderedHtml,
+                    };
 
-            var copiedNode = MeshNode.FromPath(newPath) with
-            {
-                Name = node.Name,
-                NodeType = node.NodeType,
-                Icon = node.Icon,
-                Category = node.Category,
-                Content = node.Content,
-                State = MeshNodeState.Active,
-                PreRenderedHtml = node.PreRenderedHtml,
-            };
+                    IObservable<int> create = nodeFactory.CreateNode(copiedNode)
+                        .Select(_ =>
+                        {
+                            logger?.LogInformation("Copied node {SourcePath} -> {TargetPath}", node.Path, newPath);
+                            return 1;
+                        });
 
-            await nodeFactory.CreateNodeAsync(copiedNode, ct: ct);
-            nodesCopied++;
-            logger?.LogInformation("Copied node {SourcePath} -> {TargetPath}", node.Path, newPath);
-        }
+                    if (force)
+                        return create;
 
-        return nodesCopied;
+                    // Existence-check via MeshNodeReference stream — no QueryAsync.
+                    return hub.GetWorkspace().GetMeshNodeStream(newPath)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Select(existing => existing != null ? 0 : -1)
+                        .Catch<int, Exception>(_ => Observable.Return(-1))  // treat unreachable as absent
+                        .SelectMany(flag =>
+                        {
+                            if (flag == 0)
+                            {
+                                logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
+                                return Observable.Return(0);
+                            }
+                            return create;
+                        });
+                });
+
+                // Run creates sequentially; sum the per-op counts into the final total.
+                return Observable.Concat(copyOps).Aggregate(0, (sum, v) => sum + v);
+            });
     }
 
     private static string RemapPath(string path, string sourceNamespace, string targetNamespace)

@@ -429,33 +429,40 @@ public static class CommentsView
             .WithStyle("margin-top: 4px; justify-content: flex-end;")
             .WithView(Controls.Button("Cancel")
                 .WithAppearance(Appearance.Neutral)
-                .WithClickAction(async _ =>
+                .WithClickAction(_ =>
                 {
-                    try { await nodeFactory.DeleteNodeAsync(commentPath); } catch { }
-                    host.UpdateData(stateId, "");
+                    nodeFactory.DeleteNode(commentPath).Subscribe(
+                        __ => host.UpdateData(stateId, ""),
+                        _  => host.UpdateData(stateId, ""));
+                    return Task.CompletedTask;
                 }))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    var text = "";
+                    // Read text, then read the comment via GetMeshNodeStream() — no QueryAsync,
+                    // no FirstOrDefault-by-path; the MeshNodeReference stream IS the own-node read.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
                         .Take(1)
-                        .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
-
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
-                    if (node != null)
-                    {
-                        var comment = node.Content as Comment ?? new Comment();
-                        var activeNode = node with
+                        .Subscribe(data =>
                         {
-                            State = MeshNodeState.Active,
-                            Content = comment with { Text = text }
-                        };
-                        host.Hub.Post(new UpdateNodeRequest(activeNode));
-                    }
+                            var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                    host.UpdateData(stateId, "");
+                            host.Workspace.GetMeshNodeStream()
+                                .Take(1)
+                                .Subscribe(node =>
+                                {
+                                    var comment = node.Content as Comment ?? new Comment();
+                                    var activeNode = node with
+                                    {
+                                        State = MeshNodeState.Active,
+                                        Content = comment with { Text = text }
+                                    };
+                                    host.Hub.Post(new UpdateNodeRequest(activeNode));
+                                    host.UpdateData(stateId, "");
+                                });
+                        });
+                    return Task.CompletedTask;
                 })));
 
         return stack;
@@ -468,7 +475,7 @@ public static class CommentsView
     private static UiControl BuildAddCommentButton(LayoutAreaHost host, string nodePath, string currentUser)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.85rem; color: var(--accent-fill-rest);\" title=\"Add Comment\">+ Comment</span>")
-            .WithClickAction(async _ =>
+            .WithClickAction(_ =>
             {
                 var commentId = Guid.NewGuid().AsString();
                 var commentPath = $"{nodePath}/{CommentsExtensions.CommentPartition}/{commentId}";
@@ -490,9 +497,10 @@ public static class CommentsView
                 };
 
                 var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                await nodeFactory.CreateTransientAsync(commentNode);
-
-                host.UpdateData(newCommentPathStateId, commentPath);
+                nodeFactory.CreateTransient(commentNode).Subscribe(
+                    _ => host.UpdateData(newCommentPathStateId, commentPath),
+                    _ => { /* surfaced elsewhere */ });
+                return Task.CompletedTask;
             });
     }
 }

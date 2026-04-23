@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
@@ -185,8 +187,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // Initialize graph hub via ping
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(graphAddress));
 
         // Verify graph node exists in persistence with correct NodeType
         // (Name comes from persistence, NodeType references type/graph definition)
@@ -225,8 +226,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // Initialize graph hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(graphAddress));
 
         // Act - get children via IMeshService
         var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph", null, TestContext.Current.CancellationToken)
@@ -263,7 +263,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 21
             }
         };
-        await NodeFactory.CreateNodeAsync(newStory, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(newStory);
 
         // Assert - verify the node with content is persisted
         var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story3", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);

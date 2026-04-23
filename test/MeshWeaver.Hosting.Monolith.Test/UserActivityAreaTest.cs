@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -138,8 +139,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(rolandAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(rolandAddress));
 
         response.Should().NotBeNull("User/TestUser hub should be created and respond to ping");
     }
@@ -158,8 +158,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(rolandAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(rolandAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -189,7 +188,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         using (accessService.ImpersonateAsHub(Mesh))
         {
-            await meshService.CreateNodeAsync(new MeshNode(username, "User")
+            await meshService.CreateNode(new MeshNode(username, "User")
             {
                 Name = "Runtime Test User",
                 NodeType = "User",
@@ -205,8 +204,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         // First, verify the hub can be created
         var pingResponse = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(userAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(userAddress));
         pingResponse.Should().NotBeNull($"User/{username} hub should be created and respond to ping");
 
         // Now request the Activity layout area
@@ -234,8 +232,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(rolandAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(rolandAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);

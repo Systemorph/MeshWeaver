@@ -141,8 +141,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Create an Organization dynamically (simulates runtime creation)
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         // Give the creator Admin role at root so they can create
-        await securityService.AddUserRoleAsync("Creator", "Admin", null, "system",
-            TestContext.Current.CancellationToken);
+        await securityService.AddUserRoleAsync("Creator", "Admin", null, "system");
 
         var orgNode = new MeshNode("Globex")
         {
@@ -166,8 +165,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         results.Should().BeEmpty("Organization instances require partition-level access, not public read");
 
         // Grant Alice (the unprivileged user) Viewer role on Globex
-        await securityService.AddUserRoleAsync("Alice", "Viewer", "Globex", "system",
-            TestContext.Current.CancellationToken);
+        await securityService.AddUserRoleAsync("Alice", "Viewer", "Globex", "system");
 
         var resultsAfterGrant = await MeshQuery.QueryAsync<MeshNode>(
             "path:Globex",

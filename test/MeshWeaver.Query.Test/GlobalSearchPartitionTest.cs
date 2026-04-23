@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Graph.Configuration;
@@ -43,7 +45,7 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Test Corporation",
             NodeType = "Markdown"
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Act: global search with no path (like the top search bar)
         var results = await MeshQuery
@@ -59,11 +61,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_ReturnsOrganizationByName()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(new MeshNode("AcmeCorp")
+        await NodeFactory.CreateNode(new MeshNode("AcmeCorp")
         {
             Name = "Acme Corporation",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: search by text that matches the name
         var results = await MeshQuery
@@ -79,17 +81,17 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_ReturnsChildNodesUnderOrganization()
     {
         // Arrange: create org + child markdown node
-        await NodeFactory.CreateNodeAsync(new MeshNode("MegaCorp")
+        await NodeFactory.CreateNode(new MeshNode("MegaCorp")
         {
             Name = "Mega Corporation",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("readme", "MegaCorp")
+        await NodeFactory.CreateNode(new MeshNode("readme", "MegaCorp")
         {
             Name = "Getting Started",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: search all descendants
         var results = await MeshQuery
@@ -109,11 +111,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Autocomplete_FindsOrganizationByPrefix()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(new MeshNode("AlphaCorp")
+        await NodeFactory.CreateNode(new MeshNode("AlphaCorp")
         {
             Name = "Alpha Corporation",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: autocomplete with "Alpha" prefix (like typing in search bar)
         var suggestions = await MeshQuery
@@ -129,11 +131,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Autocomplete_FindsOrganizationByPartialName()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(new MeshNode("BetaInc")
+        await NodeFactory.CreateNode(new MeshNode("BetaInc")
         {
             Name = "Beta Incorporated",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: autocomplete with partial name
         var suggestions = await MeshQuery
@@ -151,11 +153,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task NodeTypeQuery_FindsOrganizations()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(new MeshNode("GammaCorp")
+        await NodeFactory.CreateNode(new MeshNode("GammaCorp")
         {
             Name = "Gamma Corp",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: search by nodeType
         var results = await MeshQuery
@@ -173,30 +175,30 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_ReturnsNodesFromMultiplePartitions()
     {
         // Arrange: two orgs in different partitions
-        await NodeFactory.CreateNodeAsync(new MeshNode("OrgA")
+        await NodeFactory.CreateNode(new MeshNode("OrgA")
         {
             Name = "Organization A",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("OrgB")
+        await NodeFactory.CreateNode(new MeshNode("OrgB")
         {
             Name = "Organization B",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Also create a child in each
-        await NodeFactory.CreateNodeAsync(new MeshNode("doc1", "OrgA")
+        await NodeFactory.CreateNode(new MeshNode("doc1", "OrgA")
         {
             Name = "Doc in A",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("doc2", "OrgB")
+        await NodeFactory.CreateNode(new MeshNode("doc2", "OrgB")
         {
             Name = "Doc in B",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: global search
         var results = await MeshQuery
@@ -216,17 +218,17 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task TextSearch_FindsNodesAcrossPartitions()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(new MeshNode("DeltaCorp")
+        await NodeFactory.CreateNode(new MeshNode("DeltaCorp")
         {
             Name = "Delta Corporation",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("report", "DeltaCorp")
+        await NodeFactory.CreateNode(new MeshNode("report", "DeltaCorp")
         {
             Name = "Delta Quarterly Report",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: search for "Delta"
         var results = await MeshQuery
@@ -246,11 +248,11 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task GlobalSearch_WithAccessAssignment_ReturnsGrantedNodes()
     {
         // Arrange: create org + grant current user access
-        await NodeFactory.CreateNodeAsync(new MeshNode("SecureCorp")
+        await NodeFactory.CreateNode(new MeshNode("SecureCorp")
         {
             Name = "Secure Corporation",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Grant the admin user (already logged in) Viewer role on SecureCorp
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -273,17 +275,17 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
     public async Task RoutingHints_PathRestrictsToPartition()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(new MeshNode("EpsilonCorp")
+        await NodeFactory.CreateNode(new MeshNode("EpsilonCorp")
         {
             Name = "Epsilon Corp",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("project", "EpsilonCorp")
+        await NodeFactory.CreateNode(new MeshNode("project", "EpsilonCorp")
         {
             Name = "Main Project",
             NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: search with explicit namespace (routing rule should restrict to EpsilonCorp partition)
         var results = await MeshQuery

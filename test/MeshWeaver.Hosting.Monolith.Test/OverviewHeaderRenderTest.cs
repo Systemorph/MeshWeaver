@@ -33,13 +33,12 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task Overview_Renders_ForMarkdownNode()
     {
         var nodePath = $"{TestPartition}/overview-smoke";
-        await NodeFactory.CreateNodeAsync(
+        await NodeFactory.CreateNode(
             new MeshNode("overview-smoke", TestPartition) { Name = "Overview Smoke", NodeType = "Markdown" });
 
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(nodePath);
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -59,13 +58,12 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task Delete_Renders_ForExistingNode()
     {
         var nodePath = $"{TestPartition}/delete-smoke";
-        await NodeFactory.CreateNodeAsync(
+        await NodeFactory.CreateNode(
             new MeshNode("delete-smoke", TestPartition) { Name = "Delete Smoke", NodeType = "Markdown" });
 
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(nodePath);
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -86,7 +84,7 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task CreateNode_StampsCreatedAndLastModified()
     {
         var nodePath = $"{TestPartition}/stamp-check";
-        await NodeFactory.CreateNodeAsync(
+        await NodeFactory.CreateNode(
             new MeshNode("stamp-check", TestPartition) { Name = "Stamp Check", NodeType = "Markdown" });
 
         var node = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")

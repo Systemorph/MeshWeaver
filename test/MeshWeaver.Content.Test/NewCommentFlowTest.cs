@@ -127,7 +127,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             "MeshNode(commentId, docPath) should produce Path = docPath/commentId");
 
         // Act — create the node (same as meshCatalog.CreateNodeAsync in BuildNewCommentForm)
-        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
+        var createdNode = await NodeFactory.CreateNode(commentNode);
 
         // Assert — node should be retrievable
         createdNode.Should().NotBeNull("CreateNodeAsync should return the created node");
@@ -152,7 +152,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Comment found in children query ({children.Count} total children)");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(createdNode.Path!, ct: TestTimeout);
+        await NodeFactory.DeleteNode(createdNode.Path!);
     }
 
     /// <summary>
@@ -186,7 +186,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = comment
         };
 
-        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
+        var createdNode = await NodeFactory.CreateNode(commentNode);
         Output.WriteLine($"Created empty comment at: {createdNode.Path}");
 
         // Step 2: Update text via NodeFactory.CreateNodeAsync (same as BuildReplyEditArea Done button)
@@ -194,7 +194,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var updatedNode = createdNode with { Content = updatedComment };
 
         Output.WriteLine("Saving updated comment via NodeFactory.UpdateNodeAsync...");
-        await NodeFactory.UpdateNodeAsync(updatedNode, ct: TestTimeout);
+        await NodeFactory.UpdateNode(updatedNode);
 
         // Step 3: Verify the text persisted
         var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path}").FirstOrDefaultAsync();
@@ -207,7 +207,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Verified text persisted: '{retrievedComment.Text}'");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(createdNode.Path!, ct: TestTimeout);
+        await NodeFactory.DeleteNode(createdNode.Path!);
     }
 
     /// <summary>
@@ -224,8 +224,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestTimeout);
+            o => o.WithTarget(docAddress));
 
         // Create comment
         var commentId = Guid.NewGuid().AsString();
@@ -244,7 +243,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = comment
         };
 
-        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
+        var createdNode = await NodeFactory.CreateNode(commentNode);
         Output.WriteLine($"Created comment at: {createdNode.Path}");
 
         // Send DataChangeRequest to WRONG address (the markdown document, not the comment)
@@ -254,8 +253,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Sending DataChangeRequest to WRONG address: {docAddress}");
         await client.AwaitResponse(
             new DataChangeRequest().WithUpdates(updatedNode),
-            o => o.WithTarget(docAddress),
-            TestTimeout); // BUG: targeting parent instead of comment
+            o => o.WithTarget(docAddress)); // BUG: targeting parent instead of comment
 
         // Verify comment text did NOT change (still empty)
         var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path}").FirstOrDefaultAsync();
@@ -266,7 +264,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Confirmed: text is still empty (DataChangeRequest to wrong address was ignored)");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(createdNode.Path!, ct: TestTimeout);
+        await NodeFactory.DeleteNode(createdNode.Path!);
     }
 
     /// <summary>
@@ -284,8 +282,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Initialize and wait for Read view
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestTimeout);
+            o => o.WithTarget(docAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
@@ -317,7 +314,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         Output.WriteLine("Creating comment...");
-        await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
+        await NodeFactory.CreateNode(commentNode);
 
         // Wait for the view to re-render with the new comment
         Output.WriteLine("Waiting for view to update with new comment...");
@@ -334,7 +331,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("View re-rendered after comment creation");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(commentNode.Path, ct: TestTimeout);
+        await NodeFactory.DeleteNode(commentNode.Path);
     }
 
     /// <summary>
@@ -352,8 +349,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("1. Initializing document hub...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestTimeout);
+            o => o.WithTarget(docAddress));
 
         // 2. Create empty comment (simulating "Comment" button)
         var commentId = Guid.NewGuid().AsString();
@@ -375,7 +371,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         Output.WriteLine($"2. Creating empty comment: Path={commentNode.Path}");
-        var created = await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
+        var created = await NodeFactory.CreateNode(commentNode);
         created.Should().NotBeNull();
         Output.WriteLine($"   Created at: {created.Path}");
 
@@ -389,7 +385,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var editedNode = created with { Content = editedComment };
 
         Output.WriteLine("3. Updating comment text via NodeFactory.UpdateNodeAsync...");
-        await NodeFactory.UpdateNodeAsync(editedNode, ct: TestTimeout);
+        await NodeFactory.UpdateNode(editedNode);
 
         // 4. "Reload" — query fresh from persistence
         Output.WriteLine("4. Simulating reload — querying from persistence...");
@@ -415,7 +411,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"   Found in children query: {found.Path}");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(created.Path!, ct: TestTimeout);
+        await NodeFactory.DeleteNode(created.Path!);
         Output.WriteLine("Cleanup done");
     }
 
@@ -493,7 +489,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Comment node verified: {commentNode.Path}");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(commentPath);
     }
 
     /// <summary>
@@ -545,6 +541,6 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         comment.MarkerId.Should().BeNull("Page-level comments have no MarkerId");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(commentPath);
     }
 }

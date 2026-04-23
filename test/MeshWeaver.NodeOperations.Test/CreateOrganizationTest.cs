@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using Memex.Portal.Shared;
@@ -40,7 +42,7 @@ public class CreateOrganizationTest(ITestOutputHelper output) : MonolithMeshTest
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Test Organization" }
         };
-        var created = await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        var created = await NodeFactory.CreateNode(orgNode);
 
         // Assert: Organization node created
         created.Should().NotBeNull();
@@ -61,6 +63,6 @@ public class CreateOrganizationTest(ITestOutputHelper output) : MonolithMeshTest
         hasAdmin.Should().BeTrue("Creator should have Admin permissions on the organization");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 }

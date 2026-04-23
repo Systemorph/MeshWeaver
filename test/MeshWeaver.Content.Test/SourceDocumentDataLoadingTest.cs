@@ -103,8 +103,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         // Initialize the node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         // Get the workspace
         var hub = Mesh.GetHostedHub(address);
@@ -151,8 +150,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         // Initialize the node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         // Get the type registry
         var hub = Mesh.GetHostedHub(address);
@@ -201,8 +199,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         // Initialize the node hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         // Get the workspace and data
         var hub = Mesh.GetHostedHub(address);

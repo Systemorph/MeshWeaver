@@ -3,6 +3,8 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Graph.Configuration;
@@ -58,7 +60,7 @@ public class ApiTokenAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act — standard CreateNodeRequest
-        var created = await NodeFactory.CreateNodeAsync(tokenNode, ct);
+        var created = await NodeFactory.CreateNode(tokenNode);
 
         // Assert
         created.Should().NotBeNull();
@@ -93,7 +95,7 @@ public class ApiTokenAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
             }
         };
 
-        await NodeFactory.CreateNodeAsync(tokenNode, ct);
+        await NodeFactory.CreateNode(tokenNode);
 
         // Verify via query
         var result = await MeshQuery.QueryAsync<MeshNode>($"path:User/{userId}/_Api/{hashPrefix}")

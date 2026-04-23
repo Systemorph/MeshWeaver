@@ -111,48 +111,49 @@ public static class CopyLayoutArea
             .WithView(Controls.Button("Copy")
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Copy())
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    var formValues = await ctx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                    var targetNs = formValues?.GetValueOrDefault("targetNamespace")?.ToString()?.Trim() ?? "";
-                    var force = formValues?.GetValueOrDefault("force") is true or "True" or "true";
-
-                    if (string.IsNullOrWhiteSpace(targetNs))
-                    {
-                        ShowDialog(ctx, "Validation Error", "Please select a destination namespace.");
-                        return;
-                    }
-
-                    try
-                    {
-                        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        logger?.LogInformation("Copying node tree from {Source} to {Target}, force={Force}",
-                            currentPath, targetNs, force);
-
-                        var nodesCopied = await NodeCopyHelper.CopyNodeTreeAsync(
-                            meshService, meshService, host.Hub, currentPath, targetNs, force, logger);
-
-                        logger?.LogInformation("Copy complete: {Count} nodes copied", nodesCopied);
-
-                        var overviewUrl = MeshNodeLayoutAreas.BuildUrl(targetNs, MeshNodeLayoutAreas.OverviewArea);
-
-                        var successDialog = Controls.Dialog(
-                            Controls.Markdown($"**Copy Complete**\n\nCopied **{nodesCopied}** node(s) to `{targetNs}`."),
-                            "Copy Complete"
-                        ).WithSize("M").WithClosable(true).WithCloseAction(_ =>
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(formValues =>
                         {
-                            ctx.NavigateTo(overviewUrl);
-                            return Task.CompletedTask;
+                            var targetNs = formValues?.GetValueOrDefault("targetNamespace")?.ToString()?.Trim() ?? "";
+                            var force = formValues?.GetValueOrDefault("force") is true or "True" or "true";
+
+                            if (string.IsNullOrWhiteSpace(targetNs))
+                            {
+                                ShowDialog(ctx, "Validation Error", "Please select a destination namespace.");
+                                return;
+                            }
+
+                            var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                            logger?.LogInformation("Copying node tree from {Source} to {Target}, force={Force}",
+                                currentPath, targetNs, force);
+
+                            NodeCopyHelper.CopyNodeTree(
+                                    meshService, meshService, host.Hub, currentPath, targetNs, force, logger)
+                                .Subscribe(
+                                    nodesCopied =>
+                                    {
+                                        logger?.LogInformation("Copy complete: {Count} nodes copied", nodesCopied);
+
+                                        var overviewUrl = MeshNodeLayoutAreas.BuildUrl(targetNs, MeshNodeLayoutAreas.OverviewArea);
+                                        var successDialog = Controls.Dialog(
+                                            Controls.Markdown($"**Copy Complete**\n\nCopied **{nodesCopied}** node(s) to `{targetNs}`."),
+                                            "Copy Complete"
+                                        ).WithSize("M").WithClosable(true).WithCloseAction(_ =>
+                                        {
+                                            ctx.NavigateTo(overviewUrl);
+                                            return Task.CompletedTask;
+                                        });
+                                        ctx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
+                                    },
+                                    ex =>
+                                    {
+                                        logger?.LogError(ex, "Copy failed for {Source} -> {Target}", currentPath, targetNs);
+                                        ShowDialog(ctx, "Copy Failed", $"Copy failed: {ex.Message}");
+                                    });
                         });
-                        ctx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger?.LogError(ex, "Copy failed for {Source} -> {Target}", currentPath, targetNs);
-                        ShowDialog(ctx, "Copy Failed", $"Copy failed: {ex.Message}");
-                    }
                 })));
 
         return stack;

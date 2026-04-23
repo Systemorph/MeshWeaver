@@ -113,8 +113,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         // Act
         var response = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference(["storage"])),
-            o => o.WithTarget(client.Address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(client.Address));
 
         // Assert
         response.Should().NotBeNull();
@@ -147,8 +146,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         // Act - requesting the collection should return empty/null because source doesn't exist
         var response = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference(["files"])),
-            o => o.WithTarget(client.Address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(client.Address));
 
         // Assert - response should have no configs because the source collection wasn't found
         response.Should().NotBeNull();
@@ -174,8 +172,7 @@ public class MapContentCollectionTest(ITestOutputHelper output) : MonolithMeshTe
         // Act - request all collection configurations (empty array)
         var response = await client.AwaitResponse(
             new GetDataRequest(new ContentCollectionReference()),
-            o => o.WithTarget(client.Address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(client.Address));
 
         // Assert
         response.Should().NotBeNull();

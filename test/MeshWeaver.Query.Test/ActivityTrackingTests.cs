@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -22,12 +24,12 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task Catalog_NoActivity_FallsBackToActualNodes()
     {
         // Arrange - create nodes but no activity
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with
         {
             Name = "Acme",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/contoso") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with
         {
             Name = "Contoso",
             NodeType = "Markdown"
@@ -46,12 +48,12 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task SourceActivity_ReturnsMainNodesOnly()
     {
         // Arrange - Create main content node and Activity satellite
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log1") with
         {
             Name = "Activity Log 1",
             NodeType = "Activity",
@@ -79,17 +81,17 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     public async Task Catalog_SearchWithQuery_FiltersResults()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with
         {
             Name = "Acme Corporation",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/contoso") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with
         {
             Name = "Contoso Ltd",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/fabrikam") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/fabrikam") with
         {
             Name = "Fabrikam Inc",
             NodeType = "Markdown"
@@ -108,12 +110,12 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     public async Task Catalog_TextSearch_FiltersResults()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("doc/report1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("doc/report1") with
         {
             Name = "Annual Financial Report 2024",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("doc/memo1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("doc/memo1") with
         {
             Name = "Team Meeting Notes",
             NodeType = "Markdown"
@@ -134,7 +136,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         // Arrange - create 10 items
         for (int i = 0; i < 10; i++)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"item/item{i:D2}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"item/item{i:D2}") with
             {
                 Name = $"Item {i:D2}",
                 NodeType = "Markdown"
@@ -165,7 +167,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         // Arrange - create 5 items
         for (int i = 0; i < 5; i++)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"test/node{i}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"test/node{i}") with
             {
                 Name = $"Node {i}",
                 NodeType = "Markdown"
@@ -193,17 +195,17 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     public async Task Catalog_NodeTypeFilter_FiltersCorrectly()
     {
         // Arrange - Create nodes with different types
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/project1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("data/project1") with
         {
             Name = "Project Alpha",
             NodeType = "Code"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("data/doc1") with
         {
             Name = "Document One",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/project2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("data/project2") with
         {
             Name = "Project Beta",
             NodeType = "Code"
@@ -233,19 +235,19 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
     public async Task SourceActivity_ReturnsMainNodesOnly()
     {
         // Arrange - create main content nodes and Activity satellites
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log1") with
         {
             Name = "Activity Log 1",
             NodeType = "Activity",
             MainNode = "org/alpha",
             Content = new ActivityLog("DataUpdate") { HubPath = "org/alpha" }
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha/_activity/log2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/alpha/_activity/log2") with
         {
             Name = "Activity Log 2",
             NodeType = "Activity",
@@ -269,12 +271,12 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
         // Arrange - create main nodes and satellites
         for (var i = 0; i < 5; i++)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"org/node{i}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"org/node{i}") with
             {
                 Name = $"Node {i}",
                 NodeType = "Markdown"
             });
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"org/node{i}/_activity/log{i}") with
+            await NodeFactory.CreateNode(MeshNode.FromPath($"org/node{i}/_activity/log{i}") with
             {
                 Name = $"Activity {i}",
                 NodeType = "Activity",
@@ -296,24 +298,24 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
     public async Task SourceActivity_WithNamespaceFilter()
     {
         // Arrange - create main nodes with Activity satellites in different namespaces
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("projA/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("projA/doc1") with
         {
             Name = "Doc 1",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("projA/doc1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("projA/doc1/_activity/log1") with
         {
             Name = "Doc1 Activity",
             NodeType = "Activity",
             MainNode = "projA/doc1",
             Content = new ActivityLog("DataUpdate") { HubPath = "projA/doc1" }
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("projB/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("projB/doc2") with
         {
             Name = "Doc 2",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("projB/doc2/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("projB/doc2/_activity/log1") with
         {
             Name = "Doc2 Activity",
             NodeType = "Activity",

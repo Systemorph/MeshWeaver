@@ -38,8 +38,7 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
 
         // Create a node
         await CreateNodeAsync(
-            new MeshNode("test-doc", "User/rbuergi") { Name = "Test Doc", NodeType = "Markdown" },
-            ct);
+            new MeshNode("test-doc", "User/rbuergi") { Name = "Test Doc", NodeType = "Markdown" });
 
         // Simulate what happens during thread execution:
         // 1. Set user context (normally done by ExecuteMessageAsync)
@@ -79,8 +78,7 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
                 Name = "Original",
                 NodeType = "Markdown",
                 Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Original" },
-            },
-            ct);
+            });
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         // Capture the active circuit context from DevLogin so the simulated chat carries

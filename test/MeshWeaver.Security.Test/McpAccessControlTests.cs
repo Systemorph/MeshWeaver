@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Blazor.AI;
@@ -66,7 +68,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
             }
         };
 
-        await NodeFactory.CreateNodeAsync(tokenNode, ct: TestTimeout);
+        await NodeFactory.CreateNode(tokenNode);
         return rawToken;
     }
 
@@ -105,38 +107,38 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         accessService.SetCircuitContext(new AccessContext { ObjectId = "setup-admin", Name = "Setup Admin" });
 
         // Create namespace nodes
-        await NodeFactory.CreateNodeAsync(new MeshNode("SharedOrg")
+        await NodeFactory.CreateNode(new MeshNode("SharedOrg")
         {
             Name = "Shared Organization",
             NodeType = "Group",
-        }, ct: TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("Public", "SharedOrg")
+        await NodeFactory.CreateNode(new MeshNode("Public", "SharedOrg")
         {
             Name = "Public Project",
             NodeType = "Markdown",
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Public\nInitial content." },
-        }, ct: TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("Confidential", "SharedOrg")
+        await NodeFactory.CreateNode(new MeshNode("Confidential", "SharedOrg")
         {
             Name = "Confidential Project",
             NodeType = "Markdown",
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Confidential" },
-        }, ct: TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("PrivateOrg")
+        await NodeFactory.CreateNode(new MeshNode("PrivateOrg")
         {
             Name = "Private Organization",
             NodeType = "Group",
-        }, ct: TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("Secret", "PrivateOrg")
+        await NodeFactory.CreateNode(new MeshNode("Secret", "PrivateOrg")
         {
             Name = "Secret Data",
             NodeType = "Markdown",
             Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Secret" },
-        }, ct: TestTimeout);
+        });
 
         // Create API tokens for test users (while admin context is active)
         _tokenUser1 = await CreateApiTokenAsync(User1, "User One");
@@ -157,7 +159,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
             new PartitionAccessPolicy
             {
                 BreaksInheritance = true,
-            }, TestTimeout);
+            });
 
         // Re-grant User2 as Editor on Confidential (after inheritance break)
         await securityService.AddUserRoleAsync(User2, "Editor", "SharedOrg/Confidential", "system", TestTimeout);

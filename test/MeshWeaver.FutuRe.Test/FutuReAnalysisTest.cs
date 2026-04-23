@@ -114,8 +114,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Initializing hub for FutuRe/EuropeRe...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -151,8 +150,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Initializing hub for FutuRe/AmericasIns...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -188,8 +186,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Initializing hub for FutuRe/AsiaRe...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -355,8 +352,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Initializing hub for FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -391,8 +387,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
@@ -433,8 +428,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
@@ -516,8 +510,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Initializing hub for FutuRe/EuropeRe/Analysis...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         // null area = mimics browser navigation to /FutuRe/EuropeRe/Analysis
@@ -623,8 +616,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Ping to ensure group hub is created
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(groupAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(groupAddress));
 
         // Get the group hub directly
         var groupHub = Mesh.GetHostedHub(groupAddress, HostedHubCreation.Never);
@@ -782,8 +774,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
@@ -869,8 +860,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Initializing hub for FutuRe/Analysis/AnnualReport...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -899,8 +889,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/Analysis/AnnualReport");
 
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -1009,8 +998,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/Analysis/AnnualReport");
 
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -1171,8 +1159,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             var buAddress = new Address($"FutuRe/{bu}/Analysis");
             await client.AwaitResponse(
                 new PingRequest(),
-                o => o.WithTarget(buAddress),
-                ct);
+                o => o.WithTarget(buAddress));
         }
     }
 
@@ -1186,8 +1173,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(areaName);

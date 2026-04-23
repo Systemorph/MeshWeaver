@@ -44,7 +44,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Register the NodeType with the PullPastPosts layout area wired in —
         // this is the exact Configuration string that lives in prod.
-        await NodeFactory.CreateNodeAsync(new MeshNode("LinkedInProfile", "Systemorph")
+        await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {
             Name = "LinkedIn Profile",
             NodeType = MeshNode.NodeTypePath,
@@ -57,13 +57,13 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
                     ".AddLayout(layout => layout.WithView(\"PullPastPosts\", LinkedInPullActions.PullPastPosts))",
                 ShowChildrenInDetails = false,
             }
-        }, ct);
+        });
 
         await CreateCodeAsync("LinkedInProfile", LinkedInProfileSource, ct);
         await CreateCodeAsync("LinkedInPullActions", LinkedInPullActionsSource, ct);
 
         var instancePath = $"{NodeTypePath}/test-profile";
-        await NodeFactory.CreateNodeAsync(new MeshNode("test-profile", NodeTypePath)
+        await NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
         {
             Name = "Roland",
             NodeType = NodeTypePath,
@@ -73,7 +73,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
                 ["displayName"] = "Roland",
                 ["connectedAt"] = DateTimeOffset.UtcNow,
             }
-        }, ct);
+        });
 
         // Render the PullPastPosts area. In the test mesh LinkedInPublisher is
         // NOT registered in DI, so the area hits its "publisher is null" branch
@@ -89,12 +89,12 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     private Task CreateCodeAsync(string id, string source, CancellationToken ct) =>
-        NodeFactory.CreateNodeAsync(new MeshNode(id, SourceNamespace)
+        NodeFactory.CreateNode(new MeshNode(id, SourceNamespace)
         {
             Name = id,
             NodeType = "Code",
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
-        }, ct);
+        });
 
     private async Task<UiControl> RenderAreaAsync(string path, string area, CancellationToken ct)
     {
@@ -191,7 +191,7 @@ public class LinkedInPullActionsTest(ITestOutputHelper output) : MonolithMeshTes
                                 ["likes"] = past.Stats?.Likes ?? 0,
                             }
                         };
-                        try { await mesh.CreateNodeAsync(node); imported++; } catch { }
+                        try { await mesh.CreateNode(node); imported++; } catch { }
                     }
 
                     return (UiControl?)Controls.Markdown($"## Pull past posts done\n\nImported: {imported}, skipped: {skipped}.");

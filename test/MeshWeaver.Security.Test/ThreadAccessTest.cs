@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -57,7 +59,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 Content = new MeshThread()
             };
 
-            var created = await NodeFactory.CreateNodeAsync(node, TestTimeout);
+            var created = await NodeFactory.CreateNode(node);
 
             created.Should().NotBeNull();
             created.State.Should().Be(MeshNodeState.Active);
@@ -82,12 +84,12 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         {
             // Create thread first
             var threadPath = $"User/{userId}/{Guid.NewGuid().AsString()}";
-            await NodeFactory.CreateNodeAsync(new MeshNode(threadPath)
+            await NodeFactory.CreateNode(new MeshNode(threadPath)
             {
                 Name = "Thread for Messages",
                 NodeType = ThreadNodeType.NodeType,
                 Content = new MeshThread()
-            }, TestTimeout);
+            });
 
             // Create message under thread
             var msgId = Guid.NewGuid().AsString();
@@ -103,7 +105,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 }
             };
 
-            var created = await NodeFactory.CreateNodeAsync(msgNode, TestTimeout);
+            var created = await NodeFactory.CreateNode(msgNode);
 
             created.Should().NotBeNull();
             created.Path.Should().Be(msgPath);
@@ -133,7 +135,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 Content = new MeshThread()
             };
 
-            var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
+            var act = async () => await NodeFactory.CreateNode(node);
 
             await act.Should().ThrowAsync<UnauthorizedAccessException>();
         }
@@ -153,12 +155,12 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var owner = "thread-owner-2";
         LoginAs(owner);
         var threadPath = $"User/{owner}/{Guid.NewGuid().AsString()}";
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath)
+        await NodeFactory.CreateNode(new MeshNode(threadPath)
         {
             Name = "Private Thread",
             NodeType = ThreadNodeType.NodeType,
             Content = new MeshThread()
-        }, TestTimeout);
+        });
 
         // Switch to attacker
         LoginAs("attacker");
@@ -177,7 +179,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 }
             };
 
-            var act = async () => await NodeFactory.CreateNodeAsync(msgNode, TestTimeout);
+            var act = async () => await NodeFactory.CreateNode(msgNode);
 
             await act.Should().ThrowAsync<UnauthorizedAccessException>();
         }
@@ -225,7 +227,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             };
 
             // Should fail because Thread requires Update, not Create
-            var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
+            var act = async () => await NodeFactory.CreateNode(node);
             await act.Should().ThrowAsync<UnauthorizedAccessException>();
         }
         finally
@@ -259,7 +261,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 Content = new MeshThread()
             };
 
-            var created = await NodeFactory.CreateNodeAsync(node, TestTimeout);
+            var created = await NodeFactory.CreateNode(node);
 
             created.Should().NotBeNull();
             created.State.Should().Be(MeshNodeState.Active);
@@ -283,12 +285,12 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             var threadPath = $"User/{userId}/{Guid.NewGuid().AsString()}";
-            await NodeFactory.CreateNodeAsync(new MeshNode(threadPath)
+            await NodeFactory.CreateNode(new MeshNode(threadPath)
             {
                 Name = "Readable Thread",
                 NodeType = ThreadNodeType.NodeType,
                 Content = new MeshThread()
-            }, TestTimeout);
+            });
 
             // Read back
             var node = await MeshQuery.QueryAsync<MeshNode>(
@@ -315,12 +317,12 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var owner = "owner-read-test";
         LoginAs(owner);
         var threadPath = $"User/{owner}/{Guid.NewGuid().AsString()}";
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath)
+        await NodeFactory.CreateNode(new MeshNode(threadPath)
         {
             Name = "Private Thread",
             NodeType = ThreadNodeType.NodeType,
             Content = new MeshThread()
-        }, TestTimeout);
+        });
 
         // Switch to different user
         LoginAs("reader-no-access");

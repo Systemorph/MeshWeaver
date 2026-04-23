@@ -41,11 +41,9 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Admin", "IdentityTest", "system",
-            TestContext.Current.CancellationToken);
+            TestUsers.Admin.ObjectId, "Admin", "IdentityTest", "system");
         await securityService.AddUserRoleAsync(
-            "Viewer1", "Viewer", "IdentityTest", "system",
-            TestContext.Current.CancellationToken);
+            "Viewer1", "Viewer", "IdentityTest", "system");
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -66,8 +64,7 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         var nodeAddress = new Address(NodePath);
 
         await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            new PingRequest(), o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -84,8 +81,7 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         var nodeAddress = new Address(NodePath);
 
         await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            new PingRequest(), o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -113,8 +109,7 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         // should have Identity = "Viewer1" (stamped from CircuitContext)
         var nodeAddress = new Address(NodePath);
         await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            new PingRequest(), o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(

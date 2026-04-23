@@ -85,8 +85,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(acmeAddress));
 
         response.Should().NotBeNull();
     }
@@ -103,8 +102,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(projectTypeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(projectTypeAddress));
 
         response.Should().NotBeNull();
     }
@@ -121,8 +119,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(todoTypeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(todoTypeAddress));
 
         response.Should().NotBeNull();
     }
@@ -139,8 +136,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(productLaunchAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(productLaunchAddress));
 
         response.Should().NotBeNull();
     }
@@ -157,8 +153,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(taskAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(taskAddress));
 
         response.Should().NotBeNull();
     }

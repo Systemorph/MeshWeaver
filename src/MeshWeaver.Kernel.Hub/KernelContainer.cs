@@ -71,19 +71,14 @@ public class KernelContainer(IServiceProvider serviceProvider)
             {
                 DisposeOnTimeout(hub);
                 // Delete the kernel session MeshNode when the hub is disposed
-                hub.RegisterForDisposal(async (_, _) =>
+                hub.RegisterForDisposal((_, _) =>
                 {
-                    try
-                    {
-                        var meshService = hub.ServiceProvider.GetService<IMeshService>();
-                        var nodePath = $"{hub.Address}";
-                        if (meshService != null)
-                            await meshService.DeleteNodeAsync(nodePath);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Failed to delete kernel session node on dispose");
-                    }
+                    var meshService = hub.ServiceProvider.GetService<IMeshService>();
+                    var nodePath = $"{hub.Address}";
+                    meshService?.DeleteNode(nodePath).Subscribe(
+                        _ => { },
+                        ex => logger.LogWarning(ex, "Failed to delete kernel session node on dispose"));
+                    return Task.CompletedTask;
                 });
                 return Task.CompletedTask;
             })

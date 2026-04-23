@@ -98,8 +98,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine("Initializing hub for CollaborativeEditing.md...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(docAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -130,8 +129,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine("Initializing hub for document...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(docAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -161,8 +159,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine("Initializing hub for comment c1 (has reply)...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(commentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(commentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -193,8 +190,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine("Initializing hub for reply node directly...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(replyAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(replyAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -224,8 +220,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine("Initializing hub for comment c2 (no replies)...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(commentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(commentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();

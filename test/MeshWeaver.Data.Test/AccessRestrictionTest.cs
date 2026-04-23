@@ -111,8 +111,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -141,8 +140,7 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -260,8 +258,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -290,8 +287,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -327,8 +323,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Delete([entityToDelete], "user1"),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -363,8 +358,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Delete([entityToDelete], "anyuser"),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -436,8 +430,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Delete([entityToDelete], "anonymous"),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -474,8 +467,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Delete([entityToDelete], "authuser"),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -497,8 +489,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -588,8 +579,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert - Should fail at global restriction (RequireAuthentication)
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -616,8 +606,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert - Should pass global but fail type-specific (AdminOnlyCreate)
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -644,8 +633,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         // Act
         var response = await client.AwaitResponse(
             new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert - Should pass both global and type-specific restrictions
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -672,8 +660,7 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
         // Act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            TestTimeout);
+            o => o.WithTarget(CreateClientAddress()));
 
         // Assert - Update should succeed (not restricted to Admin)
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;

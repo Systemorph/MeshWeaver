@@ -141,8 +141,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     {
         // Give creator Admin role so they can create organizations
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync("Roland", "Admin", null, "system",
-            TestContext.Current.CancellationToken);
+        await securityService.AddUserRoleAsync("Roland", "Admin", null, "system");
 
         var orgNode = new MeshNode("Globex")
         {

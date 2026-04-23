@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -72,7 +73,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             Name = "Test Node v0",
             NodeType = "Markdown"
         };
-        await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(node);
 
         for (var i = 1; i <= updateCount; i++)
         {
@@ -81,7 +82,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 Name = $"Test Node v{i}",
                 NodeType = "Markdown"
             };
-            await NodeFactory.UpdateNodeAsync(updated, TestContext.Current.CancellationToken);
+            await NodeFactory.UpdateNode(updated);
         }
 
         return path;
@@ -102,8 +103,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.VersionsArea);
@@ -139,8 +139,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.VersionsArea);
@@ -177,8 +176,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         // Find the first version number via IVersionQuery
         var versionQuery = Mesh.ServiceProvider.GetService<IVersionQuery>();
@@ -231,8 +229,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         // Menu is rendered as part of any layout area via the predicate-based renderer;

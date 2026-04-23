@@ -60,8 +60,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         // Grant the user Editor role on their own namespace (simulates UserScopeGrantHandler)
-        await securityService.AddUserRoleAsync("ChatUser", "Editor", UserPath, "system",
-            TestContext.Current.CancellationToken);
+        await securityService.AddUserRoleAsync("ChatUser", "Editor", UserPath, "system");
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
