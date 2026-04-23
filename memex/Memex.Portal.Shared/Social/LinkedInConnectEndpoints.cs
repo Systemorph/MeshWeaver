@@ -84,12 +84,13 @@ public static class LinkedInConnectEndpoints
                 + $"&client_id={Uri.EscapeDataString(clientId!)}"
                 + $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"
                 + $"&state={Uri.EscapeDataString(state)}"
-                // r_member_social (Community Management API engagement reads) requires
-                // explicit app review on LinkedIn — drop it from the default scope so
-                // OAuth completes for apps that don't have it. Engagement pulls
-                // (comments/likes per post) will return 403 from /v2/socialActions/*
-                // until the scope is granted, and the publisher logs + skips them.
-                + "&scope=" + Uri.EscapeDataString("openid profile email w_member_social");
+                // Keep scopes minimal: openid/profile/email is plain OIDC sign-in,
+                // which is all we need for the analytics dashboard (posts come in
+                // via CSV import since r_member_social is closed). w_member_social
+                // (publishing) is not requested — it causes LinkedIn to render
+                // "share on your behalf" on the consent screen which isn't what
+                // this flow is for today.
+                + "&scope=" + Uri.EscapeDataString("openid profile email");
 
             return Results.Redirect(url);
         }).RequireAuthorization();
