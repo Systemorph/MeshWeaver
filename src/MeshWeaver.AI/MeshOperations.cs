@@ -248,8 +248,14 @@ public class MeshOperations
                     // Verify path match — the mesh router resolves non-existent paths
                     // to their nearest ancestor hub, which then answers with ITS OWN
                     // MeshNode. Treat mismatches as not-found so callers don't end up
-                    // patching the wrong node.
-                    if (node != null && !string.Equals(node.Path, resolvedPath, StringComparison.Ordinal))
+                    // patching the wrong node. Also treat Deleted nodes as not-found:
+                    // the hub may still have the MeshNode in its workspace cache after
+                    // a delete and we don't want stale reads to look like the node
+                    // still exists.
+                    if (node != null && (
+                        !string.Equals(node.Path, resolvedPath, StringComparison.Ordinal) ||
+                        node.State == MeshNodeState.Deleted ||
+                        node.State == MeshNodeState.Rejected))
                         node = null;
 
                     EmitOnce(node);
