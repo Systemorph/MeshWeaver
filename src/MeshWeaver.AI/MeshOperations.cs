@@ -561,7 +561,15 @@ public class MeshOperations
                        "Provide a non-empty human-readable display name, or omit the 'name' key to keep the current name.";
 
             var versionBefore = existing.Version;
-            var beforeJson = SerialisePretty(existing);
+            // Pre-serialise the before snapshot outside the subscribe callback — an
+            // exception here propagates as the expected JsonException / InvalidOpEx
+            // and the TCS never runs. Inside the subscribe, any throw would leak as
+            // an unhandled observer exception and the TCS would hang forever, so all
+            // work there is guarded below.
+            string? beforeJson;
+            try { beforeJson = SerialisePretty(existing); }
+            catch { beforeJson = null; }
+
             var patchTcs = new TaskCompletionSource<string>();
             mesh.UpdateNode(merged).Subscribe(
                 updated =>
@@ -582,16 +590,28 @@ public class MeshOperations
                     // when persistence did commit the change (verified by re-fetching
                     // the node). Trust the Subscribe onNext as success; if the write
                     // actually failed, the onError branch below fires.
-                    var afterJson = SerialisePretty(updated);
-                    var diff = DiffUtil.UnifiedDiff(beforeJson, afterJson, updated.Path);
                     var versionText = updated.Version > versionBefore
                         ? $" (v{versionBefore} → v{updated.Version})"
                         : "";
-                    // Plain-text status on the first line keeps the response legible
-                    // when rendered raw; the ```diff fence below lets any MCP client
-                    // (or chat agent) render the delta with proper syntax highlight.
-                    patchTcs.TrySetResult(
-                        $"Patched: {updated.Path}{versionText}\n\n```diff\n{diff}```");
+                    try
+                    {
+                        var afterJson = SerialisePretty(updated);
+                        var diff = beforeJson is null
+                            ? ""
+                            : DiffUtil.UnifiedDiff(beforeJson, afterJson, updated.Path);
+                        patchTcs.TrySetResult(string.IsNullOrEmpty(diff)
+                            ? $"Patched: {updated.Path}{versionText}"
+                            : $"Patched: {updated.Path}{versionText}\n\n```diff\n{diff}```");
+                    }
+                    catch (Exception serExn)
+                    {
+                        // Serialisation / diff blew up on an exotic node content shape.
+                        // Fall back to the plain-text status so the caller still gets
+                        // a success signal — the mutation itself already committed.
+                        logger.LogWarning(serExn,
+                            "Patch succeeded but diff rendering failed for {Path}", updated.Path);
+                        patchTcs.TrySetResult($"Patched: {updated.Path}{versionText}");
+                    }
                 },
                 ex => patchTcs.TrySetResult($"Error patching {merged.Path}: {ex.Message}"));
             return await patchTcs.Task;
