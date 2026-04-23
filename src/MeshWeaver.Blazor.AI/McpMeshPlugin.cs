@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Security.Claims;
 using MeshWeaver.AI;
+using MeshWeaver.Kernel;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -63,8 +64,19 @@ public class McpMeshPlugin
             return rootHub;
         }
         var address = AddressExtensions.CreateMcpAddress(sessionId);
-        logger.LogDebug("MCP session hub at {Address}", address);
-        return rootHub.GetHostedHub(address, c => c, HostedHubCreation.Always);
+        logger.LogInformation("Materialising MCP session hub at {Address}", address);
+
+        // Inline the same config RouteAddressToHostedHub("mcp", ...) would have
+        // applied — register the kernel route so SubmitCodeRequest from inside the
+        // session hub resolves locally instead of bouncing to Orleans grain activation.
+        // Kept mirrored with McpNodeType.AddMcp; if you change one, change both.
+        return rootHub.GetHostedHub(
+            address,
+            sessionConfig => sessionConfig
+                .WithRoutes(r => r.RouteAddressToHostedHub(
+                    AddressExtensions.KernelType,
+                    ck => ck.AddKernelSubHubHandlers())),
+            HostedHubCreation.Always);
     }
 
     private static string? ResolveSessionId(HttpContext? ctx)
