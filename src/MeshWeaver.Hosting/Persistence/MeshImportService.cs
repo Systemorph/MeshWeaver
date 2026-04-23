@@ -100,7 +100,11 @@ public class MeshImportService : IMeshImportService
                     {
                         if (force)
                         {
-                            await _meshService.UpdateNodeAsync(sourceNode, ct);
+                            var updateTcs = new TaskCompletionSource<MeshNode>();
+                            _meshService.UpdateNode(sourceNode).Subscribe(
+                                n => updateTcs.TrySetResult(n),
+                                ex => updateTcs.TrySetException(ex));
+                            await updateTcs.Task.WaitAsync(ct);
                             nodesImported++;
                             _logger.LogDebug("Updated node {Path}", sourceNode.Path);
                         }
@@ -111,7 +115,11 @@ public class MeshImportService : IMeshImportService
                     }
                     else
                     {
-                        await _meshService.CreateNodeAsync(sourceNode, ct);
+                        var createTcs = new TaskCompletionSource<MeshNode>();
+                        _meshService.CreateNode(sourceNode).Subscribe(
+                            n => createTcs.TrySetResult(n),
+                            ex => createTcs.TrySetException(ex));
+                        await createTcs.Task.WaitAsync(ct);
                         nodesImported++;
                         _logger.LogDebug("Created node {Path}", sourceNode.Path);
                     }
@@ -143,7 +151,11 @@ public class MeshImportService : IMeshImportService
                     ct.ThrowIfCancellationRequested();
                     try
                     {
-                        await _meshService.DeleteNodeAsync(path, ct);
+                        var deleteTcs = new TaskCompletionSource<bool>();
+                        _meshService.DeleteNode(path).Subscribe(
+                            r => deleteTcs.TrySetResult(r),
+                            ex => deleteTcs.TrySetException(ex));
+                        await deleteTcs.Task.WaitAsync(ct);
                         nodesRemoved++;
                     }
                     catch (Exception ex)

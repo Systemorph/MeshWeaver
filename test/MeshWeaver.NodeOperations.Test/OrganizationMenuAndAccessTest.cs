@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using Memex.Portal.Shared;
@@ -46,7 +48,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Test Organization" }
         };
-        var created = await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        var created = await NodeFactory.CreateNode(orgNode);
         created.Should().NotBeNull();
 
         // Check effective permissions for the creator (admin user from TestBase)
@@ -62,7 +64,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         permissions.Should().HaveFlag(Permission.Delete, "Admin should have Delete permission");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 
     /// <summary>
@@ -84,7 +86,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Test Organization" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Verify the creator has Admin permissions (PostCreationHandler calls AddUserRoleAsync)
         var securityService2 = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -111,7 +113,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         creatorPerms.Should().HaveFlag(Permission.Delete, "Creator should have Delete from Admin role assignment");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 
     [Fact(Timeout = 30000)]
@@ -126,7 +128,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Test Organization" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Check creatable types for the organization
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
@@ -140,7 +142,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         typeNames.Should().Contain("Agent", "Agent should be creatable under Organization");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 
     [Fact(Timeout = 30000)]
@@ -155,11 +157,11 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Test Organization" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Create a child node under the organization
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("Overview", orgId) { Name = "Overview", NodeType = "Markdown" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("Overview", orgId) { Name = "Overview", NodeType = "Markdown" });
 
         // Query children under the organization namespace
         var children = await MeshQuery
@@ -173,6 +175,6 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
             "Overview markdown page should exist as child");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 }

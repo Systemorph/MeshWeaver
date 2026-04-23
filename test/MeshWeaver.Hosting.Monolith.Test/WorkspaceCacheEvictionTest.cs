@@ -34,9 +34,8 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         var ct = new CancellationTokenSource(20.Seconds()).Token;
 
         var path = $"{TestPartition}/cache-evict";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("cache-evict", TestPartition) { Name = "Original", NodeType = "Markdown" },
-            ct);
+        await NodeFactory.CreateNode(
+            new MeshNode("cache-evict", TestPartition) { Name = "Original", NodeType = "Markdown" });
 
         // First subscription warms up the singleton workspace's _remoteStreamCache.
         var client1 = GetClient(c => c.AddData());
@@ -61,7 +60,7 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
             break;
         }
         current.Should().NotBeNull();
-        await NodeFactory.UpdateNodeAsync(current! with { Name = "Updated" }, ct);
+        await NodeFactory.UpdateNode(current! with { Name = "Updated" });
 
         // Give the change-feed handler a moment to evict.
         await Task.Delay(150, ct);
@@ -90,9 +89,8 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
         var ct = new CancellationTokenSource(20.Seconds()).Token;
 
         var path = $"{TestPartition}/cache-recreate";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("cache-recreate", TestPartition) { Name = "First", NodeType = "Markdown" },
-            ct);
+        await NodeFactory.CreateNode(
+            new MeshNode("cache-recreate", TestPartition) { Name = "First", NodeType = "Markdown" });
 
         // Warm cache with a subscription.
         var client1 = GetClient(c => c.AddData());
@@ -108,11 +106,10 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
 
         // Delete + recreate — emits Deleted then Created on the change feed. Either
         // event must clear the cache entry for the path.
-        await NodeFactory.DeleteNodeAsync(path, ct);
+        await NodeFactory.DeleteNode(path);
         await Task.Delay(50, ct);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("cache-recreate", TestPartition) { Name = "Second", NodeType = "Markdown" },
-            ct);
+        await NodeFactory.CreateNode(
+            new MeshNode("cache-recreate", TestPartition) { Name = "Second", NodeType = "Markdown" });
         await Task.Delay(150, ct);
 
         var client2 = GetClient(c => c.AddData());

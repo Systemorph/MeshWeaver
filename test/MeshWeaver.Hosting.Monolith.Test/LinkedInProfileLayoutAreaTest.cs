@@ -49,7 +49,7 @@ public class LinkedInProfileLayoutAreaTest(ITestOutputHelper output) : MonolithM
         //    prod NodeType node does. (PostAnalytics/PostComment NodeTypes
         //    aren't registered here — the analytics block will render its
         //    "no analytics yet" empty-state instead of charts.)
-        await NodeFactory.CreateNodeAsync(new MeshNode("LinkedInProfile", "Systemorph")
+        await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {
             Name = "LinkedIn Profile",
             NodeType = MeshNode.NodeTypePath,
@@ -61,7 +61,7 @@ public class LinkedInProfileLayoutAreaTest(ITestOutputHelper output) : MonolithM
                                 ".AddLayout(layout => layout.WithView(\"Overview\", LinkedInProfileLayoutAreas.Overview))",
                 ShowChildrenInDetails = false,
             }
-        }, ct);
+        });
 
         // 2. Four Code pieces — schema record, layout area, menu provider, analytics renderer.
         await CreateCodeAsync("LinkedInProfile", LinkedInProfileSource, ct);
@@ -70,7 +70,7 @@ public class LinkedInProfileLayoutAreaTest(ITestOutputHelper output) : MonolithM
 
         // 3. Sample profile instance.
         var instancePath = $"{NodeTypePath}/test-profile";
-        await NodeFactory.CreateNodeAsync(new MeshNode("test-profile", NodeTypePath)
+        await NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
         {
             Name = "Roland Bürgi",
             NodeType = NodeTypePath,
@@ -83,7 +83,7 @@ public class LinkedInProfileLayoutAreaTest(ITestOutputHelper output) : MonolithM
                 ["profileUrl"] = "https://www.linkedin.com/in/rolandbuergi",
                 ["connectedAt"] = DateTimeOffset.UtcNow,
             }
-        }, ct);
+        });
 
         // 4. Render the Overview area.
         var control = await RenderOverviewAsync(instancePath, ct);
@@ -102,12 +102,12 @@ public class LinkedInProfileLayoutAreaTest(ITestOutputHelper output) : MonolithM
     }
 
     private Task CreateCodeAsync(string id, string source, CancellationToken ct) =>
-        NodeFactory.CreateNodeAsync(new MeshNode(id, SourceNamespace)
+        NodeFactory.CreateNode(new MeshNode(id, SourceNamespace)
         {
             Name = id,
             NodeType = "Code",
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
-        }, ct);
+        });
 
     private async Task<UiControl> RenderOverviewAsync(string path, CancellationToken ct)
     {

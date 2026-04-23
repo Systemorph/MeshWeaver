@@ -36,8 +36,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         var client = GetClient();
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
     }
 
     /// <summary>
@@ -233,8 +232,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
             await client.AwaitResponse(
                 new GetDataRequest(new CollectionsReference(typeof(TestItem).FullName!)),
-                o => o.WithTarget(groupAddress),
-                TestContext.Current.CancellationToken));
+                o => o.WithTarget(groupAddress)));
 
         Output.WriteLine($"GetDataRequest error: {ex.GetType().Name}: {ex.Message}");
         ex.Should().NotBeOfType<TimeoutException>("should get error, not timeout");
@@ -267,8 +265,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
             await client.AwaitResponse(
                 new DataChangeRequest { Updates = [new TestItem("1", "Test")] },
-                o => o.WithTarget(groupAddress),
-                TestContext.Current.CancellationToken));
+                o => o.WithTarget(groupAddress)));
 
         Output.WriteLine($"DataChangeRequest error: {ex.GetType().Name}: {ex.Message}");
         ex.Should().NotBeOfType<TimeoutException>("should get error, not timeout");

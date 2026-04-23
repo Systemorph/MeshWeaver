@@ -157,56 +157,57 @@ public static class ImportLayoutArea
         stack = stack.WithView(Controls.Button("Import")
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.ArrowImport())
-            .WithClickAction(async actx =>
+            .WithClickAction(actx =>
             {
-                var formValues = await actx.Host.Stream
-                    .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                var targetNs = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
-                var sourceNode = formValues.GetValueOrDefault("sourceNode")?.ToString()?.Trim();
-                var force = formValues.GetValueOrDefault("force") is true or "True" or "true";
-
-                if (string.IsNullOrWhiteSpace(sourceNode))
-                {
-                    ShowErrorDialog(actx, "Validation Error", "Please select a source node.");
-                    return;
-                }
-
-                try
-                {
-                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                    logger?.LogInformation(
-                        "Copying node tree from {Source} to namespace {Target}, force={Force}",
-                        sourceNode, targetNs, force);
-
-                    var nodesCopied = await NodeCopyHelper.CopyNodeTreeAsync(
-                        meshQuery, nodeFactory, host.Hub, sourceNode, targetNs, force, logger);
-
-                    logger?.LogInformation("Import complete: {Count} nodes copied", nodesCopied);
-
-                    // Show success dialog, then navigate to destination
-                    var successDialog = Controls.Dialog(
-                        Controls.Markdown($"**Import Complete**\n\nCopied **{nodesCopied}** node(s) to `{(string.IsNullOrEmpty(targetNs) ? "root" : targetNs)}`."),
-                        "Import Complete"
-                    ).WithSize("M").WithClosable(true).WithCloseAction(ctx =>
+                actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                    .Take(1)
+                    .Subscribe(formValues =>
                     {
-                        var overviewUrl = string.IsNullOrEmpty(targetNs)
-                            ? MeshNodeLayoutAreas.BuildUrl(sourceNode.Split('/').Last(), MeshNodeLayoutAreas.OverviewArea)
-                            : MeshNodeLayoutAreas.BuildUrl(targetNs, MeshNodeLayoutAreas.OverviewArea);
-                        actx.NavigateTo(overviewUrl);
-                        return Task.CompletedTask;
+                        var targetNs = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
+                        var sourceNode = formValues.GetValueOrDefault("sourceNode")?.ToString()?.Trim();
+                        var force = formValues.GetValueOrDefault("force") is true or "True" or "true";
+
+                        if (string.IsNullOrWhiteSpace(sourceNode))
+                        {
+                            ShowErrorDialog(actx, "Validation Error", "Please select a source node.");
+                            return;
+                        }
+
+                        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                        logger?.LogInformation(
+                            "Copying node tree from {Source} to namespace {Target}, force={Force}",
+                            sourceNode, targetNs, force);
+
+                        NodeCopyHelper.CopyNodeTree(
+                                meshQuery, nodeFactory, host.Hub, sourceNode, targetNs, force, logger)
+                            .Subscribe(
+                                nodesCopied =>
+                                {
+                                    logger?.LogInformation("Import complete: {Count} nodes copied", nodesCopied);
+
+                                    var successDialog = Controls.Dialog(
+                                        Controls.Markdown($"**Import Complete**\n\nCopied **{nodesCopied}** node(s) to `{(string.IsNullOrEmpty(targetNs) ? "root" : targetNs)}`."),
+                                        "Import Complete"
+                                    ).WithSize("M").WithClosable(true).WithCloseAction(ctx =>
+                                    {
+                                        var overviewUrl = string.IsNullOrEmpty(targetNs)
+                                            ? MeshNodeLayoutAreas.BuildUrl(sourceNode.Split('/').Last(), MeshNodeLayoutAreas.OverviewArea)
+                                            : MeshNodeLayoutAreas.BuildUrl(targetNs, MeshNodeLayoutAreas.OverviewArea);
+                                        actx.NavigateTo(overviewUrl);
+                                        return Task.CompletedTask;
+                                    });
+                                    actx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
+                                },
+                                ex =>
+                                {
+                                    logger?.LogError(ex, "Import failed for {Source} -> {Target}", sourceNode, targetNs);
+                                    var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
+                                        ? "You do not have permission to import nodes here."
+                                        : $"Import failed: {ex.Message}";
+                                    ShowErrorDialog(actx, "Import Failed", errorMsg);
+                                });
                     });
-                    actx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
-                }
-                catch (Exception ex)
-                {
-                    logger?.LogError(ex, "Import failed for {Source} -> {Target}", sourceNode, targetNs);
-                    var errorMsg = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
-                        ? "You do not have permission to import nodes here."
-                        : $"Import failed: {ex.Message}";
-                    ShowErrorDialog(actx, "Import Failed", errorMsg);
-                }
             }));
 
         return stack;

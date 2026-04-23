@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -99,7 +101,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
+        var createdNode = await NodeFactory.CreateNode(node);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -122,7 +124,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         retrievedComment.Text.Should().Be("This is a test comment");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(commentPath);
     }
 
     [Fact(Timeout = 10000)]
@@ -149,7 +151,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             NodeType = CommentNodeType.NodeType,
             Content = parentComment
         };
-        await NodeFactory.CreateNodeAsync(parentNode, TestTimeout);
+        await NodeFactory.CreateNode(parentNode);
 
         // Create reply as child of parent comment node (nested path)
         var replyId = Guid.NewGuid().AsString();
@@ -171,7 +173,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         // Act
-        var createdReply = await NodeFactory.CreateNodeAsync(replyNode, TestTimeout);
+        var createdReply = await NodeFactory.CreateNode(replyNode);
 
         // Assert
         createdReply.Should().NotBeNull();
@@ -185,7 +187,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         retrievedReply!.Path.Should().StartWith(parentCommentPath);
 
         // Cleanup: delete reply first, then parent
-        await NodeFactory.DeleteNodeAsync(replyPath, ct: TestTimeout);
-        await NodeFactory.DeleteNodeAsync(parentCommentPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(replyPath);
+        await NodeFactory.DeleteNode(parentCommentPath);
     }
 }

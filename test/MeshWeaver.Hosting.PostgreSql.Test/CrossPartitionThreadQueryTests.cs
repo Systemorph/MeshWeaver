@@ -55,8 +55,7 @@ public class CrossPartitionThreadQueryTests
             var schema = $"cp_thread_{org.ToLowerInvariant()}";
             var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(
                 schema,
-                partitionDef with { Namespace = org, Schema = schema },
-                ct);
+                partitionDef with { Namespace = org, Schema = schema });
             partitions[org] = (ds, adapter);
 
             // Root org node
@@ -197,7 +196,7 @@ public class CrossPartitionThreadQueryTests
         };
         var schema = "cp_thread_nocreated";
         var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(
-            schema, partitionDef with { Namespace = "TestOrg", Schema = schema }, ct);
+            schema, partitionDef with { Namespace = "TestOrg", Schema = schema });
 
         // Create a thread WITHOUT CreatedBy (reproduces the original bug)
         await adapter.WriteAsync(new MeshNode("orphan-thread-1234", "TestOrg/_Thread")
@@ -241,7 +240,7 @@ public class CrossPartitionThreadQueryTests
         };
         var schema = "cp_thread_case";
         var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(
-            schema, partitionDef with { Namespace = "CaseTest", Schema = schema }, ct);
+            schema, partitionDef with { Namespace = "CaseTest", Schema = schema });
 
         // Write with CamelCase options (production behavior)
         await adapter.WriteAsync(new MeshNode("case-thread-abcd", "CaseTest/_Thread")

@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -60,7 +62,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         try
         {
             // Act & Assert - CreateNodeAsync should throw UnauthorizedAccessException
-            var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
+            var act = async () => await NodeFactory.CreateNode(node);
             var exception = await act.Should().ThrowAsync<UnauthorizedAccessException>();
             exception.Which.Message.Should().Contain("Access denied", "Should indicate authorization failure");
             Output.WriteLine($"Exception thrown as expected: {exception.Which.Message}");
@@ -97,7 +99,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act - Use public CreateNodeAsync which goes through message-based validation
-        var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
+        var createdNode = await NodeFactory.CreateNode(node);
 
         // Assert
         createdNode.Should().NotBeNull("Node should be created");
@@ -112,7 +114,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(nodePath);
     }
 
     /// <summary>
@@ -144,7 +146,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             DesiredId = desiredId // User wants this as final Id
         };
 
-        var createdTransient = await NodeFactory.CreateTransientAsync(transientNode, TestTimeout);
+        var createdTransient = await NodeFactory.CreateTransient(transientNode);
         createdTransient.Should().NotBeNull("Transient node should be created");
         Output.WriteLine($"Transient node created at: {createdTransient.Path}");
 
@@ -157,14 +159,14 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Create the final node
-        var createdFinal = await NodeFactory.CreateNodeAsync(finalNode, TestTimeout);
+        var createdFinal = await NodeFactory.CreateNode(finalNode);
         createdFinal.Should().NotBeNull("Final node should be created");
         createdFinal.State.Should().Be(MeshNodeState.Active, "Final node should be Active");
         createdFinal.Path.Should().Be(finalPath, "Final node should be at desired path");
         Output.WriteLine($"Final node created at: {createdFinal.Path}");
 
         // Step 3: Delete the transient node
-        await NodeFactory.DeleteNodeAsync(transientPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(transientPath);
 
         // Verify: Transient should be gone, final should exist
         var transientAfterDelete = await MeshQuery.QueryAsync<MeshNode>($"path:{transientPath}").FirstOrDefaultAsync();
@@ -175,7 +177,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         finalAfterCreate!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(finalPath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(finalPath);
     }
 
     /// <summary>
@@ -205,7 +207,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateTransientAsync(node, TestTimeout);
+        var createdNode = await NodeFactory.CreateTransient(node);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -217,7 +219,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         fetchedNode!.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after fetch");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(nodePath);
     }
 
     /// <summary>
@@ -246,7 +248,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Transient
         };
 
-        var createdTransient = await NodeFactory.CreateTransientAsync(transientNode, TestTimeout);
+        var createdTransient = await NodeFactory.CreateTransient(transientNode);
         createdTransient.State.Should().Be(MeshNodeState.Transient);
 
         // Step 2: Confirm by creating with Active state via CreateNodeAsync
@@ -258,7 +260,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Active
         };
 
-        var confirmedNode = await NodeFactory.CreateNodeAsync(activeNode, TestTimeout);
+        var confirmedNode = await NodeFactory.CreateNode(activeNode);
 
         // Assert
         confirmedNode.Should().NotBeNull("Confirmed node should be returned");
@@ -271,7 +273,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNode(nodePath);
     }
 
     /// <summary>
@@ -299,7 +301,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
                 NodeType = ThreadNodeType.NodeType
             };
 
-            var created = await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
+            var created = await NodeFactory.CreateNode(threadNode);
 
             // Assert
             created.Should().NotBeNull("User should be able to create threads under their own User node");
@@ -336,7 +338,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
                 NodeType = ThreadNodeType.NodeType
             };
 
-            var act = async () => await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
+            var act = async () => await NodeFactory.CreateNode(threadNode);
 
             // Assert
             await act.Should().ThrowAsync<UnauthorizedAccessException>(

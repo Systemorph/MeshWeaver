@@ -55,8 +55,8 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
 
     private async Task<string> CreateContextNodeAsync(string path, CancellationToken ct)
     {
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(path) { Name = path, NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(path) { Name = path, NodeType = "Markdown" });
         return path;
     }
 

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -55,13 +57,13 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Update 3 times
         var updated1 = created with { Name = "V2" };
-        await NodeFactory.UpdateNodeAsync(updated1);
+        await NodeFactory.UpdateNode(updated1);
 
         var updated2 = updated1 with { Name = "V3" };
-        await NodeFactory.UpdateNodeAsync(updated2);
+        await NodeFactory.UpdateNode(updated2);
 
         var updated3 = updated2 with { Name = "V4" };
-        await NodeFactory.UpdateNodeAsync(updated3);
+        await NodeFactory.UpdateNode(updated3);
 
         // Act
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
@@ -91,7 +93,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Update to V2
         var updated = created with { Name = "V2" };
-        await NodeFactory.UpdateNodeAsync(updated);
+        await NodeFactory.UpdateNode(updated);
 
         // Act - get the first version
         var firstVersion = versionsAfterCreate.LastOrDefault();
@@ -122,10 +124,10 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         v1Version.Should().NotBeNull("there should be a version after create");
 
         // Update to V2
-        await NodeFactory.UpdateNodeAsync(created with { Name = "V2" });
+        await NodeFactory.UpdateNode(created with { Name = "V2" });
 
         // Update to V3
-        await NodeFactory.UpdateNodeAsync(created with { Name = "V3" });
+        await NodeFactory.UpdateNode(created with { Name = "V3" });
 
         // Capture all versions
         var allVersions = new List<MeshNodeVersion>();
@@ -163,8 +165,8 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var created = await CreateNodeAsync(node);
 
         // Update multiple times
-        await NodeFactory.UpdateNodeAsync(created with { Name = "Satellite V2" });
-        await NodeFactory.UpdateNodeAsync(created with { Name = "Satellite V3" });
+        await NodeFactory.UpdateNode(created with { Name = "Satellite V2" });
+        await NodeFactory.UpdateNode(created with { Name = "Satellite V3" });
 
         // Act
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
@@ -195,7 +197,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         originalVersion.Should().NotBeNull("there should be a version after create");
 
         // Update to "Modified"
-        await NodeFactory.UpdateNodeAsync(created with { Name = "Modified" });
+        await NodeFactory.UpdateNode(created with { Name = "Modified" });
 
         // Act - post RollbackNodeRequest to the node hub
         var client = GetClient();

@@ -1,5 +1,7 @@
 using System.Linq;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -30,7 +32,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         var existingPricing = await MeshQuery.QueryAsync<MeshNode>("path:pricing").FirstOrDefaultAsync();
         if (existingPricing == null)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath(PricingPath) with
+            await NodeFactory.CreateNode(MeshNode.FromPath(PricingPath) with
             {
                 Name = "Pricing",
                 Icon = "Calculator",
@@ -40,7 +42,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         var existingApp = await MeshQuery.QueryAsync<MeshNode>("path:app").FirstOrDefaultAsync();
         if (existingApp == null)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath(AppPath) with
+            await NodeFactory.CreateNode(MeshNode.FromPath(AppPath) with
             {
                 Name = "Applications",
                 Icon = "App",
@@ -189,7 +191,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Messages = ["msg1"]
             }
         };
-        await NodeFactory.CreateNodeAsync(threadNode);
+        await NodeFactory.CreateNode(threadNode);
 
         // Create ThreadMessage child node
         var msgNode = new MeshNode("msg1", threadPath)
@@ -204,7 +206,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Type = ThreadMessageType.ExecutedInput
             }
         };
-        await NodeFactory.CreateNodeAsync(msgNode);
+        await NodeFactory.CreateNode(msgNode);
 
         // Resolve the ThreadMessage path — should return the full message path, no remainder
         var resolution = await PathResolver.ResolvePathAsync($"{threadPath}/msg1");
@@ -232,7 +234,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Messages = ["m1"]
             }
         };
-        await NodeFactory.CreateNodeAsync(threadNode);
+        await NodeFactory.CreateNode(threadNode);
 
         var msgNode = new MeshNode("m1", threadPath)
         {
@@ -246,7 +248,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
                 Type = ThreadMessageType.AgentResponse
             }
         };
-        await NodeFactory.CreateNodeAsync(msgNode);
+        await NodeFactory.CreateNode(msgNode);
 
         // Resolve the Thread path — should match the Thread node exactly
         var resolution = await PathResolver.ResolvePathAsync(threadPath);

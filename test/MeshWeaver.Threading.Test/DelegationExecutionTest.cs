@@ -120,12 +120,12 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         var parentMsgPath = $"{threadPath}/{responseMsgId}";
         var subThreadPath = $"{parentMsgPath}/{subThreadId}";
 
-        await NodeFactory.CreateNodeAsync(new MeshNode(subThreadId, parentMsgPath)
+        await NodeFactory.CreateNode(new MeshNode(subThreadId, parentMsgPath)
         {
             Name = "Research reinsurance pricing",
             NodeType = ThreadNodeType.NodeType,
             Content = new MeshThread()
-        }, ct);
+        });
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
         // 5. Create cells and submit message to the sub-thread via SubmitMessageRequest

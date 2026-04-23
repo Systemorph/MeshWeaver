@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -171,7 +173,7 @@ public class PartitionedSchemaTests
         await router.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
 
         // Delete from Eta
-        await router.DeleteNodeAsync("Eta/Item1", ct: TestContext.Current.CancellationToken);
+        await router.DeleteNode("Eta/Item1");
 
         // Eta item should be gone
         var readA = await router.GetNodeAsync("Eta/Item1", _options, TestContext.Current.CancellationToken);

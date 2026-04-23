@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
@@ -267,14 +269,12 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         Directory.CreateDirectory(Path.Combine(_testDirectory, "Alpha"));
         await File.WriteAllTextAsync(
             Path.Combine(_testDirectory, "Alpha.json"),
-            """{"id":"Alpha","name":"Alpha Corp","nodeType":"Organization"}""",
-            TestContext.Current.CancellationToken);
+            """{"id":"Alpha","name":"Alpha Corp","nodeType":"Organization"}""");
 
         Directory.CreateDirectory(Path.Combine(_testDirectory, "Beta"));
         await File.WriteAllTextAsync(
             Path.Combine(_testDirectory, "Beta.json"),
-            """{"id":"Beta","name":"Beta Inc","nodeType":"Organization"}""",
-            TestContext.Current.CancellationToken);
+            """{"id":"Beta","name":"Beta Inc","nodeType":"Organization"}""");
 
         // Act - Create a new router to discover existing partitions
         // Use a unique copy to avoid CachingStorageAdapter's static shared snapshot cache
@@ -301,7 +301,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/ToKeep") with { Name = "To Keep" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act
-        await _router.DeleteNodeAsync("ACME/ToDelete", ct: TestContext.Current.CancellationToken);
+        await _router.DeleteNodeAsync("ACME/ToDelete");
 
         // Assert
         var deleted = await _router.GetNodeAsync("ACME/ToDelete", _jsonOptions, TestContext.Current.CancellationToken);
@@ -316,7 +316,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Delete_NonexistentPartition_DoesNotThrow()
     {
         // Act & Assert - Should not throw
-        await _router.DeleteNodeAsync("NonExistent/SomePath", ct: TestContext.Current.CancellationToken);
+        await _router.DeleteNodeAsync("NonExistent/SomePath");
     }
 
     #endregion

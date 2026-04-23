@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
@@ -32,19 +34,19 @@ public class ExportImportRoundTripTest(ITestOutputHelper output) : MonolithMeshT
         var importService = Mesh.ServiceProvider.GetRequiredService<IMeshImportService>();
 
         // Create test nodes dynamically (in persistence, not static)
-        await meshService.CreateNodeAsync(MeshNode.FromPath(ExportNs) with { Name = "Export Root", NodeType = "Markdown" });
-        await meshService.CreateNodeAsync(MeshNode.FromPath($"{ExportNs}/DocA") with
+        await meshService.CreateNode(MeshNode.FromPath(ExportNs) with { Name = "Export Root", NodeType = "Markdown" });
+        await meshService.CreateNode(MeshNode.FromPath($"{ExportNs}/DocA") with
         {
             Name = "Document A", NodeType = "Markdown",
             Content = MarkdownContent.Parse("# Hello\n\nThis is **document A**.", "", $"{ExportNs}/DocA")
         });
-        await meshService.CreateNodeAsync(MeshNode.FromPath($"{ExportNs}/DocB") with
+        await meshService.CreateNode(MeshNode.FromPath($"{ExportNs}/DocB") with
         {
             Name = "Document B", NodeType = "Markdown",
             Content = MarkdownContent.Parse("## Section\n\nDocument B content.", "", $"{ExportNs}/DocB")
         });
-        await meshService.CreateNodeAsync(MeshNode.FromPath($"{ExportNs}/Sub") with { Name = "Subfolder", NodeType = "Markdown" });
-        await meshService.CreateNodeAsync(MeshNode.FromPath($"{ExportNs}/Sub/Child") with
+        await meshService.CreateNode(MeshNode.FromPath($"{ExportNs}/Sub") with { Name = "Subfolder", NodeType = "Markdown" });
+        await meshService.CreateNode(MeshNode.FromPath($"{ExportNs}/Sub/Child") with
         {
             Name = "Child Node", NodeType = "Markdown",
             Content = MarkdownContent.Parse("Child content here.", "", $"{ExportNs}/Sub/Child")
@@ -70,7 +72,7 @@ public class ExportImportRoundTripTest(ITestOutputHelper output) : MonolithMeshT
             exportedFiles.Where(f => f.EndsWith(".md")).Should().NotBeEmpty("markdown nodes should export as .md");
 
             // 4. Delete originals from persistence
-            await meshService.DeleteNodeAsync(ExportNs);
+            await meshService.DeleteNode(ExportNs);
 
             // 5. Re-import from the exported directory
             var importResult = await importService.ImportNodesAsync(tempDir, ExportNs, force: true);

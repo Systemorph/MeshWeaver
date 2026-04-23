@@ -55,7 +55,7 @@ public class JsonPatchThreadMessagesTest(ITestOutputHelper output) : MonolithMes
 
         // 1. Create thread
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "patch test", "Roland");
-        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        var created = await NodeFactory.CreateNode(threadNode);
         var threadPath = created.Path;
         Output.WriteLine($"Thread created: {threadPath}");
 

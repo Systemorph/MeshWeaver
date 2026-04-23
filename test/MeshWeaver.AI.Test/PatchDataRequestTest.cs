@@ -5,6 +5,7 @@ using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -56,7 +57,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var id = $"pdr-{Guid.NewGuid():N}";
-        await mesh.CreateNodeAsync(new MeshNode(id, "ACME")
+        await mesh.CreateNode(new MeshNode(id, "ACME")
         {
             Name = "Original",
             NodeType = TestNodeType,

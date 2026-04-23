@@ -117,8 +117,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Ensure the hub is ready
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(aliceAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -149,8 +148,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(aliceAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -181,8 +179,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(aliceAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(aliceAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);

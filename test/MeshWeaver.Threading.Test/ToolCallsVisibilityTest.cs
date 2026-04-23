@@ -66,7 +66,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 Timestamp = DateTime.UtcNow
             });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -78,10 +78,10 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 AgentName = "Orchestrator",
                 ToolCalls = toolCalls
             }
-        }, ct);
+        });
 
         // Create thread
-        await NodeFactory.CreateNodeAsync(new MeshNode("toolcalls-visible-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("toolcalls-visible-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -91,7 +91,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 ActiveMessageId = responseMsgId,
                 Messages = [responseMsgId]
             }
-        }, ct);
+        });
 
         Output.WriteLine("Created thread with response message containing tool calls");
 
@@ -127,7 +127,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var responsePath = $"{threadPath}/{responseMsgId}";
 
         // Create response message with NO tool calls initially
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -138,10 +138,10 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = "Orchestrator"
             }
-        }, ct);
+        });
 
         // Create thread
-        await NodeFactory.CreateNodeAsync(new MeshNode("toolcalls-update-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("toolcalls-update-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -151,7 +151,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 ActiveMessageId = responseMsgId,
                 Messages = [responseMsgId]
             }
-        }, ct);
+        });
 
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -220,15 +220,15 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var subThreadPath = $"{responsePath}/sub-worker";
 
         // Create sub-thread (executing)
-        await NodeFactory.CreateNodeAsync(new MeshNode("sub-worker", responsePath)
+        await NodeFactory.CreateNode(new MeshNode("sub-worker", responsePath)
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
             Content = new MeshThread { IsExecuting = true, ActiveMessageId = "sub-resp" }
-        }, ct);
+        });
 
         // Create response message — initially NO tool calls
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -237,10 +237,10 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 Role = "assistant", Text = "",
                 Type = ThreadMessageType.AgentResponse, AgentName = "Orchestrator"
             }
-        }, ct);
+        });
 
         // Create thread in executing state
-        await NodeFactory.CreateNodeAsync(new MeshNode("toolcalls-lifecycle-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("toolcalls-lifecycle-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -248,7 +248,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 IsExecuting = true, ActiveMessageId = responseMsgId, Messages = [responseMsgId]
             }
-        }, ct);
+        });
 
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -331,7 +331,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var responsePath = $"{threadPath}/{responseMsgId}";
 
         // Create response message — empty, simulating start of execution
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -342,10 +342,10 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = "TestAgent"
             }
-        }, ct);
+        });
 
         // Create thread in executing state
-        await NodeFactory.CreateNodeAsync(new MeshNode("feedback-loop-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("feedback-loop-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -355,7 +355,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
                 ActiveMessageId = responseMsgId,
                 Messages = [responseMsgId]
             }
-        }, ct);
+        });
 
         var client = GetClient();
         var workspace = client.GetWorkspace();

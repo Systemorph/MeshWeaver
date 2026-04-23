@@ -8,6 +8,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
@@ -154,7 +156,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread()
         };
-        await NodeFactory.CreateNodeAsync(threadNode, ct);
+        await NodeFactory.CreateNode(threadNode);
 
         // 2. Create user message as child node
         var messageId = Guid.NewGuid().AsString();
@@ -165,11 +167,11 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.ExecutedInput
         };
-        await NodeFactory.CreateNodeAsync(new MeshNode($"{threadPath}/{messageId}")
+        await NodeFactory.CreateNode(new MeshNode($"{threadPath}/{messageId}")
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = userMessage
-        }, ct);
+        });
 
         // 3. Initialize AgentChatClient with context
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
@@ -222,11 +224,11 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.AgentResponse
         };
-        await NodeFactory.CreateNodeAsync(new MeshNode($"{threadPath}/{replyId}")
+        await NodeFactory.CreateNode(new MeshNode($"{threadPath}/{replyId}")
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = replyMessage
-        }, ct);
+        });
 
         // 7. Verify thread contains both messages
         var children = new List<MeshNode>();
@@ -264,12 +266,12 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         // Create thread
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"ACME/ProductLaunch/{threadId}";
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath)
+        await NodeFactory.CreateNode(new MeshNode(threadPath)
         {
             Name = "Non-Streaming Test Thread",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread()
-        }, ct);
+        });
 
         // Initialize agent
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
@@ -328,19 +330,19 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var threadPath1 = $"ACME/ProductLaunch/{threadId1}";
         var threadPath2 = $"ACME/ProductLaunch/{threadId2}";
 
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath1)
+        await NodeFactory.CreateNode(new MeshNode(threadPath1)
         {
             Name = "Thread 1",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread()
-        }, ct);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath2)
+        await NodeFactory.CreateNode(new MeshNode(threadPath2)
         {
             Name = "Thread 2",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread()
-        }, ct);
+        });
 
         // Initialize agent
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);

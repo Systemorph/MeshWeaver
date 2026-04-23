@@ -318,7 +318,7 @@
                 DesiredId = id
             };
 
-            await MeshService.CreateNodeAsync(node);
+            await MeshService.CreateNode(node);
             NavigationService.NavigateTo($"/{nodePath}/Edit");
         }
         catch (Exception ex)

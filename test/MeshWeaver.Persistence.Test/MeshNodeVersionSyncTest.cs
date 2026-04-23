@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
@@ -177,7 +179,7 @@ public record Graph
         };
 
         // Act - save the node with version
-        await NodeFactory.CreateNodeAsync(nodeWithVersion, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(nodeWithVersion);
 
         // Assert - version is preserved when reading back
         var savedNode = await MeshQuery.QueryAsync<MeshNode>("path:test/versioned", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);

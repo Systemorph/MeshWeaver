@@ -1,6 +1,8 @@
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Graph.Configuration;
@@ -104,7 +106,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
                 Roles = [new RoleAssignment { Role = "Editor", Denied = true }]
             }
         };
-        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
+        await NodeFactory.CreateNode(denyNode);
 
         var permissions = await svc.GetEffectivePermissionsAsync("ACME/Project", "Alice", TestTimeout);
         permissions.Should().Be(Permission.None, "denied Editor role should yield no permissions at child");
@@ -129,7 +131,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
                 Roles = [new RoleAssignment { Role = "Viewer", Denied = true }]
             }
         };
-        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
+        await NodeFactory.CreateNode(denyNode);
 
         // Grant again at child
         await svc.AddUserRoleAsync("OverrideUser", "Viewer", "Org/Team/Project", "system", TestTimeout);
@@ -162,7 +164,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
                 Roles = [new RoleAssignment { Role = "Admin", Denied = true }]
             }
         };
-        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
+        await NodeFactory.CreateNode(denyNode);
 
         var permissions = await svc.GetEffectivePermissionsAsync("ACME/Secure", "MixedUser", TestTimeout);
 

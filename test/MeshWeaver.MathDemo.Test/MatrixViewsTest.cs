@@ -85,8 +85,7 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // Initialize the hub first — required for routing to hit the per-node hub.
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Inverse");

@@ -91,9 +91,10 @@ public static class ApprovalsView
 
         buttons = buttons.WithView(Controls.Button("Submit")
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(async ctx =>
+            .WithClickAction(ctx =>
             {
-                await SubmitApprovalRequest(ctx.Host, nodePath, currentUser, formDataId);
+                SubmitApprovalRequest(ctx.Host, nodePath, currentUser, formDataId);
+                return Task.CompletedTask;
             }));
 
         buttons = buttons.WithView(Controls.Button("Cancel")
@@ -110,67 +111,65 @@ public static class ApprovalsView
         return container;
     }
 
-    private static async Task SubmitApprovalRequest(LayoutAreaHost host, string nodePath, string currentUser, string formDataId)
+    private static void SubmitApprovalRequest(LayoutAreaHost host, string nodePath, string currentUser, string formDataId)
     {
-        var approver = "";
-        var purpose = "";
-        var dueDateStr = "";
-
+        // Reactive click handler — read form data via Subscribe (sync emission on BehaviorSubject),
+        // then chain Create(approval) → CreateNotification via SelectMany. All hub I/O is Observable
+        // based (see AsynchronousCalls.md). Click handler returns immediately; navigation fires
+        // inside the terminal onNext.
         host.Stream.GetDataStream<Dictionary<string, object?>>(formDataId)
             .Take(1)
             .Subscribe(data =>
             {
-                approver = data?.GetValueOrDefault("approver")?.ToString() ?? "";
-                purpose = data?.GetValueOrDefault("purpose")?.ToString() ?? "";
-                dueDateStr = data?.GetValueOrDefault("dueDate")?.ToString() ?? "";
+                var approver = data?.GetValueOrDefault("approver")?.ToString() ?? "";
+                var purpose = data?.GetValueOrDefault("purpose")?.ToString() ?? "";
+                var dueDateStr = data?.GetValueOrDefault("dueDate")?.ToString() ?? "";
+
+                if (string.IsNullOrWhiteSpace(approver))
+                    return;
+
+                DateTimeOffset? dueDate = null;
+                if (DateTimeOffset.TryParse(dueDateStr, out var parsed))
+                    dueDate = parsed;
+
+                var approvalId = Guid.NewGuid().AsString();
+
+                var approval = new Approval
+                {
+                    Id = approvalId,
+                    PrimaryNodePath = nodePath,
+                    Requester = currentUser,
+                    Approver = approver,
+                    Purpose = purpose,
+                    DueDate = dueDate,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    Status = ApprovalStatus.Pending
+                };
+
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+                var approvalNode = new MeshNode(approvalId, $"{nodePath}/{ApprovalExtensions.ApprovalPartition}")
+                {
+                    Name = $"Approval: {purpose}",
+                    NodeType = ApprovalNodeType.NodeType,
+                    State = MeshNodeState.Active,
+                    Content = approval
+                };
+
+                nodeFactory.CreateNode(approvalNode)
+                    .SelectMany(_ => NotificationService.CreateNotification(
+                        nodeFactory,
+                        approver,
+                        "Approval Requested",
+                        $"{currentUser} requested your approval for \"{purpose}\".",
+                        NotificationType.ApprovalRequired,
+                        nodePath,
+                        currentUser))
+                    .Subscribe(
+                        _ => host.Hub.ServiceProvider.GetService<INavigationService>()
+                                ?.NavigateTo($"/{nodePath}"),
+                        _ => { /* errors already logged by the hub */ });
             });
-
-        if (string.IsNullOrWhiteSpace(approver))
-            return;
-
-        DateTimeOffset? dueDate = null;
-        if (DateTimeOffset.TryParse(dueDateStr, out var parsed))
-            dueDate = parsed;
-
-        var approvalId = Guid.NewGuid().AsString();
-        var approvalPath = $"{nodePath}/{ApprovalExtensions.ApprovalPartition}/{approvalId}";
-
-        var approval = new Approval
-        {
-            Id = approvalId,
-            PrimaryNodePath = nodePath,
-            Requester = currentUser,
-            Approver = approver,
-            Purpose = purpose,
-            DueDate = dueDate,
-            CreatedAt = DateTimeOffset.UtcNow,
-            Status = ApprovalStatus.Pending
-        };
-
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var approvalNode = new MeshNode(approvalId, $"{nodePath}/{ApprovalExtensions.ApprovalPartition}")
-        {
-            Name = $"Approval: {purpose}",
-            NodeType = ApprovalNodeType.NodeType,
-            State = MeshNodeState.Active,
-            Content = approval
-        };
-
-        await nodeFactory.CreateNodeAsync(approvalNode);
-
-        // Create notification for the approver
-        await NotificationService.CreateNotificationAsync(
-            nodeFactory,
-            approver,
-            "Approval Requested",
-            $"{currentUser} requested your approval for \"{purpose}\".",
-            NotificationType.ApprovalRequired,
-            nodePath,
-            currentUser);
-
-        // Navigate back to the document
-        host.Hub.ServiceProvider.GetService<INavigationService>()?.NavigateTo($"/{nodePath}");
     }
 
     /// <summary>

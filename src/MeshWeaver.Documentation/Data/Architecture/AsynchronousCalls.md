@@ -2,6 +2,90 @@
 
 MeshWeaver uses a **truly asynchronous** message-passing model. This is fundamentally different from C#'s `async/await` pattern, which is better described as "fake async" — you still block the calling context waiting for a result.
 
+## 🚨 The absolute rules (no exceptions outside tests)
+
+1. **No `Task<T>` / `async` / `await` in mesh-reachable code.** Public methods on services, handlers, layout areas, and click actions return `IObservable<T>` (or `void`). Return types matter — an `async Task` method that `await`s a hub operation deadlocks the hub ActionBlock. No exceptions for "just a wrapper" or "small helper".
+2. **No `*Async` extension shims on `IMeshService`.** Use `meshService.CreateNode(node)` / `UpdateNode(node)` / `DeleteNode(path)` / `CreateTransient(node)` — these return `IObservable<MeshNode>`. **Never** use `.CreateNodeAsync(...)` / `.UpdateNodeAsync(...)` / `.DeleteNodeAsync(...)` / `.CreateTransientAsync(...)` — those extensions are being removed. They bridge the Observable to Task via `.ToTask()` and make the caller `await`, which deadlocks every time they are reached from a hub handler.
+3. **Never `.QueryAsync<MeshNode>($"path:X").FirstOrDefaultAsync()` to read a known node.** Queries go through a lagged read-side index. For a known path use `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference()).Take(1).Select(change => change.Value)`. Also the primitive for **wait-for-completion** — subscribe until a completion condition emits.
+4. **Never wrap a Task-returning query in `Observable.FromAsync(() => query.QueryAsync(...).FirstOrDefaultAsync().AsTask())`.** This is fake-reactive — runs through the lagged index and returns stale content. Use `GetRemoteStream<MeshNode, MeshNodeReference>` for the authoritative live view.
+5. **`ISynchronizationStream<T>.Update` callbacks must be synchronous.** Don't use the `Func<T?, CancellationToken, Task<ChangeItem<T>?>>` overload from hub-reachable code — it hides an `await` inside the stream update. Use the sync `Func<T?, ChangeItem<T>?>` form and compose any async I/O outside the callback.
+
+## 🚨🚨🚨 NEVER USE `QueryAsync` TO OBTAIN A `MeshNode` 🚨🚨🚨
+
+**Queries are not a node lookup. Queries are not a node lookup. Queries are not a node lookup.**
+
+`IMeshService.QueryAsync` is for searching and listing — it runs through a **lagged, eventually-consistent read-side index** that can return stale content right after a write. It is **never** the right tool for reading the current committed state of a specific node.
+
+### ❌ WRONG — every line below is a bug
+
+```csharp
+// ❌ Lagged index — returns stale content after a write.
+var node = await mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+
+// ❌ Same bug, wrapped in Observable.FromAsync to look reactive.
+return Observable.FromAsync(ct =>
+    mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync(ct).AsTask());
+
+// ❌ Even with a path: filter, this is still a query. Still lagged. Still wrong.
+await foreach (var n in mesh.QueryAsync<MeshNode>($"path:{path}")) { node = n; break; }
+
+// ❌ Calling .Current on a stream — snapshot may be null before first emission.
+var node = hub.GetWorkspace().GetStream(new MeshNodeReference())?.Current?.Value;
+```
+
+### ✅ RIGHT — the ONE way to obtain a known MeshNode
+
+```csharp
+// Direct subscription to the owning hub's workspace reference.
+// Authoritative, live, no staleness, no query index involved.
+var workspace = hub.GetWorkspace();
+return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        new Address(path), new MeshNodeReference())
+    .Take(1)                                    // one emission then complete
+    .Timeout(TimeSpan.FromSeconds(10))          // bound the wait
+    .Select(change => change.Value);            // unwrap ChangeItem<MeshNode>
+```
+
+This is also how you **wait for work to finish** — subscribe until a field in the node's content flips to a completion state, then `.Take(1)`. No polling loop. No repeated queries.
+
+### Sets / listings — **prefer `ObserveQuery`**, not `QueryAsync`
+
+Even for the cases where a query is the right idea (listings, filters, existence across the mesh), **do not `await` the `IAsyncEnumerable<T>`** version — use the reactive `IMeshService.ObserveQuery<T>` overload. It returns `IObservable<QueryResultChange<T>>` with an initial full set and then incremental deltas, and it composes with `Select` / `Where` / `Subscribe` exactly like every other mesh observable.
+
+**`QueryAsync` breaks the update flow.** It is a one-shot snapshot: you get the rows that existed at query time and nothing else. The view is frozen — if a row is added, removed, or mutated on the mesh, your list doesn't change. Any reactive chain downstream (a layout area, a dashboard, a dependent query) that re-renders when data changes is now silently broken because this particular upstream doesn't emit on updates. `ObserveQuery` emits the initial set plus a delta for every subsequent change, so the downstream chain stays live.
+
+```csharp
+// ❌ WRONG — IAsyncEnumerable + await — hub ActionBlock blocks on query pump.
+var items = await meshService.QueryAsync<MeshNode>("nodeType:Post").ToListAsync();
+
+// ✅ RIGHT — reactive, live, auto-updates on mesh changes.
+meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Post"))
+    .Select(change => change.Result)           // full result set (or delta payload)
+    .Subscribe(nodes => { /* render, react */ });
+```
+
+Valid uses of `ObserveQuery`:
+
+- Listing children of a namespace (`path/*`)
+- Filtering by predicate across the mesh (`nodeType:X`, `name:*sales*`)
+- Checking "does any node match this predicate?" for existence tests
+- Autocomplete / browsing / search UIs
+- Any layout area that renders a list and wants live updates when the underlying set changes
+
+Known-path single-node reads: **`GetRemoteStream<MeshNode, MeshNodeReference>`** (see above), never a query. No exceptions.
+
+### The ONE case where `QueryAsync` is correct: one-shot lookups that exit the process
+
+`QueryAsync` is a one-time snapshot — the result is frozen at query time and does not reflect subsequent mutations. That is exactly the shape needed for request/response call sites that return **once** and then the caller is gone:
+
+- **MCP tool handlers** — an agent calls a tool, the tool returns a payload, the session ends. No reactive subscriber downstream, no update flow to break.
+- **Export / import CLI services** — pull-and-leave jobs that dump to disk.
+- **HTTP endpoints that render once and close** — e.g. a CSV download endpoint.
+
+Anywhere else — layout areas, dashboards, chained reactive consumers, hub handlers, click actions, background orchestration that waits for state to flip — `QueryAsync` is wrong because the view won't update. Use `ObserveQuery` for those.
+
+Rule of thumb: **if any downstream code re-renders or re-computes when data changes, you need `ObserveQuery`.** `QueryAsync` is only safe when the caller serialises the snapshot and walks away.
+
 ## 🚨 Hard rule — never read `.Current` off a stream
 
 Streams (`ISynchronizationStream<T>`, any `workspace.GetStream(...)` /

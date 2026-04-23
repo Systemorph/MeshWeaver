@@ -81,8 +81,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         // Initialize hub (triggers NodeType compilation)
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         // Request default layout area
         var workspace = client.GetWorkspace();
@@ -109,8 +108,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         Output.WriteLine($"Initializing hub for {address}...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
         Output.WriteLine("Hub initialized.");
 
         var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
@@ -137,8 +135,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         Output.WriteLine($"Initializing hub for {MotorXLPath}...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();

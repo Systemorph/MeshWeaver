@@ -66,7 +66,7 @@ public class StorageImporterTests : IDisposable
         var ct = TestContext.Current.CancellationToken;
 
         // Act
-        var result = await importer.ImportAsync(new StorageImportOptions { RootPath = "ACME" }, ct);
+        var result = await importer.ImportAsync(new StorageImportOptions { RootPath = "ACME" });
 
         // Assert
         result.NodesImported.Should().BeGreaterThan(0);
@@ -92,7 +92,7 @@ public class StorageImporterTests : IDisposable
         var ct = TestContext.Current.CancellationToken;
 
         // Act
-        var result = await importer.ImportAsync(new StorageImportOptions { ImportPartitions = true }, ct);
+        var result = await importer.ImportAsync(new StorageImportOptions { ImportPartitions = true });
 
         // Assert
         result.NodesImported.Should().BeGreaterThan(0);
@@ -116,7 +116,7 @@ public class StorageImporterTests : IDisposable
         var result = await importer.ImportAsync(new StorageImportOptions
         {
             OnProgress = (nodes, partitions, path) => progressCalls.Add((nodes, partitions, path))
-        }, ct);
+        });
 
         // Assert
         progressCalls.Should().NotBeEmpty("progress callback should fire for each imported node");
@@ -139,7 +139,7 @@ public class StorageImporterTests : IDisposable
         var result = await importer.ImportAsync(new StorageImportOptions
         {
             RootPath = "ACME/Project"
-        }, ct);
+        });
 
         // Assert - Project subtree nodes should be imported
         result.NodesImported.Should().BeGreaterThan(1, "Project children should all be imported");
@@ -166,7 +166,7 @@ public class StorageImporterTests : IDisposable
         var result = await importer.ImportAsync(new StorageImportOptions
         {
             RootPath = "Doc/DataMesh"
-        }, ct);
+        });
 
         // Assert - should import CollaborativeEditing/_Comment/ nodes: c1-c6 (6) + c1/reply1 (1) = 7
         result.NodesImported.Should().BeGreaterThanOrEqualTo(7, "DataMesh has at least 7 comment nodes (c1-c6 + reply1)");
@@ -268,7 +268,7 @@ public class StorageImporterTests : IDisposable
         var importer2 = new StorageImporter(partialSource, target);
 
         // Act - re-import partial source with RemoveMissing
-        var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = true }, ct);
+        var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = true });
 
         // Assert - ACME/Project/TodoAgent should still exist, Cornerstone should be removed
         result.NodesImported.Should().Be(1);
@@ -314,7 +314,7 @@ public class StorageImporterTests : IDisposable
         {
             RootPath = "Doc/DataMesh/CollaborativeEditing",
             RemoveMissing = true
-        }, ct);
+        });
 
         // Assert
         result.NodesImported.Should().Be(1);
@@ -354,7 +354,7 @@ public class StorageImporterTests : IDisposable
         var importer2 = new StorageImporter(partialSource, target);
 
         // Act - re-import partial source WITHOUT RemoveMissing (default)
-        var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = false }, ct);
+        var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = false });
 
         // Assert - nothing should be removed
         result.NodesRemoved.Should().Be(0);
@@ -381,7 +381,7 @@ public class StorageImporterTests : IDisposable
         var result = await importer.ImportAsync(new StorageImportOptions
         {
             RootPath = "Doc/DataMesh"
-        }, ct);
+        });
 
         // Assert - 7 nodes total: c1-c6.json (6) + c1/reply1.json (1) under _Comment/
         result.NodesImported.Should().BeGreaterThanOrEqualTo(7,
@@ -465,7 +465,7 @@ public class StorageImporterTests : IDisposable
 
         // Act - second import with RemoveMissing from the same source
         var importer2 = new StorageImporter(source, target);
-        var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = true }, ct);
+        var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = true });
 
         // Assert - all nodes re-imported, zero removals
         result.NodesImported.Should().Be(firstResult.NodesImported,
@@ -495,7 +495,7 @@ public class StorageImporterTests : IDisposable
         {
             RootPath = "Doc/DataMesh",
             RemoveMissing = true
-        }, ct);
+        });
 
         // Assert
         result.NodesImported.Should().BeGreaterThanOrEqualTo(7, "DataMesh has at least 7 comment nodes (c1-c6 + reply1)");

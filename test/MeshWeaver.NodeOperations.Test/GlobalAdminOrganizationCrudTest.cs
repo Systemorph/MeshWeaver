@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using Memex.Portal.Shared;
@@ -43,14 +45,14 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             Content = new Organization { Name = "Test Organization" }
         };
 
-        var created = await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        var created = await NodeFactory.CreateNode(orgNode);
 
         created.Should().NotBeNull("Global admin should be able to create Organizations");
         created.State.Should().Be(MeshNodeState.Active);
         created.NodeType.Should().Be("Organization");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 
     [Fact(Timeout = 30000)]
@@ -65,7 +67,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Test Organization" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Read
         var found = await MeshQuery
@@ -76,7 +78,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         found!.Name.Should().Be("Test Organization");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 
     [Fact(Timeout = 30000)]
@@ -91,7 +93,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Original Name" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Update
         var updated = orgNode with
@@ -99,7 +101,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             Name = "Updated Name",
             Content = new Organization { Name = "Updated Name", Description = "Updated description" }
         };
-        await NodeFactory.UpdateNodeAsync(updated, TestTimeout);
+        await NodeFactory.UpdateNode(updated);
 
         // Verify
         var found = await MeshQuery
@@ -110,7 +112,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         found!.Name.Should().Be("Updated Name");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 
     [Fact(Timeout = 30000)]
@@ -125,10 +127,10 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "To Delete" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Delete
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
 
         // Verify gone
         var found = await MeshQuery
@@ -150,7 +152,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Permission Test Org" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Check permissions
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -173,7 +175,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             "Global admin should have Create permission at root level to create Organizations");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 
     [Fact(Timeout = 30000)]
@@ -188,7 +190,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             NodeType = OrganizationNodeType.NodeType,
             Content = new Organization { Name = "Test Organization" }
         };
-        await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+        await NodeFactory.CreateNode(orgNode);
 
         // Now create a Markdown child under the Organization
         var childNode = new MeshNode("TestPage", orgId)
@@ -196,13 +198,13 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             Name = "Test Page",
             NodeType = "Markdown"
         };
-        var created = await NodeFactory.CreateNodeAsync(childNode, TestTimeout);
+        var created = await NodeFactory.CreateNode(childNode);
 
         created.Should().NotBeNull("Admin should be able to create nodes under Organization");
         created.Path.Should().Be($"{orgId}/TestPage");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
+        await NodeFactory.DeleteNode(orgId);
     }
 
     [Fact(Timeout = 30000)]

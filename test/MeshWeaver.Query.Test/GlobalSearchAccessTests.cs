@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -42,17 +44,17 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     public async Task SearchContext_ExcludesPartitionNodes()
     {
         // Arrange: create a Partition node and a regular content node
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Admin/Partition/TestPartition") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("Admin/Partition/TestPartition") with
         {
             Name = "Test Partition",
             NodeType = "Partition",
             Content = new PartitionDefinition { Namespace = "TestPartition", DataSource = "default" }
-        }, TestTimeout);
+        });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("TestPartition/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("TestPartition/doc1") with
         {
             Name = "Test Document", NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: search with context:search (like the top search bar)
         var results = await MeshQuery
@@ -76,26 +78,26 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     public async Task SearchContext_ExcludesSatelliteTypes()
     {
         // Arrange: create main content + satellite nodes
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("satCtx/project") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("satCtx/project") with
         {
             Name = "My Project", NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Activity satellite
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("satCtx/project/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("satCtx/project/_activity/log1") with
         {
             Name = "Activity Log", NodeType = "Activity",
             MainNode = "satCtx/project",
             Content = new ActivityLog("DataUpdate") { HubPath = "satCtx/project" }
-        }, TestTimeout);
+        });
 
         // Thread satellite (created directly, not via request)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("satCtx/_Thread/test-thread-1234") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("satCtx/_Thread/test-thread-1234") with
         {
             Name = "Test Thread", NodeType = "Thread",
             MainNode = "satCtx/_Thread",
             Content = new AI.Thread { CreatedBy = "Roland" }
-        }, TestTimeout);
+        });
 
         // Act: search with context:search (mimics the top search bar)
         var results = await MeshQuery
@@ -121,14 +123,14 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     public async Task Autocomplete_FindsMainContentNodes()
     {
         // Arrange: create some content nodes
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("acSearch/report") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("acSearch/report") with
         {
             Name = "Annual Report", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("acSearch/budget") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("acSearch/budget") with
         {
             Name = "Budget Plan", NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: autocomplete with prefix "Annual" (like typing in search bar)
         var suggestions = await MeshQuery
@@ -147,16 +149,16 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     public async Task Autocomplete_WithSearchContext_ExcludesSatellites()
     {
         // Arrange: create content + satellite
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("acCtx/analysis") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("acCtx/analysis") with
         {
             Name = "Risk Analysis", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("acCtx/analysis/_activity/log1") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("acCtx/analysis/_activity/log1") with
         {
             Name = "Risk Activity", NodeType = "Activity",
             MainNode = "acCtx/analysis",
             Content = new ActivityLog("DataUpdate") { HubPath = "acCtx/analysis" }
-        }, TestTimeout);
+        });
 
         // Act: autocomplete with context:search (like the search bar does)
         var suggestions = await MeshQuery
@@ -178,21 +180,21 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     public async Task GlobalSearch_IsMain_ExcludesSatelliteNodes()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("gbl/item1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1") with
         {
             Name = "Content Item", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("gbl/item1/_activity/log1") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1/_activity/log1") with
         {
             Name = "Activity", NodeType = "Activity",
             MainNode = "gbl/item1",
             Content = new ActivityLog("DataUpdate") { HubPath = "gbl/item1" }
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("gbl/item1/_Comment/c1") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("gbl/item1/_Comment/c1") with
         {
             Name = "Comment", NodeType = "Comment",
             MainNode = "gbl/item1"
-        }, TestTimeout);
+        });
 
         // Act: global search with is:main (the default for fan-out)
         var results = await MeshQuery
@@ -211,18 +213,18 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
     public async Task GlobalSearch_FindsNodesAcrossMultipleNamespaces()
     {
         // Arrange: create nodes in different namespaces
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("SearchNs1/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("SearchNs1/doc1") with
         {
             Name = "Alpha Document", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("SearchNs2/doc2") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("SearchNs2/doc2") with
         {
             Name = "Beta Document", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("SearchNs3/doc3") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("SearchNs3/doc3") with
         {
             Name = "Gamma Document", NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Act: text search for "Document" across all namespaces
         var results = await MeshQuery

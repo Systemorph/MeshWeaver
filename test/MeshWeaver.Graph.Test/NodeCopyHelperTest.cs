@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -145,7 +147,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         await SaveNode("org/Acme", "Acme Corp", "Organization");
         var hub = GetHost();
 
-        var copied = await NodeCopyHelper.CopyNodeTreeAsync(
+        var copied = await NodeCopyHelper.CopyNodeTree(
             GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "workspace", force: false);
 
         copied.Should().Be(1);
@@ -166,7 +168,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         await SaveNode("org/Acme/Team1/Alice", "Alice", "Person");
         var hub = GetHost();
 
-        var copied = await NodeCopyHelper.CopyNodeTreeAsync(
+        var copied = await NodeCopyHelper.CopyNodeTree(
             GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "workspace", force: false);
 
         copied.Should().Be(4);
@@ -192,7 +194,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetHost();
 
-        var copied = await NodeCopyHelper.CopyNodeTreeAsync(
+        var copied = await NodeCopyHelper.CopyNodeTree(
             GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "workspace", force: false);
 
         copied.Should().Be(1); // Only Team1 copied, Acme skipped
@@ -211,7 +213,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         var hub = GetHost();
 
-        var copied = await NodeCopyHelper.CopyNodeTreeAsync(
+        var copied = await NodeCopyHelper.CopyNodeTree(
             GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "workspace", force: true);
 
         copied.Should().Be(1);
@@ -225,8 +227,8 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var hub = GetHost();
 
-        var act = () => NodeCopyHelper.CopyNodeTreeAsync(
-            GetMeshQuery(), GetNodeFactory(), hub, "nonexistent/path", "workspace", force: false);
+        var act = () => NodeCopyHelper.CopyNodeTree(
+            GetMeshQuery(), GetNodeFactory(), hub, "nonexistent/path", "workspace", force: false).ToTask();
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Source node not found*");
@@ -239,7 +241,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         await SaveNode("org/Acme/Sub", "Sub Node", "Markdown");
         var hub = GetHost();
 
-        var copied = await NodeCopyHelper.CopyNodeTreeAsync(
+        var copied = await NodeCopyHelper.CopyNodeTree(
             GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "", force: false);
 
         copied.Should().Be(2);
@@ -256,7 +258,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         await SaveNode("src/Doc", "My Doc", "Markdown", content);
         var hub = GetHost();
 
-        var copied = await NodeCopyHelper.CopyNodeTreeAsync(
+        var copied = await NodeCopyHelper.CopyNodeTree(
             GetMeshQuery(), GetNodeFactory(), hub, "src/Doc", "dest", force: false);
 
         copied.Should().Be(1);
@@ -272,7 +274,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         await SaveNode("TopLevel", "Top Level Node", "Markdown");
         var hub = GetHost();
 
-        var copied = await NodeCopyHelper.CopyNodeTreeAsync(
+        var copied = await NodeCopyHelper.CopyNodeTree(
             GetMeshQuery(), GetNodeFactory(), hub, "TopLevel", "workspace", force: false);
 
         copied.Should().Be(1);

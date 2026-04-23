@@ -184,8 +184,7 @@ public class UserPartitionVisibilityTests
         before.Should().BeEmpty("Bob has no access before explicit grant");
 
         // Alice shares her project with Bob
-        await ac.GrantAsync("User/Alice/SecretProject", "Bob", "Read", isAllow: true,
-            TestContext.Current.CancellationToken);
+        await ac.GrantAsync("User/Alice/SecretProject", "Bob", "Read", isAllow: true);
 
         // Now Bob can see it
         var after = new List<MeshNode>();

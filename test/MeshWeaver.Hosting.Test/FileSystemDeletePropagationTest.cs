@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -314,7 +316,7 @@ public class FileSystemDeletePropagationTest : IDisposable
         nodeBeforeDelete.Should().NotBeNull();
 
         // Act - Delete via API
-        await _persistence.DeleteNodeAsync("delete-test/node1", ct: TestContext.Current.CancellationToken);
+        await _persistence.DeleteNodeAsync("delete-test/node1");
 
         // Assert - Node should be gone
         var nodeAfterDelete = await _persistence.GetNodeAsync("delete-test/node1", _jsonOptions, TestContext.Current.CancellationToken);

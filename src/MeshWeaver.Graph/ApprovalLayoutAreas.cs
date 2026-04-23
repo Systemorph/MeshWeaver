@@ -104,16 +104,18 @@ public static class ApprovalLayoutAreas
 
             buttonRow = buttonRow.WithView(Controls.Button("Approve")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    await UpdateApprovalStatusAsync(ctx.Host, node!, ApprovalStatus.Approved);
+                    UpdateApprovalStatus(ctx.Host, node!, ApprovalStatus.Approved);
+                    return Task.CompletedTask;
                 }));
 
             buttonRow = buttonRow.WithView(Controls.Button("Reject")
                 .WithAppearance(Appearance.Neutral)
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    await UpdateApprovalStatusAsync(ctx.Host, node!, ApprovalStatus.Rejected);
+                    UpdateApprovalStatus(ctx.Host, node!, ApprovalStatus.Rejected);
+                    return Task.CompletedTask;
                 }));
 
             container = container.WithView(buttonRow);
@@ -129,7 +131,7 @@ public static class ApprovalLayoutAreas
         return container;
     }
 
-    private static async Task UpdateApprovalStatusAsync(LayoutAreaHost host, MeshNode node, ApprovalStatus newStatus)
+    private static void UpdateApprovalStatus(LayoutAreaHost host, MeshNode node, ApprovalStatus newStatus)
     {
         if (node.Content is not Approval approval)
             return;
@@ -148,8 +150,10 @@ public static class ApprovalLayoutAreas
         };
         host.Hub.Post(new UpdateNodeRequest(updated));
 
-        // Record approval activity as a MeshNode
+        // Activity + notification — chain as Observables, no await in a click handler.
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+        IObservable<MeshNode> activityWrite = Observable.Empty<MeshNode>();
         if (!string.IsNullOrEmpty(approval.PrimaryNodePath))
         {
             var verb = newStatus == ApprovalStatus.Approved ? "Approved" : "Rejected";
@@ -170,20 +174,26 @@ public static class ApprovalLayoutAreas
                 State = MeshNodeState.Active,
                 Content = log
             };
-            await nodeFactory.CreateNodeAsync(activityNode);
+            activityWrite = nodeFactory.CreateNode(activityNode);
         }
+
         var notificationType = newStatus == ApprovalStatus.Approved
             ? NotificationType.ApprovalGiven
             : NotificationType.ApprovalRejected;
 
-        await NotificationService.CreateNotificationAsync(
-            nodeFactory,
-            approval.Requester,
-            $"Approval {newStatus}",
-            $"Your approval request for \"{approval.Purpose}\" has been {newStatus.ToString().ToLowerInvariant()}.",
-            notificationType,
-            approval.PrimaryNodePath,
-            currentUser);
+        activityWrite
+            .DefaultIfEmpty()
+            .SelectMany(_ => NotificationService.CreateNotification(
+                nodeFactory,
+                approval.Requester,
+                $"Approval {newStatus}",
+                $"Your approval request for \"{approval.Purpose}\" has been {newStatus.ToString().ToLowerInvariant()}.",
+                notificationType,
+                approval.PrimaryNodePath,
+                currentUser))
+            .Subscribe(
+                _ => { /* fire-and-forget success */ },
+                _ => { /* errors already logged by hub */ });
     }
 
     /// <summary>
@@ -228,9 +238,10 @@ public static class ApprovalLayoutAreas
                     {
                         card = card.WithView(Controls.Button("Approve")
                             .WithAppearance(Appearance.Accent)
-                            .WithClickAction(async ctx =>
+                            .WithClickAction(ctx =>
                             {
-                                await UpdateApprovalStatusAsync(ctx.Host, node!, ApprovalStatus.Approved);
+                                UpdateApprovalStatus(ctx.Host, node!, ApprovalStatus.Approved);
+                                return Task.CompletedTask;
                             }));
                     }
                 }

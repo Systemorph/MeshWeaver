@@ -53,8 +53,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
                     InsertedText = "test",
                     Author = "test"
                 },
-                o => o.WithTarget(nonExistent),
-                TestTimeout));
+                o => o.WithTarget(nonExistent)));
 
         ex.Should().NotBeOfType<OperationCanceledException>(
             "the routing layer should fail fast, not time out");
@@ -79,8 +78,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
                     CommentText = "bar",
                     Author = "test"
                 },
-                o => o.WithTarget(nonExistent),
-                TestTimeout));
+                o => o.WithTarget(nonExistent)));
 
         ex.Should().NotBeOfType<OperationCanceledException>();
         ex.Should().NotBeOfType<TaskCanceledException>();

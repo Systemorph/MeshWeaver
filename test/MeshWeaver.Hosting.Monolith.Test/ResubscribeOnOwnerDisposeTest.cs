@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -47,9 +48,8 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
 
         // Arrange — create a node with an initial name; activates the owner hub on first read.
         var path = $"{TestPartition}/resub-target";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("resub-target", TestPartition) { Name = "Original", NodeType = "Markdown" },
-            ct);
+        await NodeFactory.CreateNode(
+            new MeshNode("resub-target", TestPartition) { Name = "Original", NodeType = "Markdown" });
 
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
@@ -79,7 +79,7 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
             break;
         }
         current.Should().NotBeNull();
-        await NodeFactory.UpdateNodeAsync(current! with { Name = "Updated" }, ct);
+        await NodeFactory.UpdateNode(current! with { Name = "Updated" });
 
         // Assert — within a few heartbeat cycles, the subscriber must see the new value.
         // Without auto-resubscribe, snapshots stays at ["Original"] forever; with it,

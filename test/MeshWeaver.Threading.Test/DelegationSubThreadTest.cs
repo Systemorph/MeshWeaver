@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -43,20 +45,19 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Create context + thread
         var contextPath = "DelegationTestOrg";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Delegation Test", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Delegation Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = await client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test delegation")),
-            o => o.WithTarget(new Address(contextPath)),
-            ct);
+            o => o.WithTarget(new Address(contextPath)));
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Create a response message (simulating what ThreadExecution does)
         var responseMsgId = "resp001";
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -66,20 +67,20 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = "Orchestrator"
             }
-        }, ct);
+        });
 
         // Create a sub-thread under the response message (simulating delegation)
         var subThreadId = "explore-mesh-schema-abc1";
         var parentMsgPath = $"{threadPath}/{responseMsgId}";
         var subThreadPath = $"{parentMsgPath}/{subThreadId}";
 
-        await NodeFactory.CreateNodeAsync(new MeshNode(subThreadId, parentMsgPath)
+        await NodeFactory.CreateNode(new MeshNode(subThreadId, parentMsgPath)
         {
             Name = "Explore mesh schema",
             NodeType = ThreadNodeType.NodeType,
             MainNode = contextPath,
             Content = new MeshThread()
-        }, ct);
+        });
 
         // Verify sub-thread path does NOT have double _Thread
         subThreadPath.Should().NotContain("_Thread/_Thread",
@@ -109,18 +110,17 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Create context + thread + response message
         var contextPath = "HierarchyTestOrg";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Hierarchy Test", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Hierarchy Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = await client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test hierarchy")),
-            o => o.WithTarget(new Address(contextPath)),
-            ct);
+            o => o.WithTarget(new Address(contextPath)));
         var threadPath = threadResponse.Message.Node!.Path;
 
         var responseMsgId = "resp002";
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -130,7 +130,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = "Orchestrator"
             }
-        }, ct);
+        });
 
         // Create sub-thread with input + output messages
         var subThreadId = "research-topic-def2";
@@ -140,7 +140,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         var inputId = "input01";
         var outputId = "output01";
 
-        await NodeFactory.CreateNodeAsync(new MeshNode(subThreadId, parentMsgPath)
+        await NodeFactory.CreateNode(new MeshNode(subThreadId, parentMsgPath)
         {
             Name = "Research the topic",
             NodeType = ThreadNodeType.NodeType,
@@ -149,10 +149,10 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 Messages = [inputId, outputId]
             }
-        }, ct);
+        });
 
         // Create input message
-        await NodeFactory.CreateNodeAsync(new MeshNode(inputId, subThreadPath)
+        await NodeFactory.CreateNode(new MeshNode(inputId, subThreadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -161,10 +161,10 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
                 Text = "Research the topic of reinsurance pricing",
                 Type = ThreadMessageType.ExecutedInput
             }
-        }, ct);
+        });
 
         // Create output message with tool calls
-        await NodeFactory.CreateNodeAsync(new MeshNode(outputId, subThreadPath)
+        await NodeFactory.CreateNode(new MeshNode(outputId, subThreadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -193,7 +193,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
                     }
                 ]
             }
-        }, ct);
+        });
 
         // Navigate the hierarchy: thread → message → sub-thread → sub-messages
 
@@ -305,27 +305,26 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
 
         // Create context + thread
         var contextPath = "CoexistTestOrg";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Coexist Test", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Coexist Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = await client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test plan and delegations")),
-            o => o.WithTarget(new Address(contextPath)),
-            ct);
+            o => o.WithTarget(new Address(contextPath)));
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Store a plan under the thread
-        await NodeFactory.CreateNodeAsync(new MeshNode("Plan", threadPath)
+        await NodeFactory.CreateNode(new MeshNode("Plan", threadPath)
         {
             Name = "Execution Plan",
             NodeType = "Markdown",
             Content = "# Plan\n1. Research\n2. Create nodes"
-        }, ct);
+        });
 
         // Create response message with sub-thread delegation
         var responseMsgId = "resp003";
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -335,16 +334,16 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = "Orchestrator"
             }
-        }, ct);
+        });
 
         // Create delegation sub-thread
-        await NodeFactory.CreateNodeAsync(
+        await NodeFactory.CreateNode(
             new MeshNode("research-task-xyz1", $"{threadPath}/{responseMsgId}")
             {
                 Name = "Research task",
                 NodeType = ThreadNodeType.NodeType,
                 Content = new MeshThread { Messages = [] }
-            }, ct);
+            });
 
         // Verify: Plan exists as Markdown child of thread
         var plan = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}/Plan").FirstOrDefaultAsync(ct);

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -42,7 +43,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges[0].Items.Should().BeEmpty();
 
         // Act - Create a new node
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with
         {
             Name = "Project 1",
             NodeType = "Markdown"
@@ -74,9 +75,9 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         await Task.Delay(200);
 
         // Act - Create multiple nodes rapidly
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project3") with { Name = "Project 3", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project3") with { Name = "Project 3", NodeType = "Markdown" });
 
         // Wait for debounce and processing
         await Task.Delay(300);
@@ -98,8 +99,8 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     public async Task ObserveQuery_Read_EmitsInitialResults()
     {
         // Arrange - Create nodes first
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
@@ -128,7 +129,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     public async Task ObserveQuery_Update_EmitsUpdatedNotification()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with
         {
             Name = "Project 1",
             NodeType = "Markdown"
@@ -146,7 +147,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges[0].Items[0].Name.Should().Be("Project 1");
 
         // Act - Update the node
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("ACME/Project1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath("ACME/Project1") with
         {
             Name = "Updated Project 1",
             NodeType = "Markdown"
@@ -172,8 +173,8 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     public async Task ObserveQuery_Delete_EmitsRemovedNotification()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
@@ -187,7 +188,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges[0].Items.Should().HaveCount(2);
 
         // Act - Delete one node
-        await NodeFactory.DeleteNodeAsync("ACME/Project1");
+        await NodeFactory.DeleteNode("ACME/Project1");
 
         // Wait for debounce and processing
         await Task.Delay(300);
@@ -223,21 +224,21 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         var countAfterInit = receivedChanges.Count;
 
         // CREATE
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
         await Task.Delay(300);
 
         var addedChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Added);
         addedChange.Items[0].Name.Should().Be("Project 1");
 
         // UPDATE
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Updated Project 1", NodeType = "Markdown" });
+        await NodeFactory.UpdateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Updated Project 1", NodeType = "Markdown" });
         await Task.Delay(300);
 
         var updatedChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Updated);
         updatedChange.Items[0].Name.Should().Be("Updated Project 1");
 
         // DELETE
-        await NodeFactory.DeleteNodeAsync("ACME/Project1");
+        await NodeFactory.DeleteNode("ACME/Project1");
         await Task.Delay(300);
 
         var removedChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Removed);
@@ -264,7 +265,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         await Task.Delay(200);
 
         // Act - Create a node
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
         await Task.Delay(300);
 
         // Assert - Both subscribers should receive the notification
@@ -285,7 +286,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     public async Task ObserveQuery_ScopeExact_OnlyNotifiesExactPath()
     {
         // Arrange — use unique path to avoid collision with base-class setup
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("TestOrg") with { Name = "TestOrg", NodeType = "Group" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("TestOrg") with { Name = "TestOrg", NodeType = "Group" });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
@@ -297,14 +298,14 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges.Should().HaveCount(1);
 
         // Act - Update the exact path
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("TestOrg") with { Name = "TestOrg Updated", NodeType = "Group" });
+        await NodeFactory.UpdateNode(MeshNode.FromPath("TestOrg") with { Name = "TestOrg Updated", NodeType = "Group" });
         await Task.Delay(300);
 
         receivedChanges.Should().HaveCount(2);
         receivedChanges[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
         // Act - Create a child (should NOT trigger for)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("TestOrg/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("TestOrg/Project1") with { Name = "Project 1", NodeType = "Markdown" });
         await Task.Delay(300);
 
         // Assert - Should still only have 2 notifications
@@ -317,7 +318,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     public async Task ObserveQuery_ScopeChildren_OnlyNotifiesDirectChildren()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
@@ -329,13 +330,13 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges.Should().HaveCount(1);
 
         // Act - Create another direct child
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
         await Task.Delay(300);
 
         receivedChanges.Should().HaveCount(2);
 
         // Act - Create a grandchild (should NOT trigger for namespace: query)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1/Task1") with { Name = "Task 1", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1/Task1") with { Name = "Task 1", NodeType = "Code" });
         await Task.Delay(300);
 
         // Assert - Should still only have 2 notifications
@@ -361,13 +362,13 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         await Task.Delay(200);
 
         // Act - Create a matching node
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
         await Task.Delay(300);
 
         receivedChanges.Should().HaveCount(2);
 
         // Act - Create a non-matching node (different NodeType)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Code" });
         await Task.Delay(300);
 
         // Assert - Should still only have 2 notifications (non-matching ignored)
@@ -384,7 +385,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     public async Task ObserveQuery_MoveNode_EmitsDeleteAndCreate()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
@@ -433,10 +434,10 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         await Task.Delay(200);
 
         // Act - Make multiple changes with delay
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
         await Task.Delay(300);
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
         await Task.Delay(300);
 
         // Assert - Versions should be incrementing
@@ -457,7 +458,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     public async Task ObserveQuery_DisposalStopsNotifications()
     {
         // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
@@ -472,7 +473,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         subscription.Dispose();
 
         // Add more nodes after disposal
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
         await Task.Delay(300);
 
         // Assert - Should only have initial emission

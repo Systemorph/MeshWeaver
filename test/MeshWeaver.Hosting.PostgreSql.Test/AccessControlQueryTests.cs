@@ -264,8 +264,7 @@ public class AccessControlQueryTests
 
         // Register NodeType as public-read (normally done by AddGraph() at startup)
         await _fixture.AccessControl.SyncNodeTypePermissionsAsync(
-            [new MeshWeaver.Mesh.Security.NodeTypePermission("NodeType", PublicRead: true)],
-            TestContext.Current.CancellationToken);
+            [new MeshWeaver.Mesh.Security.NodeTypePermission("NodeType", PublicRead: true)]);
 
         // Seed a NodeType definition and a regular node — no access grants at all
         await adapter.WriteAsync(new MeshNode("Organization", "") { Name = "Organization", NodeType = "NodeType" }, _options, TestContext.Current.CancellationToken);

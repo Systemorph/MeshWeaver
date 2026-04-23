@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -84,8 +85,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Initialize TestData hub via ping
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(testDataAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(testDataAddress));
 
         // Verify IMeshService finds the pre-seeded data
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}", null, TestContext.Current.CancellationToken)
@@ -105,14 +105,12 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Initialize TestData hub first (required for routing to child hubs)
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(testDataAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(testDataAddress));
 
         // Initialize org hub via ping
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(orgAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(orgAddress));
 
         // Verify IMeshService finds the pre-seeded projects
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/org1", null, TestContext.Current.CancellationToken)
@@ -132,14 +130,12 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Initialize TestData hub first (required for routing to child hubs)
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(testDataAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(testDataAddress));
 
         // Initialize project hub via ping
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(projAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(projAddress));
 
         // Verify IMeshService finds the pre-seeded items
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/org1/proj1", null, TestContext.Current.CancellationToken)
@@ -311,7 +307,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Arrange - create a node to move (unique per run to avoid file system collisions)
         var src = $"{TestPartition}/movetest-{_uid}";
         var dst = $"{TestPartition}/movetest-renamed-{_uid}";
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(src) with { Name = "Move Test", NodeType = "Markdown" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Move Test", NodeType = "Markdown" });
 
         // Act
         var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o, TestContext.Current.CancellationToken);
@@ -339,10 +335,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Arrange - create a hierarchy to move (unique per run)
         var parent = $"{TestPartition}/parent-{_uid}";
         var newParentPath = $"{TestPartition}/newparent-{_uid}";
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(parent) with { Name = "Parent", NodeType = "Markdown" }, ct: TestContext.Current.CancellationToken);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{parent}/child1") with { Name = "Child 1", NodeType = "Markdown" }, ct: TestContext.Current.CancellationToken);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{parent}/child2") with { Name = "Child 2", NodeType = "Markdown" }, ct: TestContext.Current.CancellationToken);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{parent}/child1/grandchild") with { Name = "Grandchild", NodeType = "Markdown" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath(parent) with { Name = "Parent", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child1") with { Name = "Child 1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child2") with { Name = "Child 2", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{parent}/child1/grandchild") with { Name = "Grandchild", NodeType = "Markdown" });
 
         // Act
         await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(parent, newParentPath), o => o, TestContext.Current.CancellationToken);
@@ -381,7 +377,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Arrange - create node (unique per run)
         var src = $"{TestPartition}/commented-{_uid}";
         var dst = $"{TestPartition}/commented-moved-{_uid}";
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(src) with { Name = "Commented Node", NodeType = "Markdown" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Commented Node", NodeType = "Markdown" });
 
         // Act - move via MoveNodeRequest
         var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o, TestContext.Current.CancellationToken);
@@ -421,8 +417,8 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Arrange (unique per run)
         var src = $"{TestPartition}/source-{_uid}";
         var dst = $"{TestPartition}/target-{_uid}";
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(src) with { Name = "Source", NodeType = "Markdown" }, ct: TestContext.Current.CancellationToken);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(dst) with { Name = "Target", NodeType = "Markdown" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(MeshNode.FromPath(src) with { Name = "Source", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath(dst) with { Name = "Target", NodeType = "Markdown" });
 
         // Act - move via MoveNodeRequest
         var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o, TestContext.Current.CancellationToken);
@@ -452,8 +448,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Initialize org hub - this should also set up default views
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(orgAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(orgAddress));
 
         // Act: Request the default layout area (Overview) using stream
         // This should not hang if default views are properly configured
@@ -484,8 +479,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Initialize org hub - this should also set up default views
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(orgAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(orgAddress));
 
         // Act: Request empty area - should return default view (Details)
         var workspace = client.GetWorkspace();
@@ -517,8 +511,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Initialize Organization hub - this is a NodeType node
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(typeOrgAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(typeOrgAddress));
 
         // Act: Request Search area directly (the default view for NodeType)
         var workspace = client.GetWorkspace();
@@ -987,8 +980,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var client = GetClient();
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(new Address(ProjectNodeTypePath)),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(new Address(ProjectNodeTypePath)));
         response.Should().NotBeNull();
     }
 
@@ -998,7 +990,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var name = "My Test Article";
         var nodePath = $"{TestPartition}/name-preservation-test";
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(nodePath) with
+        await NodeFactory.CreateNode(MeshNode.FromPath(nodePath) with
         {
             Name = name,
             NodeType = "Markdown"

@@ -534,13 +534,14 @@ public partial class CollaborativeMarkdownView
         }
     }
 
-    private async Task DeleteComment(string markerId)
+    private void DeleteComment(string markerId)
     {
         if (!commentPaths.TryGetValue(markerId, out var path))
             return;
         var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery == null) return;
-        await meshQuery.DeleteNodeAsync(path);
+        meshQuery?.DeleteNode(path).Subscribe(
+            _ => { },
+            _ => { });
     }
 
     private static string Truncate(string text, int maxLength) =>

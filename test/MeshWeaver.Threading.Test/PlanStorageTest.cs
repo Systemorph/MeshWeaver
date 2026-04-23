@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -43,15 +45,14 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // 1. Create a context node
         var contextPath = "PlanTestOrg";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Plan Test Org", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Plan Test Org", NodeType = "Markdown" });
 
         // 2. Create a thread under the context
         var client = GetClient();
         var threadResponse = await client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Plan a project setup")),
-            o => o.WithTarget(new Address(contextPath)),
-            ct);
+            o => o.WithTarget(new Address(contextPath)));
 
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
         var threadPath = threadResponse.Message.Node!.Path;
@@ -75,7 +76,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = "Markdown",
             Content = planContent
         };
-        await NodeFactory.CreateNodeAsync(planNode, ct);
+        await NodeFactory.CreateNode(planNode);
 
         // 4. Verify the plan node exists at {threadPath}/Plan
         var expectedPath = $"{threadPath}/Plan";
@@ -102,24 +103,23 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Create context + thread
         var contextPath = "PartitionTestOrg";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Partition Test", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Partition Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = await client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test partition storage")),
-            o => o.WithTarget(new Address(contextPath)),
-            ct);
+            o => o.WithTarget(new Address(contextPath)));
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Store plan
-        await NodeFactory.CreateNodeAsync(new MeshNode("Plan", threadPath)
+        await NodeFactory.CreateNode(new MeshNode("Plan", threadPath)
         {
             Name = "Test Plan",
             NodeType = "Markdown",
             Content = "# Simple plan\n1. Do thing A\n2. Do thing B"
-        }, ct);
+        });
 
         // Verify the plan path contains _Thread (it's in the thread satellite partition)
         var planPath = $"{threadPath}/Plan";
@@ -142,32 +142,31 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Create context + thread
         var contextPath = "UpdatePlanOrg";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Update Plan Test", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Update Plan Test", NodeType = "Markdown" });
 
         var client = GetClient();
         var threadResponse = await client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Update plan test")),
-            o => o.WithTarget(new Address(contextPath)),
-            ct);
+            o => o.WithTarget(new Address(contextPath)));
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Create initial plan
-        await NodeFactory.CreateNodeAsync(new MeshNode("Plan", threadPath)
+        await NodeFactory.CreateNode(new MeshNode("Plan", threadPath)
         {
             Name = "Execution Plan",
             NodeType = "Markdown",
             Content = "# Plan v1\n1. Step one"
-        }, ct);
+        });
 
         // Update the plan
-        await NodeFactory.UpdateNodeAsync(new MeshNode("Plan", threadPath)
+        await NodeFactory.UpdateNode(new MeshNode("Plan", threadPath)
         {
             Name = "Execution Plan (revised)",
             NodeType = "Markdown",
             Content = "# Plan v2\n1. Step one (revised)\n2. Step two (added)"
-        }, ct);
+        });
 
         // Verify updated content
         var planPath = $"{threadPath}/Plan";

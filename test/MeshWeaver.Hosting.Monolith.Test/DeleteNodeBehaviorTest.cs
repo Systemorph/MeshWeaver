@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -44,14 +45,14 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
 
     private async Task SeedTreeAsync(CancellationToken ct)
     {
-        await NodeFactory.CreateNodeAsync(new MeshNode("delparent", TestPartition)
-        { Name = "Parent", NodeType = "Group" }, ct);
-        await NodeFactory.CreateNodeAsync(new MeshNode("c1", Root)
-        { Name = "C1", NodeType = "Markdown" }, ct);
-        await NodeFactory.CreateNodeAsync(new MeshNode("c2", Root)
-        { Name = "C2", NodeType = "Markdown" }, ct);
-        await NodeFactory.CreateNodeAsync(new MeshNode("gc", $"{Root}/c1")
-        { Name = "GC", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(new MeshNode("delparent", TestPartition)
+        { Name = "Parent", NodeType = "Group" });
+        await NodeFactory.CreateNode(new MeshNode("c1", Root)
+        { Name = "C1", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(new MeshNode("c2", Root)
+        { Name = "C2", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(new MeshNode("gc", $"{Root}/c1")
+        { Name = "GC", NodeType = "Markdown" });
     }
 
     private async Task<DeleteNodeResponse> DeleteAsync(
@@ -63,7 +64,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         {
             tcs.TrySetResult(((IMessageDelivery<DeleteNodeResponse>)d).Message);
             return Task.FromResult<IMessageDelivery>(d);
-        }, ct);
+        });
         return await tcs.Task.WaitAsync(timeout, ct);
     }
 
@@ -83,8 +84,8 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task Leaf_Delete_SucceedsAndRemovesNode()
     {
         var ct = TestContext.Current.CancellationToken;
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("leaf", TestPartition) { Name = "Leaf", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode("leaf", TestPartition) { Name = "Leaf", NodeType = "Markdown" });
 
         var response = await DeleteAsync(
             new DeleteNodeRequest($"{TestPartition}/leaf"), 10.Seconds(), ct);
@@ -159,8 +160,8 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task NoDeletePermission_OnRoot_Fails_Unauthorized_AndLogsPath()
     {
         var ct = TestContext.Current.CancellationToken;
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("locked", TestPartition) { Name = "Locked", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode("locked", TestPartition) { Name = "Locked", NodeType = "Markdown" });
 
         // Dedicated client hub whose AccessService is scoped to nobody —
         // the access context flows with the outbound message as Sender identity.
@@ -187,8 +188,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         {
             var responseDelivery = await restrictedClient.AwaitResponse(
                 new DeleteNodeRequest(path),
-                o => o.WithTarget(new Address(path)),
-                ct);
+                o => o.WithTarget(new Address(path)));
             failedResponse = responseDelivery?.Message;
         }
         catch (Exception ex)
@@ -224,12 +224,12 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task Validator_RejectsRoot_Fails_ValidationFailed_LogsNodePath()
     {
         var ct = TestContext.Current.CancellationToken;
-        await NodeFactory.CreateNodeAsync(
+        await NodeFactory.CreateNode(
             new MeshNode("blocked", TestPartition)
             {
                 Name = BlockingValidator.BlockedMarker,
                 NodeType = "Markdown"
-            }, ct);
+            });
 
         var response = await DeleteAsync(
             new DeleteNodeRequest($"{TestPartition}/blocked"), 10.Seconds(), ct);
@@ -248,16 +248,16 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task Validator_RejectsDescendant_BlocksWholeSubtree_AllPathsListed()
     {
         var ct = TestContext.Current.CancellationToken;
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("mixed", TestPartition) { Name = "Mixed", NodeType = "Group" }, ct);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("ok", $"{TestPartition}/mixed") { Name = "OK", NodeType = "Markdown" }, ct);
-        await NodeFactory.CreateNodeAsync(
+        await NodeFactory.CreateNode(
+            new MeshNode("mixed", TestPartition) { Name = "Mixed", NodeType = "Group" });
+        await NodeFactory.CreateNode(
+            new MeshNode("ok", $"{TestPartition}/mixed") { Name = "OK", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(
             new MeshNode("bad", $"{TestPartition}/mixed")
             {
                 Name = BlockingValidator.BlockedMarker,
                 NodeType = "Markdown"
-            }, ct);
+            });
 
         var response = await DeleteAsync(
             new DeleteNodeRequest($"{TestPartition}/mixed") { Recursive = true },
@@ -291,12 +291,12 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task Warnings_WithoutConfirm_Block_AndLogWarning()
     {
         var ct = TestContext.Current.CancellationToken;
-        await NodeFactory.CreateNodeAsync(
+        await NodeFactory.CreateNode(
             new MeshNode("warny", TestPartition)
             {
                 Name = WarningValidator.WarnMarker,
                 NodeType = "Markdown"
-            }, ct);
+            });
 
         var response = await DeleteAsync(
             new DeleteNodeRequest($"{TestPartition}/warny"), 10.Seconds(), ct);
@@ -315,12 +315,12 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task Warnings_WithConfirm_Proceed_AndLogWarning()
     {
         var ct = TestContext.Current.CancellationToken;
-        await NodeFactory.CreateNodeAsync(
+        await NodeFactory.CreateNode(
             new MeshNode("warny2", TestPartition)
             {
                 Name = WarningValidator.WarnMarker,
                 NodeType = "Markdown"
-            }, ct);
+            });
 
         var response = await DeleteAsync(
             new DeleteNodeRequest($"{TestPartition}/warny2") { ConfirmWarnings = true },

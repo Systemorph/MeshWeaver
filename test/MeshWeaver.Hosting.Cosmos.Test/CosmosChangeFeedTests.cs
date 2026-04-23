@@ -155,8 +155,7 @@ public class CosmosChangeFeedTests : IAsyncLifetime
         // Act
         var leaseContainer = await CosmosChangeFeedProcessor.CreateLeaseContainerAsync(
             _database!,
-            testLeaseContainerName,
-            TestContext.Current.CancellationToken);
+            testLeaseContainerName);
 
         // Assert
         leaseContainer.Should().NotBeNull();

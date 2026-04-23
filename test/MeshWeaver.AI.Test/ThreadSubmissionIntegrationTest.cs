@@ -6,6 +6,8 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -72,8 +74,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var committed = await WaitForThreadAsync(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
-            timeoutMs: 30_000,
-            ct);
+            timeoutMs: 30_000, ct);
 
         committed.IngestedMessageIds.Should().HaveCount(1);
         committed.Messages.Should().HaveCount(2, "expected one user cell + one output cell in Messages");
@@ -106,8 +107,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var committed = await WaitForThreadAsync(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
-            timeoutMs: 15_000,
-            ct);
+            timeoutMs: 15_000, ct);
 
         committed.IngestedMessageIds.Should().HaveCount(1);
         committed.Messages.Should().HaveCount(2);
@@ -143,16 +143,14 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var committed = await WaitForThreadAsync(
             threadPath,
             t => t.IngestedMessageIds.Count >= 1 && t.Messages.Count >= 2,
-            timeoutMs: 15_000,
-            ct);
+            timeoutMs: 15_000, ct);
 
         // Give the watcher a moment to finish any further rounds, then assert final state:
         // All three user messages should end up ingested; the dispatched round(s) produced >=1 output cell.
         await WaitForThreadAsync(
             threadPath,
             t => t.IngestedMessageIds.Count == 3,
-            timeoutMs: 30_000,
-            ct);
+            timeoutMs: 30_000, ct);
 
         var final = await ReadThreadAsync(threadPath, ct);
         final.IngestedMessageIds.Should().HaveCount(3, "all three user messages should be ingested");
@@ -243,8 +241,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
             t => t.Messages.Contains(fakeUserMsgId)
                  && t.IngestedMessageIds.Contains(fakeUserMsgId)
                  && t.Messages.Count >= 2,
-            timeoutMs: 5_000,
-            ct);
+            timeoutMs: 5_000, ct);
 
         final.UserMessageIds.Should().Contain(fakeUserMsgId);
         final.IngestedMessageIds.Should().Contain(fakeUserMsgId);
@@ -290,8 +287,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var roundOneStart = await WaitForThreadAsync(
             threadPath,
             t => t.IsExecuting && t.IngestedMessageIds.Count == 1,
-            timeoutMs: 5_000,
-            ct);
+            timeoutMs: 5_000, ct);
 
         roundOneStart.IngestedMessageIds.Should().HaveCount(1, "u1 should be ingested once round 1 starts");
         var u1 = roundOneStart.IngestedMessageIds[0];
@@ -319,8 +315,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var pendingState = await WaitForThreadAsync(
             threadPath,
             t => t.UserMessageIds.Count == 4,
-            timeoutMs: 3_000,
-            ct);
+            timeoutMs: 3_000, ct);
 
         // If we're quick enough, round 1 is still executing here. Either way, we can assert
         // that u2/u3/u4 are NOT yet ingested while u1 already is (or that all 4 are ingested
@@ -335,8 +330,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         var final = await WaitForThreadAsync(
             threadPath,
             t => t.IngestedMessageIds.Count == 4 && !t.IsExecuting,
-            timeoutMs: 20_000,
-            ct);
+            timeoutMs: 20_000, ct);
 
         final.IngestedMessageIds.Should().HaveCount(4);
         final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds);
@@ -456,13 +450,13 @@ public class ThreadSubmissionIntegrationTest : AITestBase
     {
         var threadId = Guid.NewGuid().AsString();
         var threadPath = $"{MonolithMeshTestBase.TestPartition}/{ThreadNodeType.ThreadPartition}/{threadId}";
-        await NodeFactory.CreateNodeAsync(new MeshNode(threadPath)
+        await NodeFactory.CreateNode(new MeshNode(threadPath)
         {
             Name = $"Test Thread {threadId}",
             NodeType = ThreadNodeType.NodeType,
             MainNode = MonolithMeshTestBase.TestPartition,
             Content = new MeshThread { CreatedBy = "rbuergi@systemorph.com" }
-        }, ct);
+        });
         return threadPath;
     }
 

@@ -133,8 +133,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Viewer role: Read only → no Create, Update, or Delete
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Viewer", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        await svc.AddUserRoleAsync(TestUserId, "Viewer", NodePath, "system");
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
@@ -162,8 +161,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Editor role: Read|Create|Update|Comment → has Create but not Delete
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system");
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
@@ -192,8 +190,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Admin role: All permissions
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Admin", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        await svc.AddUserRoleAsync(TestUserId, "Admin", NodePath, "system");
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
@@ -221,8 +218,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Seed Admin so we get all items for sorting verification
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Admin", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        await svc.AddUserRoleAsync(TestUserId, "Admin", NodePath, "system");
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
@@ -247,8 +243,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Seed Editor to get Import item (requires Create permission)
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system",
-            TestContext.Current.CancellationToken);
+        await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system");
 
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);

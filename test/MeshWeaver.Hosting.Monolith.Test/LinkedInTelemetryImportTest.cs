@@ -44,7 +44,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("LinkedInProfile", "Systemorph")
+        await NodeFactory.CreateNode(new MeshNode("LinkedInProfile", "Systemorph")
         {
             Name = "LinkedIn Profile",
             NodeType = MeshNode.NodeTypePath,
@@ -57,13 +57,13 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                     ".AddLayout(layout => layout.WithView(\"ImportTelemetry\", LinkedInTelemetryImport.ImportTelemetry))",
                 ShowChildrenInDetails = false,
             }
-        }, ct);
+        });
 
         await CreateCodeAsync("LinkedInProfile", LinkedInProfileSource, ct);
         await CreateCodeAsync("LinkedInTelemetryImport", LinkedInTelemetryImportSource, ct);
 
         var instancePath = $"{NodeTypePath}/test-profile";
-        await NodeFactory.CreateNodeAsync(new MeshNode("test-profile", NodeTypePath)
+        await NodeFactory.CreateNode(new MeshNode("test-profile", NodeTypePath)
         {
             Name = "Test",
             NodeType = NodeTypePath,
@@ -73,7 +73,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 ["displayName"] = "Test",
                 ["connectedAt"] = DateTimeOffset.UtcNow,
             }
-        }, ct);
+        });
 
         // The NodeType must compile cleanly — render the Import area to trigger
         // the compile, then assert we got back a Stack containing the form.
@@ -88,12 +88,12 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
     }
 
     private Task CreateCodeAsync(string id, string source, CancellationToken ct) =>
-        NodeFactory.CreateNodeAsync(new MeshNode(id, SourceNamespace)
+        NodeFactory.CreateNode(new MeshNode(id, SourceNamespace)
         {
             Name = id,
             NodeType = "Code",
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
-        }, ct);
+        });
 
     private async Task<UiControl> RenderAreaAsync(string path, string area, CancellationToken ct)
     {
@@ -271,7 +271,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                             ["shares"] = ParseInt(GetCell(row, cols.SharesIdx))
                         }
                     };
-                    try { await mesh.CreateNodeAsync(node); imported++; }
+                    try { await mesh.CreateNode(node); imported++; }
                     catch { skipped++; }
 
                     reportProgress:

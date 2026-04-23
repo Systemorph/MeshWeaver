@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -26,7 +27,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         var basePath = $"ACME/Group/Markdown/Added_{Guid.NewGuid():N}";
 
         // Arrange - Create initial todo
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -48,7 +49,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         receivedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Create new todo
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task2") with
         {
             Name = "Task 2",
             NodeType = "Markdown",
@@ -73,7 +74,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         var basePath = $"ACME/Group/Markdown/Removed_{Guid.NewGuid():N}";
 
         // Arrange - Create initial todo as Active
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -94,7 +95,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         receivedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Soft delete by changing state to Deleted
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -119,7 +120,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         var basePath = $"ACME/Group/Markdown/Updated_{Guid.NewGuid():N}";
 
         // Arrange - Create initial todo
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1 - Pending",
             NodeType = "Markdown",
@@ -139,7 +140,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         receivedChanges.Should().HaveCount(1);
 
         // Act - Update the todo status
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1 - Completed",
             NodeType = "Markdown",
@@ -164,7 +165,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         var basePath = $"ACME/Group/Markdown/Deleted_{Guid.NewGuid():N}";
 
         // Arrange - Create initial todo
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -186,7 +187,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         deletedChanges[0].Items.Should().BeEmpty();
 
         // Act - Soft delete the todo
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -212,13 +213,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
 
         // Arrange - Create a todo then soft-delete it
         // (CreateNodeAsync always confirms to Active, so we must update to Deleted after)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         });
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -248,7 +249,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         deletedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Restore the todo (change state to Active)
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Task 1",
             NodeType = "Markdown",
@@ -279,7 +280,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         // This test simulates the AllTasks view which combines active and deleted streams
 
         // Arrange - Create one active and one deleted todo
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task1") with
         {
             Name = "Active Task",
             NodeType = "Markdown",
@@ -287,13 +288,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Active Task", Status = "Pending" }
         });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task2") with
         {
             Name = "Deleted Task",
             NodeType = "Markdown",
             Content = new { Id = "task2", Title = "Deleted Task", Status = "Completed" }
         });
-        await NodeFactory.UpdateNodeAsync(MeshNode.FromPath($"{basePath}/task2") with
+        await NodeFactory.UpdateNode(MeshNode.FromPath($"{basePath}/task2") with
         {
             Name = "Deleted Task",
             NodeType = "Markdown",
@@ -360,7 +361,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         lastResult.Deleted.Should().HaveCount(1);
 
         // Act - Add another active task
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{basePath}/task3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{basePath}/task3") with
         {
             Name = "New Active Task",
             NodeType = "Markdown",

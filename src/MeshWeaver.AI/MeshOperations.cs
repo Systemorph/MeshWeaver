@@ -1105,10 +1105,8 @@ public class MeshOperations
 
     /// <summary>
     /// Copies a node and all its descendants to a target namespace. Delegates to
-    /// <see cref="NodeCopyHelper.CopyNodeTreeAsync"/> — the helper itself is async
-    /// enumeration over <see cref="IMeshService"/>, which we wrap via
-    /// <c>Observable.FromAsync</c> on the task-pool scheduler so the copy never
-    /// occupies the caller's hub.
+    /// <see cref="NodeCopyHelper.CopyNodeTree"/> — fully reactive pipeline (ObserveQuery +
+    /// MeshNodeReference streams + CreateNode observables chained sequentially).
     /// </summary>
     public IObservable<string> Copy(string sourcePath, string targetNamespace, bool force = false)
     {
@@ -1122,9 +1120,7 @@ public class MeshOperations
         var resolvedSource = ResolvePath(sourcePath);
         var resolvedTarget = ResolvePath(targetNamespace);
 
-        return Observable.FromAsync(ct =>
-                NodeCopyHelper.CopyNodeTreeAsync(mesh, mesh, hub, resolvedSource, resolvedTarget, force, logger))
-            .SubscribeOn(TaskPoolScheduler.Default)
+        return NodeCopyHelper.CopyNodeTree(mesh, mesh, hub, resolvedSource, resolvedTarget, force, logger)
             .Select(copied => $"Copied {copied} node(s): {resolvedSource} -> {resolvedTarget}")
             .Catch((Exception ex) =>
             {

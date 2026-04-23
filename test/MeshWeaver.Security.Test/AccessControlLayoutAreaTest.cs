@@ -61,8 +61,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         // Initialize the hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -94,8 +93,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -129,10 +127,10 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     public async Task AccessControl_NestedNode_ShowsInheritedAssignments()
     {
         // Create actual nodes so the hubs exist
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("ACME", TestPartition) { Name = "ACME", NodeType = "Group" }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("Documentation", $"{TestPartition}/ACME") { Name = "Documentation", NodeType = "Markdown" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("ACME", TestPartition) { Name = "ACME", NodeType = "Group" });
+        await NodeFactory.CreateNode(
+            new MeshNode("Documentation", $"{TestPartition}/ACME") { Name = "Documentation", NodeType = "Markdown" });
 
         // Seed assignments
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -145,8 +143,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);

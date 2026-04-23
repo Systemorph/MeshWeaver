@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -45,8 +46,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(hubAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(hubAddress));
 
         var subscriberHub = Mesh.ServiceProvider.CreateMessageHub(
             new Address("subscriber", "1"),
@@ -95,7 +95,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         using (accessService.ImpersonateAsHub(portalHub))
         {
-            var created = await nodeFactory.CreateNodeAsync(vUserNode, ct);
+            var created = await nodeFactory.CreateNode(vUserNode);
             created.Should().NotBeNull();
             created.Path.Should().Be("VUser/testVUser");
         }
@@ -124,7 +124,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         };
 
         // "some-user" is not in the portal namespace — VUserAccessRule denies
-        var act = async () => await nodeFactory.CreateNodeAsync(vUserNode, ct);
+        var act = async () => await nodeFactory.CreateNode(vUserNode);
         await act.Should().ThrowAsync<Exception>();
     }
 
@@ -158,8 +158,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Target the mesh hub where CreateNodeRequest handler is registered.
         var response = await portalHub.AwaitResponse(
             new CreateNodeRequest(vUserNode),
-            o => o.WithTarget(Mesh.Address).ImpersonateAsHub(),
-            ct);
+            o => o.WithTarget(Mesh.Address).ImpersonateAsHub());
 
         response.Message.Success.Should().BeTrue(
             "portal hub should be allowed to create VUser nodes via ImpersonateAsHub()");
@@ -196,8 +195,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Target the mesh hub where CreateNodeRequest handler is registered.
         var response = await analyticsHub.AwaitResponse(
             new CreateNodeRequest(vUserNode),
-            o => o.WithTarget(Mesh.Address).ImpersonateAsHub(),
-            ct);
+            o => o.WithTarget(Mesh.Address).ImpersonateAsHub());
 
         response.Message.Success.Should().BeFalse(
             "non-portal hub should be denied when creating VUser nodes");

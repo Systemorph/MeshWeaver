@@ -49,12 +49,12 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
 
         // Create an idle thread (not executing)
         var threadPath = "User/Roland/_Thread/streaming-idle-test";
-        await NodeFactory.CreateNodeAsync(new MeshNode("streaming-idle-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("streaming-idle-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
             Content = new MeshThread()
-        }, ct);
+        });
 
         // Subscribe to the StreamingArea
         var client = GetClient();
@@ -83,7 +83,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var responseMsgId = "resp-abc";
 
         // Create the response message node
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -94,10 +94,10 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = "Orchestrator"
             }
-        }, ct);
+        });
 
         // Create the thread in executing state with ActiveMessageId
-        await NodeFactory.CreateNodeAsync(new MeshNode("streaming-exec-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("streaming-exec-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -107,7 +107,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 ActiveMessageId = responseMsgId,
                 ExecutionStartedAt = DateTime.UtcNow
             }
-        }, ct);
+        });
 
         // Subscribe to the StreamingArea
         var client = GetClient();
@@ -137,7 +137,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var responseMsgId = "resp-def";
 
         // Create response message
-        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        await NodeFactory.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             MainNode = "User/Roland",
@@ -147,10 +147,10 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 Text = "Done.",
                 Type = ThreadMessageType.AgentResponse
             }
-        }, ct);
+        });
 
         // Create thread in executing state
-        await NodeFactory.CreateNodeAsync(new MeshNode("streaming-complete-test", "User/Roland/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("streaming-complete-test", "User/Roland/_Thread")
         {
             NodeType = ThreadNodeType.NodeType,
             MainNode = "User/Roland",
@@ -160,7 +160,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 ActiveMessageId = responseMsgId,
                 ExecutionStartedAt = DateTime.UtcNow
             }
-        }, ct);
+        });
 
         var client = GetClient();
         var workspace = client.GetWorkspace();

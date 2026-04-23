@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
@@ -193,22 +194,6 @@ public static class LinkedInConnectEndpoints
                 Content = credential,
                 State = MeshNodeState.Active,
             };
-            // Credential upsert — if Create fails with "already exists", fall back to
-            // Update. If both fail (parent namespace can't host a satellite at this path,
-            // e.g. we were given a custom-NodeType instance path instead of the user path),
-            // redirect to the profile page with an error reason instead of throwing.
-            try { await mesh.CreateNodeAsync(credentialNode, http.RequestAborted); }
-            catch (Exception createEx)
-            {
-                logger.LogInformation(createEx, "Credential create failed at {Path}, attempting update", credentialNode.Path);
-                try { await mesh.UpdateNodeAsync(credentialNode, http.RequestAborted); }
-                catch (Exception updateEx)
-                {
-                    logger.LogWarning(updateEx, "Credential update also failed at {Path}. Redirecting to profile with error.", credentialNode.Path);
-                    return Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-error&stage=credential&reason=persist-failed");
-                }
-            }
-
             // Upsert the LinkedInProfile node so the analytics dashboard has somewhere
             // to render. Loose dictionary content avoids a hard dependency on the
             // dynamic LinkedInProfile content type from this assembly.
@@ -227,16 +212,47 @@ public static class LinkedInConnectEndpoints
                     ["connectedAt"] = DateTimeOffset.UtcNow,
                 }
             };
-            try { await mesh.CreateNodeAsync(profileNode, http.RequestAborted); }
-            catch (Exception ex)
-            {
-                logger.LogInformation(ex, "LinkedInProfile create failed at {Path}, attempting update", profileNode.Path);
-                try { await mesh.UpdateNodeAsync(profileNode, http.RequestAborted); }
-                catch (Exception ex2) { logger.LogWarning(ex2, "LinkedInProfile upsert failed for {Path}", profileNode.Path); }
-            }
 
-            logger.LogInformation("Connected LinkedIn credential for profile {Profile} (subject {Subject})", profilePath, subject);
-            return Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-ok");
+            // Reactive persistence chain — mesh.CreateNode/UpdateNode return IObservable<MeshNode>
+            // (see AsynchronousCalls.md). Each Create attempt falls back to Update on failure
+            // via Rx Catch. Profile upsert errors are swallowed (best-effort). The whole chain
+            // resolves once and emits the final IResult.
+            var tcs = new TaskCompletionSource<IResult>();
+
+            var upsertCredential = mesh.CreateNode(credentialNode)
+                .Catch<MeshNode, Exception>(createEx =>
+                {
+                    logger.LogInformation(createEx, "Credential create failed at {Path}, attempting update", credentialNode.Path);
+                    return mesh.UpdateNode(credentialNode);
+                });
+
+            var upsertProfile = mesh.CreateNode(profileNode)
+                .Catch<MeshNode, Exception>(createEx =>
+                {
+                    logger.LogInformation(createEx, "LinkedInProfile create failed at {Path}, attempting update", profileNode.Path);
+                    return mesh.UpdateNode(profileNode);
+                })
+                .Catch<MeshNode, Exception>(updateEx =>
+                {
+                    logger.LogWarning(updateEx, "LinkedInProfile upsert failed for {Path} — continuing", profileNode.Path);
+                    return Observable.Return(profileNode);
+                });
+
+            upsertCredential
+                .SelectMany(_ => upsertProfile)
+                .Subscribe(
+                    _ =>
+                    {
+                        logger.LogInformation("Connected LinkedIn credential for profile {Profile} (subject {Subject})", profilePath, subject);
+                        tcs.TrySetResult(Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-ok"));
+                    },
+                    ex =>
+                    {
+                        logger.LogWarning(ex, "Credential persist failed at {Path}. Redirecting to profile with error.", credentialNode.Path);
+                        tcs.TrySetResult(Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-error&stage=credential&reason=persist-failed"));
+                    });
+
+            return await tcs.Task;
         });
 
         return endpoints;

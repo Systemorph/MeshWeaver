@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -40,8 +42,8 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
 
         // Create a context node with content collections
         var contextPath = "UploadTestOrg";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Upload Test", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Upload Test", NodeType = "Markdown" });
 
         var svgContent = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"blue\"/></svg>";
 
@@ -56,8 +58,7 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
                     FilePath = "test-diagram.svg",
                     TextContent = svgContent
                 },
-                o => o.WithTarget(new Address(contextPath)),
-                ct);
+                o => o.WithTarget(new Address(contextPath)));
 
             // Note: may fail if node doesn't have content collections configured
             // That's expected in monolith test without file system collections

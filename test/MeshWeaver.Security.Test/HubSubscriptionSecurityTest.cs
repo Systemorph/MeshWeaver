@@ -73,8 +73,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
         var client = GetClient();
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(hubAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(hubAddress));
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<EntityStore>(hubAddress, new CollectionsReference("test"));

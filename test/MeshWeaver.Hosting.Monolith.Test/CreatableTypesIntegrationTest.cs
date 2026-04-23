@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -560,7 +561,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         };
 
         // Act
-        await NodeFactory.CreateNodeAsync(newTodoNode, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(newTodoNode);
 
         // Assert - Verify the node was created
         var createdNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/my-todo", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
@@ -585,7 +586,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             NodeType = "NodeType",
             Content = restrictedTypeDef
         };
-        await NodeFactory.CreateNodeAsync(restrictedTypeNode, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(restrictedTypeNode);
 
         // Create an instance of the restricted type
         var restrictedInstance = MeshNode.FromPath("ACME/MyRestrictedProject") with
@@ -593,7 +594,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Name = "My Restricted Project",
             NodeType = "ACME/RestrictedProject"
         };
-        await NodeFactory.CreateNodeAsync(restrictedInstance, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNode(restrictedInstance);
 
         // Act
         var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/MyRestrictedProject", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
@@ -647,7 +648,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         try
         {
-            var createdNode = await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
+            var createdNode = await NodeFactory.CreateNode(node);
             Output.WriteLine($"CreateNodeAsync completed: Path={createdNode.Path}, Name={createdNode.Name}");
         }
         catch (Exception ex)
@@ -707,7 +708,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Cleanup
         Output.WriteLine($"Cleanup: Deleting test node {nodePath}");
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.DeleteNode(nodePath);
     }
 
     /// <summary>
@@ -732,7 +733,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         };
 
         Output.WriteLine($"Step 1: Calling Catalog.CreateNodeAsync");
-        var createdNode = await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
+        var createdNode = await NodeFactory.CreateNode(node);
         Output.WriteLine($"Node created: Path={createdNode.Path}");
 
         // Step 2: Request the default (Read) view
@@ -763,7 +764,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         Output.WriteLine("SUCCESS: CreateNode -> Read flow completed");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.DeleteNode(nodePath);
     }
 
     /// <summary>
@@ -799,7 +800,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         Output.WriteLine($"Step 1: Calling NodeFactory.CreateTransientAsync for {nodePath}");
 
-        var createdNode = await NodeFactory.CreateTransientAsync(node, ct);
+        var createdNode = await NodeFactory.CreateTransient(node);
         Output.WriteLine($"CreateTransientAsync completed: Path={createdNode.Path}, State={createdNode.State}");
         createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
 
@@ -877,7 +878,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Cleanup
         Output.WriteLine($"Cleanup: Deleting test node {nodePath}");
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: CancellationToken.None);
+        await NodeFactory.DeleteNode(nodePath);
     }
 
     /// <summary>
@@ -921,7 +922,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = MarkdownContent.Parse($"# {nodeName}\n\nCreated via test.", nodePath)
         };
 
-        var createdNode = await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
+        var createdNode = await NodeFactory.CreateNode(node);
         Output.WriteLine($"Node created: {createdNode.Path}");
 
         // Step 3: Request Edit view (simulates redirect to /{nodePath}/Edit)
@@ -966,7 +967,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         Output.WriteLine("SUCCESS: Complete create flow works");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.DeleteNode(nodePath);
     }
 
     public override async ValueTask DisposeAsync()

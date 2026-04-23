@@ -1,4 +1,6 @@
 using System.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph;
@@ -33,18 +35,18 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
         var logger = Mesh.ServiceProvider.GetService<ILogger<CopyModifyCopyBackTest>>();
 
         // Create test nodes dynamically
-        await meshService.CreateNodeAsync(MeshNode.FromPath(OrigNs) with { Name = "Root", NodeType = "Markdown" });
-        await meshService.CreateNodeAsync(MeshNode.FromPath($"{OrigNs}/A") with
+        await meshService.CreateNode(MeshNode.FromPath(OrigNs) with { Name = "Root", NodeType = "Markdown" });
+        await meshService.CreateNode(MeshNode.FromPath($"{OrigNs}/A") with
         {
             Name = "Node A", NodeType = "Markdown",
             Content = MarkdownContent.Parse("Content of A", "", $"{OrigNs}/A")
         });
-        await meshService.CreateNodeAsync(MeshNode.FromPath($"{OrigNs}/B") with
+        await meshService.CreateNode(MeshNode.FromPath($"{OrigNs}/B") with
         {
             Name = "Node B", NodeType = "Markdown",
             Content = MarkdownContent.Parse("Content of B", "", $"{OrigNs}/B")
         });
-        await meshService.CreateNodeAsync(MeshNode.FromPath($"{OrigNs}/C") with
+        await meshService.CreateNode(MeshNode.FromPath($"{OrigNs}/C") with
         {
             Name = "Node C", NodeType = "Markdown",
             Content = MarkdownContent.Parse("Content of C", "", $"{OrigNs}/C")
@@ -52,7 +54,7 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
 
         // 1. Copy from OrigNs to CopyNs
         // NodeCopyHelper remaps: OrigNs -> CopyNs/Orig, OrigNs/A -> CopyNs/Orig/A, etc.
-        var nodesCopied = await NodeCopyHelper.CopyNodeTreeAsync(
+        var nodesCopied = await NodeCopyHelper.CopyNodeTree(
             meshService, meshService, Mesh, OrigNs, CopyNs, force: false, logger);
         nodesCopied.Should().Be(4, "should copy root + 3 children");
 
@@ -66,7 +68,7 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
             Name = "Node B Modified",
             Content = MarkdownContent.Parse("Modified content of B", "", $"{CopyNs}/Orig/B")
         };
-        await meshService.UpdateNodeAsync(modifiedB);
+        await meshService.UpdateNode(modifiedB);
 
         // Verify the modification took effect
         var verifyB = await meshService.QueryAsync<MeshNode>($"path:{CopyNs}/Orig/B").FirstOrDefaultAsync();
@@ -76,7 +78,7 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
         // This remaps CopyNs/Orig -> OrigNs/Orig, which nests under the original.
         // For a true round-trip, we copy the children individually.
         // Instead, let's use the copy helper with the exact source namespace matching.
-        var nodesBack = await NodeCopyHelper.CopyNodeTreeAsync(
+        var nodesBack = await NodeCopyHelper.CopyNodeTree(
             meshService, meshService, Mesh, $"{CopyNs}/Orig", OrigNs, force: true, logger);
         nodesBack.Should().BeGreaterThanOrEqualTo(4, "should copy back all nodes");
 

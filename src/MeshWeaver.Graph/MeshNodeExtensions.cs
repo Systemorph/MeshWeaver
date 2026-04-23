@@ -1,5 +1,7 @@
 ﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
@@ -23,6 +25,42 @@ public static class MeshNodeExtensions
     /// is loaded from persistence (Active) or activated via CreateNodeRequest.
     /// </summary>
     public const string MeshNodeInitGateName = "MeshNodeInit";
+
+    /// <summary>
+    /// Reactive handle to the current hub's own MeshNode. Canonical replacement for
+    /// <c>QueryAsync&lt;MeshNode&gt;($"path:{hubPath}").FirstOrDefaultAsync()</c> —
+    /// no query index, no await, no staleness, live updates on content changes.
+    /// Compose with <c>.Take(1)</c> for one-shot reads, <c>.Where(...)</c> + <c>.Take(1)</c>
+    /// for wait-for-completion, or keep subscribed for live views.
+    /// </summary>
+    public static IObservable<MeshNode> GetMeshNodeStream(this IWorkspace workspace)
+    {
+        var stream = workspace.GetStream(new MeshNodeReference())
+            ?? throw new InvalidOperationException("MeshNode stream is not available — the workspace has no MeshNodeReference reducer.");
+        return stream
+            .Where(change => change.Value != null)
+            .Select(change => change.Value!);
+    }
+
+    /// <summary>
+    /// Reactive handle to a MeshNode at the given path. Auto-dispatches: if <paramref name="path"/>
+    /// is the current hub's own address, returns the local own-node stream; otherwise returns a
+    /// remote subscription to the owning hub. Callers don't have to distinguish — just pass the path.
+    /// Canonical replacement for <c>QueryAsync&lt;MeshNode&gt;($"path:{path}").FirstOrDefaultAsync()</c>.
+    /// </summary>
+    public static IObservable<MeshNode> GetMeshNodeStream(this IWorkspace workspace, string path)
+    {
+        // Local short-circuit — GetRemoteStream throws "Owner cannot be the same as the
+        // subscriber" when the owner IS the current hub. Use the local own-node stream instead.
+        if (string.Equals(workspace.Hub.Address.ToString(), path, StringComparison.Ordinal))
+            return workspace.GetMeshNodeStream();
+
+        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+            new Address(path), new MeshNodeReference());
+        return stream
+            .Where(change => change.Value != null)
+            .Select(change => change.Value!);
+    }
 
     /// <summary>
     /// Updates a MeshNode on an EntityStore stream.

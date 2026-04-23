@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -53,7 +54,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         var id = $"logrun-{Guid.NewGuid():N}";
         var path = $"Scripts/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNodeAsync(new MeshNode(id, "Scripts")
+        await mesh.CreateNode(new MeshNode(id, "Scripts")
         {
             Name = "Log test",
             NodeType = "Code",
@@ -112,7 +113,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         var id = $"logfail-{Guid.NewGuid():N}";
         var path = $"Scripts/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNodeAsync(new MeshNode(id, "Scripts")
+        await mesh.CreateNode(new MeshNode(id, "Scripts")
         {
             Name = "Failing script",
             NodeType = "Code",

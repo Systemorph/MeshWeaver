@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -46,10 +48,10 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     public async Task NodeTypeThread_FansOutAcrossAllPartitions()
     {
         // Arrange: create two partitions with threads in each
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("PartitionA") { Name = "Partition A", NodeType = "Markdown" }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("PartitionB") { Name = "Partition B", NodeType = "Markdown" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("PartitionA") { Name = "Partition A", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(
+            new MeshNode("PartitionB") { Name = "Partition B", NodeType = "Markdown" });
 
         var client = GetClient();
 
@@ -84,10 +86,10 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     public async Task NodeTypeThread_WithNamespace_SearchesSinglePartition()
     {
         // Arrange: threads in two partitions
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("NsY") { Name = "Namespace Y", NodeType = "Markdown" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("NsX") { Name = "Namespace X", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(
+            new MeshNode("NsY") { Name = "Namespace Y", NodeType = "Markdown" });
 
         var client = GetClient();
 
@@ -119,19 +121,19 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
     public async Task NodeTypeComment_FansOutAcrossAllPartitions()
     {
         // Arrange: create nodes with comments in different partitions
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" }, TestTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode("CmtOrgA") { Name = "Org A", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(
+            new MeshNode("CmtOrgB") { Name = "Org B", NodeType = "Markdown" });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("CmtOrgA/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgA/doc1") with
         {
             Name = "Doc A", NodeType = "Markdown"
-        }, TestTimeout);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("CmtOrgB/doc2") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath("CmtOrgB/doc2") with
         {
             Name = "Doc B", NodeType = "Markdown"
-        }, TestTimeout);
+        });
 
         // Create comments as satellite nodes
         var commentA = MeshNode.FromPath($"CmtOrgA/doc1/_Comment/cmt-{Guid.NewGuid():N}") with
@@ -147,8 +149,8 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
             MainNode = "CmtOrgB/doc2"
         };
 
-        await NodeFactory.CreateNodeAsync(commentA, TestTimeout);
-        await NodeFactory.CreateNodeAsync(commentB, TestTimeout);
+        await NodeFactory.CreateNode(commentA);
+        await NodeFactory.CreateNode(commentB);
 
         // Act: query nodeType:Comment without namespace
         var results = await MeshQuery

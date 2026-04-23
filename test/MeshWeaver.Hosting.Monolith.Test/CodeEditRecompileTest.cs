@@ -88,7 +88,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var ct = new CancellationTokenSource(45.Seconds()).Token;
 
         // 1. Create the NodeType with a Code source returning V1.
-        await NodeFactory.CreateNodeAsync(new MeshNode("CodeEditType", TestPartition)
+        await NodeFactory.CreateNode(new MeshNode("CodeEditType", TestPartition)
         {
             Name = "Code Edit Type",
             NodeType = MeshNode.NodeTypePath,
@@ -98,21 +98,21 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
                 ShowChildrenInDetails = false,
             }
-        }, ct);
+        });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("code", $"{TestPartition}/CodeEditType/Source")
+        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/CodeEditType/Source")
         {
             Name = "Code",
             NodeType = "Code",
             Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
-        }, ct);
+        });
 
         // 2. Create an instance and evaluate its Overview area.
-        await NodeFactory.CreateNodeAsync(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
+        await NodeFactory.CreateNode(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
         {
             Name = "Instance 1",
             NodeType = NodeTypePath,
-        }, ct);
+        });
 
         var v1 = await ReadOverviewAsync(InstancePath, ct);
         v1.Should().Contain("MARKER_V1", "initial compile must use the V1 source");
@@ -129,7 +129,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         await NodeFactory.UpdateNodeAsync(codeNode! with
         {
             Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" }
-        }, ct);
+        });
 
         // Sanity check: persistence must observe V2 before we invalidate + reread.
         // Poll because InMemoryPersistence can propagate async.
@@ -169,13 +169,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Delete + recreate the instance so the next read goes through the full
         // activation path (no chance the stale hub lingers in the routing cache).
-        await NodeFactory.DeleteNodeAsync(InstancePath, ct);
+        await NodeFactory.DeleteNode(InstancePath);
         await Task.Delay(100, ct);
-        await NodeFactory.CreateNodeAsync(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
+        await NodeFactory.CreateNode(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
         {
             Name = "Instance 1",
             NodeType = NodeTypePath,
-        }, ct);
+        });
 
         Output.WriteLine("=== After invalidation + delete+recreate, reading Overview for V2 ===");
 

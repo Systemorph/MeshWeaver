@@ -937,8 +937,7 @@ public record SatelliteModel
             {
                 NodeType = nodeTypePath,
                 LastModified = DateTimeOffset.UtcNow
-            },
-            TestContext.Current.CancellationToken);
+            });
 
         // Assert: compilation succeeded — the SatelliteModel type is reachable.
         nodeTypeService.GetCompilationError(nodeTypePath).Should().BeNull(

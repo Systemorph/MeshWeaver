@@ -55,7 +55,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text);
-        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        var created = await NodeFactory.CreateNode(threadNode);
         return created.Path;
     }
 
@@ -99,12 +99,12 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var client = GetClient();
 
         // 1. Create some test data so the Search tool has something to find
-        await NodeFactory.CreateNodeAsync(new MeshNode("test-doc", ContextPath)
+        await NodeFactory.CreateNode(new MeshNode("test-doc", ContextPath)
         {
             Name = "Test Document",
             NodeType = "Markdown",
             Content = "Hello from test document"
-        }, ct);
+        });
 
         // 2. Create thread
         var threadPath = await CreateThreadAsync(client, "Tool calling test", ct);

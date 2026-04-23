@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -38,13 +40,13 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
         // Create a thread under Roland's namespace
-        await NodeFactory.CreateNodeAsync(new MeshNode("test-thread-1", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("test-thread-1", $"User/{RolandId}/_Thread")
         {
             Name = "Roland's test thread",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
             Content = new MeshThread()
-        }, ct);
+        });
 
         // Query by path — should find it
         var result = await MeshQuery.QueryAsync<MeshNode>(
@@ -60,13 +62,13 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
         // Create thread under Roland
-        await NodeFactory.CreateNodeAsync(new MeshNode("visible-thread", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("visible-thread", $"User/{RolandId}/_Thread")
         {
             Name = "Roland visible thread",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
             Content = new MeshThread()
-        }, ct);
+        });
 
         // Query as Roland — scope:descendants matches the real portal fan-out behavior
         var threads = await MeshQuery.QueryAsync<MeshNode>(
@@ -82,13 +84,13 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
         // Create thread under Roland (as admin — self-access allows creation under own scope)
-        await NodeFactory.CreateNodeAsync(new MeshNode("private-thread", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("private-thread", $"User/{RolandId}/_Thread")
         {
             Name = "Roland private thread",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
             Content = new MeshThread()
-        }, ct);
+        });
 
         // Switch to Samuel — RLS self-access only grants User/Samuel/... scope,
         // not User/Roland/... scope. PublicAdminAccess gives broad admin
@@ -107,13 +109,13 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
         // Create thread under Roland
-        await NodeFactory.CreateNodeAsync(new MeshNode("ns-thread", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("ns-thread", $"User/{RolandId}/_Thread")
         {
             Name = "Roland ns thread",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
             Content = new MeshThread()
-        }, ct);
+        });
 
         // Query with namespace scope (like MeshNodeLayoutAreas.Threads uses)
         var threads = await MeshQuery.QueryAsync<MeshNode>(
@@ -129,13 +131,13 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
         // Create thread under Roland (same as sidebar thread history query)
-        await NodeFactory.CreateNodeAsync(new MeshNode("getting-started-a1b2", $"User/{RolandId}/_Thread")
+        await NodeFactory.CreateNode(new MeshNode("getting-started-a1b2", $"User/{RolandId}/_Thread")
         {
             Name = "Getting Started",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
             Content = new MeshThread()
-        }, ct);
+        });
 
         // Global search: same query as ThreadChatView sidebar history.
         // In the real portal (partitioned persistence), RoutingMeshQueryProvider
@@ -161,7 +163,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             LastModified = DateTimeOffset.UtcNow.AddDays(-10),
             Content = new MeshThread()
         };
-        await NodeFactory.CreateNodeAsync(oldThread, ct);
+        await NodeFactory.CreateNode(oldThread);
 
         var newThread = new MeshNode("new-thread", $"User/{RolandId}/_Thread")
         {
@@ -171,7 +173,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             LastModified = DateTimeOffset.UtcNow,
             Content = new MeshThread()
         };
-        await NodeFactory.CreateNodeAsync(newThread, ct);
+        await NodeFactory.CreateNode(newThread);
 
         // Query with sort:LastModified-desc
         var threads = await MeshQuery.QueryAsync<MeshNode>(

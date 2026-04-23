@@ -45,7 +45,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
 
         // Create a thread node
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "single instance test", "Roland");
-        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        var created = await NodeFactory.CreateNode(threadNode);
         var threadPath = created.Path;
 
         // Get via CollectionReference for MeshNode collection
@@ -73,7 +73,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         var ct = new CancellationTokenSource(10.Seconds()).Token;
 
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "update test", "Roland");
-        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        var created = await NodeFactory.CreateNode(threadNode);
         var threadPath = created.Path;
 
         var client = GetClient();
@@ -153,7 +153,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         var ct = new CancellationTokenSource(10.Seconds()).Token;
 
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "multi update test", "Roland");
-        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        var created = await NodeFactory.CreateNode(threadNode);
         var threadPath = created.Path;
 
         var client = GetClient();
@@ -235,14 +235,13 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
 
         // 1. Create a context node and a thread under it
         var contextPath = "TestContext";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" });
 
         var client = GetClient();
         var response = await client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Parent thread for catalog test")),
-            o => o.WithTarget(new Address(contextPath)),
-            ct);
+            o => o.WithTarget(new Address(contextPath)));
 
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path;
@@ -262,8 +261,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         // 3. Create a sub-thread (delegation) via CreateNodeRequest — same flow as the "Create Thread" button
         var subResponse = await client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode(threadPath, "Delegation sub-thread")),
-            o => o.WithTarget(new Address(threadPath)),
-            ct);
+            o => o.WithTarget(new Address(threadPath)));
 
         subResponse.Message.Success.Should().BeTrue(subResponse.Message.Error);
         var subThreadPath = subResponse.Message.Node!.Path;

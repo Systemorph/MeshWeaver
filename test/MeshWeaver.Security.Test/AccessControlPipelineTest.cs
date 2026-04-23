@@ -43,8 +43,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         // Grant admin full access so test setup can work
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Admin", "PipelineTest", "system",
-            TestContext.Current.CancellationToken);
+            TestUsers.Admin.ObjectId, "Admin", "PipelineTest", "system");
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -69,8 +68,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         // Ensure hub is started
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         // Try to subscribe — should be denied by AccessControlPipeline
         var workspace = client.GetWorkspace();
@@ -93,8 +91,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync(
-            "Viewer1", "Viewer", "PipelineTest", "system",
-            TestContext.Current.CancellationToken);
+            "Viewer1", "Viewer", "PipelineTest", "system");
 
         // Verify the permission was granted via ISecurityService
         var hasRead = await securityService.HasPermissionAsync(
@@ -113,8 +110,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
             await client.AwaitResponse(
                 new GetDataRequest(new UnifiedReference("data:")),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken));
+                o => o.WithTarget(nodeAddress)));
 
         ex.InnerException.Should().BeOfType<DeliveryFailureException>();
         ex.InnerException!.Message.Should().Contain("Access denied");
@@ -146,8 +142,7 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
 
         var response = await Mesh.AwaitResponse(
             new GetDataRequest(new UnifiedReference("data:")),
-            o => o.WithTarget(new Address("Organization")),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(new Address("Organization")));
 
         // Not blocked by pipeline — may have no data but no access denied
         response.Message.Error.Should().NotContain("Access denied");

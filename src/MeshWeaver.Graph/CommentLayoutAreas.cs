@@ -307,25 +307,29 @@ public static class CommentLayoutAreas
             .WithStyle("justify-content: flex-end; margin-top: 4px;")
             .WithView(Controls.Button("Done")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    // Read text from data area
-                    var newText = "";
+                    // Read text, then resolve the comment via MeshNodeReference on its own hub
+                    // (AsynchronousCalls.md: known-path read goes via MeshNodeReference, never QueryAsync).
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
                         .Take(1)
-                        .Subscribe(data => newText = data?.GetValueOrDefault("text")?.ToString() ?? "");
+                        .Subscribe(data =>
+                        {
+                            var newText = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                    // Save via message — update only the Text property of the Comment
-                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
-                    if (node != null)
-                    {
-                        var comment = node.Content as Comment ?? new Comment();
-                        var updatedNode = node with { Content = comment with { Text = newText } };
-                        host.Hub.Post(new UpdateNodeRequest(updatedNode));
-                    }
-
-                    ctx.Host.UpdateData(editStateId, false);
+                            host.Workspace.GetStream(new MeshNodeReference())!
+                                .Where(change => change.Value != null)
+                                .Take(1)
+                                .Subscribe(change =>
+                                {
+                                    var node = change.Value!;
+                                    var comment = node.Content as Comment ?? new Comment();
+                                    var updatedNode = node with { Content = comment with { Text = newText } };
+                                    host.Hub.Post(new UpdateNodeRequest(updatedNode));
+                                    ctx.Host.UpdateData(editStateId, false);
+                                });
+                        });
+                    return Task.CompletedTask;
                 })));
 
         return stack;
@@ -365,35 +369,43 @@ public static class CommentLayoutAreas
             .WithStyle("margin-top: 8px; justify-content: flex-end;")
             .WithView(Controls.Button("Cancel")
                 .WithAppearance(Appearance.Neutral)
-                .WithClickAction(async _ =>
+                .WithClickAction(_ =>
                 {
-                    try { await nodeFactory.DeleteNodeAsync(replyPath); } catch { }
-                    host.UpdateData(replyPathStateId, "");
+                    nodeFactory.DeleteNode(replyPath).Subscribe(
+                        __ => host.UpdateData(replyPathStateId, ""),
+                        _  => host.UpdateData(replyPathStateId, ""));
+                    return Task.CompletedTask;
                 }))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Add())
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    // Read text from data area
-                    var text = "";
+                    // Read text, then look up the transient reply in the workspace stream
+                    // (not QueryAsync — AsynchronousCalls.md) and flip it to Active with the text.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(replyTextDataId)
                         .Take(1)
-                        .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
-
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{replyPath}").FirstOrDefaultAsync();
-                    if (node != null)
-                    {
-                        var replyComment = node.Content as Comment ?? new Comment();
-                        var activeNode = node with
+                        .Subscribe(data =>
                         {
-                            State = MeshNodeState.Active,
-                            Content = replyComment with { Text = text }
-                        };
-                        host.Hub.Post(new UpdateNodeRequest(activeNode));
-                    }
+                            var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                    host.UpdateData(replyPathStateId, "");
+                            host.Workspace.GetStream<MeshNode>()!
+                                .Select(nodes => nodes?.FirstOrDefault(n => n.Path == replyPath))
+                                .Where(n => n != null)
+                                .Take(1)
+                                .Subscribe(node =>
+                                {
+                                    var replyComment = node!.Content as Comment ?? new Comment();
+                                    var activeNode = node with
+                                    {
+                                        State = MeshNodeState.Active,
+                                        Content = replyComment with { Text = text }
+                                    };
+                                    host.Hub.Post(new UpdateNodeRequest(activeNode));
+                                    host.UpdateData(replyPathStateId, "");
+                                });
+                        });
+                    return Task.CompletedTask;
                 })));
 
         return stack;
@@ -405,7 +417,7 @@ public static class CommentLayoutAreas
     private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: var(--accent-fill-rest);\" title=\"Reply\">↩</span>")
-            .WithClickAction(async _ =>
+            .WithClickAction(_ =>
             {
                 var replyId = Guid.NewGuid().AsString();
                 var replyPath = $"{hubPath}/{replyId}";
@@ -426,13 +438,15 @@ public static class CommentLayoutAreas
                 };
 
                 var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                await nodeFactory.CreateTransientAsync(replyNode);
-
-                // Expand the replies section so the new reply is visible
-                var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
-                host.UpdateData(expandedStateId, true);
-
-                host.UpdateData(replyPathStateId, replyPath);
+                nodeFactory.CreateTransient(replyNode).Subscribe(
+                    _ =>
+                    {
+                        var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
+                        host.UpdateData(expandedStateId, true);
+                        host.UpdateData(replyPathStateId, replyPath);
+                    },
+                    _ => { });
+                return Task.CompletedTask;
             });
     }
 
@@ -443,17 +457,19 @@ public static class CommentLayoutAreas
     private static UiControl BuildResolveButton(LayoutAreaHost host, string hubPath, Comment comment)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #4ade80;\" title=\"Resolve\">✓</span>")
-            .WithClickAction(async _ =>
+            .WithClickAction(_ =>
             {
-                var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-                // Update comment status to Resolved
-                var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
-                if (node != null)
-                {
-                    var updatedNode = node with { Content = comment with { Status = CommentStatus.Resolved } };
-                    host.Hub.Post(new UpdateNodeRequest(updatedNode));
-                }
+                // Resolve comment — resolve the node via the workspace stream, not QueryAsync.
+                host.Workspace.GetStream<MeshNode>()!
+                    .Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
+                    .Where(n => n != null)
+                    .Take(1)
+                    .Subscribe(node =>
+                    {
+                        var updatedNode = node! with { Content = comment with { Status = CommentStatus.Resolved } };
+                        host.Hub.Post(new UpdateNodeRequest(updatedNode));
+                    });
+                return Task.CompletedTask;
             });
     }
 
@@ -478,10 +494,13 @@ public static class CommentLayoutAreas
     private static UiControl BuildDeleteButton(LayoutAreaHost host, string hubPath)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #f87171;\" title=\"Delete\">✕</span>")
-            .WithClickAction(async _ =>
+            .WithClickAction(_ =>
             {
                 var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                await nodeFactory.DeleteNodeAsync(hubPath);
+                nodeFactory.DeleteNode(hubPath).Subscribe(
+                    __ => { },
+                    _ => { });
+                return Task.CompletedTask;
             });
     }
 
@@ -506,10 +525,13 @@ public static class CommentLayoutAreas
         {
             menu = menu.WithView(
                 Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
-                    .WithClickAction(async _ =>
+                    .WithClickAction(_ =>
                     {
                         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        await nodeFactory.DeleteNodeAsync(hubPath);
+                        nodeFactory.DeleteNode(hubPath).Subscribe(
+                            __ => { },
+                            _ => { });
+                        return Task.CompletedTask;
                     }));
         }
 

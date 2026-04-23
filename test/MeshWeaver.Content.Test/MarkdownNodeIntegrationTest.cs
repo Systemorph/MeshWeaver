@@ -524,8 +524,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         Output.WriteLine("Pinging CollaborativeEditing hub...");
         var pingResponse = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(nodeAddress));
 
         Output.WriteLine($"Ping response: {pingResponse.Message}");
         pingResponse.Message.Should().NotBeNull("Hub should respond to ping");

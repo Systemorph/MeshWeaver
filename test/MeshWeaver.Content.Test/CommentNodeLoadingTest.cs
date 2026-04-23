@@ -137,8 +137,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
 
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         response.Should().NotBeNull(
             $"Hub at '{DocPartitionCommentPath}' should respond to PingRequest");

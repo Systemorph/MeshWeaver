@@ -89,8 +89,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Initialize the hub first - required for proper routing
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(todoAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(todoAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -119,8 +118,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Initialize the hub first - required for proper routing
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(todoAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(todoAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Thumbnail");
@@ -149,8 +147,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Initialize the hub first - required for proper routing
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(todoAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(todoAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -191,8 +188,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             // Initialize the hub first - required for proper routing
             await client.AwaitResponse(
                 new PingRequest(),
-                o => o.WithTarget(todoAddress),
-                TestContext.Current.CancellationToken);
+                o => o.WithTarget(todoAddress));
 
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
                 todoAddress,
@@ -241,8 +237,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
         Output.WriteLine("Hub initialized.");
 
         // Get the hosted hub directly
@@ -284,8 +279,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -319,8 +313,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Initialize the hub first
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();

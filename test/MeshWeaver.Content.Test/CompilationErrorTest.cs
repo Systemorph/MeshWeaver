@@ -3,6 +3,7 @@ using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -73,7 +74,7 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = MeshNode.NodeTypePath,
             Content = new NodeTypeDefinition()
         };
-        await NodeFactory.CreateNodeAsync(nodeTypeNode, ct: ct);
+        await NodeFactory.CreateNode(nodeTypeNode);
 
         // Code with a compile error: missing required parameter
         var codeNode = new MeshNode("BrokenCode", $"{nodeTypePath}/Source")
@@ -91,7 +92,7 @@ public record BrokenType
 }"
             }
         };
-        await NodeFactory.CreateNodeAsync(codeNode, ct: ct);
+        await NodeFactory.CreateNode(codeNode);
 
         // 2. Create an instance node of the broken type
         var instanceNode = MeshNode.FromPath("test/broken-instance") with
@@ -100,7 +101,7 @@ public record BrokenType
             NodeType = nodeTypePath,
             LastModified = DateTimeOffset.UtcNow
         };
-        await NodeFactory.CreateNodeAsync(instanceNode, ct: ct);
+        await NodeFactory.CreateNode(instanceNode);
 
         // 3. Initialize the hub -- this triggers compilation
         var client = GetClient();
@@ -109,8 +110,7 @@ public record BrokenType
         Output.WriteLine("Initializing hub for test/broken-instance...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address),
-            ct);
+            o => o.WithTarget(address));
         Output.WriteLine("Hub initialized.");
 
         // 4. Request the Overview layout area

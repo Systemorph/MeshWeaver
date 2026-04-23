@@ -152,10 +152,13 @@ public static class GroupLayoutAreas
                         .WithView(Controls.Button("")
                             .WithIconStart(FluentIcons.Delete())
                             .WithAppearance(Appearance.Stealth)
-                            .WithClickAction(async ctx =>
+                            .WithClickAction(ctx =>
                             {
                                 var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                                await nodeFactory.DeleteNodeAsync(member.Path);
+                                nodeFactory.DeleteNode(member.Path).Subscribe(
+                                    _ => { },
+                                    _ => { });
+                                return Task.CompletedTask;
                             })));
                 }
             }
@@ -217,39 +220,40 @@ public static class GroupLayoutAreas
                 .WithStyle("justify-content: flex-end; gap: 8px; margin-top: 16px;")
                 .WithView(Controls.Button("Save")
                     .WithAppearance(Appearance.Accent)
-                    .WithClickAction(async saveCtx =>
+                    .WithClickAction(saveCtx =>
                     {
-                        var formValues = await saveCtx.Host.Stream
-                            .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                        var memberId = formValues.GetValueOrDefault("memberId")?.ToString()?.Trim();
-                        if (string.IsNullOrEmpty(memberId))
-                        {
-                            var errorDialog = Controls.Dialog(
-                                Controls.Markdown("Please select a **Member**."),
-                                "Validation Error"
-                            ).WithSize("S").WithClosable(true);
-                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                            return;
-                        }
-
-                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                        {
-                            var memberName = memberId.Split('/').Last();
-                            var memberNode = new MeshNode($"{memberName}_Membership", groupPath)
+                        saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                            .Take(1)
+                            .Subscribe(formValues =>
                             {
-                                NodeType = Configuration.GroupMembershipNodeType.NodeType,
-                                Name = $"{memberName} Membership",
-                                Content = new GroupMembership
+                                var memberId = formValues.GetValueOrDefault("memberId")?.ToString()?.Trim();
+                                if (string.IsNullOrEmpty(memberId))
                                 {
-                                    Member = memberId,
-                                    Groups = [new MembershipEntry { Group = groupPath }]
+                                    var errorDialog = Controls.Dialog(
+                                        Controls.Markdown("Please select a **Member**."),
+                                        "Validation Error"
+                                    ).WithSize("S").WithClosable(true);
+                                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                    return;
                                 }
-                            };
-                            await nodeFactory.CreateNodeAsync(memberNode);
-                        }
 
-                        saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                                var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                                var memberName = memberId.Split('/').Last();
+                                var memberNode = new MeshNode($"{memberName}_Membership", groupPath)
+                                {
+                                    NodeType = Configuration.GroupMembershipNodeType.NodeType,
+                                    Name = $"{memberName} Membership",
+                                    Content = new GroupMembership
+                                    {
+                                        Member = memberId,
+                                        Groups = [new MembershipEntry { Group = groupPath }]
+                                    }
+                                };
+                                nodeFactory.CreateNode(memberNode).Subscribe(
+                                    _ => saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!),
+                                    _ => { });
+                            });
+                        return Task.CompletedTask;
                     })));
 
         var dialog = Controls.Dialog(formContent, "Add Member")

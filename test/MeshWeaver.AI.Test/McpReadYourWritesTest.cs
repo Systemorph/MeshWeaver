@@ -245,7 +245,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         // plugin Create so we're not tangling the test with Create semantics).
         var id = $"exec-{Guid.NewGuid():N}";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNodeAsync(
+        await meshService.CreateNode(
             new MeshNode(id, "Scripts")
             {
                 Name = "Hello Script",

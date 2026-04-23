@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Acme.Test.TestHelpers;
@@ -94,8 +95,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -140,8 +140,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Initializing hub...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -197,15 +196,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Create the transient node via NodeFactory
-            await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await NodeFactory.CreateTransient(transientNode);
             Output.WriteLine("Transient node created.");
 
             // Initialize the node's hub
             var nodeAddress = new Address(nodePath);
             await client.AwaitResponse(
                 new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+                o => o.WithTarget(nodeAddress));
             Output.WriteLine("Node hub initialized.");
 
             // Transient nodes are auto-confirmed and redirected to Edit.
@@ -236,7 +234,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             // Cleanup
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath);
                 Output.WriteLine("Cleanup: transient node deleted.");
             }
             catch (Exception ex)
@@ -269,7 +267,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         try
         {
-            await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await NodeFactory.CreateTransient(transientNode);
             Output.WriteLine("Transient node created successfully");
 
             var nodeAddress = new Address(nodePath);
@@ -317,7 +315,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath);
             }
             catch { }
         }
@@ -352,7 +350,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node (simulates BuildCreateChildForm)
-            var createdNode = await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            var createdNode = await NodeFactory.CreateTransient(transientNode);
             createdNode.Should().NotBeNull("Transient node should be created");
             createdNode.State.Should().Be(MeshNodeState.Transient);
             Output.WriteLine($"Transient node created: {createdNode.Path}");
@@ -361,8 +359,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             var nodeAddress = new Address(nodePath);
             await client.AwaitResponse(
                 new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+                o => o.WithTarget(nodeAddress));
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Send CreateNodeRequest with State=Active (simulates Create button click)
@@ -407,7 +404,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath);
                 Output.WriteLine("Cleanup: node deleted.");
             }
             catch { }
@@ -435,7 +432,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node
-            var createdNode = await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            var createdNode = await NodeFactory.CreateTransient(transientNode);
             createdNode.Should().NotBeNull("Transient node should be created");
             createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
             createdNode.Name.Should().Be("E2E Test Task");
@@ -453,7 +450,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath);
                 Output.WriteLine("Cleanup: node deleted.");
             }
             catch { }
@@ -539,15 +536,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         try
         {
-            await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await NodeFactory.CreateTransient(transientNode);
             Output.WriteLine("Transient node created (without content).");
 
             // Step 2: Initialize the node's hub (this triggers MeshDataSource initialization)
             var nodeAddress = new Address(nodePath);
             await client.AwaitResponse(
                 new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+                o => o.WithTarget(nodeAddress));
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Get the node from workspace to see what content was created
@@ -628,7 +624,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath);
                 Output.WriteLine("Cleanup: node deleted.");
             }
             catch { }
@@ -671,15 +667,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node
-            await NodeFactory.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await NodeFactory.CreateTransient(transientNode);
             Output.WriteLine("Transient node created.");
 
             // Step 2: Initialize the node's hub
             var nodeAddress = new Address(nodePath);
             await client.AwaitResponse(
                 new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                TestContext.Current.CancellationToken);
+                o => o.WithTarget(nodeAddress));
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Confirm the node (make it Active)
@@ -747,7 +742,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         {
             try
             {
-                await NodeFactory.DeleteNodeAsync(nodePath);
+                await NodeFactory.DeleteNode(nodePath);
                 Output.WriteLine("Cleanup: node deleted.");
             }
             catch { }
@@ -800,8 +795,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);

@@ -63,8 +63,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         // Thread is NOT public-read — visibility is via user scope (path LIKE 'User/{userId}/%').
         var schemaAccessControl = new PostgreSqlAccessControl(ds);
         await schemaAccessControl.SyncNodeTypePermissionsAsync(
-            [new NodeTypePermission("ThreadMessage", PublicRead: true)],
-            TestContext.Current.CancellationToken);
+            [new NodeTypePermission("ThreadMessage", PublicRead: true)]);
     }
 
     public ValueTask DisposeAsync()

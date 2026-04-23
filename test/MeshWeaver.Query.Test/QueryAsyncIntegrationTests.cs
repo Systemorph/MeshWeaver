@@ -1,6 +1,8 @@
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
@@ -25,9 +27,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_FilterByProperty_ReturnsMatchingNodes()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/chair") with { Name = "Chair", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/chair") with { Name = "Chair", NodeType = "Code" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} nodeType:Markdown scope:descendants")).ToListAsync();
 
@@ -39,8 +41,8 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_FilterWithTextSearch_ReturnsFuzzyMatches()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop") with { Name = "Gaming Laptop Pro" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/desktop") with { Name = "Desktop Computer" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Gaming Laptop Pro" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/desktop") with { Name = "Desktop Computer" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} laptop scope:descendants")).ToListAsync();
 
@@ -52,9 +54,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_CombinedFilterAndSearch_ReturnsMatchingResults()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop1") with { Name = "Gaming Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop2") with { Name = "Business Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/chair") with { Name = "Gaming Chair", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop1") with { Name = "Gaming Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop2") with { Name = "Business Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/chair") with { Name = "Gaming Chair", NodeType = "Code" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} nodeType:Markdown gaming scope:descendants")).ToListAsync();
 
@@ -66,10 +68,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeDescendants_SearchesAllChildren()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(new MeshNode(p) { Name = "Root", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other_desc/company") with { Name = "Other Company", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(new MeshNode(p) { Name = "Root", NodeType = "Group" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("other_desc/company") with { Name = "Other Company", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} nodeType:Markdown scope:descendants")).ToListAsync();
 
@@ -81,9 +83,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeAncestors_SearchesParentPaths()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(new MeshNode(p) { Name = "Organization Root", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
+        await NodeFactory.CreateNode(new MeshNode(p) { Name = "Organization Root", NodeType = "Group" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/acme/project nodeType:Group scope:ancestors")).ToListAsync();
 
@@ -95,10 +97,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_InOperator_MatchesMultipleValues()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/chair") with { Name = "Chair", NodeType = "Code" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/food") with { Name = "Food", NodeType = "Notification" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/chair") with { Name = "Chair", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/food") with { Name = "Food", NodeType = "Notification" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} nodeType:(Markdown OR Code) scope:descendants")).ToListAsync();
 
@@ -110,9 +112,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_LikeOperator_MatchesWildcard()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop-pro") with { Name = "Laptop Pro", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop-basic") with { Name = "Laptop Basic", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/desktop") with { Name = "Desktop Computer", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop-pro") with { Name = "Laptop Pro", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop-basic") with { Name = "Laptop Basic", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/desktop") with { Name = "Desktop Computer", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} name:*Laptop* scope:descendants")).ToListAsync();
 
@@ -124,9 +126,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_OrLogic_MatchesEitherCondition()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/chair") with { Name = "Chair", NodeType = "Code" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/food") with { Name = "Food", NodeType = "Notification" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/chair") with { Name = "Chair", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/food") with { Name = "Food", NodeType = "Notification" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} (nodeType:Markdown OR nodeType:Code) scope:descendants")).ToListAsync();
 
@@ -138,9 +140,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_EmptyQuery_ReturnsAllAtPath()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/phone") with { Name = "Phone" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other_empty/chair") with { Name = "Chair" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("other_empty/chair") with { Name = "Chair" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}")).ToListAsync();
 
@@ -152,9 +154,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NotEqualOperator_ExcludesMatches()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/chair") with { Name = "Chair", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/chair") with { Name = "Chair", NodeType = "Code" });
 
         var results = await MeshQuery.QueryAsync<MeshNode>($"path:{p} -nodeType:Markdown scope:descendants").ToListAsync();
 
@@ -168,10 +170,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithoutScope_SearchesImmediateChildrenOnly()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/beta") with { Name = "Beta Inc", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other_ns/company") with { Name = "Other Company", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/beta") with { Name = "Beta Inc", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("other_ns/company") with { Name = "Other Company", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"namespace:{p}")).ToListAsync();
 
@@ -183,10 +185,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithDescendants_SearchesRecursively()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project/task") with { Name = "Task A", NodeType = "Notification" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other_nsDesc/company") with { Name = "Other Company", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/project/task") with { Name = "Task A", NodeType = "Notification" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("other_nsDesc/company") with { Name = "Other Company", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"namespace:{p} scope:descendants")).ToListAsync();
 
@@ -198,10 +200,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithFilter_SearchesImmediateChildrenWithFilter()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/beta") with { Name = "Beta Inc", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/project") with { Name = "Org Project", NodeType = "Code" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/child") with { Name = "Acme Child", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/beta") with { Name = "Beta Inc", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/project") with { Name = "Org Project", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/child") with { Name = "Acme Child", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"namespace:{p} nodeType:Markdown")).ToListAsync();
 
@@ -213,10 +215,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeChildren_SearchesImmediateChildrenOnly()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(new MeshNode(p) { Name = "Products", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop/accessories") with { Name = "Accessories", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(new MeshNode(p) { Name = "Products", NodeType = "Group" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop/accessories") with { Name = "Accessories", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"namespace:{p}")).ToListAsync();
 
@@ -228,9 +230,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithScopeChildren_LimitsToImmediateChildren()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/beta") with { Name = "Beta Inc", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/beta") with { Name = "Beta Inc", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"namespace:{p}")).ToListAsync();
 
@@ -246,9 +248,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeHierarchy_FindsAgentUnderNodeType()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ProductLaunch") with { Name = "MeshFlow Product Launch", NodeType = $"{p}/Project" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ProductLaunch") with { Name = "MeshFlow Product Launch", NodeType = $"{p}/Project" });
 
         var nodeResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/ProductLaunch")).ToListAsync();
         nodeResults.Should().HaveCount(1);
@@ -267,10 +269,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeHierarchy_FindsMultipleAgentsUnderNodeType()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project/ReportAgent") with { Name = "Project Report Agent", NodeType = "Agent" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project/Todo") with { Name = "Todo NodeType", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/ReportAgent") with { Name = "Project Report Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/Todo") with { Name = "Todo NodeType", NodeType = "Markdown" });
 
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/Project nodeType:Agent scope:hierarchy")).ToListAsync();
 
@@ -282,8 +284,8 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeHierarchy_IncludesSelfIfMatchesFilter()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project") with { Name = "Project Agent", NodeType = "Agent" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project") with { Name = "Project Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
 
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/Project nodeType:Agent scope:hierarchy")).ToListAsync();
 
@@ -295,11 +297,11 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeHierarchy_FindsBothAncestorAndDescendantAgents()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Orchestrator") with { Name = "Orchestrator", NodeType = "Agent" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME") with { Name = "ACME Organization", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME/ACMEAgent") with { Name = "ACME Agent", NodeType = "Agent" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME/Project") with { Name = "Project", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Orchestrator") with { Name = "Orchestrator", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME") with { Name = "ACME Organization", NodeType = "Group" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME/ACMEAgent") with { Name = "ACME Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME/Project") with { Name = "Project", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
 
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/ACME/Project nodeType:Agent scope:hierarchy")).ToListAsync();
         var agentNames = agentResults.Cast<MeshNode>().Select(n => n.Name).ToList();
@@ -312,8 +314,8 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeMyselfAndAncestors_FindsAgentsAtExactAncestorPaths()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME") with { Name = "ACME Root Agent", NodeType = "Agent" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME/ProductLaunch") with { Name = "MeshFlow Product Launch", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME") with { Name = "ACME Root Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME/ProductLaunch") with { Name = "MeshFlow Product Launch", NodeType = "Markdown" });
 
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/ACME/ProductLaunch nodeType:Agent scope:selfAndAncestors")).ToListAsync();
 
@@ -326,9 +328,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeSelfAndAncestors_FindsChildrenOfAncestorPaths()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME") with { Name = "ACME Root", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME/GlobalAgent") with { Name = "Global Agent", NodeType = "Agent" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME/ProductLaunch") with { Name = "MeshFlow Product Launch", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME") with { Name = "ACME Root", NodeType = "Group" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME/GlobalAgent") with { Name = "Global Agent", NodeType = "Agent" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/ACME/ProductLaunch") with { Name = "MeshFlow Product Launch", NodeType = "Markdown" });
 
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/ACME/ProductLaunch nodeType:Agent scope:selfAndAncestors")).ToListAsync();
 
@@ -344,10 +346,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_DevLogin_FindsUserNodesUnderUserNamespace()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Alice") with { Name = "Alice Chen", NodeType = "Markdown", Content = new { name = "Alice Chen" } });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Bob") with { Name = "Bob Wilson", NodeType = "Markdown", Content = new { name = "Bob Wilson" } });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Carol") with { Name = "Carol Martinez", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Public_Access") with { Name = "Public Access", NodeType = "Code" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Alice") with { Name = "Alice Chen", NodeType = "Markdown", Content = new { name = "Alice Chen" } });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Bob") with { Name = "Bob Wilson", NodeType = "Markdown", Content = new { name = "Bob Wilson" } });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Carol") with { Name = "Carol Martinez", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Public_Access") with { Name = "Public Access", NodeType = "Code" });
 
         var results = await MeshQuery.QueryAsync<MeshNode>($"nodeType:Markdown namespace:{p} scope:descendants").ToListAsync();
 
@@ -360,8 +362,8 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_DevLogin_NamespaceUserWithoutScope_FindsImmediateChildren()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Alice") with { Name = "Alice Chen", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Bob") with { Name = "Bob Wilson", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Alice") with { Name = "Alice Chen", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Bob") with { Name = "Bob Wilson", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync<MeshNode>($"nodeType:Markdown namespace:{p}").ToListAsync();
 
@@ -377,7 +379,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task DevLogin_Signin_FindsUserByPath()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Roland") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/Roland") with
         {
             Name = "Roland Buergi",
             NodeType = "Markdown",

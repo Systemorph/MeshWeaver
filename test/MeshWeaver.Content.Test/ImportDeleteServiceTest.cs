@@ -225,8 +225,7 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         var parent = new MeshNode("ImportTestParent", "lifecycle") { Name = "Parent" };
         var createParent = await client.AwaitResponse(
             new CreateNodeRequest(parent),
-            o => o.WithTarget(Mesh.Address),
-            TestTimeout);
+            o => o.WithTarget(Mesh.Address));
         createParent.Message.Success.Should().BeTrue();
 
         // Create children
@@ -238,8 +237,7 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         // Act - delete parent recursively
         var deleteResponse = await client.AwaitResponse(
             new DeleteNodeRequest("lifecycle/ImportTestParent") { Recursive = true },
-            o => o.WithTarget(Mesh.Address),
-            TestTimeout);
+            o => o.WithTarget(Mesh.Address));
 
         // Assert
         deleteResponse.Message.Success.Should().BeTrue();

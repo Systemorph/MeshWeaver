@@ -88,8 +88,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         // Initialize the hub first - this triggers dynamic compilation which can take time
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -125,8 +124,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         // Initialize the hub first - this triggers dynamic compilation which can take time
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -157,8 +155,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         // Initialize the hub first - this triggers dynamic compilation which can take time
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(parentAddress),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(parentAddress));
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();

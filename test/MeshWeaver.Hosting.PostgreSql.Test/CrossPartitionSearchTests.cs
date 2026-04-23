@@ -64,8 +64,7 @@ public class CrossPartitionSearchTests
             var schemaName = org.ToLowerInvariant();
             var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(
                 schemaName,
-                partitionDef with { Namespace = org, Schema = schemaName },
-                ct);
+                partitionDef with { Namespace = org, Schema = schemaName });
             partitions[org] = (ds, adapter);
 
             // Store partition definition in Admin

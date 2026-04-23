@@ -2,6 +2,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -41,7 +43,7 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
         var node = CreateVUserNode("visitor1");
         using (accessService.ImpersonateAsHub(portalHub))
         {
-            var created = await meshService.CreateNodeAsync(node, ct);
+            var created = await meshService.CreateNode(node);
             created.Should().NotBeNull();
             created.Path.Should().Be("VUser/visitor1");
             created.State.Should().Be(MeshNodeState.Active);
@@ -66,10 +68,10 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
         using (accessService.ImpersonateAsHub(portalHub))
         {
             // First creation succeeds
-            await meshService.CreateNodeAsync(node, ct);
+            await meshService.CreateNode(node);
 
             // Second creation should throw, not hang
-            var act = async () => await meshService.CreateNodeAsync(node, ct);
+            var act = async () => await meshService.CreateNode(node);
             await act.Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("*already exists*");
         }
@@ -98,7 +100,7 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
             var existsBefore = await CheckNodeExistsAsync(meshService, $"VUser/{virtualUserId}", ct);
             existsBefore.Should().BeFalse("VUser node should not exist yet");
 
-            await meshService.CreateNodeAsync(node, ct);
+            await meshService.CreateNode(node);
 
             // Second call: VUser exists after creation
             var existsAfter = await CheckNodeExistsAsync(meshService, $"VUser/{virtualUserId}", ct);

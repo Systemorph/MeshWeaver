@@ -68,8 +68,7 @@ public class PartitionQueryTests
 
         // Register Partition node type as public read
         await _fixture.AccessControl.SyncNodeTypePermissionsAsync(
-            [new NodeTypePermission("Partition", PublicRead: true)],
-            TestContext.Current.CancellationToken);
+            [new NodeTypePermission("Partition", PublicRead: true)]);
     }
 
     [Fact(Timeout = 30000)]
@@ -78,8 +77,7 @@ public class PartitionQueryTests
         await SeedPartitionDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options,
-            TestContext.Current.CancellationToken);
+        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options);
 
         node.Should().NotBeNull();
         node!.NodeType.Should().Be("Partition");
@@ -104,8 +102,7 @@ public class PartitionQueryTests
             $"namespace:Admin/Partition nodeType:Partition", userId: "alice");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options,
-            TestContext.Current.CancellationToken))
+        await foreach (var item in query.QueryAsync(request, _options))
         {
             results.Add(item);
         }
@@ -128,8 +125,7 @@ public class PartitionQueryTests
             $"namespace:Admin/Partition nodeType:Partition", userId: WellKnownUsers.Anonymous);
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options,
-            TestContext.Current.CancellationToken))
+        await foreach (var item in query.QueryAsync(request, _options))
         {
             results.Add(item);
         }
@@ -143,8 +139,7 @@ public class PartitionQueryTests
         await SeedPartitionDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/Documentation", _options,
-            TestContext.Current.CancellationToken);
+        var node = await adapter.ReadAsync("Admin/Partition/Documentation", _options);
 
         node.Should().NotBeNull();
         var def = DeserializeContent<PartitionDefinition>(node.Content);
@@ -160,8 +155,7 @@ public class PartitionQueryTests
         await SeedPartitionDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options,
-            TestContext.Current.CancellationToken);
+        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options);
 
         node.Should().NotBeNull();
         var def = DeserializeContent<PartitionDefinition>(node.Content);

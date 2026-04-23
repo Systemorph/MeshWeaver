@@ -43,7 +43,7 @@ public static class VUserHelper
             };
 
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            await meshService.CreateNodeAsync(userNode, CancellationToken.None);
+            await meshService.CreateNode(userNode);
             logger?.LogDebug("VirtualUser: Created VUser node {Path}", path);
         }
     }

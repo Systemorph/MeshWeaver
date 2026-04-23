@@ -1,6 +1,8 @@
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
@@ -38,28 +40,28 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     public async Task ActivityFeed_ReturnsMainNodesWithActivitySatellites()
     {
         // Arrange: 3 main nodes; only 2 have _activity satellite children
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("af/project1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project1") with
         {
             Name = "Project 1", NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("af/project1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project1/_activity/log1") with
         {
             Name = "Log 1", NodeType = "Activity",
             MainNode = "af/project1",
             Content = new ActivityLog("DataUpdate") { HubPath = "af/project1" }
         });
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("af/project2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project2") with
         {
             Name = "Project 2", NodeType = "Markdown"
         });
         // project2 has NO activity satellite
 
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("af/project3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project3") with
         {
             Name = "Project 3", NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("af/project3/_activity/log3") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("af/project3/_activity/log3") with
         {
             Name = "Log 3", NodeType = "Activity",
             MainNode = "af/project3",
@@ -83,7 +85,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     public async Task ActivityFeed_NoActivitySatellites_ReturnsEmpty()
     {
         // Arrange: main nodes but no activity satellites
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("afEmpty/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("afEmpty/doc1") with
         {
             Name = "Doc 1", NodeType = "Markdown"
         });
@@ -103,16 +105,16 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
     public async Task RecentlyViewed_InMemory_ReturnsMainNodes_ExcludesSatellites()
     {
         // Arrange: main nodes + satellite node
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("rv/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("rv/doc1") with
         {
             Name = "Doc 1", NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("rv/doc2") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("rv/doc2") with
         {
             Name = "Doc 2", NodeType = "Markdown"
         });
         // Activity satellite (should be excluded by is:main)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("rv/doc1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath("rv/doc1/_activity/log1") with
         {
             Name = "Activity", NodeType = "Activity",
             MainNode = "rv/doc1",
@@ -144,8 +146,8 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
 
         // Arrange: create context node and thread (use non-User namespace to avoid ACL)
         var contextPath = "ThreadCtx";
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "Thread Context", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(contextPath) { Name = "Thread Context", NodeType = "Markdown" });
 
         var client = GetClient();
         var response = await client.AwaitResponse(
@@ -195,26 +197,26 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         var ns = "myItems";
 
         // Arrange: namespace node first (required for CreateNodeRequest target)
-        await NodeFactory.CreateNodeAsync(
-            new MeshNode(ns) { Name = "My Items NS", NodeType = "Markdown" }, ct);
+        await NodeFactory.CreateNode(
+            new MeshNode(ns) { Name = "My Items NS", NodeType = "Markdown" });
 
         // Main content nodes under the namespace
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{ns}/doc1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/doc1") with
         {
             Name = "Document 1", NodeType = "Markdown"
-        }, ct);
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{ns}/project1") with
+        });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/project1") with
         {
             Name = "Project 1", NodeType = "Markdown"
-        }, ct);
+        });
 
         // Activity satellite (should be excluded by is:main)
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{ns}/doc1/_activity/log1") with
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{ns}/doc1/_activity/log1") with
         {
             Name = "Activity", NodeType = "Activity",
             MainNode = $"{ns}/doc1",
             Content = new ActivityLog("DataUpdate") { HubPath = $"{ns}/doc1" }
-        }, ct);
+        });
 
         // Thread satellite via CreateNodeRequest
         var client = GetClient();
