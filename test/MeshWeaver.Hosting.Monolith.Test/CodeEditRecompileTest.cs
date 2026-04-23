@@ -126,7 +126,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             break;
         }
         codeNode.Should().NotBeNull();
-        await NodeFactory.UpdateNodeAsync(codeNode! with
+        await NodeFactory.UpdateNode(codeNode! with
         {
             Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" }
         });

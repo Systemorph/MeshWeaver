@@ -43,8 +43,11 @@ public static class VUserHelper
             };
 
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            await meshService.CreateNode(userNode);
-            logger?.LogDebug("VirtualUser: Created VUser node {Path}", path);
+            // Fire-and-forget: await on hub-backed CreateNode deadlocks the hub
+            // pump (see AsynchronousCalls.md). Subscribe logs success/failure.
+            meshService.CreateNode(userNode).Subscribe(
+                _ => logger?.LogDebug("VirtualUser: Created VUser node {Path}", path),
+                ex => logger?.LogWarning(ex, "VirtualUser: Failed to create VUser node {Path}", path));
         }
     }
 }

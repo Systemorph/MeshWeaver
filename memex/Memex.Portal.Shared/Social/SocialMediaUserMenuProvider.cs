@@ -59,7 +59,7 @@ public sealed class SocialMediaUserMenuProvider : INodeMenuProvider
         {
             try
             {
-                await mesh.CreateNodeAsync(new MeshNode("SocialMedia", hubPath)
+                await mesh.CreateNode(new MeshNode("SocialMedia", hubPath)
                 {
                     Name = "Social Media",
                     NodeType = "Systemorph/SocialMediaHub",

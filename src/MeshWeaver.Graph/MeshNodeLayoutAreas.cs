@@ -808,34 +808,34 @@ public static class MeshNodeLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
+        return nodeStream.SelectMany(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
-            // Query for NodeType children at this level
-            IReadOnlyList<MeshNode> nodeTypeChildren;
-            try
-            {
-                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:NodeType").ToListAsync();
-            }
-            catch
-            {
-                nodeTypeChildren = Array.Empty<MeshNode>();
-            }
+            // NodeType children: ObserveQuery snapshot — listing observable, no await.
+            var children = meshQuery.ObserveQuery<MeshNode>(
+                    MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:NodeType"))
+                .Take(1)
+                .Select(c => (IReadOnlyList<MeshNode>)c.Items)
+                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>()));
 
-            // Query for the node's own NodeType definition (if it has one)
-            MeshNode? ownType = null;
-            if (node != null && !string.IsNullOrEmpty(node.NodeType))
-            {
-                try
-                {
-                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}").FirstOrDefaultAsync();
-                }
-                catch { }
-            }
+            // Own NodeType definition by path (known-path lookup): GetMeshNodeStream — no QueryAsync.
+            var ownTypeStream = node != null && !string.IsNullOrEmpty(node.NodeType)
+                ? host.Workspace.GetMeshNodeStream(node.NodeType)
+                    .Take(1)
+                    .Select(n => (MeshNode?)n)
+                    .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                : Observable.Return<MeshNode?>(null);
 
-            var hasOwnType = ownType != null;
-            var hasNodeTypeChildren = nodeTypeChildren.Count > 0;
+            return children.CombineLatest(ownTypeStream, (nodeTypeChildren, ownType) =>
+            {
+                var hasOwnType = ownType != null;
+                var hasNodeTypeChildren = nodeTypeChildren.Count > 0;
+                return (node, ownType, nodeTypeChildren, hasOwnType, hasNodeTypeChildren);
+            });
+        }).Select(tuple =>
+        {
+            var (node, ownType, nodeTypeChildren, hasOwnType, hasNodeTypeChildren) = tuple;
 
             if (!hasOwnType && !hasNodeTypeChildren)
             {

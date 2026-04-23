@@ -318,17 +318,28 @@
                 DesiredId = id
             };
 
-            await MeshService.CreateNode(node);
-            NavigationService.NavigateTo($"/{nodePath}/Edit");
+            // Subscribe to CreateNode (IObservable<MeshNode>) — await on hub-backed
+            // writes deadlocks the hub pump (see AsynchronousCalls.md).
+            MeshService.CreateNode(node).Subscribe(
+                _ =>
+                {
+                    isCreating = false;
+                    NavigationService.NavigateTo($"/{nodePath}/Edit");
+                },
+                ex =>
+                {
+                    errorMessage = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
+                        ? "You do not have permission to create nodes in this namespace."
+                        : $"Failed to create node: {ex.Message}";
+                    isCreating = false;
+                    _ = InvokeAsync(StateHasChanged);
+                });
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
                 ? "You do not have permission to create nodes in this namespace."
                 : $"Failed to create node: {ex.Message}";
-        }
-        finally
-        {
             isCreating = false;
         }
     }

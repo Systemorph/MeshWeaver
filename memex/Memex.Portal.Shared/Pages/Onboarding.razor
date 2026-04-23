@@ -6,6 +6,7 @@
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 @using Microsoft.Extensions.DependencyInjection
+@using System.Reactive.Linq
 @inject AccessService AccessService
 @inject IMeshService NodeFactory
 @inject IMeshService MeshQuery
@@ -177,7 +178,7 @@
                     Content = userContent
                 };
 
-                await NodeFactory.CreateNodeAsync(node);
+                await NodeFactory.CreateNode(node);
 
                 // First user becomes global Admin (stored in admin.access table)
                 if (isFirstUser)
