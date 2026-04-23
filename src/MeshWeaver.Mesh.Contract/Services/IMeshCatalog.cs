@@ -26,17 +26,22 @@ internal interface IMeshCatalog : IPathResolver
     /// <summary>
     /// Creates a new node in the catalog with validation.
     /// The node is created in Transient state, validated, and then confirmed.
-    /// Identity is resolved from AccessContext. Returns an IObservable that emits
-    /// the created node on success — no await, no Task.
+    /// Identity is resolved from AccessContext.
     /// </summary>
-    IObservable<MeshNode> CreateNode(MeshNode node, string? createdBy = null);
+    /// <param name="node">The node to create</param>
+    /// <param name="createdBy">Optional user who created the node (resolved from AccessContext if null)</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The created node with State set to Confirmed</returns>
+    /// <exception cref="InvalidOperationException">If node already exists or validation fails</exception>
+    Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default);
 
     /// <summary>
     /// Creates a transient node for UI creation flows.
-    /// Resolves currentUser internally from AccessService. Returns IObservable that
-    /// emits the transient node on success.
+    /// Resolves currentUser internally from AccessService.
+    /// The node is persisted in Transient state, enriched with HubConfiguration,
+    /// but NOT confirmed — the Create area handles confirmation.
     /// </summary>
-    IObservable<MeshNode> CreateTransient(MeshNode node);
+    Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default);
 
     /// <summary>
     /// Resolves a full URL path to an address using score-based matching.

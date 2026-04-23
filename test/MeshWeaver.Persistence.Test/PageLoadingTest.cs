@@ -98,7 +98,8 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // Initialize the hub
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address));
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
         Output.WriteLine($"Hub initialized for {nodePath}");
 
         var workspace = client.GetWorkspace();
@@ -131,7 +132,8 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(address));
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
         Output.WriteLine($"Hub initialized for {nodePath}");
 
         var workspace = client.GetWorkspace();
@@ -277,7 +279,8 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
                     var address = new Address(path);
                     await client.AwaitResponse(
                         new PingRequest(),
-                        o => o.WithTarget(address));
+                        o => o.WithTarget(address),
+                        TestContext.Current.CancellationToken);
 
                     var workspace = client.GetWorkspace();
                     var reference = new LayoutAreaReference(string.Empty);
