@@ -2,7 +2,9 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -99,20 +101,61 @@ public static class CodeNodeType
                 var kernelAddress = AddressExtensions.CreateKernelAddress(
                     "code-" + hub.Address.Path.Replace('/', '-'));
 
-                // Fire-and-forget — 1:1 with ExecutionManager in interactive markdown.
-                // Progress + stdout stream into the kernel's layout area at submissionId.
-                hub.Post(
-                    new SubmitCodeRequest(code.Code ?? string.Empty) { Id = submissionId },
-                    o => o.WithTarget(kernelAddress));
-
-                hub.Post(
-                    new ExecuteScriptResponse
+                // Create an ActivityLog MeshNode for this run — scripts'
+                // Log.LogInformation(...) calls will append to it, and callers
+                // subscribe via GetRemoteStream<MeshNode, MeshNodeReference> to
+                // watch progress live. Created via IMeshService.CreateNode so it
+                // flows through the standard create pipeline (RLS, persistence).
+                var activityId = submissionId;
+                var activityNamespace = $"{hub.Address.Path}/_activity";
+                var activityPath = $"{activityNamespace}/{activityId}";
+                var activityNode = new MeshNode(activityId, activityNamespace)
+                {
+                    Name = $"Script run {activityId[..Math.Min(8, activityId.Length)]}",
+                    NodeType = ActivityNodeType.NodeType,
+                    MainNode = hub.Address.Path,
+                    State = MeshNodeState.Active,
+                    Content = new ActivityLog("ScriptExecution")
                     {
-                        Success = true,
-                        SubmissionId = submissionId,
-                        OutputAreaReference = submissionId
+                        Id = activityId,
+                        HubPath = hub.Address.Path,
+                        Status = ActivityStatus.Running
+                    }
+                };
+
+                var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+                meshService.CreateNode(activityNode).Subscribe(
+                    _ =>
+                    {
+                        // Node created. Fire SubmitCodeRequest carrying the log path.
+                        hub.Post(
+                            new SubmitCodeRequest(code.Code ?? string.Empty)
+                            {
+                                Id = submissionId,
+                                ActivityLogPath = activityPath
+                            },
+                            o => o.WithTarget(kernelAddress));
+
+                        hub.Post(
+                            new ExecuteScriptResponse
+                            {
+                                Success = true,
+                                SubmissionId = submissionId,
+                                OutputAreaReference = submissionId,
+                                ActivityLog = activityPath
+                            },
+                            o => o.ResponseFor(request));
                     },
-                    o => o.ResponseFor(request));
+                    err =>
+                    {
+                        hub.Post(
+                            new ExecuteScriptResponse
+                            {
+                                Success = false,
+                                Error = $"Failed to create ActivityLog node: {err.Message}"
+                            },
+                            o => o.ResponseFor(request));
+                    });
             });
         return request.Processed();
     }
