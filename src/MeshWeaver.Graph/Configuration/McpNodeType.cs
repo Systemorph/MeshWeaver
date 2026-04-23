@@ -1,4 +1,5 @@
 using MeshWeaver.Graph.Security;
+using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -37,9 +38,18 @@ public static class McpNodeType
         builder.AddAutocompleteExcludedTypes(NodeType);
         builder
             .ConfigureHub(config => config
+                // mcp/{sessionId} addresses target this rule and land on a hosted
+                // hub whose own routing pipeline mirrors the kernel scaffolding —
+                // so a subsequent post to kernel/X from inside the session hub
+                // resolves locally via RouteAddressToHostedHub("kernel", ...)
+                // instead of leaking back to the Orleans grain-activation path
+                // (which would try to find a MeshNode at kernel/X and fail).
                 .WithRoutes(routes => routes.RouteAddressToHostedHub(
                     AddressExtensions.McpType,
-                    c => c)))
+                    sessionConfig => sessionConfig
+                        .WithRoutes(r => r.RouteAddressToHostedHub(
+                            AddressExtensions.KernelType,
+                            c => c.AddKernelSubHubHandlers())))))
             .ConfigureServices(services =>
             {
                 services.AddSingleton<INodeTypeAccessRule>(sp =>
