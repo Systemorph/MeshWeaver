@@ -1,7 +1,7 @@
 ---
 NodeType: "Doc/Article"
-Title: "CQRS — Queries vs. Content Access"
-Abstract: "Why you must never use a query to fetch a specific node's content. Queries return sets of matches and can lag behind writes; reading content uses GetRemoteStream with a MeshNodeReference — direct, reactive, and always in sync."
+Title: "CQRS — Queries, Reads, Writes, Operations"
+Abstract: "Query only for finding sets of elements. For a specific node's content use GetDataRequest for a one-shot, GetRemoteStream for a live subscription. Writes go through PatchDataChangeRequest. Operations like 'run this script' are named request types handled on the owning node's hub — the implementation (e.g. the kernel) stays private."
 Icon: "Split"
 Published: "2026-04-23"
 Thumbnail: "images/DataMesh.svg"
@@ -15,204 +15,251 @@ Tags:
   - "Consistency"
 ---
 
-## The rule
+## The four primitives
 
-> **Queries bring sets of elements. Nothing more.**
-> If you want the *content* of a specific node, **never use a query** — use
-> `workspace.GetRemoteStream<MeshNode>(address, new MeshNodeReference())`.
+| Intent | Primitive |
+|---|---|
+| **Find a set of nodes** (existence, listing, search) | `mesh.ObserveQuery<T>(request)` — or `QueryAsync` for `IAsyncEnumerable` |
+| **Read a known node's content (one-shot)** | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr))` + `hub.RegisterCallback` |
+| **Subscribe to a node's live updates** | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` |
+| **Write to a node** | `hub.Post(new PatchDataChangeRequest(...), o => o.WithTarget(addr))` (or `DataChangeRequest` for full updates) |
+| **Perform an operation on a node** | Named request type handled on the owning hub — e.g. `ExecuteScriptRequest`, `MoveNodeRequest`, `ImportRequest` |
 
-This is not a stylistic choice. It is a correctness requirement.
+**Read this line twice:** *query only for sets*. A query that happens to return one row is still a query.
 
-## Why queries can't be used for content
+## Why queries are not for content
 
-MeshWeaver separates **read-side discovery** (queries) from **authoritative content
-reads** (workspace streams). They go through different code paths with different
-guarantees:
+Queries route through a **read-side index** (a cached projection).  The index is eventually
+consistent: there is a window — single-digit to tens of milliseconds in prod — where a
+successful write is not yet reflected in query results. That's acceptable for browsing
+and autocomplete but lethal for "read-your-writes" operations like Patch (read current
+content → merge → write), auditing ("did my change take?"), or any decision flow.
 
-| | Query (`QueryAsync`, `ObserveQuery`) | Content access (`GetRemoteStream` + `MeshNodeReference`) |
-|---|---|---|
-| Purpose | Find WHICH nodes match a predicate | Get THE current state of a known node |
-| Returns | A set (0..N items) | A single `MeshNode` |
-| Source | Read-side index / cached projection | Owning hub's workspace (source of truth) |
-| Consistency | Eventually consistent — **has a delay** | Strong — emits the hub's current committed state |
-| After a write | May still return the old row for milliseconds | Next emission reflects the write |
-| Cost | Scans / indexed lookup across partitions | One subscribe on the owning hub |
-| Scales | Thousands of rows per second | One stream per caller per node |
+`GetDataRequest(new MeshNodeReference())` goes to the **owning hub's workspace** — the
+source of truth. No staleness. It also activates the hub if it was cold; you don't have
+to pre-subscribe.
 
-A query that "happens to match one row" is still a query. It ran through the indexed
-read path. It can lie about the current state. It can be out of sync.
+## One-shot reads (`GetDataRequest` + `RegisterCallback`)
 
-The indexed/cached read path exists for good reasons — it makes `Search("nodeType:Agent")`
-fast across millions of nodes. But that same indirection is exactly why you must not
-use it to read a node you already have the path for.
-
-## The two patterns
-
-### Query — only when you're looking for a set
+The canonical pattern for "give me this node's current MeshNode":
 
 ```csharp
-// "Give me every Agent node under this namespace"
-mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Agent namespace:OrgA"))
-    .Take(1)
-    .Subscribe(change =>
+var delivery = hub.Post(
+    new GetDataRequest(new MeshNodeReference()),
+    o => o.WithTarget(new Address(path)));
+
+hub.RegisterCallback(delivery, (d, _) =>
+{
+    if (d is IMessageDelivery<GetDataResponse> response
+        && response.Message.Data is MeshNode node)
     {
-        foreach (var node in change.Items) { /* paths only — existence + metadata */ }
-    });
+        // Use node.Content, node.Version, etc. — authoritative, no lag.
+    }
+    return Task.FromResult(d);
+}, cancellationToken);
 ```
 
-Valid use cases:
-- Listing children of a namespace (`path/*`)
-- Searching by predicate (`nodeType:X`, `name:*sales*`)
-- Checking whether any match exists
-- Browsing / autocomplete
+No `ObserveQuery`, no `await`, no `FromAsync` bridge. The target hub activates on
+receipt of the message, responds with a `GetDataResponse` wrapping the current
+`MeshNode`, and your callback fires.
 
-What you get back is enough to *decide what to read next*. It is **not** what you
-render to the user or base a business decision on.
+## Live updates (`GetRemoteStream`)
 
-### Content — always through `GetRemoteStream` + `MeshNodeReference`
+Use when you want to *react* to writes — render a view, wait for a job to finish,
+watch progress roll in.
 
 ```csharp
-// "Give me the live state of THIS node"
-var workspace = hub.GetWorkspace();
-workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(path), new MeshNodeReference())
-    .Take(1)
-    .Subscribe(change =>
-    {
-        var node = change.Value;  // current committed MeshNode, not a lagged index hit
-        if (node is null) { /* truly not found */ return; }
-        // work with node.Content, node.Version, etc.
-    });
-```
-
-Valid use cases:
-- Getting a node for rendering
-- Reading content before a Patch / Update (merge semantics)
-- Anything where staleness would be a bug
-
-`GetRemoteStream` is cached per `(address, reference)` pair, so repeated calls reuse
-one subscription to the owning hub. Drop the subscription when you're done —
-the stream stays live until all subscribers unsubscribe.
-
-## The composite pattern: find-then-read
-
-When you only know the node by name/predicate, do both:
-
-```csharp
-// 1) Query to discover existence + path
-mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"name:\"{displayName}\" nodeType:Report"))
-    .Take(1)
-    .SelectMany(change =>
-    {
-        var hit = change.Items.FirstOrDefault();
-        if (hit is null) return Observable.Return<MeshNode?>(null);
-
-        // 2) Content access for the node's actual current state
-        return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(hit.Path), new MeshNodeReference())
-            .Take(1)
-            .Select(change => change.Value);
-    })
-    .Subscribe(node => { /* authoritative node — or null if not found */ });
-```
-
-This shape costs two round trips but is always correct. Shortcutting by using
-`change.Items.FirstOrDefault()` directly from the query and treating it as the
-content is the bug this article exists to prevent.
-
-## Why the delay matters — a concrete example
-
-```text
-t=0    ms   agent writes:  UpdateNode @OrgA/Report, Content = { Title: "Q2" }
-t=5    ms   agent reads:   mesh.QueryAsync("path:OrgA/Report").First()
-             → returns Content = { Title: "Q1" }  ← STALE
-             → the read-side index hasn't been updated yet
-t=40   ms   read-side index catches up
-t=41   ms   same query now returns { Title: "Q2" }
-```
-
-Meanwhile, in the same scenario, `GetRemoteStream` subscribes directly to the
-owning hub's workspace, which applied the write synchronously — the next emission
-has `{ Title: "Q2" }` with no staleness window.
-
-In an AI agent, the staleness window is where the agent re-reads its own Patch
-and thinks it didn't take — then patches again, double-writes, and the user
-sees a mess. Using `GetRemoteStream` eliminates the class of bug.
-
-## Watching for updates (wait-for-completion)
-
-`GetRemoteStream` is not a one-shot fetch — it's a **live subscription** to the
-node's workspace. Every write on the owning hub pushes a new emission. This is
-what makes it the right tool for *waiting until something happens*:
-
-```csharp
-// Run a script and wait until it reports completion in its progress state.
 workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
         new Address(jobPath), new MeshNodeReference())
     .Where(change =>
         change.Value?.Content is JobStatus { State: "Done" or "Failed" })
     .Take(1)
-    .Timeout(TimeSpan.FromMinutes(5))
-    .Subscribe(
-        final => logger.LogInformation("Job finished: {State}",
-                    ((JobStatus)final.Value!.Content!).State),
-        err   => logger.LogError(err, "Job did not finish in time"));
+    .Subscribe(final =>
+        logger.LogInformation("Job finished: {State}",
+            ((JobStatus)final.Value!.Content!).State));
 ```
 
-Key point: the stream stays live for the subscription's lifetime. The first
-emission is the current state; subsequent emissions arrive as the hub applies
-writes. `Where(...).Take(1)` waits until the condition is true, at which point
-the stream completes naturally.
+The first emission is the current state; subsequent emissions arrive as the hub
+applies writes. `Where(...).Take(1)` waits until a condition is true and then
+completes — no polling.
 
-This is the correct primitive for any "kick off work and notify me when done"
-pattern — no polling, no `await` on a long-running `Task`, no hub blocking.
-Compare to a query-poll loop, which would also re-hit the lagged read path on
-every tick.
+Use this for "wait for a job to finish" / "stream progress" — never a polling
+loop against a query.
 
-## Scopes in queries
+## Writes (`PatchDataChangeRequest`)
 
-Some people try to dodge staleness with `scope:exact` on a query targeting one
-node. **This does not change the source** — it still flows through the query
-read path. The index is still the index. The delay is still there.
-
-`scope:*` is a filter on which matches to return, not a switch between two read
-paths. There is no query scope that upgrades to strong consistency.
-
-## The `MeshNodeReference` family
-
-`MeshNodeReference` is a `WorkspaceReference<MeshNode>` that represents
-"the hub's own MeshNode." You pass it to `GetRemoteStream` to read content:
+Writes flow to the owning hub as data changes, not as node CRUD:
 
 ```csharp
-// Remote read (cross-hub — owner ≠ current hub)
-workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-    new Address(otherHubPath), new MeshNodeReference());
-
-// Local read (same hub — from inside a layout area / handler on the owning hub)
-hub.GetWorkspace().GetStream(new MeshNodeReference());
+hub.Post(
+    new PatchDataChangeRequest(
+        StreamId: targetAddress.ToString(),
+        Version: expectedVersion,
+        Change: new RawJson(patchJson),
+        ChangeType: ChangeType.Patch,
+        ChangedBy: userId),
+    o => o.WithTarget(targetAddress));
 ```
 
-Other references exist for different shapes of content
-(`LayoutAreaReference`, `CollectionReference<T>`, `PartialWorkspaceReference<T>`);
-see *Workspace references* for the catalogue. `MeshNodeReference` is the one you
-want for "read the MeshNode itself."
+Never go through `mesh.QueryAsync` + merge in memory + `mesh.UpdateNode`. The index
+read is stale; the merge loses concurrent writes; the full-node replace overwrites
+anything you didn't explicitly read. Let the owning hub apply the patch on its
+authoritative state.
+
+For full-node updates use `DataChangeRequest.WithUpdates(fullNode)`.
+
+## Operations — named request types per intent
+
+When you want to **do** something on a node (not read or write content), define a
+named request type and handle it on the owning hub. The caller never sees the
+implementation detail.
+
+Example — **run a script on a Code node**. The caller doesn't know (or need to know)
+that the Code hub dispatches to an internal kernel:
+
+```csharp
+// In MeshWeaver.Mesh.Contract — no MeshWeaver.Kernel reference!
+public record ExecuteScriptRequest : IRequest<ExecuteScriptResponse>
+{
+    public string? SubmissionId { get; init; }
+}
+
+public record ExecuteScriptResponse
+{
+    public bool Success { get; init; }
+    public string? SubmissionId { get; init; }
+    public string? OutputAreaReference { get; init; }
+    public string? Error { get; init; }
+}
+```
+
+The Code node's hub registers a **synchronous** handler:
+
+```csharp
+// In CodeNodeType.HubConfiguration
+config.WithHandler<ExecuteScriptRequest>(HandleExecuteScript)
+
+private static IMessageDelivery HandleExecuteScript(
+    IMessageHub hub, IMessageDelivery<ExecuteScriptRequest> request)
+{
+    // Synchronous workspace read — .Current is the latest committed state.
+    var node = hub.GetWorkspace().GetStream(new MeshNodeReference())?.Current?.Value;
+    if (node?.Content is not CodeConfiguration code || !code.IsExecutable)
+    {
+        hub.Post(new ExecuteScriptResponse { Success = false, Error = "..." },
+            o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+    var submissionId = request.Message.SubmissionId ?? Guid.NewGuid().ToString("N");
+    var kernelAddress = /* private — derived from hub.Address */;
+
+    // Fire-and-forget dispatch to the (private) kernel.
+    hub.Post(new SubmitCodeRequest(code.Code ?? "") { Id = submissionId },
+        o => o.WithTarget(kernelAddress));
+
+    hub.Post(new ExecuteScriptResponse
+        {
+            Success = true,
+            SubmissionId = submissionId,
+            OutputAreaReference = submissionId
+        },
+        o => o.ResponseFor(request));
+    return request.Processed();
+}
+```
+
+The caller just fires the request at the node and subscribes for progress:
+
+```csharp
+var delivery = hub.Post(
+    new ExecuteScriptRequest(),
+    o => o.WithTarget(new Address(codeNodePath)));
+
+hub.RegisterCallback(delivery, (d, _) =>
+{
+    if (d is IMessageDelivery<ExecuteScriptResponse> resp && resp.Message.Success)
+    {
+        // Subscribe to the output area for progress — still no direct kernel reference.
+        workspace.GetRemoteStream<UiControl, LayoutAreaReference>(
+            new Address(codeNodePath),
+            new LayoutAreaReference(resp.Message.OutputAreaReference!))
+            .Subscribe(/* ... */);
+    }
+    return Task.FromResult(d);
+});
+```
+
+**Rules for operation handlers:**
+- Synchronous. No `.Subscribe` on a stream, no `await`, no `Observable.FromAsync`.
+  Read `.Current?.Value` from the workspace stream (it's already populated at
+  handler-invocation time).
+- The target address is the **node** (`new Address(nodePath)`), never the
+  implementation detail (kernel, persistence, etc.).
+- The response is a *dispatch acknowledgement*, not a completion signal. For
+  long-running work, expose an `OutputAreaReference` and let the caller subscribe
+  via `GetRemoteStream`.
+
+## Handlers: reactive chains, not `.Current`
+
+Inside a `.WithHandler<TRequest>(...)` body the **handler body must not block**,
+but reading state from a workspace stream is done **reactively** — compose with
+`.Select(...)` / `.Where(...)` / `.Take(1)` / `.Subscribe(...)`. The Subscribe
+callback fires once the stream emits; the handler returns `request.Processed()`
+immediately and the callback later posts the actual response via
+`hub.Post(response, o => o.ResponseFor(request))`.
+
+**Never `.Current` / `.Current?.Value` on a stream.** `Current` is populated
+after the stream has emitted its first value — inside a handler that just
+triggered the hub's activation, the workspace hasn't loaded data yet and
+`Current` is null. You will ship a wrong answer. The reactive chain avoids
+this: Subscribe fires once the data is actually there.
+
+```csharp
+// ❌ NEVER
+var node = hub.GetWorkspace().GetStream(new MeshNodeReference())?.Current?.Value;
+
+// ✅ ALWAYS
+hub.GetWorkspace().GetStream(new MeshNodeReference())
+    ?.Select(change => change.Value)
+    .Where(node => node is not null)
+    .Take(1)
+    .Subscribe(node =>
+    {
+        // handler logic here — post the response inside this callback
+        hub.Post(new MyResponse { /* ... */ }, o => o.ResponseFor(request));
+    });
+return request.Processed();   // handler returns immediately
+```
+
+| Inside a handler | OK? |
+|---|---|
+| `hub.Post(...)` — fire a message | ✅ sync |
+| `hub.RegisterCallback(delivery, callback)` — register; callback fires later | ✅ sync |
+| `workspace.UpdateMeshNode(fn)` — apply an update | ✅ sync |
+| `hub.GetWorkspace().GetStream(ref)?.Select(...).Where(...).Take(1).Subscribe(...)` — reactive read | ✅ |
+| `hub.GetWorkspace().GetStream(ref)?.Current?.Value` — snapshot read | ❌ null on cold workspaces |
+| `await anything` | ❌ never |
+| `Observable.FromAsync(...)` | ❌ hides an await — same bug |
 
 ## Quick decision matrix
 
-| Your intent | Use |
+| Intent | Primitive |
 |---|---|
-| "List all nodes under X" | `ObserveQuery` |
-| "Does a node called X exist?" | `ObserveQuery` + `Take(1)` + check `Items.Count` |
-| "Give me the Report node at `@OrgA/Q2Report`" | `GetRemoteStream<MeshNode, MeshNodeReference>` |
-| "What's the current value of this field on this specific node?" | `GetRemoteStream` |
-| "Patch this node — I need to merge with current content first" | `GetRemoteStream` to read, then `mesh.UpdateNode` to write |
-| "Autocomplete: what nodes start with `Sal`?" | `ObserveQuery` |
-| "Render the page for this node" | `GetRemoteStream` |
+| List nodes under X | `ObserveQuery` |
+| Does node X exist? | `ObserveQuery` + check `Items.Count` |
+| Give me node X's MeshNode (once) | `hub.Post(GetDataRequest(new MeshNodeReference()), WithTarget(X))` + `RegisterCallback` |
+| Keep me updated on node X's MeshNode | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` |
+| Patch node X | `hub.Post(PatchDataChangeRequest(...), WithTarget(X))` |
+| Replace node X wholesale | `hub.Post(DataChangeRequest{...}.WithUpdates(fullNode), WithTarget(X))` |
+| Run the script on Code node X | `hub.Post(ExecuteScriptRequest(), WithTarget(X))` + `RegisterCallback<ExecuteScriptResponse>` |
+| Wait until the run finishes | `workspace.GetRemoteStream` on X's output area until a terminal condition |
+| Move/Copy node X | `hub.Post(MoveNodeRequest(...), WithTarget(X))` — same pattern, different request type |
 
 ## Anti-patterns
 
 ```csharp
-// ❌ Query to get content — stale read, guaranteed bug surface.
+// ❌ Query to get content — stale read, lost-update risk.
 var node = await mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
 return JsonSerializer.Serialize(node);
 
@@ -220,25 +267,28 @@ return JsonSerializer.Serialize(node);
 return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
     .Take(1).Select(c => c.Items.FirstOrDefault());
 
-// ❌ Wrapping QueryAsync in Observable.FromAsync does not make it strongly consistent.
+// ❌ Wrapping QueryAsync in Observable.FromAsync does not fix consistency.
 return Observable.FromAsync(ct =>
     mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync(ct).AsTask());
 
-// ✅ Content read — goes to the owning hub's workspace, no staleness.
-return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(path), new MeshNodeReference())
-    .Take(1)
-    .Select(change => change.Value);
+// ❌ Caller addressing the implementation detail (kernel) directly.
+hub.Post(new SubmitCodeRequest(...), o => o.WithTarget(kernelAddress));
+
+// ❌ Async in a handler body.
+.WithHandler<FooRequest>(async (hub, req) => { await something; return req.Processed(); })
+
+// ✅ One-shot content read — authoritative.
+var delivery = hub.Post(new GetDataRequest(new MeshNodeReference()),
+    o => o.WithTarget(new Address(path)));
+hub.RegisterCallback(delivery, (d, _) => { /* ... */ return Task.FromResult(d); });
+
+// ✅ Live updates.
+workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+    new Address(path), new MeshNodeReference());
+
+// ✅ Named operation — caller never references the kernel.
+hub.Post(new ExecuteScriptRequest(), o => o.WithTarget(new Address(codeNodePath)));
 ```
-
-## Summary
-
-- **Queries return sets.** Use them to discover existence and to enumerate.
-- **Content comes from workspace streams.** Use
-  `GetRemoteStream(address, new MeshNodeReference())` for a single node.
-- A query that "only returns one" is still a query. It still lags.
-- If your code is about to call `.FirstOrDefault()` on a query result and use
-  the node's `.Content`, you are writing a bug. Switch to `GetRemoteStream`.
 
 Related reading:
 - [Asynchronous Calls](AsynchronousCalls) — the hub's single-threaded scheduler and
