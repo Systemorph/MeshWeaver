@@ -193,11 +193,20 @@ public static class LinkedInConnectEndpoints
                 Content = credential,
                 State = MeshNodeState.Active,
             };
+            // Credential upsert — if Create fails with "already exists", fall back to
+            // Update. If both fail (parent namespace can't host a satellite at this path,
+            // e.g. we were given a custom-NodeType instance path instead of the user path),
+            // redirect to the profile page with an error reason instead of throwing.
             try { await mesh.CreateNodeAsync(credentialNode, http.RequestAborted); }
-            catch (Exception ex)
+            catch (Exception createEx)
             {
-                logger.LogInformation(ex, "Credential create failed at {Path}, attempting update", credentialNode.Path);
-                await mesh.UpdateNodeAsync(credentialNode, http.RequestAborted);
+                logger.LogInformation(createEx, "Credential create failed at {Path}, attempting update", credentialNode.Path);
+                try { await mesh.UpdateNodeAsync(credentialNode, http.RequestAborted); }
+                catch (Exception updateEx)
+                {
+                    logger.LogWarning(updateEx, "Credential update also failed at {Path}. Redirecting to profile with error.", credentialNode.Path);
+                    return Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-error&stage=credential&reason=persist-failed");
+                }
             }
 
             // Upsert the LinkedInProfile node so the analytics dashboard has somewhere
