@@ -450,6 +450,8 @@ public class MyPlugin(IMessageHub hub, IAgentChat chat)
 
 ## Testing Guidelines
 
+**When building NodeTypes, data models, layout areas, or CSV loaders — read `src/MeshWeaver.AI/Data/Agent/Coder.md` first.** It is the canonical guide for that kind of work and includes the non-negotiable testing standard: **comprehensive unit tests per invariant + branch + boundary + degenerate-input**, not "at least one test per feature". Applies to both Coder-agent sessions and hand-written code. A NodeType with a single happy-path test is not tested; it's demoed.
+
 Tests use xUnit v3 with structured logging and test parallelization configured via `xunit.runner.json`:
 - `parallelizeAssembly: false`
 - `parallelizeTestCollections: false`

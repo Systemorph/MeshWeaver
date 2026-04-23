@@ -7,6 +7,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
+using MeshWeaver.Kernel;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -1133,6 +1134,105 @@ public class MeshOperations
                             + "layout area on an instance) and re-call GetDiagnostics."
                     },
                     options);
+        }
+    }
+
+    /// <summary>
+    /// Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive)
+    /// and returns stdout / return value / errors as JSON. The target node must have
+    /// <c>CodeConfiguration.IsExecutable == true</c>. Execution is synchronous from the
+    /// caller's perspective: the method awaits <see cref="SubmitCodeRequest"/>'s Processed
+    /// signal (which the kernel emits only after the code finishes running), then reads
+    /// the kernel's output layout area and returns whatever rendered.
+    /// </summary>
+    public async Task<string> ExecuteScript(string path, int timeoutSeconds = 120)
+    {
+        logger.LogInformation("ExecuteScript called with path={Path}", path);
+        if (string.IsNullOrWhiteSpace(path))
+            return JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions);
+
+        var resolvedPath = ResolvePath(path);
+
+        // Fetch the node; require IsExecutable.
+        MeshNode? node = null;
+        await foreach (var n in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
+        {
+            node = n; break;
+        }
+        if (node is null)
+            return JsonSerializer.Serialize(
+                new { status = "Error", message = $"Node not found: {resolvedPath}" },
+                hub.JsonSerializerOptions);
+
+        string? code = null;
+        bool isExecutable = false;
+        if (node.Content is Mesh.CodeConfiguration cc)
+        {
+            code = cc.Code;
+            isExecutable = cc.IsExecutable;
+        }
+        else if (node.Content is System.Text.Json.JsonElement je)
+        {
+            if (je.TryGetProperty("code", out var codeProp)) code = codeProp.GetString();
+            if (je.TryGetProperty("isExecutable", out var execProp)) isExecutable = execProp.GetBoolean();
+        }
+
+        if (string.IsNullOrWhiteSpace(code))
+            return JsonSerializer.Serialize(
+                new { status = "Error", message = $"Node at {resolvedPath} has no Code content" },
+                hub.JsonSerializerOptions);
+
+        if (!isExecutable)
+            return JsonSerializer.Serialize(
+                new { status = "Error", message = $"Node at {resolvedPath} is not marked IsExecutable=true" },
+                hub.JsonSerializerOptions);
+
+        // Stable kernel address per node — same convention as CodeLayoutAreas Run button.
+        var kernelAddress = AddressExtensions.CreateKernelAddress(
+            "code-" + resolvedPath.Replace('/', '-'));
+        var submissionId = Guid.NewGuid().ToString("N");
+
+        try
+        {
+            var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            // AwaitResponse gives us the Processed signal once the kernel has finished
+            // executing the code (HandleKernelCommand in KernelContainer awaits
+            // kernel.SendAsync before returning Processed).
+            await hub.AwaitResponse(
+                new SubmitCodeRequest(code) { Id = submissionId },
+                o => o.WithTarget(kernelAddress),
+                cts.Token);
+
+            return JsonSerializer.Serialize(
+                new
+                {
+                    status = "Executed",
+                    path = resolvedPath,
+                    submissionId,
+                    kernelAddress = kernelAddress.ToString(),
+                    outputUrl = $"{kernelAddress}/{submissionId}",
+                    message = "Code dispatched to kernel and processed. Any Console.Out / return value is "
+                        + "available at the kernel layout area path above. The call has already waited "
+                        + "for kernel completion — side effects (e.g. nodes created via mesh.CreateNode) "
+                        + "have happened."
+                },
+                hub.JsonSerializerOptions);
+        }
+        catch (OperationCanceledException)
+        {
+            return JsonSerializer.Serialize(
+                new { status = "Timeout", path = resolvedPath, timeoutSeconds,
+                      message = $"Kernel did not signal completion within {timeoutSeconds}s. Side effects may still have happened." },
+                hub.JsonSerializerOptions);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "ExecuteScript failed for {Path}", resolvedPath);
+            return JsonSerializer.Serialize(
+                new { status = "Error", path = resolvedPath, message = ex.Message },
+                hub.JsonSerializerOptions);
         }
     }
 }

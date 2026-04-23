@@ -257,12 +257,27 @@ When asked to create a node type:
    - If `status: "Error"` → read `error`, fix the broken source or the NodeType JSON (often the fix is adding a `sources` entry pointing at another NodeType's `Source` via `$self` or an absolute path), write the fix with `Update`/`Patch`, and re-check.
    - Repeat until `status: "Ok"`. Only then is the NodeType "done".
    - Alternative: a plain `Get('@{path}')` on any instance (or the NodeType itself) wraps the JSON with a `compilationError` field when the type failed to compile — useful when you want the node data and the compile status together.
-8. **Write tests** — ALWAYS, before you consider the NodeType done:
-   - Every NodeType gets a `Test/` sibling folder next to `Source/` with at least one test file per feature (content type, each reference data type, each layout area).
-   - Test files follow the same `// <meshweaver>` frontmatter + top-level C# pattern as `Source/` files. Asserts throw on failure.
-   - Run them with the `RunTests` tool. For a NodeType living at `samples/Graph/Data/MyNamespace/MyType`, invoke the project-level tests that exercise it, e.g. `RunTests("test/MeshWeaver.MyNamespace.Test", "FullyQualifiedName~MyType")`.
-   - Do not ship a NodeType whose tests are red. If you can't get them green, surface the failure with the test output and ask for guidance.
-   - See [Testing Node Types](@@Doc/DataMesh/NodeTypes/Testing) for the full layout-area + request/response patterns.
+8. **Write comprehensive tests** — ALWAYS, before you consider the NodeType done:
+
+   **Coverage bar — comprehensive, not token.** "At least one test per feature" is the floor, not the target. A NodeType with one happy-path test is *not* tested; it's demoed. Aim for:
+   - **Each invariant** → a dedicated test. List the rules that must hold, then assert each one: limits clip, deductibles are consumed in order, aggregates cap per section, share scales linearly, etc.
+   - **Each branch** → a dedicated test. If cover resolution switches on type, test each concrete subtype. If a loop breaks early on an edge case (limit exhausted, empty input, unknown id), assert that exit.
+   - **Each boundary** → assertions at both sides. Loss = attachment (no cession). Loss = attachment + 1 (cession = 1). Loss = attachment + limit + 1 (cession = limit, not more).
+   - **Degenerate inputs** — empty treaty, empty losses, section id not in Acceptance, Acceptance pointing at a non-existent section, null/zero/negative values — each must produce a predictable result, not throw.
+   - **Serialisation round-trip** — for record content types, assert that `JsonSerializer.Deserialize(JsonSerializer.Serialize(obj))` is equal to the original, including polymorphic subtypes via `$type`.
+   - **Pure-function tests run fast** — a comprehensive set should still be under a second. If you're at 6 tests and it feels "done", you're likely at 20% of the coverage that shifts the type from "maybe works" to "known-good under changes".
+
+   **Where tests live:**
+   - `Test/` sibling folder next to `Source/`, one file per topical area (e.g. `CessionTest.cs`, `ChainLadderTest.cs`, `SerializationTest.cs`).
+   - Each file: `// <meshweaver>` frontmatter + top-level C# `public static` methods named `Test_<What>_<Expectation>` that throw on failure.
+   - When an interactive in-mesh runner makes sense (e.g. for a demo), expose a `Tests` layout area that calls each test and renders a pass/fail table — so the user can see the entire suite green in one view.
+
+   **How to run:**
+   - `RunTests("test/MeshWeaver.MyNamespace.Test", "FullyQualifiedName~MyType")` for project-level tests.
+   - Navigate to the `Tests` layout area on prod for the in-mesh view.
+   - Do not ship a NodeType whose tests are red. If you cannot get them green, surface the failure with the test output and ask for guidance — but first attempt the comprehensive set, not a reduced one.
+
+   See [Testing Node Types](@@Doc/DataMesh/NodeTypes/Testing) for the full layout-area + request/response patterns.
 
 # Business Rules & Calculations
 
