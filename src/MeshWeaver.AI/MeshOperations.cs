@@ -215,63 +215,24 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// One-shot read of the MeshNode at <paramref name="resolvedPath"/> via
-    /// <c>GetDataRequest</c> + <c>MeshNodeReference</c>. The target hub activates
-    /// on receipt and posts a <c>GetDataResponse</c>. Emits the MeshNode (or
-    /// null if the response carried no MeshNode) within <paramref name="timeoutSeconds"/>.
+    /// One-shot read of the MeshNode at <paramref name="resolvedPath"/>.
+    ///
+    /// Uses <c>ObserveQuery</c> rather than <c>GetDataRequest(MeshNodeReference)</c>
+    /// because the query read path is invalidated by <c>MeshChangeFeed</c> after
+    /// writes via <c>mesh.CreateNode / UpdateNode / DeleteNode</c>, whereas a
+    /// GetDataRequest against the node hub's workspace can return stale state —
+    /// <c>HandleUpdateNodeRequest</c> fires a fire-and-forget DataChangeRequest
+    /// fan-out to the node's own address but the handler explicitly acknowledges
+    /// it may silently fail. Until that workspace-tick path is made reliable,
+    /// Take(1) on ObserveQuery gives us the consistent read-after-write behaviour
+    /// the AgentWriteFailure / PatchWorkspace / Security test suites depend on.
     /// </summary>
     private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10) =>
-        Observable.Create<MeshNode?>(observer =>
-        {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-            var completed = 0;
-
-            void EmitOnce(MeshNode? node)
-            {
-                if (Interlocked.Exchange(ref completed, 1) != 0) return;
-                observer.OnNext(node);
-                observer.OnCompleted();
-            }
-
-            try
-            {
-                var delivery = hub.Post(
-                    new GetDataRequest(new MeshNodeReference()),
-                    o => o.WithTarget(new Address(resolvedPath)))!;
-
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    MeshNode? node = null;
-                    if (d is IMessageDelivery<GetDataResponse> gdr)
-                        node = gdr.Message.Data as MeshNode;
-
-                    // Verify path match — the mesh router resolves non-existent paths
-                    // to their nearest ancestor hub, which then answers with ITS OWN
-                    // MeshNode. Treat mismatches as not-found so callers don't end up
-                    // patching the wrong node. Also treat Deleted nodes as not-found:
-                    // the hub may still have the MeshNode in its workspace cache after
-                    // a delete and we don't want stale reads to look like the node
-                    // still exists.
-                    if (node != null && (
-                        !string.Equals(node.Path, resolvedPath, StringComparison.Ordinal) ||
-                        node.State == MeshNodeState.Deleted ||
-                        node.State == MeshNodeState.Rejected))
-                        node = null;
-
-                    EmitOnce(node);
-                    return Task.FromResult(d);
-                }, cts.Token);
-
-                cts.Token.Register(() => EmitOnce(null));
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "FetchNode: Post/RegisterCallback failed for {Path}", resolvedPath);
-                EmitOnce(null);
-            }
-
-            return () => cts.Dispose();
-        });
+        mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
+            .Select(change => change.Items.FirstOrDefault())
+            .Catch((Exception _) => Observable.Return<MeshNode?>(null));
 
     /// <summary>
     /// Writes a full <see cref="MeshNode"/> to the node's own hub via
@@ -609,11 +570,14 @@ public class MeshOperations
 
                 var versionBefore = meshNode.Version;
                 var currentPath = meshNode.Path;
-                // Writes go through DataChangeRequest to the node's own hub — the
-                // handler applies to its workspace (ticks MeshNodeReference stream)
-                // and data source persists. Immediate read-after-write consistency.
+                // Use mesh.UpdateNode (UpdateNodeRequest → HandleUpdateNodeRequest →
+                // persistence.SaveNode) — this path writes to persistence immediately
+                // so read-after-write tests (including the RLS Security suite) see
+                // the new state on the next query. DataChangeRequest would go through
+                // the data-source stream which debounces persistence at 200ms and
+                // makes immediate reads race.
                 perNode = perNode.Add(
-                    UpdateViaDataChange(meshNode)
+                    mesh.UpdateNode(meshNode)
                         .Select(updated =>
                         {
                             OnNodeChange?.Invoke(new NodeChangeEntry
@@ -724,7 +688,10 @@ public class MeshOperations
                 }
 
                 var versionBefore = existing.Version;
-                return UpdateViaDataChange(merged)
+                // Same rationale as Update — use mesh.UpdateNode for immediate
+                // persistence so post-Patch reads see the new state without
+                // waiting for the data-source debounce.
+                return mesh.UpdateNode(merged)
                     .Select(updated =>
                     {
                         OnNodeChange?.Invoke(new NodeChangeEntry
