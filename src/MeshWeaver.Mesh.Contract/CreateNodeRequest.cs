@@ -108,6 +108,14 @@ public record DeleteNodeRequest(string Path) : IRequest<DeleteNodeResponse>
     /// The user or system requesting the deletion.
     /// </summary>
     public string? DeletedBy { get; init; }
+
+    /// <summary>
+    /// If true, deletions proceed even when <see cref="ValidateDeleteRequest"/> responses carry
+    /// warnings. Without this flag, any warning blocks the delete and is surfaced back to the
+    /// caller (as <see cref="NodeDeletionRejectionReason.WarningsRequireConfirmation"/>) so the
+    /// UI can render a confirmation dialog. The second call — with this flag set — proceeds.
+    /// </summary>
+    public bool ConfirmWarnings { get; init; }
 }
 
 /// <summary>
@@ -173,7 +181,22 @@ public enum NodeDeletionRejectionReason
     /// <summary>
     /// A child node could not be deleted, so the parent was not deleted either.
     /// </summary>
-    ChildDeletionFailed
+    ChildDeletionFailed,
+
+    /// <summary>
+    /// The caller lacks <see cref="Security.Permission.Delete"/> permission on the node (or on
+    /// one of its descendants for recursive deletes). The error text lists every path that was
+    /// denied so the UI can show exactly what the user cannot delete.
+    /// </summary>
+    Unauthorized,
+
+    /// <summary>
+    /// One or more <see cref="ValidateDeleteRequest"/> responses carried warnings and
+    /// <see cref="DeleteNodeRequest.ConfirmWarnings"/> was not set. Caller should surface the
+    /// warnings (from <see cref="DeleteNodeResponse.Log"/>) and re-issue the request with
+    /// <c>ConfirmWarnings=true</c> to proceed.
+    /// </summary>
+    WarningsRequireConfirmation
 }
 
 /// <summary>

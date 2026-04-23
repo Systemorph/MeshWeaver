@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -39,9 +40,10 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(MoveNodeResponse), nameof(MoveNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeMoveRejectionReason), nameof(NodeMoveRejectionReason));
 
-        // Internal relay used by HandleDeleteNodeRequest to forward the terminal
-        // storage commit + reply to the mesh hub (see CommitNodeDeletionMessage.cs).
-        config.TypeRegistry.WithType(typeof(CommitNodeDeletionMessage), nameof(CommitNodeDeletionMessage));
+        // Per-node pre-flight delete validation. Posted by HandleDeleteNodeRequest to each
+        // node in the subtree. Owning hub runs local INodeValidators + domain rules.
+        config.TypeRegistry.WithType(typeof(ValidateDeleteRequest), nameof(ValidateDeleteRequest));
+        config.TypeRegistry.WithType(typeof(ValidateDeleteResponse), nameof(ValidateDeleteResponse));
 
         // Import/Delete types
         config.TypeRegistry.WithType(typeof(ImportNodesRequest), nameof(ImportNodesRequest));
@@ -76,7 +78,7 @@ public static class MeshExtensions
             .AddMeshTypes()
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
-            .WithHandler<CommitNodeDeletionMessage>(HandleCommitNodeDeletion)
+            .WithHandler<ValidateDeleteRequest>(HandleValidateDeleteRequest)
             .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
             .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest)
             .WithHandler<HeartBeatEvent>(HandleHeartBeat);
@@ -384,12 +386,37 @@ public static class MeshExtensions
     /// parent's Fail response is posted (in-flight child deletes are not aborted but the
     /// parent will not be deleted).
     /// </summary>
+    /// <summary>
+    /// Central delete orchestrator. Four phases:
+    /// <list type="number">
+    /// <item><description><b>Collect.</b> Root + (recursive) descendants via
+    /// <see cref="IMeshStorage"/> (storage adapter — no workspace/type-source detour).</description></item>
+    /// <item><description><b>Permission.</b> Check <see cref="Permission.Delete"/> for
+    /// every path via <see cref="ISecurityService"/>. Any denial fails the whole op
+    /// with the full list of denied paths in the <see cref="ActivityLog"/>.</description></item>
+    /// <item><description><b>Validate.</b> Run <see cref="INodeValidator"/> chain for
+    /// every node. Errors block; warnings block unless
+    /// <see cref="DeleteNodeRequest.ConfirmWarnings"/> is set. Custom hubs that want
+    /// cross-hub validation can additionally post <see cref="ValidateDeleteRequest"/>
+    /// — there's a default handler registered by <see cref="WithNodeOperationHandlers"/>
+    /// on every hub that opts in.</description></item>
+    /// <item><description><b>Commit.</b> Bulk-delete via <see cref="IStorageService"/>
+    /// directly, bottom-up. Publish change events. Reply + DisposeRequest(s) from the
+    /// mesh hub so FIFO guarantees the caller sees the Ok before the deleted hubs tear
+    /// down.</description></item>
+    /// </list>
+    /// </summary>
     private static IMessageDelivery HandleDeleteNodeRequest(
         IMessageHub hub,
         IMessageDelivery<DeleteNodeRequest> request)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
+        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var storage = hub.ServiceProvider.GetRequiredService<IStorageService>();
+        var securityService = hub.ServiceProvider.GetService<ISecurityService>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var meshHub = ResolveMeshHub(hub);
 
         var deleteRequest = request.Message;
         if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
@@ -397,173 +424,382 @@ public static class MeshExtensions
             deleteRequest = deleteRequest with { DeletedBy = deleteSenderId };
 
         var capturedRequest = deleteRequest;
-        var path = deleteRequest.Path;
+        var path = capturedRequest.Path;
+        var startedAt = DateTime.UtcNow;
 
-        var nodeStream = hub.GetWorkspace()?.GetStream<MeshNode>();
-        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
-        var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
+        logger.LogInformation(
+            "[DeleteNode] start path={Path} recursive={Recursive} confirmWarnings={Confirm} deletedBy={DeletedBy}",
+            path, capturedRequest.Recursive, capturedRequest.ConfirmWarnings,
+            capturedRequest.DeletedBy ?? "system");
 
-        // Read own node from the live workspace stream when the hub exposes one (BehaviorSubject —
-        // emits current value synchronously on subscribe). Fall back to persistence when not (some
-        // test/infra configurations don't materialize the stream). No catalog usage either way.
-        var existingNodeObs = nodeStream != null
-            ? nodeStream
-                .Take(1)
-                .Select(nodes => nodes?.FirstOrDefault(n => n.Path == path))
-            : Observable.FromAsync(token => persistence.GetNodeAsync(path, token));
+        var baseActivity = new ActivityLog("NodeDeletion")
+        {
+            HubPath = path,
+            Start = startedAt,
+            User = !string.IsNullOrEmpty(capturedRequest.DeletedBy)
+                ? new UserInfo(capturedRequest.DeletedBy, capturedRequest.DeletedBy)
+                : null
+        };
 
-        // Bound the pre-commit fetch by MeshOperationOptions.Timeout (default 30s).
-        // Recursive child deletes also have their own bound via the storage-commit
-        // Timeout inside HandleCommitNodeDeletion, so a stuck child won't hang forever.
-        existingNodeObs
-            .Timeout(opts.Timeout)
-            .SelectMany(existingNode =>
+        void PostFailed(string error, NodeDeletionRejectionReason reason, ImmutableList<LogMessage> logMessages, ImmutableList<string>? affected = null)
+        {
+            var failLog = baseActivity with
             {
-                if (existingNode == null)
+                Messages = logMessages,
+                AffectedPaths = affected ?? [path],
+                End = DateTime.UtcNow,
+                Status = ActivityStatus.Failed
+            };
+            hub.Post(
+                DeleteNodeResponse.Fail(error, reason) with { Log = failLog },
+                o => o.ResponseFor(request));
+        }
+
+        CollectNodesForDelete(persistence, path, capturedRequest.Recursive, opts.Timeout, logger)
+            .SelectMany(collected =>
+            {
+                if (collected.Root == null)
                 {
-                    hub.Post(
-                        DeleteNodeResponse.Fail(
-                            $"Node not found at path: {path}",
-                            NodeDeletionRejectionReason.NodeNotFound),
-                        o => o.ResponseFor(request));
-                    return Observable.Empty<MeshNode>();
+                    logger.LogDebug("[DeleteNode] not-found path={Path}", path);
+                    PostFailed(
+                        $"Node not found at path: {path}",
+                        NodeDeletionRejectionReason.NodeNotFound,
+                        [new LogMessage($"Node not found at path: {path}", LogLevel.Error)]);
+                    return Observable.Empty<System.Reactive.Unit>();
                 }
 
-                return RunDeletionValidatorsObs(hub, existingNode, capturedRequest)
-                    .SelectMany(validationError =>
+                if (!capturedRequest.Recursive && collected.HasUnlistedChildren)
+                {
+                    logger.LogDebug("[DeleteNode] has-children path={Path}", path);
+                    var msg = $"Node at '{path}' has children. Use recursive delete to remove it.";
+                    PostFailed(msg, NodeDeletionRejectionReason.HasChildren,
+                        [new LogMessage(msg, LogLevel.Error)]);
+                    return Observable.Empty<System.Reactive.Unit>();
+                }
+
+                var toDelete = collected.ToDelete;
+
+                return CheckDeletePermissionsForAll(securityService, accessService, toDelete, logger)
+                    .SelectMany(deniedPaths =>
                     {
-                        if (validationError != null)
+                        if (deniedPaths.Count > 0)
                         {
                             logger.LogWarning(
-                                "Validator rejected node deletion at {Path}: {Error}",
-                                path, validationError.Value.ErrorMessage);
-                            hub.Post(
-                                DeleteNodeResponse.Fail(
-                                    validationError.Value.ErrorMessage ?? "Validation failed",
-                                    validationError.Value.Reason),
-                                o => o.ResponseFor(request));
-                            return Observable.Empty<MeshNode>();
+                                "[DeleteNode] permission-denied path={Path} denied=[{Denied}]",
+                                path, string.Join(",", deniedPaths));
+                            var msgs = deniedPaths
+                                .Select(p => new LogMessage(
+                                    $"Delete permission denied for '{p}'", LogLevel.Error))
+                                .ToImmutableList();
+                            var primary = deniedPaths[0];
+                            PostFailed(
+                                deniedPaths.Count == 1
+                                    ? $"Delete permission denied for '{primary}'"
+                                    : $"Delete permission denied for {deniedPaths.Count} nodes (first: '{primary}')",
+                                NodeDeletionRejectionReason.Unauthorized,
+                                msgs,
+                                toDelete.Select(n => n.Path).ToImmutableList());
+                            return Observable.Empty<System.Reactive.Unit>();
                         }
-                        return Observable.Return(existingNode);
+
+                        return ValidateAllLocal(hub, toDelete, capturedRequest, logger)
+                            .SelectMany(validations =>
+                            {
+                                var errorEntries = validations
+                                    .SelectMany(v => v.Errors.Select(e => (v.Path, Msg: e)))
+                                    .ToImmutableList();
+                                var warningEntries = validations
+                                    .SelectMany(v => v.Warnings.Select(w => (v.Path, Msg: w)))
+                                    .ToImmutableList();
+
+                                if (!errorEntries.IsEmpty)
+                                {
+                                    logger.LogWarning(
+                                        "[DeleteNode] validator-rejected path={Path} errors={Count}",
+                                        path, errorEntries.Count);
+                                    var msgs = errorEntries
+                                        .Select(e => new LogMessage(
+                                            $"Cannot delete '{e.Path}': {e.Msg}", LogLevel.Error))
+                                        .ToImmutableList();
+                                    var primary = errorEntries[0];
+                                    PostFailed(
+                                        errorEntries.Count == 1
+                                            ? $"Cannot delete '{primary.Path}': {primary.Msg}"
+                                            : $"Cannot delete '{path}': {errorEntries.Count} validation errors (first: '{primary.Path}' — {primary.Msg})",
+                                        NodeDeletionRejectionReason.ValidationFailed,
+                                        msgs,
+                                        toDelete.Select(n => n.Path).ToImmutableList());
+                                    return Observable.Empty<System.Reactive.Unit>();
+                                }
+
+                                if (!warningEntries.IsEmpty && !capturedRequest.ConfirmWarnings)
+                                {
+                                    logger.LogInformation(
+                                        "[DeleteNode] warnings-require-confirmation path={Path} warnings={Count}",
+                                        path, warningEntries.Count);
+                                    var msgs = warningEntries
+                                        .Select(w => new LogMessage(
+                                            $"'{w.Path}': {w.Msg}", LogLevel.Warning))
+                                        .ToImmutableList();
+                                    var primary = warningEntries[0];
+                                    PostFailed(
+                                        $"Delete of '{path}' has {warningEntries.Count} warning(s) (first: '{primary.Path}' — {primary.Msg}). Set ConfirmWarnings=true to proceed.",
+                                        NodeDeletionRejectionReason.WarningsRequireConfirmation,
+                                        msgs,
+                                        toDelete.Select(n => n.Path).ToImmutableList());
+                                    return Observable.Empty<System.Reactive.Unit>();
+                                }
+
+                                logger.LogDebug(
+                                    "[DeleteNode] committing path={Path} count={Count}",
+                                    path, toDelete.Count);
+                                return BulkDeleteViaStorage(storage, toDelete, opts.Timeout, logger)
+                                    .Do(_ =>
+                                    {
+                                        var warningMsgs = warningEntries
+                                            .Select(w => new LogMessage(
+                                                $"'{w.Path}': {w.Msg}", LogLevel.Warning))
+                                            .ToImmutableList();
+
+                                        var okLog = baseActivity with
+                                        {
+                                            Messages = warningMsgs,
+                                            AffectedPaths = toDelete.Select(n => n.Path).ToImmutableList(),
+                                            End = DateTime.UtcNow,
+                                            Status = warningMsgs.IsEmpty
+                                                ? ActivityStatus.Succeeded
+                                                : ActivityStatus.Warning
+                                        };
+
+                                        logger.LogInformation(
+                                            "[DeleteNode] succeeded path={Path} count={Count} warnings={Warnings} by={DeletedBy}",
+                                            path, toDelete.Count, warningMsgs.Count,
+                                            capturedRequest.DeletedBy ?? "system");
+
+                                        var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
+                                        foreach (var node in toDelete)
+                                            changeFeed?.Publish(MeshChangeEvent.Deleted(node.Path));
+
+                                        meshHub.Post(
+                                            DeleteNodeResponse.Ok() with { Log = okLog },
+                                            o => o
+                                                .WithTarget(request.Sender)
+                                                .WithProperty(PostOptions.RequestId, request.Id));
+
+                                        foreach (var node in toDelete)
+                                            meshHub.Post(
+                                                new DisposeRequest(),
+                                                o => o.WithTarget(new Address(node.Path)));
+                                    });
+                            });
                     });
             })
-            .SelectMany(existingNode =>
-                // Collect direct children via IMeshStorage (no access control needed —
-                // the caller has already passed the deletion validator chain). Using
-                // persistence directly is more reliable than routing through query
-                // services whose scoping can vary across hub configurations.
-                Observable.FromAsync(async token =>
-                {
-                    var list = new List<MeshNode>();
-                    await foreach (var child in persistence.GetChildrenAsync(path).WithCancellation(token))
-                        list.Add(child);
-                    return list;
-                })
-                .Select(children => (existingNode, children: (IList<MeshNode>)children)))
             .Subscribe(
-                tuple =>
-                {
-                    var children = tuple.children;
-
-                    if (children.Count == 0)
-                    {
-                        // Leaf — delete via IMeshStorage directly. We CANNOT use
-                        // IMeshService.DeleteNode here: that posts DeleteNodeRequest, which
-                        // routes back to this handler for the SAME path and recurses forever.
-                        DeleteSelfFromStorage(hub, path, capturedRequest, request, persistence, logger);
-                        return;
-                    }
-
-                    if (!capturedRequest.Recursive)
-                    {
-                        hub.Post(
-                            DeleteNodeResponse.Fail(
-                                $"Node at '{path}' has children. Use recursive delete to remove it.",
-                                NodeDeletionRejectionReason.HasChildren),
-                            o => o.ResponseFor(request));
-                        return;
-                    }
-
-                    // Recursive: delete children in parallel via IMeshService.DeleteNode.
-                    // Track outcome with an Interlocked counter; on FIRST failure, post the
-                    // parent's Fail response immediately. On ALL successes, delete self.
-                    var remaining = children.Count;
-                    var failureFlag = 0;
-                    string? firstFailedPath = null;
-
-                    foreach (var child in children)
-                    {
-                        var childPath = child.Path;
-                        meshService.DeleteNode(childPath).Subscribe(
-                            success =>
-                            {
-                                if (!success
-                                    && Interlocked.CompareExchange(ref failureFlag, 1, 0) == 0)
-                                {
-                                    Interlocked.CompareExchange(ref firstFailedPath, childPath, null);
-                                    hub.Post(
-                                        DeleteNodeResponse.Fail(
-                                            $"Cannot delete '{path}': child '{childPath}' deletion returned false.",
-                                            NodeDeletionRejectionReason.ChildDeletionFailed),
-                                        o => o.ResponseFor(request));
-                                }
-
-                                if (Interlocked.Decrement(ref remaining) == 0
-                                    && Interlocked.CompareExchange(ref failureFlag, 0, 0) == 0)
-                                {
-                                    // All children deleted successfully — now delete self via
-                                    // IMeshStorage (NOT IMeshService — that would re-trigger
-                                    // this handler for the same path and recurse forever).
-                                    DeleteSelfFromStorage(hub, path, capturedRequest, request, persistence, logger);
-                                }
-                            },
-                            ex =>
-                            {
-                                if (Interlocked.CompareExchange(ref failureFlag, 1, 0) == 0)
-                                {
-                                    Interlocked.CompareExchange(ref firstFailedPath, childPath, null);
-                                    logger.LogWarning(ex,
-                                        "Child deletion failed for {ChildPath} under {Path}",
-                                        childPath, path);
-                                    hub.Post(
-                                        DeleteNodeResponse.Fail(
-                                            $"Cannot delete '{path}': child '{childPath}' threw: {ex.Message}",
-                                            NodeDeletionRejectionReason.ChildDeletionFailed),
-                                        o => o.ResponseFor(request));
-                                }
-                                Interlocked.Decrement(ref remaining);
-                            });
-                    }
-                },
+                _ => { },
                 ex =>
                 {
-                    if (ex is TimeoutException)
-                    {
-                        logger.LogError(ex,
-                            "Delete of {Path} exceeded the {Timeout}s budget — failing the caller instead of hanging",
-                            path, opts.Timeout.TotalSeconds);
-                        hub.Post(
-                            DeleteNodeResponse.Fail(
-                                $"Delete of '{path}' exceeded the configured timeout of {opts.Timeout.TotalSeconds:0}s",
-                                NodeDeletionRejectionReason.Unknown),
-                            o => o.ResponseFor(request));
-                    }
-                    else if (ex is InvalidOperationException)
-                    {
-                        logger.LogWarning(ex, "Node deletion failed for path {Path}", path);
-                        hub.Post(
-                            DeleteNodeResponse.Fail(ex.Message, NodeDeletionRejectionReason.ValidationFailed),
-                            o => o.ResponseFor(request));
-                    }
-                    else
-                    {
-                        logger.LogError(ex, "Unexpected error during node deletion at {Path}", path);
-                        hub.Post(
-                            DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}",
-                                NodeDeletionRejectionReason.Unknown),
-                            o => o.ResponseFor(request));
-                    }
+                    var isTimeout = ex is TimeoutException;
+                    logger.LogError(ex, "[DeleteNode] {Kind} path={Path}",
+                        isTimeout ? "timeout" : "unexpected", path);
+                    PostFailed(
+                        isTimeout
+                            ? $"Delete of '{path}' exceeded {opts.Timeout.TotalSeconds:0}s timeout"
+                            : $"Unexpected error: {ex.Message}",
+                        isTimeout
+                            ? NodeDeletionRejectionReason.Unknown
+                            : (ex is InvalidOperationException
+                                ? NodeDeletionRejectionReason.ValidationFailed
+                                : NodeDeletionRejectionReason.Unknown),
+                        [new LogMessage(ex.Message, LogLevel.Error)]);
                 });
+
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Phase 1 — fetch root + (recursive) descendants via <see cref="IMeshStorage"/>.
+    /// IAsyncEnumerable is the native shape of storage iteration; we bridge to an
+    /// observable at the boundary with <c>Observable.FromAsync</c>. Returns bottom-up
+    /// order (deepest first) so bulk delete processes children before parents.
+    /// </summary>
+    private static IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> ToDelete, bool HasUnlistedChildren)>
+        CollectNodesForDelete(
+            IMeshStorage persistence,
+            string path,
+            bool recursive,
+            TimeSpan timeout,
+            ILogger logger)
+    {
+        return Observable.FromAsync<(MeshNode? Root, IReadOnlyList<MeshNode> ToDelete, bool HasUnlistedChildren)>(async ct =>
+        {
+            var root = await persistence.GetNodeAsync(path, ct);
+            if (root == null)
+                return (null, Array.Empty<MeshNode>(), false);
+
+            if (!recursive)
+            {
+                bool anyChildren = false;
+                await foreach (var _ in persistence.GetChildrenAsync(path).WithCancellation(ct))
+                {
+                    anyChildren = true;
+                    break;
+                }
+                return (root, new[] { root }, anyChildren);
+            }
+
+            var descendants = new List<MeshNode>();
+            await foreach (var d in persistence.GetAllDescendantsAsync(path).WithCancellation(ct))
+                descendants.Add(d);
+
+            var all = descendants.Append(root)
+                .OrderByDescending(n => n.Path.Count(c => c == '/'))
+                .ThenByDescending(n => n.Path, StringComparer.Ordinal)
+                .ToImmutableList();
+
+            logger.LogDebug("[DeleteNode] collected path={Path} total={Count}", path, all.Count);
+            return (root, (IReadOnlyList<MeshNode>)all, false);
+        })
+        .Timeout(timeout);
+    }
+
+    /// <summary>
+    /// Phase 2 — check <see cref="Permission.Delete"/> for every node's primary path.
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>> CheckDeletePermissionsForAll(
+        ISecurityService? securityService,
+        AccessService? accessService,
+        IReadOnlyList<MeshNode> nodes,
+        ILogger logger)
+    {
+        if (securityService == null || nodes.Count == 0)
+            return Observable.Return<IReadOnlyList<string>>(Array.Empty<string>());
+
+        var userId = accessService?.Context?.ObjectId
+                     ?? accessService?.CircuitContext?.ObjectId
+                     ?? WellKnownUsers.Anonymous;
+
+        return Observable.FromAsync<IReadOnlyList<string>>(async ct =>
+        {
+            var denied = new List<string>();
+            foreach (var node in nodes)
+            {
+                var pathToCheck = node.MainNode ?? node.Path;
+                var perms = await securityService.GetEffectivePermissionsAsync(pathToCheck, userId, ct);
+                if (!perms.HasFlag(Permission.Delete))
+                {
+                    denied.Add(node.Path);
+                    logger.LogDebug(
+                        "[DeleteNode] permission-denied for {User} on {Path} (effective={Perms})",
+                        userId, node.Path, perms);
+                }
+            }
+            return (IReadOnlyList<string>)denied;
+        });
+    }
+
+    /// <summary>
+    /// Phase 3 — run the hub's <see cref="INodeValidator"/> chain for every node
+    /// locally. Collects errors across all nodes (doesn't short-circuit on first)
+    /// so the caller's ActivityLog shows the complete picture.
+    /// </summary>
+    private static IObservable<IReadOnlyList<(string Path, ImmutableList<string> Errors, ImmutableList<string> Warnings)>>
+        ValidateAllLocal(
+            IMessageHub hub,
+            IReadOnlyList<MeshNode> nodes,
+            DeleteNodeRequest request,
+            ILogger logger)
+    {
+        if (nodes.Count == 0)
+            return Observable.Return<IReadOnlyList<(string, ImmutableList<string>, ImmutableList<string>)>>(
+                Array.Empty<(string, ImmutableList<string>, ImmutableList<string>)>());
+
+        return nodes
+            .Select(n => RunDeletionValidatorsWithWarningsObs(hub, n, request)
+                .Select(r => (
+                    Path: n.Path,
+                    Errors: r.Error is null
+                        ? ImmutableList<string>.Empty
+                        : ImmutableList.Create(r.Error),
+                    Warnings: r.Warnings)))
+            .Concat()
+            .ToList()
+            .Select(results => (IReadOnlyList<(string, ImmutableList<string>, ImmutableList<string>)>)
+                results.ToImmutableList());
+    }
+
+    /// <summary>
+    /// Phase 4 — bulk-delete every path by calling <see cref="IStorageService"/> directly.
+    /// Bottom-up order; single timeout covers the full bulk so a stuck adapter fails the
+    /// whole op rather than leaving a partial deletion.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> BulkDeleteViaStorage(
+        IStorageService storage,
+        IReadOnlyList<MeshNode> nodesBottomUp,
+        TimeSpan timeout,
+        ILogger logger)
+    {
+        if (nodesBottomUp.Count == 0)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        return Observable.FromAsync(async ct =>
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(timeout);
+            foreach (var node in nodesBottomUp)
+            {
+                logger.LogDebug("[DeleteNode] storage.DeleteNode {Path}", node.Path);
+                await storage.DeleteNodeAsync(node.Path, recursive: false, linked.Token);
+            }
+            return System.Reactive.Unit.Default;
+        });
+    }
+
+    /// <summary>
+    /// Default handler for <see cref="ValidateDeleteRequest"/>. Fetches the target node
+    /// (via <see cref="IMeshStorage"/>), runs the hub's registered
+    /// <see cref="INodeValidator"/> chain for <see cref="NodeOperation.Delete"/>, and
+    /// returns the first validator failure as an Error (empty Warnings in the default
+    /// implementation — custom hubs can override this handler to emit Warnings).
+    /// </summary>
+    private static IMessageDelivery HandleValidateDeleteRequest(
+        IMessageHub hub,
+        IMessageDelivery<ValidateDeleteRequest> request)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
+        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
+        var path = request.Message.Path;
+
+        var existingNodeObs = Observable.FromAsync(token => persistence.GetNodeAsync(path, token));
+
+        // Running validators against a fabricated DeleteNodeRequest keeps
+        // RunDeletionValidatorsObs unchanged — every validator sees the same inputs it
+        // would see during the real delete.
+        var proxyDeleteRequest = new DeleteNodeRequest(path);
+
+        existingNodeObs
+            .Timeout(opts.Timeout)
+            .SelectMany(node =>
+            {
+                if (node == null)
+                    return Observable.Return(
+                        ValidateDeleteResponse.FromError($"Node not found at path: {path}"));
+
+                return RunDeletionValidatorsObs(hub, node, proxyDeleteRequest)
+                    .Select(err => err is null
+                        ? ValidateDeleteResponse.Ok()
+                        : ValidateDeleteResponse.FromError(err.Value.ErrorMessage ?? "Validation failed"));
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "[ValidateDelete] {Path} failed — treating as error", path);
+                return Observable.Return(
+                    ValidateDeleteResponse.FromError($"Validation error: {ex.Message}"));
+            })
+            .Subscribe(response =>
+            {
+                hub.Post(response, o => o.ResponseFor(request));
+            });
 
         return request.Processed();
     }
@@ -697,43 +933,9 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Issues a storage-level delete of the given path and posts the appropriate
-    /// DeleteNodeResponse on completion. Used by the leaf and "all children deleted"
-    /// branches of HandleDeleteNodeRequest. We CANNOT use IMeshService.DeleteNode here
-    /// because that posts DeleteNodeRequest which routes back to this same handler for
-    /// the same path and recurses forever. The storage-level call is fine because the
-    /// caller has already passed RunDeletionValidatorsObs.
-    /// </summary>
-    private static void DeleteSelfFromStorage(
-        IMessageHub hub,
-        string path,
-        DeleteNodeRequest capturedRequest,
-        IMessageDelivery<DeleteNodeRequest> request,
-        IMeshStorage persistence,
-        ILogger logger)
-    {
-        // Post the terminal commit (storage delete + reply + DisposeRequest) FROM the
-        // mesh hub — not from the node's own hub.
-        //
-        // Why: when this runs on the node's own hub (recursive self-delete — the outer
-        // DeleteNodeRequest targeted parentPath, so the handler is running on parentHub),
-        // the subsequent DisposeRequest tears that same hub down. A reply posted from
-        // the dying hub races callback disposal and is lost — the recursive delete
-        // tests time out for exactly that reason.
-        //
-        // Resolving up to the mesh hub (the topmost hub, which never disposes itself)
-        // makes Sender = mesh. Ok and DisposeRequest both travel mesh → caller on one
-        // routing path; FIFO on the caller's inbound queue guarantees the Ok fires the
-        // RegisterCallback before DisposeRequest disposes the hub.
-        var meshHub = ResolveMeshHub(hub);
-        meshHub.Post(
-            new CommitNodeDeletionMessage(path, request.Id, request.Sender, capturedRequest.DeletedBy));
-    }
-
-    /// <summary>
     /// Walks up <see cref="MessageHubConfiguration.ParentHub"/> to the topmost hub —
     /// the mesh hub, which is never torn down by its own operations and is therefore
-    /// the stable place to post terminal delete commits from.
+    /// the stable place to post terminal delete replies + DisposeRequests from.
     /// </summary>
     private static IMessageHub ResolveMeshHub(IMessageHub hub)
     {
@@ -741,76 +943,6 @@ public static class MeshExtensions
         while (current.Configuration.ParentHub is { } parent && !ReferenceEquals(parent, current))
             current = parent;
         return current;
-    }
-
-    /// <summary>
-    /// Handler for the mesh-hub relay that commits the actual storage delete, replies
-    /// to the original caller, and disposes the deleted address's grain. See
-    /// <see cref="CommitNodeDeletionMessage"/> for the rationale. Registered via
-    /// <see cref="WithNodeOperationHandlers"/>; in practice only the mesh hub ever
-    /// receives this message because callers always target <c>catalog.MeshAddress</c>.
-    /// </summary>
-    private static IMessageDelivery HandleCommitNodeDeletion(
-        IMessageHub hub,
-        IMessageDelivery<CommitNodeDeletionMessage> delivery)
-    {
-        var msg = delivery.Message;
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
-        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
-        var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
-
-        // Reply AFTER the storage commit actually lands so callers see read-after-write
-        // consistency — an awaited DeleteNodeAsync return is followed by queries that
-        // must not see the pre-delete node. Because this handler runs on the MESH hub
-        // (never torn down by its own operations), Ok and DisposeRequest are posted
-        // from a stable sender: Ok goes to the original caller, DisposeRequest to the
-        // deleted node's grain; FIFO on the caller's inbound guarantees the Ok resolves
-        // the RegisterCallback before any DisposeRequest targeting the same caller.
-        //
-        // Timeout is enforced so a stuck storage adapter cannot leave the caller
-        // waiting forever — on timeout, OnError posts a Fail response instead.
-        persistence.DeleteNode(msg.Path, recursive: false)
-            .Timeout(opts.Timeout)
-            .Subscribe(
-                _ =>
-                {
-                    hub.Post(
-                        DeleteNodeResponse.Ok(),
-                        o => o
-                            .WithTarget(msg.OriginalSender)
-                            .WithProperty(PostOptions.RequestId, msg.OriginalRequestId));
-
-                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                        ?.Publish(MeshChangeEvent.Deleted(msg.Path));
-
-                    // Dispose the grain at the deleted address so a subsequent recreate
-                    // at the same path doesn't keep the old node's HubConfiguration.
-                    hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(msg.Path)));
-
-                    logger.LogInformation(
-                        "Node deleted at {Path} by {DeletedBy}",
-                        msg.Path, msg.DeletedBy ?? "system");
-                },
-                ex =>
-                {
-                    var timedOut = ex is TimeoutException;
-                    logger.LogError(ex,
-                        timedOut
-                            ? "Storage delete of {Path} exceeded {Timeout}s — failing caller"
-                            : "Storage delete failed for {Path}",
-                        msg.Path, opts.Timeout.TotalSeconds);
-                    hub.Post(
-                        DeleteNodeResponse.Fail(
-                            timedOut
-                                ? $"Storage delete of '{msg.Path}' exceeded the configured timeout of {opts.Timeout.TotalSeconds:0}s"
-                                : $"Storage delete failed: {ex.Message}",
-                            NodeDeletionRejectionReason.Unknown),
-                        o => o
-                            .WithTarget(msg.OriginalSender)
-                            .WithProperty(PostOptions.RequestId, msg.OriginalRequestId));
-                });
-
-        return delivery.Processed();
     }
 
     /// <summary>
@@ -858,6 +990,49 @@ public static class MeshExtensions
             })
             .Take(1)
             .DefaultIfEmpty(null);
+    }
+
+    /// <summary>
+    /// Delete-specific validator runner that collects BOTH errors (first-only, short-circuit)
+    /// AND warnings (all, aggregated). Returns one tuple per node: (firstError or null, all
+    /// warnings emitted by validators that accepted the delete).
+    /// </summary>
+    private static IObservable<(string? Error, ImmutableList<string> Warnings)>
+        RunDeletionValidatorsWithWarningsObs(
+            IMessageHub hub,
+            MeshNode node,
+            DeleteNodeRequest request)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Delete,
+            Node = node,
+            Request = request,
+            AccessContext = accessService?.Context ?? accessService?.CircuitContext
+        };
+
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
+            .Where(v => v.SupportedOperations.Count == 0
+                        || v.SupportedOperations.Contains(NodeOperation.Delete))
+            .ToList();
+
+        if (validators.Count == 0)
+            return Observable.Return<(string?, ImmutableList<string>)>((null, ImmutableList<string>.Empty));
+
+        return validators
+            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Concat()
+            .ToList()
+            .Select(results =>
+            {
+                var firstError = results.FirstOrDefault(r => !r.IsValid);
+                var warnings = results
+                    .Where(r => r.IsValid && !string.IsNullOrEmpty(r.Warning))
+                    .Select(r => r.Warning!)
+                    .ToImmutableList();
+                return ((string?)firstError?.ErrorMessage, warnings);
+            });
     }
 
     /// <summary>

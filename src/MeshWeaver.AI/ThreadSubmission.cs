@@ -480,21 +480,35 @@ internal static class ThreadSubmissionServer
         // patch can't double-dispatch.
         var dispatching = 0;
 
-        // Subscribe to this thread's own MeshNode (via MeshNodeReference) instead of the
-        // collection-wide stream — fewer wakeups, and the patches we observe are exactly
-        // the writes against this thread.
+        // Subscribe to the thread's MeshNodeReference stream. Note: the stream emits on
+        // ANY MeshNode write in this hub's collection (thread node, satellite cells, ...)
+        // because ReduceToMeshNode returns the last-updated node from the collection.
+        // We MUST filter to thread-node emissions BEFORE throttling — otherwise a
+        // satellite-cell write arriving within 50ms of a thread-state commit will shadow
+        // the commit (Throttle keeps only the last) and the watcher never sees the state
+        // change. That was the resubmit-truncation flake: ApplyResubmit posts an
+        // UpdateNodeRequest for the replayed user cell *and* commits the truncation;
+        // the cell emission landed last, the watcher saw Content=ThreadMessage, skipped,
+        // and the dispatch never fired until the next unrelated write.
         //
-        // Throttle by a small window so a burst of rapid AppendUserMessageRequest patches
-        // (user submits 3 messages in quick succession, or the GUI batches submits) coalesce
-        // into a SINGLE dispatch with all the queued user ids in one round / one response
-        // cell. Without throttling each patch individually wins the reentrancy guard and
-        // produces one round per submit.
+        // Throttle still sits after the filter so rapid AppendUserMessageRequest patches
+        // coalesce into a single dispatch with all the queued user ids in one round.
         var sub = workspace.GetStream(new MeshNodeReference())
+            ?.Where(change => change.Value?.Content is MeshThread)
             ?.Throttle(TimeSpan.FromMilliseconds(50))
             ?.Subscribe(change =>
             {
                 var threadNode = change.Value;
                 if (threadNode?.Content is not MeshThread thread) return;
+
+                logger?.LogDebug(
+                    "[ThreadSubmission] watcher tick thread={ThreadPath} IsExecuting={IsExecuting} " +
+                    "Messages=[{Messages}] Ingested=[{Ingested}] UserIds=[{UserIds}] dispatching={Dispatching}",
+                    threadPath, thread.IsExecuting,
+                    string.Join(",", thread.Messages),
+                    string.Join(",", thread.IngestedMessageIds),
+                    string.Join(",", thread.UserMessageIds),
+                    dispatching);
 
                 // IsExecuting=true is visible — we held the guard waiting for this commit.
                 if (thread.IsExecuting && dispatching == 1)
@@ -505,13 +519,28 @@ internal static class ThreadSubmissionServer
                 if (thread.IsExecuting) return;
 
                 if (Interlocked.CompareExchange(ref dispatching, 1, 0) != 0)
+                {
+                    logger?.LogDebug(
+                        "[ThreadSubmission] watcher skip thread={ThreadPath} — dispatching already 1",
+                        threadPath);
                     return;
+                }
 
                 var releaseGuard = true;
                 try
                 {
                     var dispatch = ThreadSubmission.PlanNextRound(thread);
-                    if (dispatch is null) return;
+                    if (dispatch is null)
+                    {
+                        logger?.LogDebug(
+                            "[ThreadSubmission] watcher idle thread={ThreadPath} — nothing to dispatch",
+                            threadPath);
+                        return;
+                    }
+
+                    logger?.LogDebug(
+                        "[ThreadSubmission] watcher dispatching thread={ThreadPath} userIds=[{UserIds}] responseId={ResponseId}",
+                        threadPath, string.Join(",", dispatch.UserMessageIds), dispatch.ResponseMessageId);
 
                     // Hold the guard. It will be released when we observe IsExecuting=true
                     // back on this same stream above (or on hard failure inside DispatchRound).
