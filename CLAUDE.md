@@ -356,6 +356,41 @@ Always use `GetRequiredService<T>()` for core services (`IMeshNodeFactory`, `IMe
 
 For full documentation see `src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md`.
 
+## MCP Mutations — Always Show a Diff
+
+Claude Code renders diffs only for local file Edit/Write, not for MCP tool results.
+Every time you mutate a mesh node through MCP (`patch`, `update`, `create`, `delete`,
+`move`, `copy`), **surface what changed** so the user has the same visibility as for
+file edits:
+
+1. `get @path` **before** the mutation — cache the JSON.
+2. Mutate.
+3. `get @path` **after** — cache the new JSON.
+4. Render a ```diff code-fence in your response with the relevant change. Claude Code
+   applies syntax highlighting to ```diff blocks, so the user sees exactly what you
+   changed on the mesh.
+
+```diff
+--- Systemorph/FutuRe/Pricing/Source/Foo.cs (before)
++++ Systemorph/FutuRe/Pricing/Source/Foo.cs (after)
+@@ @@
+-public string Old { get; init; }
++public string New { get; init; }
+```
+
+- Trim to the changed region — a full-file dump drowns out the delta.
+- For `create`, show the whole new content as additions. For `delete`, show the content
+  as removals. For `move`/`copy`, show the old path → new path.
+- Read-only / side-effect MCP tools don't need this: `get`, `search`, `recycle`,
+  `get_diagnostics`, `navigate_to`, `get_base_url`, `execute_script`.
+- If the mutation was a no-op (server rejected the change or content was already
+  equal), say so explicitly rather than rendering an empty diff.
+
+The `MeshOperations` MCP tools are being extended to return a unified diff in the
+tool response directly, so this convention holds even when other agents consume
+the MCP. Until that's universally deployed, compute the diff locally from
+before/after `get` calls.
+
 ## Development Patterns
 
 ### Adding New Layout Areas
