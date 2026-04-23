@@ -175,6 +175,52 @@ refactor to `IObservable<T>`, and submit a PR without the async. "But this is a 
 helper" / "just a one-liner wrapper" / "the MCP SDK needs Task" are all traps — the
 wrapper either becomes part of the hot path or someone copies it into one.**
 
+## 🚨 CQRS — never query for a single node's content
+
+> **Queries (`QueryAsync` / `ObserveQuery`) bring sets of elements. Nothing more.**
+> To read the *content* of a specific node, **never use a query** — use
+> `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(address, new MeshNodeReference())`.
+
+Queries route through a read-side index that is **eventually consistent** — it lags
+behind writes. Using `mesh.QueryAsync($"path:X").FirstOrDefaultAsync()` (or any
+`Observable.FromAsync(() => ...)` wrapper around it) to read `X` will sometimes
+return stale content right after a write. That's the bug class this rule prevents.
+
+```csharp
+// ❌ WRONG — indexed read path, lagged, stale just after writes.
+var node = await mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+
+// ❌ WRONG — same bug wrapped in Observable.FromAsync to look reactive.
+return Observable.FromAsync(ct =>
+    mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync(ct).AsTask());
+
+// ✅ CORRECT — direct subscription to the owning hub's workspace. Authoritative,
+//    live (you get future updates too), no staleness.
+var workspace = hub.GetWorkspace();
+return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        new Address(path), new MeshNodeReference())
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(10))
+    .Select(change => change.Value);
+```
+
+**Valid query uses:**
+- Listing children of a namespace (`path/*`)
+- Searching by predicate (`nodeType:X`, `name:*sales*`)
+- Checking existence (did any node match?)
+- Autocomplete / browsing
+
+**Always-wrong query uses:**
+- Getting a node by exact path so you can read its content
+- Reading the current state before a Patch/Update
+- "Wait for this script/job to finish" (use `GetRemoteStream` and `Where(...).Take(1)` on the completion condition)
+
+`GetRemoteStream` is also the right primitive for **waiting for work to finish** —
+subscribe until a completion field flips in the node's content, then `Take(1)`.
+Queries polled in a loop would lag on every tick.
+
+Full treatment: `Doc/Architecture/CqrsAndContentAccess.md`.
+
 ### The three building blocks
 
 1. **`IMeshService.CreateNode / UpdateNode / DeleteNode` return `IObservable<T>`** (NOT `Task<T>`). They internally `hub.Post` + `hub.RegisterCallback`. Subscribe to drive them — never call `.ToTask()` / `.FirstAsync()` / `await` on them from a click action or hub handler.

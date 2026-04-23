@@ -169,27 +169,21 @@ public class MeshOperations
         if (string.IsNullOrWhiteSpace(resolvedPath))
             return Observable.Return("Error: path is required.");
 
-        // Handle children query (path/*)
+        // Handle children query (path/*) — ObserveQuery emits a QueryResultChange whose
+        // Initial change contains every matching child in a single batch. Take(1) completes
+        // the stream as soon as the first snapshot arrives; no await, no FromAsync bridge.
         if (resolvedPath.EndsWith("/*"))
         {
             var parentPath = resolvedPath[..^2];
-            return Observable.FromAsync(async ct =>
+            return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parentPath}"))
+                .Take(1)
+                .Select(change =>
                 {
-                    var result = ImmutableList<object>.Empty;
-                    await foreach (var node in mesh.QueryAsync<MeshNode>(
-                        MeshQueryRequest.FromQuery($"namespace:{parentPath}")).WithCancellation(ct))
-                    {
-                        result = result.Add(new
-                        {
-                            node.Path,
-                            node.Name,
-                            node.NodeType,
-                            node.Icon
-                        });
-                    }
-                    return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
+                    var list = change.Items
+                        .Select(node => (object)new { node.Path, node.Name, node.NodeType, node.Icon })
+                        .ToImmutableList();
+                    return JsonSerializer.Serialize(list, hub.JsonSerializerOptions);
                 })
-                .SubscribeOn(TaskPoolScheduler.Default)
                 .Catch((Exception ex) =>
                 {
                     logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
@@ -197,25 +191,24 @@ public class MeshOperations
                 });
         }
 
-        // Unified path first, then fall back to direct node lookup.
+        // Unified path first, then fall back to direct node lookup via ObserveQuery.
         return TryResolveUnifiedPath(resolvedPath)
             .SelectMany(unified => unified != null
                 ? Observable.Return(unified)
-                : Observable.FromAsync(async ct =>
+                : mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+                    .Take(1)
+                    .Select(change =>
                     {
-                        await foreach (var node in mesh.QueryAsync<MeshNode>(
-                            MeshQueryRequest.FromQuery($"path:{resolvedPath}")).WithCancellation(ct))
-                        {
-                            var compileError = LookupCompilationError(node);
-                            return compileError != null
-                                ? JsonSerializer.Serialize(
-                                    new { node, compilationError = compileError },
-                                    hub.JsonSerializerOptions)
-                                : JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
-                        }
-                        return $"Not found: {resolvedPath}";
-                    })
-                    .SubscribeOn(TaskPoolScheduler.Default))
+                        var node = change.Items.FirstOrDefault();
+                        if (node is null)
+                            return $"Not found: {resolvedPath}";
+                        var compileError = LookupCompilationError(node);
+                        return compileError != null
+                            ? JsonSerializer.Serialize(
+                                new { node, compilationError = compileError },
+                                hub.JsonSerializerOptions)
+                            : JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
+                    }))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
@@ -344,24 +337,18 @@ public class MeshOperations
             fullQuery = $"namespace:{resolvedBase} {cleanQuery}".Trim();
         }
 
-        return Observable.FromAsync(async ct =>
+        // Snapshot semantics: Take(1) on ObserveQuery gives us the Initial change
+        // containing every match for this query in one batch — no async enumeration,
+        // no FromAsync bridge.
+        return mesh.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = 50 })
+            .Take(1)
+            .Select(change =>
             {
-                var results = ImmutableList<object>.Empty;
-                await foreach (var item in mesh.QueryAsync(
-                    new MeshQueryRequest { Query = fullQuery, Limit = 50 }).WithCancellation(ct))
-                {
-                    if (item is MeshNode node)
-                    {
-                        results = results.Add(new { node.Path, node.Name, node.NodeType });
-                    }
-                    else
-                    {
-                        results = results.Add(item);
-                    }
-                }
-                return JsonSerializer.Serialize(results, hub.JsonSerializerOptions);
+                var list = change.Items
+                    .Select(node => (object)new { node.Path, node.Name, node.NodeType })
+                    .ToImmutableList();
+                return JsonSerializer.Serialize(list, hub.JsonSerializerOptions);
             })
-            .SubscribeOn(TaskPoolScheduler.Default)
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Error searching with query {Query}", query);
@@ -551,10 +538,12 @@ public class MeshOperations
             if (string.IsNullOrWhiteSpace(resolvedPath))
                 return Observable.Return("Error: path is required.");
 
-            // Read the current node first, then build the merged update.
-            return Observable.FromAsync(ct =>
-                    mesh.QueryAsync<MeshNode>($"path:{resolvedPath}").FirstOrDefaultAsync(ct).AsTask())
-                .SubscribeOn(TaskPoolScheduler.Default)
+            // Read the current node reactively via ObserveQuery (not QueryAsync +
+            // FromAsync, which queues an await on the hub). Take(1) completes as soon
+            // as the first snapshot arrives.
+            return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+                .Take(1)
+                .Select(change => change.Items.FirstOrDefault())
                 .SelectMany(existing =>
                 {
                     if (existing == null)
@@ -1085,12 +1074,11 @@ public class MeshOperations
                 new { status = "Unknown", message = "INodeTypeService not registered on this hub" },
                 hub.JsonSerializerOptions));
 
-        return Observable.FromAsync(ct =>
-                mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
-                    .FirstOrDefaultAsync(ct).AsTask())
-            .SubscribeOn(TaskPoolScheduler.Default)
-            .Select(node =>
+        return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+            .Take(1)
+            .Select(change =>
             {
+                var node = change.Items.FirstOrDefault();
                 var nodeTypePath = node?.Content is Graph.Configuration.NodeTypeDefinition
                     ? node.Path
                     : node?.NodeType;
@@ -1197,10 +1185,18 @@ public class MeshOperations
 
         var resolvedPath = ResolvePath(path);
 
-        return Observable.FromAsync(ct =>
-                mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
-                    .FirstOrDefaultAsync(ct).AsTask())
-            .SubscribeOn(TaskPoolScheduler.Default)
+        // Content read goes through the owning hub's workspace (not a query) so we
+        // never see a stale index hit. Take(1) grabs the current committed state,
+        // Timeout guards against a missing node (GetRemoteStream stays live forever
+        // otherwise — no "not found" emission).
+        var workspace = hub.GetWorkspace();
+        var nodeAddress = new Address(resolvedPath);
+        return workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(nodeAddress, new MeshNodeReference())
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Select(change => change.Value)
+            .Catch((TimeoutException _) => Observable.Return<MeshNode?>(null))
             .SelectMany(node =>
             {
                 if (node is null)
