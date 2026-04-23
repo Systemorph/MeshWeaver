@@ -132,7 +132,20 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
             => AsyncEnumerable.Empty<QuerySuggestion>();
 
         public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
-            => throw new NotSupportedException();
+            => System.Reactive.Linq.Observable.FromAsync(async () =>
+            {
+                var items = new List<T>();
+                await foreach (var item in QueryAsync(request))
+                {
+                    if (item is T typed)
+                        items.Add(typed);
+                }
+                return new QueryResultChange<T>
+                {
+                    ChangeType = QueryChangeType.Initial,
+                    Items = items,
+                };
+            });
 
         public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
             => Task.FromResult<T?>(default);
