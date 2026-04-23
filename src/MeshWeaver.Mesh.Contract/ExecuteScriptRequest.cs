@@ -1,4 +1,6 @@
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Security;
 
 namespace MeshWeaver.Mesh;
 
@@ -8,7 +10,10 @@ namespace MeshWeaver.Mesh;
 /// <c>IsExecutable</c>, and dispatches execution through its internal kernel. The
 /// kernel layer is intentionally NOT exposed in this request — callers (MCP,
 /// agents) never address the kernel directly; they only speak to the Code node.
+///
+/// Requires <see cref="Permission.Execute"/> on the Code node's path.
 /// </summary>
+[RequiresPermission(Permission.Execute)]
 public record ExecuteScriptRequest : IRequest<ExecuteScriptResponse>
 {
     /// <summary>
