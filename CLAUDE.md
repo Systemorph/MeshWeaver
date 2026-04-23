@@ -131,11 +131,49 @@ dotnet run --project memex/aspire/Memex.AppHost
 # Requires Docker for dependencies
 ```
 
-## Reactive Pattern — NO AWAIT IN UI / HUB FLOWS
+## 🚨 Reactive Pattern — NOTHING ASYNC EVER (READ THIS FIRST)
 
-**Rule: `await` inside hub handlers, button click actions, and service layers that are called from those paths is FORBIDDEN. It deadlocks.** Every write/read to the mesh must be composed as an `IObservable<T>` chain.
+> **RULE: no `await`, no `async`, no `Task<T>` return types anywhere in hub-reachable
+> code. Period. No exceptions for "just this small bit".** Mesh code is `IObservable<T>`
+> end-to-end. `async` + `await` looks innocent and deadlocks the mesh. Every recent
+> "ExecuteScript times out", "Patch hangs", "click does nothing" incident traced to
+> someone (usually me) sliding an `await` into a path that eventually flows through a
+> hub handler. **Stop doing it.**
 
-This is the single most important pattern in MeshWeaver. Violating it is the cause of most "button does nothing", "popup doesn't show", and "freezes under load" bugs.
+**What this actually means:**
+
+- **Return types**: public methods on `MeshOperations`, handlers, services, layout
+  areas → `IObservable<T>` (or `void` for fire-and-forget). Never `Task<T>`.
+- **Internals**: compose with `.SelectMany`, `.Select`, `.Where`, `.Timeout`. Convert
+  Task-returning primitives at the boundary with `Observable.FromAsync(() => task)`
+  — but never `await` the task yourself inside hub flow.
+- **MCP / external-SDK boundaries** that MUST return `Task<T>` (because the SDK
+  requires it): acceptable as a *single adapter layer* at the surface — e.g.
+  `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();`. Keep
+  the body of that adapter one line. The hub work itself still lives on
+  `IObservable<T>`.
+- **Click actions**: synchronous — `WithClickAction(ctx => { ...; return Task.CompletedTask; })`.
+  Never `async ctx =>`.
+- **Tests**: the single exception. Test code MAY `await` to block until a stream
+  emits (`.FirstAsync().ToTask()`). Everywhere else, no.
+
+**The canonical mistake ledger (what has blown up recently):**
+
+- `Patch` TCS hang — `SerialisePretty` threw inside `Subscribe`, TCS never resolved,
+  xUnit fact timed out at 30 s. Fix: `Observable.FromAsync` + composed chain, not
+  Subscribe-with-TCS-callback.
+- `ExecuteScript` silent timeout — `AwaitResponse` inside a tool method, response
+  never routed back to the scope that awaited.
+- Kernel grain activation loop — `await contentService.GetContentAsync(...)` inside
+  a script deadlocked the kernel's action block.
+- Any `TaskCompletionSource` in hub-reachable code is a code smell — a 99%-of-the-time
+  sign that someone is trying to bridge `IObservable` → `Task` inside the hub flow.
+  Delete it and return `IObservable<T>` instead.
+
+**If you catch yourself reaching for `async`/`await`/`Task<T>` in hub code: stop,
+refactor to `IObservable<T>`, and submit a PR without the async. "But this is a small
+helper" / "just a one-liner wrapper" / "the MCP SDK needs Task" are all traps — the
+wrapper either becomes part of the hot path or someone copies it into one.**
 
 ### The three building blocks
 
