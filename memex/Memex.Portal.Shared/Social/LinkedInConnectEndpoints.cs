@@ -84,7 +84,12 @@ public static class LinkedInConnectEndpoints
                 + $"&client_id={Uri.EscapeDataString(clientId!)}"
                 + $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"
                 + $"&state={Uri.EscapeDataString(state)}"
-                + "&scope=" + Uri.EscapeDataString("openid profile email w_member_social r_member_social");
+                // r_member_social (Community Management API engagement reads) requires
+                // explicit app review on LinkedIn — drop it from the default scope so
+                // OAuth completes for apps that don't have it. Engagement pulls
+                // (comments/likes per post) will return 403 from /v2/socialActions/*
+                // until the scope is granted, and the publisher logs + skips them.
+                + "&scope=" + Uri.EscapeDataString("openid profile email w_member_social");
 
             return Results.Redirect(url);
         }).RequireAuthorization();
