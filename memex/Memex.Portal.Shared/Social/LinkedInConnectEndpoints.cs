@@ -149,7 +149,10 @@ public static class LinkedInConnectEndpoints
             {
                 var body = await tokenResp.Content.ReadAsStringAsync(http.RequestAborted);
                 logger.LogWarning("LinkedIn token exchange failed {Status}: {Body}", (int)tokenResp.StatusCode, body);
-                return Results.Problem("LinkedIn token exchange failed. See server logs.", statusCode: 502);
+                // Friendly landing instead of raw Bad Gateway JSON — pass the reason
+                // so the profile page can show a visible banner.
+                var reason = ExtractLinkedInErrorReason(body);
+                return Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-error&stage=token&reason={Uri.EscapeDataString(reason)}");
             }
 
             using var doc = JsonDocument.Parse(await tokenResp.Content.ReadAsStringAsync(http.RequestAborted));
@@ -162,7 +165,7 @@ public static class LinkedInConnectEndpoints
             uiReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             using var uiResp = await http2.SendAsync(uiReq, http.RequestAborted);
             if (!uiResp.IsSuccessStatusCode)
-                return Results.Problem("LinkedIn userinfo fetch failed.", statusCode: 502);
+                return Results.Redirect($"/{profilePath}/LinkedIn?connect=linkedin-error&stage=userinfo&reason={Uri.EscapeDataString("userinfo-" + (int)uiResp.StatusCode)}");
 
             using var uiDoc = JsonDocument.Parse(await uiResp.Content.ReadAsStringAsync(http.RequestAborted));
             var subject = uiDoc.RootElement.GetProperty("sub").GetString()!;
@@ -238,4 +241,21 @@ public static class LinkedInConnectEndpoints
 
     private static string BuildRedirectUri(HttpContext http) =>
         $"{http.Request.Scheme}://{http.Request.Host}{CallbackPath}";
+
+    /// <summary>
+    /// Extracts the short <c>error</c> field from a LinkedIn OAuth error payload,
+    /// falling back to a generic slug if the body isn't parseable. Used to surface
+    /// a compact query-string reason code to the user instead of raw JSON.
+    /// </summary>
+    private static string ExtractLinkedInErrorReason(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String)
+                return err.GetString() ?? "unknown";
+        }
+        catch { /* non-JSON response */ }
+        return "token-exchange-failed";
+    }
 }
