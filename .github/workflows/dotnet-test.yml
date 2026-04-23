@@ -34,8 +34,11 @@ jobs:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
       run: |
+        # PostgreSql uses Testcontainers — ubuntu-latest has Docker pre-installed,
+        # the test project pulls pgvector/pgvector:pg17 on demand. Cosmos still
+        # needs the emulator (separate workstream). Orleans hangs on silo bootstrap
+        # in CI (separate workstream). Acme/FutuRe hit dynamic compilation issues.
         find test -name '*.csproj' \
-          ! -path '*PostgreSql*' \
           ! -path '*Cosmos*' \
           ! -path '*Orleans*' \
           ! -path '*Acme*' \
