@@ -132,7 +132,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             Content = apiToken,
         };
 
-        var created = await nodeFactory.CreateNodeAsync(userNode);
+        var created = await nodeFactory.CreateNode(userNode);
 
         // Store a lightweight index pointer at the original location for O(1) validation lookup.
         // Promote to System identity — users don't have Create permission on the top-level
@@ -155,12 +155,12 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         {
             using (accessService.SwitchAccessContext(new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" }))
             {
-                await nodeFactory.CreateNodeAsync(indexNode);
+                await nodeFactory.CreateNode(indexNode);
             }
         }
         else
         {
-            await nodeFactory.CreateNodeAsync(indexNode);
+            await nodeFactory.CreateNode(indexNode);
         }
 
         logger.LogInformation("Created API token {Label} for user {UserId} (hash prefix {HashPrefix})",

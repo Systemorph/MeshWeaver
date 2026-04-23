@@ -117,7 +117,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.CreateNode(node);
 
         // Act - try to create the same node again
-        var act = () => NodeFactory.CreateNode(node);
+        var act = () => NodeFactory.CreateNode(node).ToTask();
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -131,7 +131,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         var node = new MeshNode("", "test") { Name = "Invalid Node" }; // Empty Id
 
         // Act
-        var act = () => NodeFactory.CreateNode(node);
+        var act = () => NodeFactory.CreateNode(node).ToTask();
 
         // Assert
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
@@ -197,7 +197,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task DeleteNode_NotFound_ShouldFail()
     {
         // Act
-        var act = () => NodeFactory.DeleteNode("nonexistent/path/Node");
+        var act = () => NodeFactory.DeleteNode("nonexistent/path/Node").ToTask();
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -302,7 +302,7 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
         };
 
         // Act
-        var act = () => NodeFactory.CreateNode(node);
+        var act = () => NodeFactory.CreateNode(node).ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -343,7 +343,7 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
         };
 
         // Act — creation should fail due to validator
-        var act = () => NodeFactory.CreateNode(node);
+        var act = () => NodeFactory.CreateNode(node).ToTask();
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
         // Verify no trace of the node exists
@@ -389,7 +389,7 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
         };
 
         // Act
-        var act = () => NodeFactory.CreateNode(node);
+        var act = () => NodeFactory.CreateNode(node).ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -469,7 +469,7 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
         await NodeFactory.CreateNode(node);
 
         // Act - try to delete the protected node
-        var act = () => NodeFactory.DeleteNode("deletion/validation/ProtectedNode");
+        var act = () => NodeFactory.DeleteNode("deletion/validation/ProtectedNode").ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -606,7 +606,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var act = () => NodeFactory.CreateNode(node);
+        var act = () => NodeFactory.CreateNode(node).ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -667,7 +667,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         await NodeFactory.CreateNode(node);
 
         // Act - try to delete the locked node
-        var act = () => NodeFactory.DeleteNode("nodetype/deletion/LockedNode");
+        var act = () => NodeFactory.DeleteNode("nodetype/deletion/LockedNode").ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -738,7 +738,7 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var act = () => NodeFactory.CreateNode(node);
+        var act = () => NodeFactory.CreateNode(node).ToTask();
 
         // Assert - global validator rejects first
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -757,7 +757,7 @@ public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) 
         };
 
         // Act
-        var act = () => NodeFactory.CreateNode(node);
+        var act = () => NodeFactory.CreateNode(node).ToTask();
 
         // Assert - NodeType validator rejects after global passes
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -1071,7 +1071,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
             Name = "Downgraded Node",
             Content = new UpdatableContent(Title: "Downgraded", Version: 3)
         };
-        var act = () => NodeFactory.UpdateNode(downgradedNode);
+        var act = () => NodeFactory.UpdateNode(downgradedNode).ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -1114,7 +1114,7 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
         };
 
         // Act - try to update a node that doesn't exist
-        var act = () => NodeFactory.UpdateNode(node);
+        var act = () => NodeFactory.UpdateNode(node).ToTask();
 
         // Assert
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -1198,7 +1198,7 @@ public class NodeOperationsWithGlobalUpdateValidatorTest(ITestOutputHelper outpu
         {
             Name = "This is forbidden by policy"
         };
-        var act = () => NodeFactory.UpdateNode(updatedNode);
+        var act = () => NodeFactory.UpdateNode(updatedNode).ToTask();
 
         // Assert — validator rejection surfaces as UnauthorizedAccessException
         await act.Should().ThrowAsync<UnauthorizedAccessException>()

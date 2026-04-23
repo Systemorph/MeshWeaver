@@ -93,7 +93,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
             Name = id,
             NodeType = "Code",
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
-        });
+        }).ToTask(ct);
 
     private async Task<UiControl> RenderAreaAsync(string path, string area, CancellationToken ct)
     {

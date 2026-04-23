@@ -14,16 +14,11 @@ public static class WorkspaceNodeExtensions
 {
     /// <summary>
     /// Gets the MeshNode for the current hub as a stream.
-    /// The node is retrieved via IMeshService based on the hub's address.
+    /// Delegates to <see cref="MeshNodeExtensions.GetMeshNodeStream(IWorkspace)"/> —
+    /// uses the live MeshNodeReference stream, never a query.
     /// </summary>
     public static IObservable<MeshNode?> GetNodeStream(this IWorkspace workspace)
-    {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var nodePath = workspace.Hub.Address.ToString();
-
-        return Observable.FromAsync(async ct =>
-            await meshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync(ct));
-    }
+        => workspace.GetMeshNodeStream().Select(n => (MeshNode?)n);
 
     /// <summary>
     /// Gets the MeshNode's Content as a typed stream.
@@ -36,14 +31,11 @@ public static class WorkspaceNodeExtensions
 
     /// <summary>
     /// Gets the MeshNode for a specific path as a stream.
+    /// Auto-dispatches to local own-node stream or remote MeshNodeReference subscription
+    /// (see <see cref="MeshNodeExtensions.GetMeshNodeStream(IWorkspace, string)"/>).
     /// </summary>
     public static IObservable<MeshNode?> GetNodeStream(this IWorkspace workspace, string path)
-    {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-        return Observable.FromAsync(async ct =>
-            await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync(ct));
-    }
+        => workspace.GetMeshNodeStream(path).Select(n => (MeshNode?)n);
 
     /// <summary>
     /// Gets a specific node's Content as a typed stream.

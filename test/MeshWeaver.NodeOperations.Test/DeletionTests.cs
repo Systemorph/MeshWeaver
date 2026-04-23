@@ -93,7 +93,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     public async Task Delete_NonExistentNode_Throws()
     {
         // Act & Assert — deleting a non-existent node should throw
-        var act = () => NodeFactory.DeleteNode("nonexistent/path/that/does/not/exist");
+        var act = () => NodeFactory.DeleteNode("nonexistent/path/that/does/not/exist").ToTask();
         await act.Should().ThrowAsync<System.Exception>();
     }
 

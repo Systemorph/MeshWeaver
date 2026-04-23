@@ -119,16 +119,12 @@ public static class MeshCatalogView
     public static IObservable<UiControl> Editor(LayoutAreaHost host, RenderingContext ctx)
     {
         var nodePath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        return Observable.FromAsync(async ct =>
+        // Reactive: own-node MeshNodeReference stream, no QueryAsync, no FromAsync.
+        return host.Workspace.GetMeshNodeStream().Take(1).Select(node =>
         {
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync(ct);
-
-            // Wrap editor control with a back button
             var stack = Controls.Stack.WithWidth("100%");
 
-            // Back button
             var overviewHref = $"/{nodePath}/{MeshNodeLayoutAreas.OverviewArea}";
             var nodeName = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? "Overview";
             stack = stack.WithView(
@@ -137,7 +133,6 @@ public static class MeshCatalogView
                     .WithView(Controls.Button(nodeName)
                         .WithNavigateToHref(overviewHref)));
 
-            // Editor control
             stack = stack.WithView(new MeshNodeEditorControl
             {
                 NodePath = nodePath,

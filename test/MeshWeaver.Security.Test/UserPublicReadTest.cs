@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -149,8 +150,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
             NodeType = "Organization",
             Content = new Organization { Name = "Globex Corp" }
         };
-        var created = await NodeFactory.CreateNodeAsync(orgNode,
-            ct: TestContext.Current.CancellationToken);
+        var created = await NodeFactory.CreateNode(orgNode);
         created.Should().NotBeNull();
         Output.WriteLine($"Created: {created.Path}");
 

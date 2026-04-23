@@ -107,7 +107,7 @@ public class LinkedInProfileLayoutAreaTest(ITestOutputHelper output) : MonolithM
             Name = id,
             NodeType = "Code",
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
-        });
+        }).ToTask(ct);
 
     private async Task<UiControl> RenderOverviewAsync(string path, CancellationToken ct)
     {
