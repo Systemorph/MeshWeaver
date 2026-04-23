@@ -337,6 +337,17 @@ public class KernelContainer(IServiceProvider serviceProvider)
         await Task.WhenAll(composite.ChildKernels.OfType<CSharpKernel>()
             .Select(k => k.SetValueAsync(nameof(Mesh), hub, typeof(IMessageHub))));
 
+        // Expose a `Progress` global that scripts can call to push observable updates
+        // to the kernel's area stream at the stable view id "progress". Clients
+        // (Blazor result pane, MCP ExecuteScript progress channel) subscribe to
+        // that area and surface each report. Per Doc/Architecture/AsynchronousCalls
+        // a script should emit progress and never `await` hub-routed calls — the
+        // await would deadlock the kernel's action block waiting for a response
+        // that has to traverse the same block to return.
+        var progressReporter = new KernelProgressReporter(hub, this);
+        await Task.WhenAll(composite.ChildKernels.OfType<CSharpKernel>()
+            .Select(k => k.SetValueAsync("Progress", progressReporter, typeof(IProgress<string>))));
+
         // Add default using directives for interactive markdown
         // Note: We don't include "using static MeshWeaver.Layout.Controls;" because
         // Controls.DateTime() conflicts with System.DateTime
@@ -498,5 +509,19 @@ using MeshWeaver.Messaging;
         return request.Processed();
     }
 
-
+    /// <summary>
+    /// Bridges <c>IProgress&lt;string&gt;</c> calls inside scripts to the kernel hub's
+    /// area stream. Scripts call <c>Progress.Report("...")</c>; subscribers at the
+    /// layout-area reference <c>"progress"</c> on the kernel hub see each update.
+    /// Per-call cost is one hashtable write — cheap enough that scripts can report
+    /// liberally.
+    /// </summary>
+    private sealed class KernelProgressReporter(IMessageHub hub, KernelContainer container) : IProgress<string>
+    {
+        public void Report(string value)
+        {
+            try { container.UpdateView(hub, "progress", value); }
+            catch { /* progress is best-effort — never let it break script execution */ }
+        }
+    }
 }
