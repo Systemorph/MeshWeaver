@@ -21,6 +21,26 @@
     <ImportMap />
     <link rel="icon" type="image/png" href="favicon.ico" />
     <script src="_content/Radzen.Blazor/Radzen.Blazor.js"></script>
+
+    @*
+        Load Monaco early, in parallel with HTML parsing, and expose a readiness
+        Promise that Blazor.start() awaits below. BlazorMonaco 3.4 ships Monaco
+        0.54 whose `editor/editor.main.js` is a tiny AMD stub — the real 3.6MB
+        bundle (editor.api-*.js) is fetched asynchronously by the AMD loader.
+        If Blazor activates a circuit and renders a <StandaloneCodeEditor>
+        before that async load finishes, BlazorMonaco's jsInterop calls
+        `monaco.editor.create(...)` while `monaco` is undefined, the circuit
+        crashes, and the user sees a broken page. Using require([...], cb) to
+        gate Blazor.start removes the race.
+    *@
+    <script src="_content/BlazorMonaco/jsInterop.js"></script>
+    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
+    <script>
+        window.monacoReady = new Promise(function (resolve, reject) {
+            require(['vs/editor/editor.main'], resolve, reject);
+        });
+    </script>
+
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
     <PageTitle>Memex Portal</PageTitle>
     @if (!string.IsNullOrEmpty(aiConnectionString))
@@ -110,23 +130,31 @@
         })();
     </script>
 
-    <script src="_content/BlazorMonaco/jsInterop.js"></script>
-    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
-    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/editor/editor.main.js"></script>
     <script src="_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js" type="module"></script>
     <script src="_framework/blazor.web.js" autostart="false"></script>
     <script>
-        Blazor.start({
-            circuit: {
-                // Short, bounded retries so the "rejected/failed" state arrives
-                // in seconds rather than minutes when a deploy invalidates the
-                // circuit. On terminal failure, the mutation observer above
-                // reloads the page to pick up a fresh circuit on the new server.
-                reconnectionOptions: {
-                    maxRetries: 3,
-                    retryIntervalMilliseconds: 2000
+        // Wait for Monaco to finish loading before activating the Blazor
+        // circuit. See the comment next to the <script> tags in <head>.
+        window.monacoReady.then(function () {
+            Blazor.start({
+                circuit: {
+                    // Short, bounded retries so the "rejected/failed" state arrives
+                    // in seconds rather than minutes when a deploy invalidates the
+                    // circuit. On terminal failure, the mutation observer above
+                    // reloads the page to pick up a fresh circuit on the new server.
+                    reconnectionOptions: {
+                        maxRetries: 3,
+                        retryIntervalMilliseconds: 2000
+                    }
                 }
-            }
+            });
+        }).catch(function (err) {
+            console.error('Monaco failed to load, starting Blazor without it:', err);
+            Blazor.start({
+                circuit: {
+                    reconnectionOptions: { maxRetries: 3, retryIntervalMilliseconds: 2000 }
+                }
+            });
         });
     </script>
 </body>
