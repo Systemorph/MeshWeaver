@@ -130,6 +130,13 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
     public Task<string> Recycle(
         [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
         => ops.Recycle(path);
+
+    [McpServerTool]
+    [Description("Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive) and returns stdout / return value / errors. The target node must have `CodeConfiguration.IsExecutable == true`. Blocks until the kernel signals completion (side-effects — e.g. mesh.CreateNode calls inside the script — have happened by the time this returns). Use to run import/test scripts from MCP without needing a UI click.")]
+    public Task<string> ExecuteScript(
+        [Description("Path to an executable Code node (e.g., @Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Script/ImportLargeClaims). Must be `IsExecutable=true`.")] string path,
+        [Description("Timeout in seconds. Default 120.")] int timeoutSeconds = 120)
+        => ops.ExecuteScript(path, timeoutSeconds);
 }
 
 /// <summary>
