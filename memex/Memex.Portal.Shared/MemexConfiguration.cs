@@ -44,8 +44,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
-using ModelContextProtocol.AspNetCore.Authentication;
-using ModelContextProtocol.Authentication;
 using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 
 namespace Memex.Portal.Shared;
@@ -195,10 +193,6 @@ public static class MemexConfiguration
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
             services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
                 .AddMicrosoftIdentityWebApp(entraIdConfig);
-            services.AddAuthentication()
-                .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
-                    ApiTokenAuthenticationHandler.SchemeName, _ => { })
-                .AddMcp(ConfigureMcpResourceMetadata);
             services.AddControllersWithViews()
                 .AddMicrosoftIdentityUI();
         }
@@ -228,68 +222,13 @@ public static class MemexConfiguration
                 .AddGoogleAuthentication(builder.Configuration)
                 .AddLinkedInAuthentication(builder.Configuration)
                 .AddAppleAuthentication(builder.Configuration);
-
-            // Add API token auth scheme for MCP bearer authentication
-            authBuilder.AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
-                ApiTokenAuthenticationHandler.SchemeName, _ => { })
-                .AddMcp(ConfigureMcpResourceMetadata);
         }
 
-        // Add authorization with McpAuth policy (MCP scheme forwards to ApiToken or Cookie)
-        services.AddAuthorization(options =>
-        {
-            options.AddPolicy("McpAuth", policy =>
-            {
-                policy.AddAuthenticationSchemes(McpAuthenticationDefaults.AuthenticationScheme);
-                policy.RequireAuthenticatedUser();
-            });
-        });
-    }
-
-    /// <summary>
-    /// Configures the MCP authentication scheme with OAuth resource metadata discovery
-    /// and request-based forwarding to the appropriate authentication handler.
-    /// </summary>
-    private static void ConfigureMcpResourceMetadata(McpAuthenticationOptions options)
-    {
-        // CRITICAL: SDK constructor sets ForwardAuthenticate = "Bearer" which takes
-        // priority over ForwardDefaultSelector in ASP.NET Core's ResolveTarget().
-        // Clear it so our selector works.
-        options.ForwardAuthenticate = null;
-
-        // Route Bearer tokens to ApiToken handler, everything else to Cookie
-        options.ForwardDefaultSelector = ctx =>
-        {
-            var authHeader = ctx.Request.Headers.Authorization.ToString();
-            if (!string.IsNullOrEmpty(authHeader) &&
-                authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-                return ApiTokenAuthenticationHandler.SchemeName;
-            return CookieAuthenticationDefaults.AuthenticationScheme;
-        };
-
-        // Fallback resource metadata (overridden per-request by Events)
-        options.ResourceMetadata = new ProtectedResourceMetadata
-        {
-            BearerMethodsSupported = { "header" },
-            ScopesSupported = { "mcp" },
-        };
-
-        options.Events = new McpAuthenticationEvents
-        {
-            OnResourceMetadataRequest = ctx =>
-            {
-                var req = ctx.HttpContext.Request;
-                var origin = $"{req.Scheme}://{req.Host}";
-                ctx.ResourceMetadata = new ProtectedResourceMetadata
-                {
-                    Resource = $"{origin}/mcp",
-                    BearerMethodsSupported = { "header" },
-                    ScopesSupported = { "mcp" },
-                    AuthorizationServers = { $"{origin}/connect" },
-                };
-                return Task.CompletedTask;
-            }
-        };
+        // MCP auth is deliberately separate from the Blazor cookie pipeline above —
+        // see McpAuthenticationExtensions for the "why". Bearer-only, no cookie leakage,
+        // proper 401 + WWW-Authenticate on anonymous requests so MCP clients can
+        // discover the auth server.
+        services.AddMcpAuthentication();
     }
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
