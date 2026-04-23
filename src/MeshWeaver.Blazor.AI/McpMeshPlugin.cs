@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Security.Claims;
 using MeshWeaver.AI;
 using MeshWeaver.Kernel;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,15 +18,18 @@ namespace MeshWeaver.Blazor.AI;
 /// URL-based NavigateTo.
 ///
 /// <para>
-/// <b>Session hub</b>: on construction, the plugin resolves a session-scoped
-/// satellite hub at address <c>mcp/{sessionId}</c> (materialised by the
-/// <c>RouteAddressToHostedHub</c> rule from <see cref="Graph.Configuration.McpNodeType"/>)
-/// and hands that to <see cref="MeshOperations"/>. All posts from MCP tools
-/// therefore originate "outside" the grain scope — same as the Blazor client
-/// hub pattern — so routing rules like the kernel's fire correctly and
-/// side-effects land predictably. Each authenticated caller × MCP session id
-/// gets its own hub; idle hubs dispose themselves.
+/// <b>Session hub</b>: on construction, the plugin materialises a session-scoped
+/// hub at <c>portal/mcp-{callerId}-{mcpSessionId}</c> — exactly mirroring the
+/// Blazor <c>PortalApplication</c> pattern. Portal-typed addresses are skipped
+/// from Orleans grain resolution (<c>RoutingGrain</c>) and the sub-hub is
+/// registered with the routing service so responses (e.g. kernel
+/// <c>SubmitCodeRequest</c> ack) route back correctly. Inlines the same
+/// <c>RouteAddressToHostedHub("kernel", ...)</c> rule so in-session kernel
+/// execution stays local.
 /// </para>
+///
+/// <para>Each authenticated caller × MCP session id gets its own hub; idle
+/// hubs dispose when the MCP connection ends.</para>
 /// </summary>
 [McpServerToolType]
 public class McpMeshPlugin
@@ -41,19 +45,14 @@ public class McpMeshPlugin
     {
         logger = hub.ServiceProvider.GetRequiredService<ILogger<McpMeshPlugin>>();
         baseUrl = config?.Value.BaseUrl ?? "http://localhost:5000";
+        var routingService = hub.ServiceProvider.GetRequiredService<IRoutingService>();
 
-        // Resolve the session id from the inbound request:
-        //   1. Standard MCP header Mcp-Session-Id (sent by protocol-compliant clients)
-        //   2. Auth claim oid / sub (falls back to caller identity)
-        //   3. "anonymous" sentinel (only in dev scenarios without auth)
-        // Once resolved, materialise a hub at mcp/{sessionId} on the root hub. The
-        // RouteAddressToHostedHub rule from McpNodeType creates it on demand and
-        // disposes it after idle timeout.
-        var sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, logger);
+        var sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, routingService, logger);
         ops = new MeshOperations(sessionHub);
     }
 
-    private static IMessageHub ResolveSessionHub(IMessageHub rootHub, HttpContext? ctx, ILogger logger)
+    private static IMessageHub ResolveSessionHub(
+        IMessageHub rootHub, HttpContext? ctx, IRoutingService routingService, ILogger logger)
     {
         var sessionId = ResolveSessionId(ctx);
         if (sessionId is null)
@@ -63,19 +62,31 @@ public class McpMeshPlugin
                 + "Some routing rules (kernel dispatch, etc.) will not fire.");
             return rootHub;
         }
-        var address = AddressExtensions.CreateMcpAddress(sessionId);
+
+        // Reuse the existing Portal address type: the RoutingGrain already
+        // shortcircuits portal addresses away from Orleans grain resolution
+        // (see RoutingGrain.cs:42), so our session hub gets the same
+        // "lives outside the grain scope" treatment as a Blazor circuit.
+        var address = AddressExtensions.CreatePortalAddress("mcp-" + sessionId);
         logger.LogInformation("Materialising MCP session hub at {Address}", address);
 
-        // Inline the same config RouteAddressToHostedHub("mcp", ...) would have
-        // applied — register the kernel route so SubmitCodeRequest from inside the
-        // session hub resolves locally instead of bouncing to Orleans grain activation.
-        // Kept mirrored with McpNodeType.AddMcp; if you change one, change both.
+        // Mirrors PortalApplication.DefaultPortalConfig:
+        //   1. WithInitialization → RegisterStreamAsync registers the sub-hub
+        //      with the routing service so responses (kernel ack,
+        //      UpdateNodeResponse, etc.) find their way back.
+        //   2. WithRoutes → kernel addresses are resolved as local hosted hubs
+        //      rather than bouncing to Orleans grain activation.
         return rootHub.GetHostedHub(
             address,
             sessionConfig => sessionConfig
-                .WithRoutes(r => r.RouteAddressToHostedHub(
+                .WithInitialization(async (hub, _) =>
+                {
+                    var registry = await routingService.RegisterStreamAsync(hub);
+                    hub.RegisterForDisposal(registry);
+                })
+                .WithRoutes(routes => routes.RouteAddressToHostedHub(
                     AddressExtensions.KernelType,
-                    ck => ck.AddKernelSubHubHandlers())),
+                    c => c.AddKernelSubHubHandlers())),
             HostedHubCreation.Always);
     }
 
