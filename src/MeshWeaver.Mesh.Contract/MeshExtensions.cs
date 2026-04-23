@@ -337,13 +337,25 @@ public static class MeshExtensions
                         mode == "confirm" ? "Confirmed transient node at {Path}" : "Node created at {Path} by {CreatedBy}",
                         resultNode.Path, capturedRequest.CreatedBy ?? "system");
 
-                    // Run post-creation handlers (Subscribe-based) and post Ok inside the
-                    // OnCompleted so the response only goes out after handlers have all run.
+                    // Run post-creation handlers and post the terminal response. On every
+                    // terminal path (success/error) a response MUST go out so the caller never
+                    // waits forever. The node is already persisted — but if a post-creation
+                    // handler errored, surface that as a Fail so the caller can react (don't
+                    // silently lie with Ok).
                     RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
                         .Subscribe(
                             _ => { },
-                            ex => logger.LogWarning(ex,
-                                "Post-creation handler chain errored at {Path}", resultNode.Path),
+                            ex =>
+                            {
+                                logger.LogError(ex,
+                                    "Post-creation handler chain errored at {Path} — node IS persisted but handler failed",
+                                    resultNode.Path);
+                                hub.Post(
+                                    CreateNodeResponse.Fail(
+                                        $"Node persisted but post-creation handler failed: {ex.Message}",
+                                        NodeCreationRejectionReason.Unknown),
+                                    o => o.ResponseFor(request));
+                            },
                             () => hub.Post(CreateNodeResponse.Ok(resultNode),
                                 o => o.ResponseFor(request)));
                 },
