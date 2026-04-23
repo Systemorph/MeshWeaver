@@ -1238,6 +1238,19 @@ public class MeshOperations
                 return Observable.Create<string>(observer =>
                 {
                     var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+                    var completed = 0;
+
+                    void EmitOnce(Func<object> payloadFactory)
+                    {
+                        if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                        try
+                        {
+                            observer.OnNext(JsonSerializer.Serialize(payloadFactory(), hub.JsonSerializerOptions));
+                        }
+                        catch (Exception ex) { observer.OnError(ex); return; }
+                        observer.OnCompleted();
+                    }
+
                     try
                     {
                         var delivery = hub.Post(
@@ -1246,47 +1259,61 @@ public class MeshOperations
 
                         hub.RegisterCallback(delivery, (d, _) =>
                         {
-                            try
+                            if (d is IMessageDelivery<SubmitCodeResponse> resp)
                             {
-                                observer.OnNext(JsonSerializer.Serialize(
-                                    new
-                                    {
-                                        status = "Executed",
-                                        path = resolvedPath,
-                                        submissionId,
-                                        kernelAddress = kernelAddress.ToString(),
-                                        outputUrl = $"{kernelAddress}/{submissionId}",
-                                        message = "Code dispatched to kernel and processed. Any Console.Out / return value is "
-                                            + "available at the kernel layout area path above. The call has already waited "
-                                            + "for kernel completion — side effects (e.g. nodes created via mesh.CreateNode) "
-                                            + "have happened."
-                                    },
-                                    hub.JsonSerializerOptions));
-                                observer.OnCompleted();
+                                var r = resp.Message;
+                                EmitOnce(() => new
+                                {
+                                    status = r.Success ? "Executed" : "Error",
+                                    path = resolvedPath,
+                                    submissionId = r.SubmissionId,
+                                    kernelAddress = kernelAddress.ToString(),
+                                    outputUrl = $"{kernelAddress}/{r.SubmissionId}",
+                                    error = r.Error,
+                                    message = r.Success
+                                        ? "Code dispatched and kernel signalled completion. Side effects "
+                                          + "(e.g. mesh.CreateNode calls inside the script) have happened. "
+                                          + "Console output / return value is at the kernel layout area path above."
+                                        : $"Kernel reported failure: {r.Error}"
+                                });
                             }
-                            catch (Exception ex)
+                            else if (d is IMessageDelivery<DeliveryFailure> failure)
                             {
-                                observer.OnError(ex);
+                                EmitOnce(() => new
+                                {
+                                    status = "Error",
+                                    path = resolvedPath,
+                                    submissionId,
+                                    message = $"Delivery failed: {failure.Message.Message ?? "unknown"}"
+                                });
+                            }
+                            else
+                            {
+                                EmitOnce(() => new
+                                {
+                                    status = "Executed",
+                                    path = resolvedPath,
+                                    submissionId,
+                                    kernelAddress = kernelAddress.ToString(),
+                                    outputUrl = $"{kernelAddress}/{submissionId}",
+                                    message = $"Unexpected response {d.Message?.GetType().Name} — check kernel progress area for status."
+                                });
                             }
                             return Task.FromResult(d);
                         }, cts.Token);
 
-                        cts.Token.Register(() =>
+                        cts.Token.Register(() => EmitOnce(() => new
                         {
-                            observer.OnNext(JsonSerializer.Serialize(
-                                new { status = "Timeout", path = resolvedPath, timeoutSeconds,
-                                      message = $"Kernel did not signal completion within {timeoutSeconds}s. Side effects may still have happened." },
-                                hub.JsonSerializerOptions));
-                            observer.OnCompleted();
-                        });
+                            status = "Timeout",
+                            path = resolvedPath,
+                            timeoutSeconds,
+                            message = $"Kernel did not signal completion within {timeoutSeconds}s. Side effects may still have happened — check the kernel's progress area."
+                        }));
                     }
                     catch (Exception ex)
                     {
                         logger.LogError(ex, "ExecuteScript failed for {Path}", resolvedPath);
-                        observer.OnNext(JsonSerializer.Serialize(
-                            new { status = "Error", path = resolvedPath, message = ex.Message },
-                            hub.JsonSerializerOptions));
-                        observer.OnCompleted();
+                        EmitOnce(() => new { status = "Error", path = resolvedPath, message = ex.Message });
                     }
 
                     return () => cts.Dispose();

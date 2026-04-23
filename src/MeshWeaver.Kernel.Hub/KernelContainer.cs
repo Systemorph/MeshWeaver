@@ -478,13 +478,32 @@ using MeshWeaver.Messaging;
     public async Task<IMessageDelivery> HandleKernelCommand(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request, CancellationToken ct)
     {
         subscriptions.Add(request.Sender);
+        var submissionId = request.Message.Id;
         var command = new SubmitCode(request.Message.Code)
         {
-            Parameters = { [ViewId] = request.Message.Id }
+            Parameters = { [ViewId] = submissionId }
         };
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
-        return await SubmitCommand(hub, request, ct, command);
+
+        string? error = null;
+        try
+        {
+            await SubmitCommand(hub, request, ct, command);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+
+        // Post a completion response so callers using RegisterCallback / AwaitResponse
+        // (e.g. MeshOperations.ExecuteScript from MCP) see SubmitCodeRequest finish.
+        // Processed() alone does not round-trip back to the sender — a posted response
+        // with ResponseFor(request) is what fires the callback.
+        hub.Post(
+            new SubmitCodeResponse(submissionId, error is null) { Error = error },
+            o => o.ResponseFor(request));
+        return request.Processed();
     }
 
     private async Task<IMessageDelivery> SubmitCommand(IMessageHub hub, IMessageDelivery request, CancellationToken ct, KernelCommand command)
