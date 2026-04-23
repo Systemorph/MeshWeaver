@@ -2,6 +2,21 @@
 
 MeshWeaver uses a **truly asynchronous** message-passing model. This is fundamentally different from C#'s `async/await` pattern, which is better described as "fake async" — you still block the calling context waiting for a result.
 
+## 🚨 Related rule, read this first
+
+**Queries are for sets and existence — never for reading a specific node's content.**
+Queries go through a read-side index that lags behind writes; they are eventually
+consistent. To read the current committed state of a known node, use
+`workspace.GetRemoteStream<MeshNode, MeshNodeReference>(address, new MeshNodeReference())`.
+That stream is also how you **wait for a job to finish** (subscribe until a completion
+condition emits) — no polling, no `await` on a long-running task.
+
+Full treatment: *[CQRS — Queries vs. Content Access](CqrsAndContentAccess)*.
+
+The anti-patterns below (`Observable.FromAsync(() => query.FirstOrDefaultAsync(...).AsTask())`)
+are fake-reactive wrappers over the lagged read path. They don't deadlock the hub —
+they return stale content. Same bug class, different symptom.
+
 ## The T-Shirt Analogy
 
 When you order a t-shirt online, you don't stand next to the mailbox until it arrives. Your life continues. The t-shirt shows up later, and you deal with it then.
@@ -148,13 +163,25 @@ public IObservable<TokenResult> CreateToken(string label)
     // No await. Consumer calls .Subscribe(onNext, onError).
 }
 
-// Wrap IAsyncEnumerable queries into observables when composing chains:
-public IObservable<bool> DeleteToken(string path) =>
-    Observable.FromAsync(() =>
-            meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
-                     .FirstOrDefaultAsync().AsTask())
-        .SelectMany(node => nodeFactory.DeleteNode(path));   // IObservable<bool>
+// ❌ WRONG — `Observable.FromAsync(() => query.FirstOrDefaultAsync().AsTask())`
+//    is the fake-reactive pattern. It runs through the lagged read-side index,
+//    can return stale content just after a write, and provides no live updates.
+//
+// ✅ CORRECT — read the current committed content directly from the owning hub:
+public IObservable<bool> DeleteToken(string path)
+{
+    var workspace = hub.GetWorkspace();
+    return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+            new Address(path), new MeshNodeReference())
+        .Take(1)
+        .Timeout(TimeSpan.FromSeconds(10))
+        .SelectMany(change => change.Value is null
+            ? Observable.Return(false)
+            : nodeFactory.DeleteNode(path));
+}
 ```
+
+See *[CQRS — Queries vs. Content Access](CqrsAndContentAccess)* for the full rule.
 
 ### Anti-patterns in click handlers
 
