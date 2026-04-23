@@ -52,7 +52,23 @@ public class McpMeshPlugin
         var routingService = hub.ServiceProvider.GetRequiredService<IRoutingService>();
 
         var sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, routingService, logger);
-        ops = new MeshOperations(sessionHub);
+
+        // Per-MCP-call hosted hub — same pattern as interactive markdown's per-view
+        // kernel (MarkdownView.razor.cs uses `AddressExtensions.CreateKernelAddress(guid)`).
+        // A fresh kernel-typed address means the session hub's
+        // `RouteAddressToHostedHub("kernel", …)` rule materialises a new hosted hub
+        // with kernel-sub-hub handlers. Each MCP tool invocation thus runs on its own
+        // ActionBlock — no serialisation on the session hub, no bleed of state between
+        // concurrent calls. Cleanup happens when the session hub disposes.
+        var requestKernelAddress = AddressExtensions.CreateKernelAddress(
+            "mcp-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        var requestHub = sessionHub.GetHostedHub(
+            requestKernelAddress,
+            c => c.AddKernelSubHubHandlers(),
+            HostedHubCreation.Always)!;
+        logger.LogInformation("Materialising MCP request hub at {Address}", requestHub.Address);
+
+        ops = new MeshOperations(requestHub);
     }
 
     private static IMessageHub ResolveSessionHub(
@@ -67,10 +83,6 @@ public class McpMeshPlugin
             return rootHub;
         }
 
-        // Reuse the existing Portal address type: the RoutingGrain already
-        // shortcircuits portal addresses away from Orleans grain resolution
-        // (see RoutingGrain.cs:42), so our session hub gets the same
-        // "lives outside the grain scope" treatment as a Blazor circuit.
         var address = AddressExtensions.CreatePortalAddress("mcp-" + sessionId);
         logger.LogInformation("Materialising MCP session hub at {Address}", address);
 
