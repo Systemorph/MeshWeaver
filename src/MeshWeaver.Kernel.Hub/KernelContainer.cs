@@ -328,7 +328,9 @@ public class KernelContainer(IServiceProvider serviceProvider)
             typeof(System.ComponentModel.DescriptionAttribute).Assembly.Location,
             typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly.Location,
             typeof(System.Reactive.Linq.Observable).Assembly.Location, // System.Reactive - for reactive UI examples
-            typeof(FluentIcons).Assembly.Location // MeshWeaver.Application.Styles - for icon support
+            typeof(FluentIcons).Assembly.Location, // MeshWeaver.Application.Styles - for icon support
+            typeof(ILogger).Assembly.Location, // Microsoft.Extensions.Logging.Abstractions - for scripts' Log global
+            typeof(LoggerExtensions).Assembly.Location // Microsoft.Extensions.Logging.Abstractions - LogInformation/LogWarning extensions
         ]);
 
         var composite = new CompositeKernel("mesh");
