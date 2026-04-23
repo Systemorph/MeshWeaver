@@ -34,15 +34,12 @@ jobs:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
       run: |
-        # PostgreSql uses Testcontainers — ubuntu-latest has Docker pre-installed,
-        # the test project pulls pgvector/pgvector:pg17 on demand. Cosmos still
-        # needs the emulator (separate workstream). Orleans hangs on silo bootstrap
-        # in CI (separate workstream). Acme/FutuRe hit dynamic compilation issues.
+        # Only Cosmos is excluded — needs the Cosmos emulator which is heavy to
+        # set up on a runner. Everything else runs (PostgreSql via Testcontainers
+        # using pre-installed Docker, Orleans via in-proc TestCluster, Acme/FutuRe
+        # via dynamic Code-piece compilation).
         find test -name '*.csproj' \
           ! -path '*Cosmos*' \
-          ! -path '*Orleans*' \
-          ! -path '*Acme*' \
-          ! -path '*FutuRe*' \
           -exec dotnet test {} --no-build --verbosity normal -l:trx \
                 --blame-hang-timeout 3m --blame-hang-dump-type mini \; 2>&1 | tee test/test-results.log
     - name: Fail on hang / aborted test run
