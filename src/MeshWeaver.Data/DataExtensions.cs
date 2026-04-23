@@ -155,6 +155,8 @@ public static class DataExtensions
                 typeof(SchemaReference),
                 typeof(DataModelReference),
                 typeof(PatchDataChangeRequest),
+                typeof(PatchDataRequest),
+                typeof(PatchDataResponse),
                 typeof(GetDataRequest),
                 typeof(GetDataResponse),
                 typeof(UnifiedReference),
@@ -469,12 +471,123 @@ public static class DataExtensions
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration
             .WithHandler<DataChangeRequest>(HandleDataChangeRequest)
+            .WithHandler<PatchDataRequest>(HandlePatchDataRequest)
             .WithHandler<SubscribeRequest>(HandleSubscribeRequest)
             .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
             .WithHandler<GetDataRequest>(HandleGetDataRequest)
             .WithHandler<UpdateUnifiedReferenceRequest>(HandleUpdateUnifiedReferenceRequest)
             .WithHandler<DeleteUnifiedReferenceRequest>(HandleDeleteUnifiedReferenceRequest)
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
+
+    /// <summary>
+    /// Applies a JSON merge patch to the stream identified by the request's
+    /// <see cref="WorkspaceReference"/>. The workspace's own <c>GetStream</c> resolves
+    /// the stream; the current value is serialised, the patch is merged on top (RFC
+    /// 7396), the result is deserialised back, and <c>stream.Update</c> commits it —
+    /// which ticks any downstream subscribers (e.g. <c>MeshNodeReference</c>) so a
+    /// subsequent <see cref="GetDataRequest"/> sees the new value with no staleness.
+    /// </summary>
+    private static IMessageDelivery HandlePatchDataRequest(
+        IMessageHub hub, IMessageDelivery<PatchDataRequest> request)
+    {
+        try
+        {
+            var reference = request.Message.Reference;
+
+            // Resolve TReduced from the reference's WorkspaceReference<T> base.
+            var tReduced = WalkBaseForGeneric(reference.GetType(), typeof(WorkspaceReference<>))
+                ?? throw new InvalidOperationException(
+                    $"Reference {reference.GetType().Name} does not inherit from WorkspaceReference<T>");
+
+            // Find IWorkspace.GetStream<T>(WorkspaceReference<T>, ...) — the 2-arg overload
+            // with optional config. We pass null for the config and rely on its default.
+            var getStream = typeof(IWorkspace).GetMethods()
+                .First(m => m.Name == nameof(IWorkspace.GetStream)
+                    && m.IsGenericMethodDefinition
+                    && m.GetParameters().Length == 2
+                    && m.GetParameters()[0].ParameterType.IsGenericType
+                    && m.GetParameters()[0].ParameterType.GetGenericTypeDefinition()
+                        == typeof(WorkspaceReference<>))
+                .MakeGenericMethod(tReduced);
+
+            dynamic? stream = getStream.Invoke(hub.GetWorkspace(), new object?[] { reference, null });
+            if (stream is null)
+            {
+                hub.Post(new PatchDataResponse(false, hub.Version)
+                    { Error = $"No stream resolved for reference {reference.GetType().Name}" },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            var jsonOpts = hub.JsonSerializerOptions;
+            var patchText = request.Message.Patch.Content ?? "{}";
+            var streamId = (string?)stream.StreamId;
+            var version = hub.Version;
+
+            // Build a properly typed update delegate via MakeGenericMethod on the helper below.
+            var applyPatch = typeof(DataExtensions)
+                .GetMethod(nameof(ApplyJsonMergePatchAndUpdate),
+                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .MakeGenericMethod(tReduced);
+            applyPatch.Invoke(null, new object?[]
+            {
+                stream, patchText, jsonOpts, streamId, version
+            });
+
+            hub.Post(new PatchDataResponse(true, version),
+                o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new PatchDataResponse(false, hub.Version) { Error = ex.Message },
+                o => o.ResponseFor(request));
+        }
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Typed helper for <see cref="HandlePatchDataRequest"/> — applies a JSON merge
+    /// patch to the stream's current value. Runs inside <c>stream.Update</c> so the
+    /// commit + downstream fan-out is handled by the synchronization stream machinery.
+    /// </summary>
+    private static void ApplyJsonMergePatchAndUpdate<T>(
+        ISynchronizationStream<T> stream,
+        string patchText,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        string? streamId,
+        long version)
+    {
+        stream.Update(current =>
+        {
+            var currentJson = System.Text.Json.JsonSerializer.Serialize(current, jsonOpts);
+            var currentNode = System.Text.Json.Nodes.JsonNode.Parse(currentJson) as System.Text.Json.Nodes.JsonObject
+                ?? new System.Text.Json.Nodes.JsonObject();
+            var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText) as System.Text.Json.Nodes.JsonObject
+                ?? throw new InvalidOperationException("Patch must be a JSON object");
+
+            foreach (var kvp in patchNode.ToArray())
+            {
+                if (kvp.Value is null)
+                    currentNode.Remove(kvp.Key);
+                else
+                    currentNode[kvp.Key] = kvp.Value.DeepClone();
+            }
+
+            var mergedJson = currentNode.ToJsonString(jsonOpts);
+            var merged = System.Text.Json.JsonSerializer.Deserialize<T>(mergedJson, jsonOpts);
+            return new ChangeItem<T>(merged, streamId, version);
+        });
+    }
+
+    private static Type? WalkBaseForGeneric(Type type, Type genericDef)
+    {
+        for (var t = type; t is not null; t = t.BaseType)
+        {
+            if (t.IsGenericType && t.GetGenericTypeDefinition() == genericDef)
+                return t.GetGenericArguments()[0];
+        }
+        return null;
+    }
 
     private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request)
     {

@@ -191,20 +191,13 @@ public class MeshOperations
                 });
         }
 
-        // Unified path first, then direct node lookup via ObserveQuery. NOTE: per
-        // CqrsAndContentAccess.md, content reads should route through GetDataRequest
-        // + RegisterCallback; that refactor is tracked in task #57 but was reverted
-        // after read-your-writes tests revealed the hub's workspace can serve stale
-        // state after a cross-hub write. Restore when we land the per-request hub
-        // model (task #59) that keeps one hub alive for the full call chain.
+        // Single-node content read via GetDataRequest + MeshNodeReference + RegisterCallback.
+        // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
         return TryResolveUnifiedPath(resolvedPath)
             .SelectMany(unified => unified != null
                 ? Observable.Return(unified)
-                : mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
-                    .Take(1)
-                    .Select(change =>
+                : FetchNode(resolvedPath).Select(node =>
                     {
-                        var node = change.Items.FirstOrDefault();
                         if (node is null)
                             return $"Not found: {resolvedPath}";
                         var compileError = LookupCompilationError(node);
@@ -261,6 +254,73 @@ public class MeshOperations
             {
                 logger.LogWarning(ex, "FetchNode: Post/RegisterCallback failed for {Path}", resolvedPath);
                 EmitOnce(null);
+            }
+
+            return () => cts.Dispose();
+        });
+
+    /// <summary>
+    /// Writes a full <see cref="MeshNode"/> to the node's own hub via
+    /// <see cref="DataChangeRequest"/>. The target hub's data-change handler applies
+    /// the update to its workspace (ticking the <c>MeshNodeReference</c> stream so
+    /// subsequent <see cref="GetDataRequest"/> sees the new value) and persists via
+    /// its data source. Emits the saved node on success.
+    /// </summary>
+    private IObservable<MeshNode> UpdateViaDataChange(MeshNode node, int timeoutSeconds = 10) =>
+        Observable.Create<MeshNode>(observer =>
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var completed = 0;
+
+            void Fail(Exception ex)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnError(ex);
+            }
+
+            void Emit(MeshNode n)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnNext(n);
+                observer.OnCompleted();
+            }
+
+            try
+            {
+                var delivery = hub.Post(
+                    DataChangeRequest.Update([node]),
+                    o => o.WithTarget(new Address(node.Path)))!;
+
+                hub.RegisterCallback(delivery, (d, _) =>
+                {
+                    if (d is IMessageDelivery<DataChangeResponse> resp)
+                    {
+                        if (resp.Message.Status == DataChangeStatus.Committed)
+                            Emit(node with { Version = resp.Message.Version });
+                        else
+                            Fail(new InvalidOperationException(
+                                $"DataChangeRequest rejected for {node.Path}: {resp.Message.Log?.Status}"));
+                    }
+                    else if (d is IMessageDelivery<DeliveryFailure> failure)
+                    {
+                        Fail(new InvalidOperationException(
+                            failure.Message.Message ?? $"Delivery failed to {node.Path}"));
+                    }
+                    else
+                    {
+                        Fail(new InvalidOperationException(
+                            $"Unexpected response {d.Message?.GetType().Name} for DataChangeRequest at {node.Path}"));
+                    }
+                    return Task.FromResult(d);
+                }, cts.Token);
+
+                cts.Token.Register(() => Fail(new TimeoutException(
+                    $"DataChangeRequest for {node.Path} did not complete within {timeoutSeconds}s.")));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "UpdateViaDataChange: Post/RegisterCallback failed for {Path}", node.Path);
+                Fail(ex);
             }
 
             return () => cts.Dispose();
@@ -535,8 +595,11 @@ public class MeshOperations
 
                 var versionBefore = meshNode.Version;
                 var currentPath = meshNode.Path;
+                // Writes go through DataChangeRequest to the node's own hub — the
+                // handler applies to its workspace (ticks MeshNodeReference stream)
+                // and data source persists. Immediate read-after-write consistency.
                 perNode = perNode.Add(
-                    mesh.UpdateNode(meshNode)
+                    UpdateViaDataChange(meshNode)
                         .Select(updated =>
                         {
                             OnNodeChange?.Invoke(new NodeChangeEntry
@@ -588,105 +651,144 @@ public class MeshOperations
             if (string.IsNullOrWhiteSpace(resolvedPath))
                 return Observable.Return("Error: path is required.");
 
-            // See Get: GetDataRequest-based reads reverted pending task #59.
-            return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
-                .Take(1)
-                .Select(change => change.Items.FirstOrDefault())
-                .SelectMany(existing =>
+            // Validate fields is a JSON object client-side. The actual merge happens
+            // on the node hub via PatchDataRequest — no need to fetch the existing
+            // MeshNode here, the hub applies the delta to its own workspace state.
+            JsonObject? jsonObj;
+            try
+            {
+                var sanitized = RepairJson(fields);
+                jsonObj = JsonNode.Parse(sanitized) as JsonObject;
+            }
+            catch (JsonException ex)
+            {
+                return Observable.Return($"Invalid JSON: {ex.Message}");
+            }
+
+            if (jsonObj == null)
+                return Observable.Return("Error: fields must be a JSON object");
+
+            if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
+                return Observable.Return(
+                    $"Error: cannot patch {resolvedPath}: 'content' is null. " +
+                    "Fetch the node first with Get, modify the returned content in-place, " +
+                    "and resend the complete node. Never send null content.");
+
+            if (jsonObj.ContainsKey("name") && string.IsNullOrWhiteSpace(jsonObj["name"]?.ToString()))
+                return Observable.Return(
+                    $"Error: cannot patch {resolvedPath}: 'name' is empty. " +
+                    "Provide a non-empty human-readable display name, or omit the 'name' key.");
+
+            // Fall back to read-merge-write via DataChangeRequest — the new
+            // PatchDataRequest handler commits to a reduced stream that doesn't yet
+            // propagate back to the source InstanceCollection (see task #60 note).
+            // When that's fixed, switch to PatchViaDataRequest(resolvedPath, rawPatch).
+            return FetchNode(resolvedPath).SelectMany(existing =>
+            {
+                if (existing == null)
+                    return Observable.Return($"Error: node not found at {resolvedPath}");
+
+                var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
+                    ?? new MeshNode(existing.Id, existing.Namespace);
+
+                var merged = existing with
                 {
-                    if (existing == null)
-                        return Observable.Return($"Error: node not found at {resolvedPath}");
+                    Name = jsonObj.ContainsKey("name") ? partial.Name : existing.Name,
+                    Icon = jsonObj.ContainsKey("icon") ? partial.Icon : existing.Icon,
+                    Category = jsonObj.ContainsKey("category") ? partial.Category : existing.Category,
+                    Order = jsonObj.ContainsKey("order") ? partial.Order : existing.Order,
+                    Content = jsonObj.ContainsKey("content") ? partial.Content : existing.Content,
+                    PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
+                };
 
-                    JsonObject? jsonObj;
-                    try
+                var versionBefore = existing.Version;
+                return UpdateViaDataChange(merged)
+                    .Select(updated =>
                     {
-                        var sanitized = RepairJson(fields);
-                        jsonObj = JsonNode.Parse(sanitized) as JsonObject;
-                    }
-                    catch (JsonException ex)
-                    {
-                        return Observable.Return($"Invalid JSON: {ex.Message}");
-                    }
-
-                    if (jsonObj == null)
-                        return Observable.Return("Error: fields must be a JSON object");
-
-                    if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
-                        return Observable.Return(BuildNullContentError(existing.Path, existing.NodeType!));
-
-                    var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
-                        ?? new MeshNode(existing.Id, existing.Namespace);
-
-                    var merged = existing with
-                    {
-                        Name = jsonObj.ContainsKey("name") ? partial.Name : existing.Name,
-                        Icon = jsonObj.ContainsKey("icon") ? partial.Icon : existing.Icon,
-                        Category = jsonObj.ContainsKey("category") ? partial.Category : existing.Category,
-                        Order = jsonObj.ContainsKey("order") ? partial.Order : existing.Order,
-                        Content = jsonObj.ContainsKey("content") ? partial.Content : existing.Content,
-                        PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
-                    };
-
-                    if (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
-                    {
-                        var validationError = ValidateContentWithSchema(merged);
-                        if (validationError != null)
-                            return Observable.Return(validationError);
-                    }
-
-                    if (jsonObj.ContainsKey("name") && string.IsNullOrWhiteSpace(merged.Name))
-                        return Observable.Return(
-                            $"Error: cannot patch {existing.Path}: 'name' is empty. " +
-                            "Provide a non-empty human-readable display name, or omit the 'name' key to keep the current name.");
-
-                    var versionBefore = existing.Version;
-                    string? beforeJson;
-                    try { beforeJson = SerialisePretty(existing); }
-                    catch { beforeJson = null; }
-
-                    return mesh.UpdateNode(merged)
-                        .Select(updated =>
+                        OnNodeChange?.Invoke(new NodeChangeEntry
                         {
-                            OnNodeChange?.Invoke(new NodeChangeEntry
-                            {
-                                Path = updated.Path,
-                                Operation = "Updated",
-                                VersionBefore = versionBefore,
-                                VersionAfter = updated.Version,
-                                NodeType = updated.NodeType,
-                                NodeName = updated.Name
-                            });
-
-                            var versionText = updated.Version > versionBefore
-                                ? $" (v{versionBefore} → v{updated.Version})"
-                                : "";
-                            try
-                            {
-                                var afterJson = SerialisePretty(updated);
-                                var diff = beforeJson is null
-                                    ? ""
-                                    : DiffUtil.UnifiedDiff(beforeJson, afterJson, updated.Path);
-                                return string.IsNullOrEmpty(diff)
-                                    ? $"Patched: {updated.Path}{versionText}"
-                                    : $"Patched: {updated.Path}{versionText}\n\n```diff\n{diff}```";
-                            }
-                            catch (Exception serExn)
-                            {
-                                logger.LogWarning(serExn,
-                                    "Patch succeeded but diff rendering failed for {Path}", updated.Path);
-                                return $"Patched: {updated.Path}{versionText}";
-                            }
-                        })
-                        .Catch((Exception ex) =>
-                            Observable.Return($"Error patching {merged.Path}: {ex.Message}"));
-                })
-                .Catch((Exception ex) =>
-                {
-                    logger.LogWarning(ex, "Error patching node at {Path}", path);
-                    return Observable.Return($"Error: {ex.Message}");
-                });
+                            Path = updated.Path,
+                            Operation = "Updated",
+                            VersionBefore = versionBefore,
+                            VersionAfter = updated.Version,
+                            NodeType = updated.NodeType,
+                            NodeName = updated.Name
+                        });
+                        var versionText = updated.Version > versionBefore
+                            ? $" (v{versionBefore} → v{updated.Version})"
+                            : "";
+                        return $"Patched: {updated.Path}{versionText}";
+                    })
+                    .Catch((Exception ex) =>
+                        Observable.Return($"Error patching {merged.Path}: {ex.Message}"));
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Error patching node at {Path}", path);
+                return Observable.Return($"Error: {ex.Message}");
+            });
         });
     }
+
+    /// <summary>
+    /// Posts a <see cref="PatchDataRequest"/> to the node's hub with the raw JSON
+    /// delta. The hub applies the JSON merge patch to its own <c>MeshNodeReference</c>
+    /// workspace stream and returns <see cref="PatchDataResponse"/>. Emits the
+    /// committed version on success; OnError on failure/timeout.
+    /// </summary>
+    private IObservable<long> PatchViaDataRequest(string resolvedPath, string rawPatch, int timeoutSeconds = 10) =>
+        Observable.Create<long>(observer =>
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var completed = 0;
+
+            void Fail(Exception ex)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnError(ex);
+            }
+
+            void Emit(long version)
+            {
+                if (Interlocked.Exchange(ref completed, 1) != 0) return;
+                observer.OnNext(version);
+                observer.OnCompleted();
+            }
+
+            try
+            {
+                var delivery = hub.Post(
+                    new PatchDataRequest(new MeshNodeReference(), new RawJson(rawPatch)),
+                    o => o.WithTarget(new Address(resolvedPath)))!;
+
+                hub.RegisterCallback(delivery, (d, _) =>
+                {
+                    if (d is IMessageDelivery<PatchDataResponse> resp)
+                    {
+                        if (resp.Message.Success)
+                            Emit(resp.Message.Version);
+                        else
+                            Fail(new InvalidOperationException(resp.Message.Error ?? "Patch rejected"));
+                    }
+                    else if (d is IMessageDelivery<DeliveryFailure> failure)
+                        Fail(new InvalidOperationException(failure.Message.Message ?? "Delivery failed"));
+                    else
+                        Fail(new InvalidOperationException(
+                            $"Unexpected response {d.Message?.GetType().Name} for PatchDataRequest at {resolvedPath}"));
+                    return Task.FromResult(d);
+                }, cts.Token);
+
+                cts.Token.Register(() => Fail(new TimeoutException(
+                    $"PatchDataRequest for {resolvedPath} did not complete within {timeoutSeconds}s.")));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "PatchViaDataRequest: Post/RegisterCallback failed for {Path}", resolvedPath);
+                Fail(ex);
+            }
+
+            return () => cts.Dispose();
+        });
 
     /// <summary>
     /// Sanitizes a MeshNode's Id: if the Id contains slashes, splits it into proper Id + Namespace.
@@ -1122,12 +1224,9 @@ public class MeshOperations
                 new { status = "Unknown", message = "INodeTypeService not registered on this hub" },
                 hub.JsonSerializerOptions));
 
-        // See Get: GetDataRequest-based reads reverted pending task #59.
-        return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
-            .Take(1)
-            .Select(change =>
+        // Content read via GetDataRequest + MeshNodeReference — queries are set-only.
+        return FetchNode(resolvedPath).Select(node =>
             {
-                var node = change.Items.FirstOrDefault();
                 var nodeTypePath = node?.Content is Graph.Configuration.NodeTypeDefinition
                     ? node.Path
                     : node?.NodeType;
