@@ -26,5 +26,13 @@ public record PatchDataRequest(WorkspaceReference Reference, RawJson Patch)
 /// </summary>
 public record PatchDataResponse(bool Success, long Version)
 {
+    /// <summary>
+    /// Path to the <c>ActivityLog</c> MeshNode emitted by this patch. Callers
+    /// subscribe to it (via <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>)
+    /// to stream warnings/errors/progress — same shape as Thread streams.
+    /// Null when the handler short-circuited before an Activity was scoped.
+    /// </summary>
+    public string? ActivityLog { get; init; }
+
     public string? Error { get; init; }
 }

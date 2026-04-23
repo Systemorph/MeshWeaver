@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh.Security;
+﻿using MeshWeaver.Data;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Security;
 
@@ -26,6 +27,13 @@ public record CreateNodeRequest(MeshNode Node) : IRequest<CreateNodeResponse>
 /// <param name="Node">The created node (with updated State) or null if failed</param>
 public record CreateNodeResponse(MeshNode? Node)
 {
+    /// <summary>
+    /// Path to the <c>ActivityLog</c> MeshNode emitted by this creation.
+    /// Subscribe via <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> to
+    /// stream warnings/errors/progress — same as Thread streams.
+    /// </summary>
+    public string? ActivityLog { get; init; }
+
     /// <summary>
     /// Error message if the creation failed.
     /// </summary>
@@ -107,6 +115,9 @@ public record DeleteNodeRequest(string Path) : IRequest<DeleteNodeResponse>
 /// </summary>
 public record DeleteNodeResponse
 {
+    /// <summary>Path to the <c>ActivityLog</c> MeshNode for this deletion.</summary>
+    public string? ActivityLog { get; init; }
+
     /// <summary>
     /// Error message if the deletion failed.
     /// </summary>
@@ -184,6 +195,9 @@ public record UpdateNodeRequest(MeshNode Node) : IRequest<UpdateNodeResponse>
 /// <param name="Node">The updated node or null if failed</param>
 public record UpdateNodeResponse(MeshNode? Node)
 {
+    /// <summary>Path to the <c>ActivityLog</c> MeshNode for this update.</summary>
+    public string? ActivityLog { get; init; }
+
     /// <summary>
     /// Error message if the update failed.
     /// </summary>
@@ -285,6 +299,9 @@ public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permiss
 /// <param name="Node">The moved node at its new path, or null if failed</param>
 public record MoveNodeResponse(MeshNode? Node)
 {
+    /// <summary>Path to the <c>ActivityLog</c> MeshNode for this move.</summary>
+    public string? ActivityLog { get; init; }
+
     /// <summary>
     /// Error message if the move failed.
     /// </summary>
