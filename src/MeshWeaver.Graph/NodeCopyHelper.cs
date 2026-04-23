@@ -73,15 +73,16 @@ public static class NodeCopyHelper
                     if (force)
                         return create;
 
-                    // Existence-check via MeshNodeReference stream — no QueryAsync.
-                    return hub.GetWorkspace().GetMeshNodeStream(newPath)
+                    // Existence-check via ObserveQuery initial snapshot — no FromAsync, no
+                    // GetMeshNodeStream (which requires IWorkspace registration). One-shot
+                    // copy operation; ObserveQuery.Take(1) returns the current snapshot.
+                    return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{newPath}"))
                         .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(5))
-                        .Select(existing => existing != null ? 0 : -1)
-                        .Catch<int, Exception>(_ => Observable.Return(-1))  // treat unreachable as absent
-                        .SelectMany(flag =>
+                        .Select(c => c.Items.Count > 0)
+                        .Catch<bool, Exception>(_ => Observable.Return(false))
+                        .SelectMany(exists =>
                         {
-                            if (flag == 0)
+                            if (exists)
                             {
                                 logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
                                 return Observable.Return(0);
