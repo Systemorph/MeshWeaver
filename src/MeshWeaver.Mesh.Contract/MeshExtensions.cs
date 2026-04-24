@@ -1053,6 +1053,14 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Hard deadline for any forward-and-await-response pattern in node operation handlers.
+    /// Proper error propagation should bring a real response back well before this fires —
+    /// the safety catch only runs if the framework lost the response somewhere. When it
+    /// trips it logs an ERROR with enough context to find and fix the propagation bug.
+    /// </summary>
+    private static readonly TimeSpan NodeOpForwardTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
     /// All hub-backed work goes through Post + RegisterCallback; non-hub async work (catalog reads,
     /// persistence writes, validator runs) is wrapped in <c>Observable.FromAsync</c> and composed
@@ -1082,49 +1090,16 @@ public static class MeshExtensions
         var meshConfig = hub.ServiceProvider.GetService<IMeshCatalog>()?.Configuration;
         var workspace = hub.GetWorkspace();
 
-        logger.LogDebug("[UpdateNode] start hub={Hub}, target={Target}, sender={Sender}",
-            hub.Address, updatedNode.Path, request.Sender);
+        logger.LogInformation("[UpdateNode] start hub={Hub}, target={Target}, sender={Sender}, deliveryId={DeliveryId}",
+            hub.Address, updatedNode.Path, request.Sender, request.Id);
 
-        // If we're not the owning hub, forward to the owning per-node hub. UpdateNodeRequest
-        // must be processed on the owning hub where workspace.GetMeshNodeStream() reads the
-        // own MeshNode locally — same pattern as UpdateThreadMessageContent. Persistence
-        // belongs in MeshDataSource init only.
-        const string ForwardedMarker = "_UpdateNodeForwarded";
-        if (!hub.Address.ToString().Equals(updatedNode.Path, StringComparison.Ordinal))
-        {
-            // Loop guard: if we already forwarded once and it bounced back via routing
-            // fallback (no owning hub exists for this path), reply NodeNotFound instead
-            // of looping. Marker is set on the forwarded delivery's properties.
-            if (request.Properties.ContainsKey(ForwardedMarker))
-            {
-                logger.LogDebug("[UpdateNode] forward bounced back — node {Path} has no owning hub",
-                    updatedNode.Path);
-                hub.Post(UpdateNodeResponse.Fail(
-                    $"Node not found at path: {updatedNode.Path}",
-                    NodeUpdateRejectionReason.NodeNotFound),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            logger.LogDebug("[UpdateNode] forwarding to owning hub at {Path}", updatedNode.Path);
-            var forwarded = hub.Post(capturedRequest,
-                o => o.WithTarget(new Address(updatedNode.Path)).WithProperty(ForwardedMarker, true));
-            hub.RegisterCallback((IMessageDelivery)forwarded, response =>
-            {
-                logger.LogDebug("[UpdateNode] response from owning hub: type={Type}", response.Message?.GetType().Name);
-                if (response is IMessageDelivery<UpdateNodeResponse> ur)
-                    hub.Post(ur.Message, o => o.ResponseFor(request));
-                else if (response.Message is DeliveryFailure df)
-                    hub.Post(UpdateNodeResponse.Fail(df.Message ?? "Forwarding failed"),
-                        o => o.ResponseFor(request));
-                return response.Processed();
-            });
-            return request.Processed();
-        }
-
-        // Own hub: read existing via the local MeshNodeReference stream.
+        // Read existing via path-aware MeshNode stream — auto-routes own/remote so we
+        // never need to forward the request to a per-node hub. (Forwarding fails when
+        // a node has no configured owning hub: the routing-default hub has no
+        // UpdateNodeRequest handler and silently DeliveryFailures with no response back
+        // to the caller.) Hard timeout + Catch ensure we always emit a value.
         var existingNodeObs = workspace
-            .GetMeshNodeStream()
+            .GetMeshNodeStream(updatedNode.Path)
             .Select(n => (MeshNode?)n)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
@@ -1193,7 +1168,16 @@ public static class MeshExtensions
                         // Write via the workspace's own MeshNode stream — the data source
                         // sync writes through to persistence at the proper boundary. No direct
                         // persistence.SaveNode here.
-                        workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path);
+                        // UpdateMeshNode auto-handles own/remote based on address — for
+                        // own hub, writes to local data source; for remote, pushes patch
+                        // via the remote MeshNode stream.
+                        var ownPath = hub.Address.ToString();
+                        if (string.Equals(ownPath, nodeToSave.Path, StringComparison.Ordinal))
+                            workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path);
+                        else
+                            workspace.UpdateMeshNode(_ => nodeToSave,
+                                address: new Address(nodeToSave.Path),
+                                nodePath: nodeToSave.Path);
                         return Observable.Return(nodeToSave);
                     });
             })
