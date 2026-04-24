@@ -1104,11 +1104,11 @@ public static class MeshExtensions
                 hub.Address, hub.Address.Path, updatedNode.Path);
             var forwarded = hub.Post(capturedRequest,
                 o => o.WithTarget(new Address(updatedNode.Path)))!;
-            hub.RegisterCallback(forwarded, (d, _) =>
+            hub.RegisterCallback(forwarded, d =>
             {
                 hub.Post(((IMessageDelivery<UpdateNodeResponse>)d).Message,
                     o => o.ResponseFor(request));
-                return Task.FromResult<IMessageDelivery>(d);
+                return d;
             });
             return request.Processed();
         }
@@ -1204,56 +1204,52 @@ public static class MeshExtensions
                                 ?? existingNode.LastModifiedBy
                         };
 
-                        // Write via the workspace's local MeshNode partition stream — the
-                        // data source's persister flushes to persistence at the proper
-                        // boundary; subscribers receive the update through the workspace
-                        // synchronization protocol. We do NOT pass an address here:
-                        // routing UpdateMeshNode to a remote address sends a
-                        // SubscribeRequest to a per-node hub that may not be activated for
-                        // mesh-hub-loaded nodes (test scenarios + many production paths),
-                        // and the request hangs on DeliveryFailure with no response back.
-                        // The mesh hub's local InstanceCollection IS the source of truth
-                        // for any node loaded by MeshDataSource at init.
-                        workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path);
+                        // Use the hub's data layer as the synchronization point: post a
+                        // DataChangeRequest to ourselves (own per-node hub) and wait for the
+                        // DataChangeResponse — that response only fires after the activity
+                        // completes, which includes the persister flush. No async/await; pure
+                        // hub.Post + RegisterCallback. The response.Ok we send the caller is
+                        // chained off DataChangeResponse so the caller's read-after-write sees
+                        // freshly persisted data.
                         return Observable.Return(nodeToSave);
                     });
             })
             .Subscribe(
                 savedNode =>
                 {
-                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                        ?.Publish(MeshChangeEvent.Updated(savedNode));
-
-                    // Version history — fire-and-forget Subscribe; failures are non-critical.
-                    if (meshConfig != null && !meshConfig.IsSatelliteNodeType(savedNode.NodeType))
+                    // Post change to own hub; chain Ok response to caller off the
+                    // DataChangeResponse callback (persistence-complete signal). Sync
+                    // overload — no Task return.
+                    var dcr = hub.Post(DataChangeRequest.Update([savedNode]),
+                        o => o.WithTarget(new Address(savedNode.Path)))!;
+                    hub.RegisterCallback(dcr, d =>
                     {
-                        var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                        if (versionQuery != null)
+                        hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                            ?.Publish(MeshChangeEvent.Updated(savedNode));
+
+                        // Version history — fire-and-forget Subscribe; non-critical.
+                        if (meshConfig != null && !meshConfig.IsSatelliteNodeType(savedNode.NodeType))
                         {
-                            Observable.FromAsync(token =>
-                                    versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, token))
-                                .Subscribe(
-                                    _ => { },
-                                    ex => logger.LogWarning(ex,
-                                        "Version history write failed at {Path} (non-critical)",
-                                        savedNode.Path));
+                            var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                            if (versionQuery != null)
+                            {
+                                Observable.FromAsync(token =>
+                                        versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, token))
+                                    .Subscribe(
+                                        _ => { },
+                                        ex => logger.LogWarning(ex,
+                                            "Version history write failed at {Path} (non-critical)",
+                                            savedNode.Path));
+                            }
                         }
-                    }
 
-                    logger.LogInformation(
-                        "Node persisted at {Path} by {UpdatedBy}",
-                        savedNode.Path, capturedRequest.UpdatedBy ?? "system");
+                        logger.LogInformation(
+                            "Node persisted at {Path} by {UpdatedBy}",
+                            savedNode.Path, capturedRequest.UpdatedBy ?? "system");
 
-                    // Workspace fan-out is fire-and-forget — the target hub may or may not
-                    // have a MeshNode data source mapped, and in some topologies no handler
-                    // at all (returns DeliveryFailure). Either outcome is fine: persistence
-                    // already succeeded and the PathResolver cache was invalidated via the
-                    // MeshChangeFeed.Publish call above. Any subscribed workspace stream will
-                    // receive the update; the rest is best-effort.
-                    hub.Post(DataChangeRequest.Update([savedNode]),
-                        o => o.WithTarget(new Address(savedNode.Path)));
-
-                    hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
+                        hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
+                        return d;
+                    });
                 },
                 ex =>
                 {
