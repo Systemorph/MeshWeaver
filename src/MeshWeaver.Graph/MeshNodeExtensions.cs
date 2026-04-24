@@ -27,42 +27,6 @@ public static class MeshNodeExtensions
     public const string MeshNodeInitGateName = "MeshNodeInit";
 
     /// <summary>
-    /// Reactive handle to the current hub's own MeshNode. Canonical replacement for
-    /// <c>QueryAsync&lt;MeshNode&gt;($"path:{hubPath}").FirstOrDefaultAsync()</c> —
-    /// no query index, no await, no staleness, live updates on content changes.
-    /// Compose with <c>.Take(1)</c> for one-shot reads, <c>.Where(...)</c> + <c>.Take(1)</c>
-    /// for wait-for-completion, or keep subscribed for live views.
-    /// </summary>
-    public static IObservable<MeshNode> GetMeshNodeStream(this IWorkspace workspace)
-    {
-        var stream = workspace.GetStream(new MeshNodeReference())
-            ?? throw new InvalidOperationException("MeshNode stream is not available — the workspace has no MeshNodeReference reducer.");
-        return stream
-            .Where(change => change.Value != null)
-            .Select(change => change.Value!);
-    }
-
-    /// <summary>
-    /// Reactive handle to a MeshNode at the given path. Auto-dispatches: if <paramref name="path"/>
-    /// is the current hub's own address, returns the local own-node stream; otherwise returns a
-    /// remote subscription to the owning hub. Callers don't have to distinguish — just pass the path.
-    /// Canonical replacement for <c>QueryAsync&lt;MeshNode&gt;($"path:{path}").FirstOrDefaultAsync()</c>.
-    /// </summary>
-    public static IObservable<MeshNode> GetMeshNodeStream(this IWorkspace workspace, string path)
-    {
-        // Local short-circuit — GetRemoteStream throws "Owner cannot be the same as the
-        // subscriber" when the owner IS the current hub. Use the local own-node stream instead.
-        if (string.Equals(workspace.Hub.Address.ToString(), path, StringComparison.Ordinal))
-            return workspace.GetMeshNodeStream();
-
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(path), new MeshNodeReference());
-        return stream
-            .Where(change => change.Value != null)
-            .Select(change => change.Value!);
-    }
-
-    /// <summary>
     /// Updates a MeshNode on an EntityStore stream.
     /// Reads the current MeshNode, applies the update function, and pushes the change.
     /// </summary>
@@ -105,70 +69,6 @@ public static class MeshNodeExtensions
         }, ex =>
         {
             var logger = stream.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("MeshWeaver.Graph.UpdateMeshNode");
-            logger?.LogError(ex, "UpdateMeshNode failed for {NodePath}", nodePath);
-            return Task.CompletedTask;
-        });
-    }
-
-    /// <summary>
-    /// Updates a MeshNode via the workspace. Uses GetStream for the local hub
-    /// or GetRemoteStream for a remote hub address.
-    /// </summary>
-    public static void UpdateMeshNode(this IWorkspace workspace,
-        Func<MeshNode, MeshNode> update,
-        Address? address = null, string? nodePath = null)
-    {
-        if (address != null && !address.Equals(workspace.Hub.Address))
-        {
-            // Remote: update via CollectionReference stream on the remote hub
-            var remoteStream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
-                address, new CollectionReference(nameof(MeshNode)));
-            remoteStream?.Update(current =>
-            {
-                if (current == null) throw new InvalidOperationException("no state of mesh nodes");
-                var nId = nodePath?.Split('/').Last();
-                var node = (nId is null ? current.Instances.Values.First() : current.Instances.GetValueOrDefault(nId)) as MeshNode;
-                if (node is null) throw new InvalidOperationException("State is not a mesh node.");
-                var updated = update(node);
-                return new ChangeItem<InstanceCollection>(current.SetItem(updated.Id, updated), remoteStream.StreamId, remoteStream.StreamId,
-                    ChangeType.Patch, remoteStream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = node }]);
-            });
-            return;
-        }
-
-        // Local: use data source stream directly (same pattern as WorkspaceOperations.UpdateStreams)
-        var dataSource = workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
-        if (dataSource == null)
-            throw new InvalidOperationException("No data source registered for MeshNode");
-        var dsStream = dataSource.GetStreamForPartition(null)
-            ?? throw new InvalidOperationException("No stream for MeshNode partition");
-
-        dsStream.Update(state =>
-        {
-            var store = state ?? new EntityStore();
-            var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
-            if (collection is null)
-                throw new InvalidOperationException(
-                    $"MeshNode collection not found. Available: [{string.Join(", ", store.Collections.Keys)}]");
-
-            var nodeId = nodePath?.Split('/').Last();
-            var current = (nodeId is null
-                ? collection.Instances.Values.FirstOrDefault()
-                : collection.Instances.GetValueOrDefault(nodeId)) as MeshNode;
-            if (current == null)
-                throw new InvalidOperationException(
-                    $"MeshNode '{nodePath}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
-
-            var updated = update(current);
-            var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
-            return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
-                [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],
-                dsStream.StreamId));
-        }, ex =>
-        {
-            var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Graph.UpdateMeshNode");
             logger?.LogError(ex, "UpdateMeshNode failed for {NodePath}", nodePath);
             return Task.CompletedTask;
@@ -307,7 +207,6 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
         typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
-        typeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
         return typeRegistry;
     }
 }

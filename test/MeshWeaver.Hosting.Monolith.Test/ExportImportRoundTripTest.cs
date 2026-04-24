@@ -62,7 +62,9 @@ public class ExportImportRoundTripTest(ITestOutputHelper output) : MonolithMeshT
         var tempDir = Path.Combine(Path.GetTempPath(), $"meshweaver_rt_{Guid.NewGuid():N}");
         try
         {
-            var exportResult = await exportService.ExportToDirectoryAsync(ExportNs, tempDir);
+            var exportResult = await exportService.ExportToDirectory(ExportNs, tempDir)
+                .Take(1)
+                .ToTask();
             exportResult.Success.Should().BeTrue($"export should succeed, but got: {exportResult.Error}");
             exportResult.NodesExported.Should().BeGreaterThanOrEqualTo(4);
 

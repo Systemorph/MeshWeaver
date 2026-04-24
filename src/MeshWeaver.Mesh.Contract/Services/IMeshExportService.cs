@@ -28,6 +28,7 @@ public record ExportResult
 /// <summary>
 /// Service for exporting mesh nodes to a directory using file persister formats
 /// (.md for markdown, .cs for code, .json for others).
+/// Reactive — returns <see cref="IObservable{T}"/>; never <see cref="Task"/>.
 /// </summary>
 public interface IMeshExportService
 {
@@ -37,11 +38,9 @@ public interface IMeshExportService
     /// <param name="rootPath">Root path of the subtree to export</param>
     /// <param name="outputDirectory">Target directory to write files to</param>
     /// <param name="excludedNodeTypes">Node types to exclude from export (e.g., satellite types like Thread, Activity)</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Export result with counts</returns>
-    Task<ExportResult> ExportToDirectoryAsync(
+    /// <returns>Observable that emits the export result once.</returns>
+    IObservable<ExportResult> ExportToDirectory(
         string rootPath,
         string outputDirectory,
-        IReadOnlySet<string>? excludedNodeTypes = null,
-        CancellationToken ct = default);
+        IReadOnlySet<string>? excludedNodeTypes = null);
 }

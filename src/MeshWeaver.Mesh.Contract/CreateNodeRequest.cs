@@ -105,6 +105,13 @@ public record DeleteNodeRequest(string Path) : IRequest<DeleteNodeResponse>
     public bool Recursive { get; init; }
 
     /// <summary>
+    /// If true, also delete satellite nodes (e.g. _Comment, _Activity, _Thread). By default
+    /// satellites are preserved so an undo / restore can find prior activity. Set to <c>true</c>
+    /// for hard-delete operations such as the Delete step inside a Move.
+    /// </summary>
+    public bool IncludeSatellites { get; init; }
+
+    /// <summary>
     /// The user or system requesting the deletion.
     /// </summary>
     public string? DeletedBy { get; init; }
@@ -280,7 +287,79 @@ public enum NodeUpdateRejectionReason
 }
 
 /// <summary>
+/// Request to copy a MeshNode (and its subtree) to a new path.
+/// By default copies descendants but NOT satellites — explicitly set <see cref="IncludeSatellites"/>
+/// to <c>true</c> to also copy satellite subtrees (e.g. for Move which is Copy+Delete).
+/// Requires Read permission on the source and Create permission on the target.
+/// </summary>
+/// <param name="SourcePath">The path to copy from.</param>
+/// <param name="TargetPath">The path to copy to.</param>
+public record CopyNodeRequest(string SourcePath, string TargetPath) : IRequest<CopyNodeResponse>
+{
+    /// <summary>If <c>true</c>, copies all descendant nodes (subtree) under the source.</summary>
+    public bool IncludeDescendants { get; init; } = true;
+
+    /// <summary>If <c>true</c>, copies satellite nodes (e.g. _Comment, _Activity) attached to the source.</summary>
+    public bool IncludeSatellites { get; init; }
+}
+
+/// <summary>
+/// Response for <see cref="CopyNodeRequest"/>.
+/// </summary>
+/// <param name="Node">The root node at its new target path, or <c>null</c> if failed.</param>
+public record CopyNodeResponse(MeshNode? Node)
+{
+    /// <summary>Inline activity log for the copy operation.</summary>
+    public ActivityLog? Log { get; init; }
+
+    /// <summary>Error message if the copy failed.</summary>
+    public string? Error { get; init; }
+
+    /// <summary>True if the copy succeeded.</summary>
+    public bool Success => Error == null && Node != null;
+
+    /// <summary>Rejection reason if the copy failed.</summary>
+    public NodeCopyRejectionReason? RejectionReason { get; init; }
+
+    /// <summary>Number of descendant nodes copied (excluding the root).</summary>
+    public int DescendantsCopied { get; init; }
+
+    /// <summary>Number of satellite nodes copied.</summary>
+    public int SatellitesCopied { get; init; }
+
+    /// <summary>Creates a successful copy response.</summary>
+    public static CopyNodeResponse Ok(MeshNode node, int descendantsCopied = 0, int satellitesCopied = 0)
+        => new(node) { DescendantsCopied = descendantsCopied, SatellitesCopied = satellitesCopied };
+
+    /// <summary>Creates a failed copy response.</summary>
+    public static CopyNodeResponse Fail(string error,
+        NodeCopyRejectionReason reason = NodeCopyRejectionReason.Unknown)
+        => new((MeshNode?)null) { Error = error, RejectionReason = reason };
+}
+
+/// <summary>
+/// Reasons why a copy request can be rejected.
+/// </summary>
+public enum NodeCopyRejectionReason
+{
+    /// <summary>Unknown or unspecified reason.</summary>
+    Unknown,
+    /// <summary>The source node was not found.</summary>
+    SourceNotFound,
+    /// <summary>A node already exists at the target path.</summary>
+    TargetAlreadyExists,
+    /// <summary>The target namespace does not exist.</summary>
+    TargetNamespaceNotFound,
+    /// <summary>The user does not have permission for the operation.</summary>
+    Unauthorized,
+    /// <summary>A validation rule rejected the copy.</summary>
+    ValidationFailed,
+}
+
+/// <summary>
 /// Request to move a MeshNode to a new path.
+/// Implemented as Copy(IncludeSatellites=true) + DeleteNode(source) — the handler at the
+/// mesh hub orchestrates the two operations and posts the response.
 /// Requires Delete permission on the source namespace and Create permission on the target namespace.
 /// </summary>
 /// <param name="SourcePath">The current path of the node</param>

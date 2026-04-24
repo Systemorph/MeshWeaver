@@ -283,7 +283,7 @@ public class ReentrancyTestSiloConfigurator : ISiloConfigurator, IHostConfigurat
         {
             AccessObject = "Public",
             DisplayName = "Public",
-            Roles = [new RoleAssignment { Role = "Editor" }]
+            Roles = [new RoleAssignment { Role = "Admin" }]
         };
         return [new("Public_Access", "User")
         {

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -229,11 +230,11 @@ public static class VersionLayoutArea
 
     /// <summary>
     /// Handles RollbackNodeRequest by fetching the historical version and posting it as a DataChangeRequest.
+    /// Sync handler — composes via <c>IObservable</c>; no <c>await</c>.
     /// </summary>
-    internal static async Task<IMessageDelivery> HandleRollbackNodeRequest(
+    internal static IMessageDelivery HandleRollbackNodeRequest(
         IMessageHub hub,
-        IMessageDelivery<RollbackNodeRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<RollbackNodeRequest> request)
     {
         var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
         if (versionQuery == null)
@@ -246,31 +247,38 @@ public static class VersionLayoutArea
 
         var msg = request.Message;
         var options = hub.JsonSerializerOptions;
-        var historicalNode = await versionQuery.GetVersionAsync(msg.Path, msg.TargetVersion, options, ct);
 
-        if (historicalNode == null)
-        {
-            hub.Post(new DataChangeResponse(hub.Version,
-                new ActivityLog("Rollback").Fail($"Version {msg.TargetVersion} not found for {msg.Path}")),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        Observable.FromAsync(ct => versionQuery.GetVersionAsync(msg.Path, msg.TargetVersion, options, ct))
+            .Subscribe(historicalNode =>
+            {
+                if (historicalNode == null)
+                {
+                    hub.Post(new DataChangeResponse(hub.Version,
+                        new ActivityLog("Rollback").Fail($"Version {msg.TargetVersion} not found for {msg.Path}")),
+                        o => o.ResponseFor(request));
+                    return;
+                }
 
-        // Post the historical node as an update (version 0 forces a new save)
-        hub.Post(
-            new DataChangeRequest { ChangedBy = "rollback" }.WithUpdates(historicalNode with { Version = 0 }),
-            o => o.WithTarget(hub.Address));
+                // Post the historical node as an update (version 0 forces a new save)
+                hub.Post(
+                    new DataChangeRequest { ChangedBy = "rollback" }.WithUpdates(historicalNode with { Version = 0 }),
+                    o => o.WithTarget(hub.Address));
+            },
+            ex => hub.Post(new DataChangeResponse(hub.Version,
+                new ActivityLog("Rollback").Fail($"Rollback error: {ex.Message}")),
+                o => o.ResponseFor(request)));
 
         return request.Processed();
     }
 
     /// <summary>
     /// Handles UndoActivityRequest by restoring all affected nodes to their pre-activity state.
+    /// Sync handler — composes via <c>IObservable</c>; no <c>await</c>.
+    /// Persistence allowed: handler runs on the affected node's owning hub.
     /// </summary>
-    internal static async Task<IMessageDelivery> HandleUndoActivityRequest(
+    internal static IMessageDelivery HandleUndoActivityRequest(
         IMessageHub hub,
-        IMessageDelivery<UndoActivityRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<UndoActivityRequest> request)
     {
         var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
         if (versionQuery == null)
@@ -284,44 +292,53 @@ public static class VersionLayoutArea
         var msg = request.Message;
         var hubPath = hub.Address.ToString();
         var options = hub.JsonSerializerOptions;
-
-        // Find the activity log node by known path pattern
         var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
         var activityNodePath = $"{hubPath}/_activity/{msg.ActivityLogId}";
-        var activityNode = await persistence.GetNodeAsync(activityNodePath, ct);
 
-        if (activityNode?.Content is not ActivityLog activityLog)
-        {
-            hub.Post(new DataChangeResponse(hub.Version,
-                new ActivityLog("Undo").Fail($"Activity log {msg.ActivityLogId} not found")),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        Observable.FromAsync(ct => persistence.GetNodeAsync(activityNodePath, ct))
+            .SelectMany(activityNode =>
+            {
+                if (activityNode?.Content is not ActivityLog activityLog)
+                {
+                    hub.Post(new DataChangeResponse(hub.Version,
+                        new ActivityLog("Undo").Fail($"Activity log {msg.ActivityLogId} not found")),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<IReadOnlyCollection<MeshNode>>();
+                }
 
-        if (activityLog.AffectedPaths.Count == 0)
-        {
-            hub.Post(new DataChangeResponse(hub.Version,
-                new ActivityLog("Undo").Fail("No affected paths recorded for this activity")),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                if (activityLog.AffectedPaths.Count == 0)
+                {
+                    hub.Post(new DataChangeResponse(hub.Version,
+                        new ActivityLog("Undo").Fail("No affected paths recorded for this activity")),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<IReadOnlyCollection<MeshNode>>();
+                }
 
-        // For each affected path, find the version just before StartVersion
-        var restoredNodes = new List<MeshNode>();
-        foreach (var path in activityLog.AffectedPaths)
-        {
-            var beforeVersion = await versionQuery.GetVersionBeforeAsync(
-                path, activityLog.StartVersion, options, ct);
-            if (beforeVersion != null)
-                restoredNodes.Add(beforeVersion with { Version = 0 });
-        }
-
-        if (restoredNodes.Count > 0)
-        {
-            hub.Post(
-                new DataChangeRequest { ChangedBy = "undo" }.WithUpdates(restoredNodes.ToArray()),
-                o => o.WithTarget(hub.Address));
-        }
+                // For each affected path, fetch the version just before StartVersion in parallel.
+                // No await — each path's lookup is wrapped in Observable.FromAsync and merged.
+                return activityLog.AffectedPaths
+                    .ToObservable()
+                    .SelectMany(path => Observable.FromAsync(ct =>
+                        versionQuery.GetVersionBeforeAsync(path, activityLog.StartVersion, options, ct)))
+                    .Where(node => node != null)
+                    .Select(node => node! with { Version = 0 })
+                    .Aggregate(
+                        ImmutableList<MeshNode>.Empty,
+                        (acc, n) => acc.Add(n))
+                    .Select(list => (IReadOnlyCollection<MeshNode>)list);
+            })
+            .Subscribe(restoredNodes =>
+            {
+                if (restoredNodes.Count > 0)
+                {
+                    hub.Post(
+                        new DataChangeRequest { ChangedBy = "undo" }.WithUpdates(restoredNodes.ToArray()),
+                        o => o.WithTarget(hub.Address));
+                }
+            },
+            ex => hub.Post(new DataChangeResponse(hub.Version,
+                new ActivityLog("Undo").Fail($"Undo error: {ex.Message}")),
+                o => o.ResponseFor(request)));
 
         return request.Processed();
     }

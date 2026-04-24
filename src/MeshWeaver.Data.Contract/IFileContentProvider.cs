@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+
 namespace MeshWeaver.Data;
 
 /// <summary>
@@ -33,6 +35,18 @@ public interface IFileContentProvider
         string filePath,
         Stream content,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Reactive variant of <see cref="SaveFileContentAsync"/>. Emits a single result
+    /// when the underlying IO completes. Use this from hub handlers and Subscribe-based
+    /// flows so the consumer never has to bridge a <see cref="Task{TResult}"/> via
+    /// <c>Observable.FromAsync</c>.
+    /// </summary>
+    IObservable<FileOperationResult> SaveFileContent(
+        string collectionName,
+        string filePath,
+        Stream content)
+        => Observable.FromAsync(ct => SaveFileContentAsync(collectionName, filePath, content, ct));
 
     /// <summary>
     /// Deletes a file.

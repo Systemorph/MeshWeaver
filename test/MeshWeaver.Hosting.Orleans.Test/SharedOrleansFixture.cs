@@ -212,7 +212,7 @@ public class SharedSiloConfigurator : ISiloConfigurator, IHostConfigurator
         {
             AccessObject = "Public",
             DisplayName = "Public",
-            Roles = [new RoleAssignment { Role = "Editor" }]
+            Roles = [new RoleAssignment { Role = "Admin" }]
         };
         return
         [

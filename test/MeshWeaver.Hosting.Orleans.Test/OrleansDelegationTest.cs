@@ -406,7 +406,7 @@ public class DelegationProductionSiloConfigurator : ISiloConfigurator, IHostConf
         {
             AccessObject = "Public",
             DisplayName = "Public",
-            Roles = [new RoleAssignment { Role = "Editor" }]
+            Roles = [new RoleAssignment { Role = "Admin" }]
         };
         return
         [

@@ -39,6 +39,10 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(MoveNodeRequest), nameof(MoveNodeRequest));
         config.TypeRegistry.WithType(typeof(MoveNodeResponse), nameof(MoveNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeMoveRejectionReason), nameof(NodeMoveRejectionReason));
+        config.TypeRegistry.WithType(typeof(CopyNodeRequest), nameof(CopyNodeRequest));
+        config.TypeRegistry.WithType(typeof(CopyNodeResponse), nameof(CopyNodeResponse));
+        config.TypeRegistry.WithType(typeof(NodeCopyRejectionReason), nameof(NodeCopyRejectionReason));
+        config.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
 
         // Per-node pre-flight delete validation. Posted by HandleDeleteNodeRequest to each
         // node in the subtree. Owning hub runs local INodeValidators + domain rules.
@@ -81,6 +85,7 @@ public static class MeshExtensions
             .WithHandler<ValidateDeleteRequest>(HandleValidateDeleteRequest)
             .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
             .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest)
+            .WithHandler<CopyNodeRequest>(HandleCopyNodeRequest)
             .WithHandler<HeartBeatEvent>(HandleHeartBeat);
     }
 
@@ -1074,16 +1079,60 @@ public static class MeshExtensions
 
         var capturedRequest = updateRequest;
         var updatedNode = updateRequest.Node;
-        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
         var meshConfig = hub.ServiceProvider.GetService<IMeshCatalog>()?.Configuration;
+        var workspace = hub.GetWorkspace();
 
-        // Read existing from persistence — the source of truth, just-written by CreateNode
-        // is always visible. The previous workspace-stream "optimization" hung in CI when
-        // the hub had just activated and the stream's first emission was delayed (Take(1)
-        // waited forever). Persistence is the right read for known-path content per
-        // AsynchronousCalls.md (no FirstOrDefault-on-collection anti-pattern).
-        var existingNodeObs = Observable.FromAsync(token =>
-            persistence.GetNodeAsync(updatedNode.Path, token));
+        logger.LogDebug("[UpdateNode] start hub={Hub}, target={Target}, sender={Sender}",
+            hub.Address, updatedNode.Path, request.Sender);
+
+        // If we're not the owning hub, forward to the owning per-node hub. UpdateNodeRequest
+        // must be processed on the owning hub where workspace.GetMeshNodeStream() reads the
+        // own MeshNode locally — same pattern as UpdateThreadMessageContent. Persistence
+        // belongs in MeshDataSource init only.
+        const string ForwardedMarker = "_UpdateNodeForwarded";
+        if (!hub.Address.ToString().Equals(updatedNode.Path, StringComparison.Ordinal))
+        {
+            // Loop guard: if we already forwarded once and it bounced back via routing
+            // fallback (no owning hub exists for this path), reply NodeNotFound instead
+            // of looping. Marker is set on the forwarded delivery's properties.
+            if (request.Properties.ContainsKey(ForwardedMarker))
+            {
+                logger.LogDebug("[UpdateNode] forward bounced back — node {Path} has no owning hub",
+                    updatedNode.Path);
+                hub.Post(UpdateNodeResponse.Fail(
+                    $"Node not found at path: {updatedNode.Path}",
+                    NodeUpdateRejectionReason.NodeNotFound),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            logger.LogDebug("[UpdateNode] forwarding to owning hub at {Path}", updatedNode.Path);
+            var forwarded = hub.Post(capturedRequest,
+                o => o.WithTarget(new Address(updatedNode.Path)).WithProperty(ForwardedMarker, true));
+            hub.RegisterCallback((IMessageDelivery)forwarded, response =>
+            {
+                logger.LogDebug("[UpdateNode] response from owning hub: type={Type}", response.Message?.GetType().Name);
+                if (response is IMessageDelivery<UpdateNodeResponse> ur)
+                    hub.Post(ur.Message, o => o.ResponseFor(request));
+                else if (response.Message is DeliveryFailure df)
+                    hub.Post(UpdateNodeResponse.Fail(df.Message ?? "Forwarding failed"),
+                        o => o.ResponseFor(request));
+                return response.Processed();
+            });
+            return request.Processed();
+        }
+
+        // Own hub: read existing via the local MeshNodeReference stream.
+        var existingNodeObs = workspace
+            .GetMeshNodeStream()
+            .Select(n => (MeshNode?)n)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Catch<MeshNode?, Exception>(ex =>
+            {
+                logger.LogWarning(ex, "[UpdateNode] read existing failed for {Path}", updatedNode.Path);
+                return Observable.Return<MeshNode?>(null);
+            });
 
         // Read existing → check NodeType → validate → persist → workspace ack → response.
         // Each step lives in a Subscribe callback; the handler returns synchronously below.
@@ -1141,7 +1190,11 @@ public static class MeshExtensions
                                 ?? existingNode.LastModifiedBy
                         };
 
-                        return persistence.SaveNode(nodeToSave);
+                        // Write via the workspace's own MeshNode stream — the data source
+                        // sync writes through to persistence at the proper boundary. No direct
+                        // persistence.SaveNode here.
+                        workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path);
+                        return Observable.Return(nodeToSave);
                     });
             })
             .Subscribe(
@@ -1258,116 +1311,185 @@ public static class MeshExtensions
             .DefaultIfEmpty(null);
     }
 
-    private static async Task<IMessageDelivery> HandleMoveNodeRequest(
+    /// <summary>
+    /// Sync handler for MoveNodeRequest — implements Move as Copy(IncludeSatellites=true) +
+    /// DeleteNode(IncludeSatellites=true). The handler orchestrates the two service calls;
+    /// the actual copy logic lives in <see cref="HandleCopyNodeRequest"/>.
+    /// Response is posted from the mesh hub (the source hub may be deleted at this point).
+    /// </summary>
+    private static IMessageDelivery HandleMoveNodeRequest(
         IMessageHub hub,
-        IMessageDelivery<MoveNodeRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<MoveNodeRequest> request)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
-        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+        var moveRequest = request.Message;
+        var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+        var sourcePath = moveRequest.SourcePath;
+        var targetPath = moveRequest.TargetPath;
 
-        if (persistence == null)
-        {
-            hub.Post(
-                MoveNodeResponse.Fail("IMeshStorage not available", NodeMoveRejectionReason.Unknown),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        // Move = Copy (with satellites + descendants) → Delete source (with satellites).
+        // Delete only fires after Copy succeeds (SelectMany short-circuits on copy error).
+        meshService.CopyNode(sourcePath, targetPath, includeDescendants: true, includeSatellites: true)
+            .SelectMany(copied =>
+                meshService.DeleteNode(sourcePath)
+                    .Select(_ => copied))
+            .Subscribe(
+                movedNode =>
+                {
+                    var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+                    changeFeed?.Publish(MeshChangeEvent.Deleted(sourcePath));
+                    changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
+                    hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
+                    logger.LogInformation("Node moved {Source} -> {Target}", sourcePath, targetPath);
+                },
+                ex =>
+                {
+                    var msg = ex.Message ?? "Unknown error";
+                    var reason = msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                        ? NodeMoveRejectionReason.TargetAlreadyExists
+                        : msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                            ? NodeMoveRejectionReason.SourceNotFound
+                            : NodeMoveRejectionReason.Unknown;
+                    logger.LogError(ex, "Move {Source} -> {Target} failed", sourcePath, targetPath);
+                    hub.Post(MoveNodeResponse.Fail(msg, reason), o => o.ResponseFor(request));
+                });
 
-        try
-        {
-            var moveRequest = request.Message;
-
-            // 1. Check source exists
-            var sourceNode = await persistence.GetNodeAsync(moveRequest.SourcePath, ct);
-            if (sourceNode == null)
-            {
-                hub.Post(
-                    MoveNodeResponse.Fail(
-                        $"Source node not found at path: {moveRequest.SourcePath}",
-                        NodeMoveRejectionReason.SourceNotFound),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 2. Check target does not exist
-            if (await persistence.ExistsAsync(moveRequest.TargetPath, ct))
-            {
-                hub.Post(
-                    MoveNodeResponse.Fail(
-                        $"Target path already exists: {moveRequest.TargetPath}",
-                        NodeMoveRejectionReason.TargetAlreadyExists),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 3. Run validators
-            var validationError = await RunMoveValidatorsAsync(hub, sourceNode, moveRequest, ct);
-            if (validationError != null)
-            {
-                logger.LogWarning("Validator rejected node move from {Source} to {Target}: {Error}",
-                    moveRequest.SourcePath, moveRequest.TargetPath, validationError.Value.ErrorMessage);
-
-                hub.Post(
-                    MoveNodeResponse.Fail(
-                        validationError.Value.ErrorMessage ?? "Validation failed",
-                        validationError.Value.Reason),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 4. Move the node — subscribe and post response in the callback.
-            //    Timeout is enforced at the Observable layer so a stuck storage
-            //    adapter cannot hang the caller forever. Default is 30s; raise via
-            //    WithMeshOperationTimeout for long-running tests or batch jobs.
-            var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
-
-            persistence.MoveNode(moveRequest.SourcePath, moveRequest.TargetPath)
-                .Timeout(opts.Timeout)
-                .Subscribe(
-                    movedNode =>
-                    {
-                        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-                        changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
-                        changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
-                        hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
-                        logger.LogInformation("Node moved from {Source} to {Target}",
-                            moveRequest.SourcePath, moveRequest.TargetPath);
-                    },
-                    ex =>
-                    {
-                        var timedOut = ex is TimeoutException;
-                        if (timedOut)
-                            logger.LogError(ex, "Move exceeded {Timeout}s for {Source} -> {Target}",
-                                opts.Timeout.TotalSeconds, moveRequest.SourcePath, moveRequest.TargetPath);
-                        else
-                            logger.LogError(ex, "Error moving node from {Source} to {Target}",
-                                moveRequest.SourcePath, moveRequest.TargetPath);
-                        hub.Post(
-                            MoveNodeResponse.Fail(timedOut
-                                ? $"Move operation exceeded the configured timeout of {opts.Timeout.TotalSeconds:0}s"
-                                : $"Unexpected error: {ex.Message}"),
-                            o => o.ResponseFor(request));
-                    });
-
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error moving node from {Source} to {Target}",
-                request.Message.SourcePath, request.Message.TargetPath);
-            hub.Post(
-                MoveNodeResponse.Fail($"Unexpected error: {ex.Message}"),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        return request.Processed();
     }
 
-    private static async Task<(string? ErrorMessage, NodeMoveRejectionReason Reason)?> RunMoveValidatorsAsync(
+    /// <summary>
+    /// Sync handler for <see cref="CopyNodeRequest"/>. Implements copy as
+    /// <c>ObserveQuery</c> (initial set of source + subtree) → <c>Select(CreateNode)</c>
+    /// for each, all in observable composition. No <c>await</c>, no persistence read,
+    /// no remote MeshNodeReference subscription. Per <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </summary>
+    private static IMessageDelivery HandleCopyNodeRequest(
+        IMessageHub hub,
+        IMessageDelivery<CopyNodeRequest> request)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
+        var copyRequest = request.Message;
+        var meshService = hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>();
+        var sourcePath = copyRequest.SourcePath;
+        var targetPath = copyRequest.TargetPath;
+
+        logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat})",
+            sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites);
+
+        // Subtree query covers source + descendants + satellites (anything under sourcePath).
+        // ObserveQuery's first emission is the initial result set; we Take(1) and project each
+        // node into a CreateNode call at the new target path.
+        meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{sourcePath} scope:subtree"))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Catch<QueryResultChange<MeshNode>, Exception>(ex =>
+            {
+                logger.LogWarning(ex, "[CopyNode] source query {Path} failed", sourcePath);
+                return Observable.Empty<QueryResultChange<MeshNode>>();
+            })
+            .DefaultIfEmpty()
+            .SelectMany(change =>
+            {
+                var nodes = change?.Items ?? (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>();
+                logger.LogDebug("[CopyNode] subtree returned {Count} nodes", nodes.Count);
+                var sourceNode = nodes.FirstOrDefault(n =>
+                    string.Equals(n.Path, sourcePath, StringComparison.Ordinal));
+                if (sourceNode == null)
+                {
+                    hub.Post(CopyNodeResponse.Fail(
+                            $"Source node not found at path: {sourcePath}",
+                            NodeCopyRejectionReason.SourceNotFound),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
+                }
+
+                // Filter subtree by include flags (descendants vs satellites).
+                var others = nodes
+                    .Where(n => !string.Equals(n.Path, sourcePath, StringComparison.Ordinal))
+                    .Where(n =>
+                    {
+                        var isSatellite = !string.Equals(n.MainNode, n.Path, StringComparison.Ordinal);
+                        return isSatellite ? copyRequest.IncludeSatellites : copyRequest.IncludeDescendants;
+                    })
+                    .ToList();
+                var descCount = others.Count(n => string.Equals(n.MainNode, n.Path, StringComparison.Ordinal));
+                var satCount = others.Count - descCount;
+
+                // Create root, then create all children in parallel via Merge — Move semantics
+                // require all inserts to complete before the source is deleted.
+                return meshService.CreateNode(RetargetNode(sourceNode, sourcePath, targetPath))
+                    .SelectMany(rootCreated =>
+                    {
+                        if (others.Count == 0)
+                            return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
+                        return others.ToObservable()
+                            .Select(n => RetargetNode(n, sourcePath, targetPath))
+                            .SelectMany(retargeted => meshService.CreateNode(retargeted))
+                            .ToList()
+                            .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
+                    });
+            })
+            .Subscribe(
+                t =>
+                {
+                    hub.Post(CopyNodeResponse.Ok(t.Root, t.Desc, t.Sat), o => o.ResponseFor(request));
+                    logger.LogInformation("Copied {Source} -> {Target} (descendants={Desc}, satellites={Sat})",
+                        sourcePath, targetPath, t.Desc, t.Sat);
+                },
+                ex =>
+                {
+                    var msg = ex.Message ?? "Unknown error";
+                    var reason = msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                        ? NodeCopyRejectionReason.TargetAlreadyExists
+                        : msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                            ? NodeCopyRejectionReason.SourceNotFound
+                            : NodeCopyRejectionReason.Unknown;
+                    logger.LogError(ex, "Copy {Source} -> {Target} failed", sourcePath, targetPath);
+                    hub.Post(CopyNodeResponse.Fail(msg, reason), o => o.ResponseFor(request));
+                });
+
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Builds a new MeshNode by relocating <paramref name="node"/> from <paramref name="oldRoot"/>
+    /// to <paramref name="newRoot"/>. Path is derived from Namespace + Id; MainNode is rewritten
+    /// when it pointed inside the old subtree.
+    /// </summary>
+    private static MeshNode RetargetNode(MeshNode node, string oldRoot, string newRoot)
+    {
+        var newPath = string.Equals(node.Path, oldRoot, StringComparison.Ordinal)
+            ? newRoot
+            : node.Path.StartsWith(oldRoot + "/", StringComparison.Ordinal)
+                ? newRoot + node.Path[oldRoot.Length..]
+                : node.Path;
+        var segs = newPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var ns = segs.Length > 1 ? string.Join("/", segs.Take(segs.Length - 1)) : "";
+        var id = segs[^1];
+        var newMainNode = string.Equals(node.MainNode, oldRoot, StringComparison.Ordinal)
+            ? newRoot
+            : node.MainNode.StartsWith(oldRoot + "/", StringComparison.Ordinal)
+                ? newRoot + node.MainNode[oldRoot.Length..]
+                : node.MainNode;
+        return node with
+        {
+            Id = id,
+            Namespace = ns,
+            MainNode = newMainNode,
+            LastModified = DateTimeOffset.UtcNow
+        };
+    }
+
+    /// <summary>
+    /// Reactive variant of the move-validator runner. Iterates validators sequentially
+    /// via <c>Concat</c> (preserves short-circuit semantics — stops at the first failure),
+    /// emits the first failure as a tuple or <c>null</c> if all pass.
+    /// </summary>
+    private static IObservable<(string? ErrorMessage, NodeMoveRejectionReason Reason)?> RunMoveValidatorsObs(
         IMessageHub hub,
         MeshNode node,
-        MoveNodeRequest request,
-        CancellationToken ct)
+        MoveNodeRequest request)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -1379,16 +1501,12 @@ public static class MeshExtensions
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>();
-        foreach (var validator in validators)
-        {
-            if (validator.SupportedOperations.Count > 0 &&
-                !validator.SupportedOperations.Contains(NodeOperation.Move))
-            {
-                continue;
-            }
-
-            var result = await validator.ValidateAsync(context, ct);
-            if (!result.IsValid)
+        return validators
+            .Where(v => v.SupportedOperations.Count == 0 || v.SupportedOperations.Contains(NodeOperation.Move))
+            .Select(v => Observable.FromAsync(ct => v.ValidateAsync(context, ct)))
+            .Concat()
+            .Where(result => !result.IsValid)
+            .Select(result =>
             {
                 var reason = result.Reason switch
                 {
@@ -1396,10 +1514,9 @@ public static class MeshExtensions
                     NodeRejectionReason.Unauthorized => NodeMoveRejectionReason.ValidationFailed,
                     _ => NodeMoveRejectionReason.ValidationFailed
                 };
-                return (result.ErrorMessage, reason);
-            }
-        }
-
-        return null;
+                return ((string?, NodeMoveRejectionReason)?)(result.ErrorMessage, reason);
+            })
+            .Take(1)
+            .DefaultIfEmpty(null);
     }
 }

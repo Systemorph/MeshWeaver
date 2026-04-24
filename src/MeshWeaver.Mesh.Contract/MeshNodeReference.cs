@@ -1,7 +1,6 @@
 using MeshWeaver.Data;
-using MeshWeaver.Mesh;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Workspace reference that returns the hub's own MeshNode.

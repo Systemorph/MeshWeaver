@@ -107,7 +107,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
-        configuration.TypeRegistry.WithType(typeof(Graph.MeshNodeReference), nameof(Graph.MeshNodeReference));
+        configuration.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
         // Pre-resolve RoutingService to avoid re-entrant DI resolution deadlock
         // during client hub's BuildupAction (which runs on a thread pool thread)
         var routingService = RoutingService;
