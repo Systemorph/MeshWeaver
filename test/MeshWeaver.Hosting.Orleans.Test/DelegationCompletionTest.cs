@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -32,47 +33,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// waits for the second response to resolve the delegation TCS.
 /// Without it, the parent thread hangs forever after delegation.
 /// </summary>
-public class DelegationCompletionTest(ITestOutputHelper output) : TestBase(output)
+[Collection(nameof(OrleansClusterCollection))]
+public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
 {
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
-
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<RlsChatSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "completion"),
-            config =>
-            {
-                config.TypeRegistry.AddAITypes();
-                return config.AddLayoutClient();
-            });
-        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
-        {
-            ObjectId = "Roland",
-            Name = "Roland Buergi"
-        });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
+    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+        => await fixture.GetClientAsync($"completion-{name}-{Guid.NewGuid():N}", "Roland");
 
     /// <summary>
     /// Verifies that SubmitMessageRequest produces two responses:

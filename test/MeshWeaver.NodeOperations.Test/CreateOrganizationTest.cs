@@ -52,7 +52,7 @@ public class CreateOrganizationTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Assert: Partition exists at Admin/Partition/{OrgId}
         var partitionPath = $"{PartitionNodeType.Namespace}/{orgId}";
-        var partition = await MeshQuery.QueryAsync<MeshNode>($"path:{partitionPath}").FirstOrDefaultAsync(TestTimeout);
+        var partition = await ReadNodeAsync(partitionPath, TestTimeout);
         partition.Should().NotBeNull("Partition should be created by post-creation handler");
         partition!.NodeType.Should().Be("Partition");
 

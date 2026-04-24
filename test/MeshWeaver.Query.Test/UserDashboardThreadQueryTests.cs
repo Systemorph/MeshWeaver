@@ -257,7 +257,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         var threadPath = response.Message.Node!.Path!;
 
         // Assert: retrieve and verify CreatedBy is set
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(TestTimeout);
+        var node = await ReadNodeAsync(threadPath, TestTimeout);
         node.Should().NotBeNull();
         var content = node!.Content.Should().BeOfType<MeshThread>().Subject;
         content.CreatedBy.Should().NotBeNullOrEmpty("CreatedBy should be set by HandleCreateThread");

@@ -34,8 +34,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
 
         await NodeFactory.DeleteNode(nodePath);
 
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var result = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
         result.Should().BeNull("node should be deleted");
     }
 
@@ -67,8 +66,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         // Delete from node hub — this is the production pattern
         await nodeService.DeleteNode(nodePath);
 
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var result = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
         result.Should().BeNull("deletion from node hub should work");
     }
 
@@ -87,8 +85,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
 
         await NodeFactory.DeleteNode($"{TestPartition}/del-parent");
 
-        var parent = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del-parent")
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var parent = await ReadNodeAsync($"{TestPartition}/del-parent", TestContext.Current.CancellationToken);
         parent.Should().BeNull("parent should be deleted");
 
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/del-parent")
@@ -130,8 +127,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         var response = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         response.Success.Should().BeTrue($"delete should succeed (error: {response.Error})");
 
-        var lookup = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var lookup = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
         lookup.Should().BeNull("node should be gone after Post+RegisterCallback delete");
     }
 
@@ -167,8 +163,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         var response = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         response.Success.Should().BeTrue($"recursive delete should succeed (error: {response.Error})");
 
-        var parent = await MeshQuery.QueryAsync<MeshNode>($"path:{parentPath}")
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var parent = await ReadNodeAsync(parentPath, TestContext.Current.CancellationToken);
         parent.Should().BeNull();
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{parentPath}")
             .ToListAsync(TestContext.Current.CancellationToken);

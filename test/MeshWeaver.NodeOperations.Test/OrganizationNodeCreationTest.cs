@@ -54,7 +54,7 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
         Output.WriteLine($"Organization created at: {created.Path}");
 
         // Verify retrievable
-        var fetched = await MeshQuery.QueryAsync<MeshNode>($"path:{orgPath}").FirstOrDefaultAsync();
+        var fetched = await ReadNodeAsync(orgPath);
         fetched.Should().NotBeNull("Created organization should be queryable");
         fetched!.NodeType.Should().Be("Organization");
 

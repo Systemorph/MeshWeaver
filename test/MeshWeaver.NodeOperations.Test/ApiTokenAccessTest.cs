@@ -97,9 +97,8 @@ public class ApiTokenAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await NodeFactory.CreateNode(tokenNode);
 
-        // Verify via query
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:User/{userId}/_Api/{hashPrefix}")
-            .FirstOrDefaultAsync(ct);
+        // Verify via per-node stream (CQRS-correct — no catalog/index lag)
+        var result = await ReadNodeAsync($"User/{userId}/_Api/{hashPrefix}", ct);
         result.Should().NotBeNull("token should be retrievable by path");
         result!.MainNode.Should().Be($"User/{userId}");
     }

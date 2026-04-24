@@ -83,10 +83,9 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
         var childPath = await CreateNodeAsync(client, childNode, "User/Roland", ct);
         Output.WriteLine($"Child: {childPath}");
 
-        // Verify: child is reachable via message routing (GetDataRequest)
-        var childNodeId = $"cfeed-child-{suffix}";
+        // Verify: child is reachable via message routing (GetDataRequest via MeshNodeReference reducer).
         var getResponse = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), childNodeId)),
+            new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(childPath)), ct);
         var data = getResponse.Message.Data as MeshNode;
         if (data == null && getResponse.Message.Data is JsonElement je)

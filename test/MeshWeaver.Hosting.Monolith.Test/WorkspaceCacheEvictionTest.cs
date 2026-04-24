@@ -53,12 +53,7 @@ public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMesh
 
         // Update the node — handler publishes MeshChangeEvent.Updated to IMeshChangeFeed.
         // Workspace's subscription to the feed must evict the cache entry for this path.
-        MeshNode? current = null;
-        await foreach (var n in NodeFactory.QueryAsync<MeshNode>($"path:{path}", ct: ct).WithCancellation(ct))
-        {
-            current = n;
-            break;
-        }
+        var current = await ReadNodeAsync(path, ct);
         current.Should().NotBeNull();
         await NodeFactory.UpdateNode(current! with { Name = "Updated" });
 

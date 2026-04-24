@@ -108,9 +108,9 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         createdNode.Name.Should().Be("Test Node With Permission");
         createdNode.DesiredId.Should().Be("MyDesiredId", "DesiredId should be preserved");
 
-        // Verify node exists via query
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
-        fetchedNode.Should().NotBeNull("Node should be retrievable from query");
+        // Verify node exists via per-node stream
+        var fetchedNode = await ReadNodeAsync(nodePath);
+        fetchedNode.Should().NotBeNull("Node should be retrievable");
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
@@ -168,11 +168,11 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         // Step 3: Delete the transient node
         await NodeFactory.DeleteNode(transientPath);
 
-        // Verify: Transient should be gone, final should exist
-        var transientAfterDelete = await MeshQuery.QueryAsync<MeshNode>($"path:{transientPath}").FirstOrDefaultAsync();
+        // Verify: Transient should be gone, final should exist (stream reads)
+        var transientAfterDelete = await ReadNodeAsync(transientPath);
         transientAfterDelete.Should().BeNull("Transient node should be deleted");
 
-        var finalAfterCreate = await MeshQuery.QueryAsync<MeshNode>($"path:{finalPath}").FirstOrDefaultAsync();
+        var finalAfterCreate = await ReadNodeAsync(finalPath);
         finalAfterCreate.Should().NotBeNull("Final node should exist");
         finalAfterCreate!.State.Should().Be(MeshNodeState.Active);
 
@@ -213,8 +213,8 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         createdNode.Should().NotBeNull();
         createdNode.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after creation");
 
-        // Verify it can be retrieved
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+        // Verify it can be retrieved (stream read)
+        var fetchedNode = await ReadNodeAsync(nodePath);
         fetchedNode.Should().NotBeNull();
         fetchedNode!.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after fetch");
 
@@ -267,8 +267,8 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         confirmedNode.State.Should().Be(MeshNodeState.Active, "Node should be Active after confirmation");
         confirmedNode.Path.Should().Be(nodePath, "Path should remain the same");
 
-        // Verify persistence
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+        // Verify persistence (stream read)
+        var fetchedNode = await ReadNodeAsync(nodePath);
         fetchedNode.Should().NotBeNull();
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 

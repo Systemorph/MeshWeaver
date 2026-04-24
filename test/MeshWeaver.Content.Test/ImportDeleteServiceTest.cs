@@ -243,13 +243,13 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         deleteResponse.Message.Success.Should().BeTrue();
 
         // Verify all nodes are gone
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>("path:lifecycle/ImportTestParent").FirstOrDefaultAsync();
+        var parentNode = await ReadNodeAsync("lifecycle/ImportTestParent");
         parentNode.Should().BeNull();
 
-        var child1Node = await MeshQuery.QueryAsync<MeshNode>("path:lifecycle/ImportTestParent/Child1").FirstOrDefaultAsync();
+        var child1Node = await ReadNodeAsync("lifecycle/ImportTestParent/Child1");
         child1Node.Should().BeNull();
 
-        var child2Node = await MeshQuery.QueryAsync<MeshNode>("path:lifecycle/ImportTestParent/Child2").FirstOrDefaultAsync();
+        var child2Node = await ReadNodeAsync("lifecycle/ImportTestParent/Child2");
         child2Node.Should().BeNull();
     }
 

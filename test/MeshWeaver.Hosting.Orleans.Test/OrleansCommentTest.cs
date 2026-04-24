@@ -28,6 +28,8 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture — uses CommentSiloConfigurator with AddFileSystemPersistence(SamplesGraphData)
+// and a CommentClientConfigurator (custom client wiring), which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Orleans integration test for CreateCommentRequest.
 /// Follows the same pattern as OrleansChatTest: GetRemoteStream for reactive verification,
@@ -83,9 +85,9 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     /// </summary>
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+        // Canonical CQRS-correct read via per-node MeshNodeReference reducer (not catalog lookup).
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+            new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)

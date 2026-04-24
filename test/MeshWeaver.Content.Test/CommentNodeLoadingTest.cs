@@ -42,9 +42,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 20000)]
     public async Task CommentNode_IsLoadableByExactPath()
     {
-        var node = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{DocPartitionCommentPath}")
-            .FirstOrDefaultAsync();
+        var node = await ReadNodeAsync(DocPartitionCommentPath);
 
         node.Should().NotBeNull(
             $"Comment node at '{DocPartitionCommentPath}' should be loadable from the Doc partition");
@@ -62,9 +60,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 20000)]
     public async Task CommentNode_HasValidCommentContent()
     {
-        var node = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{DocPartitionCommentPath}")
-            .FirstOrDefaultAsync();
+        var node = await ReadNodeAsync(DocPartitionCommentPath);
 
         node.Should().NotBeNull();
         node!.Content.Should().BeOfType<Comment>();
@@ -114,9 +110,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task ReplyNode_IsLoadableUnderComment()
     {
         var replyPath = $"{DocPartitionCommentPath}/reply1";
-        var node = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{replyPath}")
-            .FirstOrDefaultAsync();
+        var node = await ReadNodeAsync(replyPath);
 
         node.Should().NotBeNull($"Reply node at '{replyPath}' should be loadable");
         node!.Id.Should().Be("reply1");

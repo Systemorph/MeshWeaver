@@ -207,10 +207,8 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Wait for the rollback to be processed
         await Task.Delay(2000, TestContext.Current.CancellationToken);
 
-        // Assert - verify the node was rolled back
-        var currentNode = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{nodePath}", ct: TestContext.Current.CancellationToken)
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        // Assert - verify the node was rolled back (stream read)
+        var currentNode = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
 
         currentNode.Should().NotBeNull("the node should still exist after rollback");
         currentNode!.Name.Should().Be("Original", "the node should have been rolled back to the original name");

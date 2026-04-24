@@ -67,10 +67,8 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         created.Name.Should().Be("Test Markdown Node");
         created.NodeType.Should().Be("Markdown");
 
-        // Verify node exists in persistence
-        var fetched = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{nodePath}")
-            .FirstOrDefaultAsync(TestTimeout);
+        // Verify node exists via stream (CQRS-correct read after write)
+        var fetched = await ReadNodeAsync(nodePath, TestTimeout);
         fetched.Should().NotBeNull("node should be retrievable from persistence");
 
         // Cleanup
@@ -105,10 +103,8 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             var act = async () => await NodeFactory.CreateNode(node);
             await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
-            // Verify node does NOT exist
-            var fetched = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{nodePath}")
-                .FirstOrDefaultAsync(TestTimeout);
+            // Verify node does NOT exist (per-node hub returns NotFound — ReadNodeAsync surfaces null)
+            var fetched = await ReadNodeAsync(nodePath, TestTimeout);
             fetched.Should().BeNull("rejected node should not exist");
         }
         finally

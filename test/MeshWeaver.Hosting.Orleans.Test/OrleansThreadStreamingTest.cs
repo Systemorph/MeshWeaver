@@ -31,6 +31,9 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture — uses StreamingSiloConfigurator with
+// AddFileSystemPersistence(SamplesGraphData) and a custom ToolCallingFakeChatClientFactory,
+// neither of which the SharedOrleansFixture configures.
 /// <summary>
 /// Orleans integration tests for thread streaming and tool calls.
 /// Verifies that in a distributed Orleans cluster:
@@ -76,9 +79,9 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+        // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+            new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)

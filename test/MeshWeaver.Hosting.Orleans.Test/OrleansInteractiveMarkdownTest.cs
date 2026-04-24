@@ -36,6 +36,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// kernel and producing output) lives in the monolith test suite where the kernel is
 /// co-located and far faster to exercise.
 /// </summary>
+// TODO: needs custom shared fixture — uses InteractiveMarkdownSiloConfigurator with
+// AddInMemoryPersistence and ConfigurePortalMesh only (no Graph/AI/RLS). The SharedOrleansFixture
+// adds Graph/AI/RLS which would change the registered services and TypeRegistry.
 public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase(output)
 {
     private TestCluster Cluster { get; set; } = null!;

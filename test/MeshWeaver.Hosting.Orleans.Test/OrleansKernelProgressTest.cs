@@ -1,9 +1,11 @@
 using System;
 using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
@@ -27,12 +29,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// an ActivityLog MeshNode at script dispatch and thread its id/logger through
 /// to the script's <c>Log</c> global).
 /// </summary>
-public class OrleansKernelProgressTest(ITestOutputHelper output) : OrleansTestBase(output)
+[Collection(nameof(OrleansClusterCollection))]
+public class OrleansKernelProgressTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
 {
     private const int DefaultTimeoutMs = 30_000;
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-        => base.ConfigureClient(configuration).AddLayoutClient();
+    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+        => await fixture.GetClientAsync($"kernel-{name}-{Guid.NewGuid():N}", "Roland");
 
     [Fact(Timeout = DefaultTimeoutMs, Skip = "Pending task #60: ActivityLog created at kernel dispatch + Log global wired through")]
     public async Task Log_from_script_is_observable_on_activity_log_stream()

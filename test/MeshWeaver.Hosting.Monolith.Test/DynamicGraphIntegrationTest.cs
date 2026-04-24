@@ -248,7 +248,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task GetNodeAsync_Organization_ReturnsNodeTypeDefinition()
     {
         // Act
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organization", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Organization");
 
         // Assert
         node.Should().NotBeNull("Organization node should exist");
@@ -285,11 +285,11 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task TypeNodes_ExistInPersistence()
     {
         // Assert that type nodes exist
-        var orgType = await MeshQuery.QueryAsync<MeshNode>("path:Organization", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var orgType = await ReadNodeAsync("Organization");
         orgType.Should().NotBeNull("Organization should exist in persistence");
         orgType!.NodeType.Should().Be("NodeType");
 
-        var projectType = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var projectType = await ReadNodeAsync("ACME/Project");
         projectType.Should().NotBeNull("ACME/Project should exist in persistence");
         projectType!.NodeType.Should().Be("NodeType");
     }
@@ -318,10 +318,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         moved!.Path.Should().Be(dst);
         moved.Name.Should().Be("Move Test");
 
-        var oldNode = await MeshQuery.QueryAsync<MeshNode>($"path:{src}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var oldNode = await ReadNodeAsync(src, TestContext.Current.CancellationToken);
         oldNode.Should().BeNull("Original node should be deleted");
 
-        var newNode = await MeshQuery.QueryAsync<MeshNode>($"path:{dst}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newNode = await ReadNodeAsync(dst, TestContext.Current.CancellationToken);
         newNode.Should().NotBeNull("Node should exist at new path");
         newNode!.Name.Should().Be("Move Test");
     }
@@ -343,26 +343,27 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         // Act
         await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(parent, newParentPath), o => o, TestContext.Current.CancellationToken);
 
-        // Assert - old paths should not exist
-        (await MeshQuery.QueryAsync<MeshNode>($"path:{parent}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
-        (await MeshQuery.QueryAsync<MeshNode>($"path:{parent}/child1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
-        (await MeshQuery.QueryAsync<MeshNode>($"path:{parent}/child2", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
-        (await MeshQuery.QueryAsync<MeshNode>($"path:{parent}/child1/grandchild", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        // Assert - old paths should not exist (via per-node stream)
+        var ct = TestContext.Current.CancellationToken;
+        (await ReadNodeAsync(parent, ct)).Should().BeNull();
+        (await ReadNodeAsync($"{parent}/child1", ct)).Should().BeNull();
+        (await ReadNodeAsync($"{parent}/child2", ct)).Should().BeNull();
+        (await ReadNodeAsync($"{parent}/child1/grandchild", ct)).Should().BeNull();
 
-        // Assert - new paths should exist with correct data
-        var newParent = await MeshQuery.QueryAsync<MeshNode>($"path:{newParentPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        // Assert - new paths should exist with correct data (via per-node stream)
+        var newParent = await ReadNodeAsync(newParentPath, ct);
         newParent.Should().NotBeNull();
         newParent!.Name.Should().Be("Parent");
 
-        var newChild1 = await MeshQuery.QueryAsync<MeshNode>($"path:{newParentPath}/child1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newChild1 = await ReadNodeAsync($"{newParentPath}/child1", ct);
         newChild1.Should().NotBeNull();
         newChild1!.Name.Should().Be("Child 1");
 
-        var newChild2 = await MeshQuery.QueryAsync<MeshNode>($"path:{newParentPath}/child2", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newChild2 = await ReadNodeAsync($"{newParentPath}/child2", ct);
         newChild2.Should().NotBeNull();
         newChild2!.Name.Should().Be("Child 2");
 
-        var newGrandchild = await MeshQuery.QueryAsync<MeshNode>($"path:{newParentPath}/child1/grandchild", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newGrandchild = await ReadNodeAsync($"{newParentPath}/child1/grandchild", ct);
         newGrandchild.Should().NotBeNull();
         newGrandchild!.Name.Should().Be("Grandchild");
     }
@@ -387,10 +388,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         response.Message.Node.Should().NotBeNull();
         response.Message.Node!.Path.Should().Be(dst);
 
-        var movedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{dst}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var movedNode = await ReadNodeAsync(dst, TestContext.Current.CancellationToken);
         movedNode.Should().NotBeNull("Node should exist at new path");
 
-        var oldNode = await MeshQuery.QueryAsync<MeshNode>($"path:{src}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var oldNode = await ReadNodeAsync(src, TestContext.Current.CancellationToken);
         oldNode.Should().BeNull("Node should not remain at old path");
     }
 
@@ -834,7 +835,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     public async Task FileSystem_PersistenceService_FindsNodeTypeNode_WithPolymorphicDeserialization()
     {
         // Act - this should find Type/Organizations by reading from disk
-        var nodeTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:Type/Organizations", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var nodeTypeNode = await ReadNodeAsync("Type/Organizations");
 
         // Assert
         nodeTypeNode.Should().NotBeNull(
@@ -878,7 +879,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
     {
         // Act - get the Organizations node (triggers on-demand compilation from disk files)
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organizations", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Organizations");
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
@@ -996,8 +997,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             NodeType = "Markdown"
         });
 
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}", ct: TestContext.Current.CancellationToken)
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("node should exist after creation");
         node!.Name.Should().Be(name, "Name should be preserved through CreateNodeAsync");

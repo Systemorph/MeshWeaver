@@ -70,8 +70,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
 
     private async Task<bool> NodeExistsAsync(string path, CancellationToken ct)
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{path}")
-            .FirstOrDefaultAsync(ct);
+        var node = await ReadNodeAsync(path, ct);
         return node != null;
     }
 

@@ -258,9 +258,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var deadline = System.DateTime.UtcNow.Add(10.Seconds());
         while (System.DateTime.UtcNow < deadline)
         {
-            updatedNode = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{TestNamespace}/iris-access", ct: ct)
-                .FirstOrDefaultAsync(ct);
+            updatedNode = await ReadNodeAsync($"{TestNamespace}/iris-access", ct);
 
             if (updatedNode?.Content is AccessAssignment a && a.Roles.Count == 1)
                 break;
@@ -348,9 +346,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         MeshNode? result = null;
         while (System.DateTime.UtcNow < deadline)
         {
-            result = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{TestNamespace}/dave-access", ct: ct)
-                .FirstOrDefaultAsync(ct);
+            result = await ReadNodeAsync($"{TestNamespace}/dave-access", ct);
 
             if (result?.Content is AccessAssignment a && a.AccessObject == "User/eve")
                 break;
@@ -414,9 +410,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         MeshNode? result = null;
         while (System.DateTime.UtcNow < deadline)
         {
-            result = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{TestNamespace}/george-access", ct: ct)
-                .FirstOrDefaultAsync(ct);
+            result = await ReadNodeAsync($"{TestNamespace}/george-access", ct);
 
             if (result?.Content is AccessAssignment a && a.AccessObject == "Admin/engineering")
                 break;

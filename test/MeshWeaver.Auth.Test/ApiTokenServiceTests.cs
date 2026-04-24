@@ -66,8 +66,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         var (rawToken, node) = await service.CreateTokenAsync(
             "user1", "Test User", "test@example.com", "Test");
 
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var stored = await meshQuery.QueryAsync<MeshNode>($"path:{node.Path}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var stored = await ReadNodeAsync(node.Path!, TestContext.Current.CancellationToken);
         stored.Should().NotBeNull();
         stored!.NodeType.Should().Be("ApiToken");
     }

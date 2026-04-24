@@ -247,8 +247,8 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         // No hub initialization needed — RoutingMeshQueryProvider discovers
         // partitions via DiscoverNewProvidersAsync during the query.
 
-        // Load parent comment
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path}").FirstOrDefaultAsync();
+        // Load parent comment via per-node stream
+        var parentNode = await ReadNodeAsync(CommentC1Path);
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
         parentNode.Namespace.Should().Be(DocPath + "/_Comment");
@@ -257,8 +257,10 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         parentComment.Should().NotBeNull();
         Output.WriteLine($"Parent: Id={parentNode.Id}, Path={parentNode.Path}, Author={parentComment!.Author}");
 
-        // Load reply — verify Id is the local name, not the full path
-        var replyNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ReplyPath}").FirstOrDefaultAsync();
+        // Load reply via per-node stream — replies must be addressable as their own hub.
+        // If this returns the parent c1, the per-node hub for the reply is misconfigured
+        // (routing should activate the reply's own hub, MeshDataSource should load reply1).
+        var replyNode = await ReadNodeAsync(ReplyPath);
         replyNode.Should().NotBeNull("Reply node should exist");
         replyNode!.Id.Should().Be("reply1", "Reply Id should be the local file name, not the full path");
         replyNode.Namespace.Should().Be(CommentC1Path);

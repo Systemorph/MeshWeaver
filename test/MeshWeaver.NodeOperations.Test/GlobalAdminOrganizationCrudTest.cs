@@ -69,10 +69,8 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         };
         await NodeFactory.CreateNode(orgNode);
 
-        // Read
-        var found = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{orgId}")
-            .FirstOrDefaultAsync(TestTimeout);
+        // Read via stream (CQRS-correct — direct subscription to owning hub)
+        var found = await ReadNodeAsync(orgId, ct: TestTimeout);
 
         found.Should().NotBeNull("Global admin should be able to read Organizations");
         found!.Name.Should().Be("Test Organization");
@@ -103,10 +101,8 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         };
         await NodeFactory.UpdateNode(updated);
 
-        // Verify
-        var found = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{orgId}")
-            .FirstOrDefaultAsync(TestTimeout);
+        // Verify via stream (authoritative — no catalog lag after write)
+        var found = await ReadNodeAsync(orgId, ct: TestTimeout);
 
         found.Should().NotBeNull();
         found!.Name.Should().Be("Updated Name");
@@ -132,10 +128,8 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         // Delete
         await NodeFactory.DeleteNode(orgId);
 
-        // Verify gone
-        var found = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{orgId}")
-            .FirstOrDefaultAsync(TestTimeout);
+        // Verify gone — stream times out (short window) when per-node hub is deleted
+        var found = await ReadNodeAsync(orgId, TestTimeout);
 
         found.Should().BeNull("Deleted organization should not be found");
     }

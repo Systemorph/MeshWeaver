@@ -39,6 +39,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// This tests the real delegation flow: agent calls delegate_to_agent →
 /// sub-thread created → sub-agent executes → result propagates back.
 /// </summary>
+// TODO: needs custom shared fixture — uses DelegationProductionSiloConfigurator with
+// DelegationTestAgentFactory which extends ChatClientAgentFactory. Per the existing comment,
+// the SwappableChatClientFactory pattern doesn't work for ChatClientAgentFactory subclasses.
 /// <summary>
 /// Delegation tests using per-class TestCluster because DelegationTestAgentFactory
 /// extends ChatClientAgentFactory which needs the grain's IMessageHub at construction time.
@@ -98,9 +101,9 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+        // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+            new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)

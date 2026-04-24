@@ -180,7 +180,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task Task_Instances_HaveCorrectNodeType()
     {
-        var task = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
+        var task = await ReadNodeAsync("ACME/ProductLaunch/Todo/DefinePersona");
 
         task.Should().NotBeNull();
         task!.NodeType.Should().Be("ACME/Project/Todo");

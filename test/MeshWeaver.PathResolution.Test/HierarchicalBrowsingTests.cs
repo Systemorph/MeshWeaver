@@ -145,7 +145,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await SetupMarketingHierarchy();
 
         // Get ClaimsProcessing node
-        var claimsNode = await MeshQuery.QueryAsync<MeshNode>("path:Systemorph/Marketing/ClaimsProcessing").FirstOrDefaultAsync();
+        var claimsNode = await ReadNodeAsync("Systemorph/Marketing/ClaimsProcessing");
         claimsNode.Should().NotBeNull();
 
         // Get direct children
@@ -165,7 +165,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await SetupMarketingHierarchy();
 
         // Get a sub-story
-        var emailTriageNode = await MeshQuery.QueryAsync<MeshNode>("path:Systemorph/Marketing/ClaimsProcessing/EmailTriage").FirstOrDefaultAsync();
+        var emailTriageNode = await ReadNodeAsync("Systemorph/Marketing/ClaimsProcessing/EmailTriage");
         emailTriageNode.Should().NotBeNull();
 
         // Verify parent path
@@ -174,7 +174,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         // Get parent
         var parentPath = emailTriageNode.GetParentPath();
         parentPath.Should().NotBeNull();
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{parentPath}").FirstOrDefaultAsync();
+        var parentNode = await ReadNodeAsync(parentPath!);
         parentNode.Should().NotBeNull();
         parentNode!.Name.Should().Be("Claims Processing");
     }
