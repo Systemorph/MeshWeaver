@@ -68,7 +68,13 @@ public class TestClientConfigurator : IHostConfigurator
     public void Configure(IHostBuilder hostBuilder)
     {
 
-        hostBuilder.UseOrleansMeshClient();
+        // Mirror the silo's mesh-builder chain (ConfigurePortalMesh) on the client so
+        // the client-side mesh catalog has the same NodeType registrations (Graph, AI,
+        // Kernel). Without this, CreateNodeRequest posted to the client mesh address
+        // fails with "NodeType '<X>' is not registered" because the local catalog is
+        // empty — every CreateThread/CreateApiToken test depends on this.
+        hostBuilder.UseOrleansMeshClient()
+            .ConfigurePortalMesh();
 
 
     }
