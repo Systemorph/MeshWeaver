@@ -77,7 +77,16 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
     public void Update(Func<MeshNode, MeshNode> transform)
     {
         ArgumentNullException.ThrowIfNull(transform);
-        workspace.UpdateMeshNode(transform, new Address(CurrentPath), CurrentPath);
+        // Long-standing stream: this editor is already subscribed to the node via
+        // GetMeshNodeStream. Apply the transform to the latest snapshot held by the
+        // BehaviorSubject and post a DataChangeRequest to the owning hub. The owning
+        // hub's data layer applies the patch and the same subscription receives the
+        // echo (so the editor's UI re-renders without an extra read).
+        var current = node.Value;
+        if (current is null) return;
+        var updated = transform(current);
+        hub.Post(new DataChangeRequest { Updates = [updated] },
+            o => o.WithTarget(new Address(CurrentPath)));
     }
 
     public IObservable<MoveNodeResponse> Move(string targetPath)

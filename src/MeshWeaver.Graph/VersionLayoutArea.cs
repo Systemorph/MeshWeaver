@@ -292,10 +292,15 @@ public static class VersionLayoutArea
         var msg = request.Message;
         var hubPath = hub.Address.ToString();
         var options = hub.JsonSerializerOptions;
-        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var activityNodePath = $"{hubPath}/_activity/{msg.ActivityLogId}";
 
-        Observable.FromAsync(ct => persistence.GetNodeAsync(activityNodePath, ct))
+        // Read the activity-log node via ObserveQuery — initial result-set covers the
+        // exact path we want, .Take(1) returns immediately, no persistence read.
+        meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{activityNodePath}"))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Select(change => change.Items.FirstOrDefault())
             .SelectMany(activityNode =>
             {
                 if (activityNode?.Content is not ActivityLog activityLog)

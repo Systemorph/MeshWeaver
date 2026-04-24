@@ -1090,22 +1090,44 @@ public static class MeshExtensions
         var meshConfig = hub.ServiceProvider.GetService<IMeshCatalog>()?.Configuration;
         var workspace = hub.GetWorkspace();
 
-        logger.LogInformation("[UpdateNode] start hub={Hub}, target={Target}, sender={Sender}, deliveryId={DeliveryId}",
+        logger.LogDebug("[UpdateNode] start hub={Hub}, target={Target}, sender={Sender}, deliveryId={DeliveryId}",
             hub.Address, updatedNode.Path, request.Sender, request.Id);
 
-        // Read existing via path-aware MeshNode stream — auto-routes own/remote so we
-        // never need to forward the request to a per-node hub. (Forwarding fails when
-        // a node has no configured owning hub: the routing-default hub has no
-        // UpdateNodeRequest handler and silently DeliveryFailures with no response back
-        // to the caller.) Hard timeout + Catch ensure we always emit a value.
-        var existingNodeObs = workspace
-            .GetMeshNodeStream(updatedNode.Path)
-            .Select(n => (MeshNode?)n)
+        // The handler runs on the hub that owns the node's MeshNodeReference stream.
+        // workspace.GetStream(new MeshNodeReference()) returns the own MeshNode reducer
+        // stream when MeshDataSource is registered on this hub. If GetStream throws
+        // ("Failed to create stream") the hub has no reducer for the node — same
+        // semantic as "node not found here": post a NodeNotFound response instead of
+        // crashing the message pump.
+        ISynchronizationStream<MeshNode>? ownStream;
+        try
+        {
+            ownStream = workspace.GetStream(new MeshNodeReference());
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[UpdateNode] hub {Hub} has no MeshNodeReference stream for {Path}",
+                hub.Address, updatedNode.Path);
+            ownStream = null;
+        }
+
+        if (ownStream == null)
+        {
+            hub.Post(UpdateNodeResponse.Fail(
+                $"Node not found at path: {updatedNode.Path}",
+                NodeUpdateRejectionReason.NodeNotFound),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        var existingNodeObs = ownStream
+            .Select(change => (MeshNode?)change.Value)
+            .Where(n => n != null)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(10))
             .Catch<MeshNode?, Exception>(ex =>
             {
-                logger.LogWarning(ex, "[UpdateNode] read existing failed for {Path}", updatedNode.Path);
+                logger.LogWarning(ex, "[UpdateNode] read own node failed for {Path}", updatedNode.Path);
                 return Observable.Return<MeshNode?>(null);
             });
 
@@ -1114,6 +1136,8 @@ public static class MeshExtensions
         existingNodeObs
             .SelectMany(existingNode =>
             {
+                logger.LogInformation("[UpdateNode] step=read-complete path={Path} found={Found}",
+                    updatedNode.Path, existingNode != null);
                 if (existingNode == null)
                 {
                     hub.Post(
@@ -1165,19 +1189,17 @@ public static class MeshExtensions
                                 ?? existingNode.LastModifiedBy
                         };
 
-                        // Write via the workspace's own MeshNode stream — the data source
-                        // sync writes through to persistence at the proper boundary. No direct
-                        // persistence.SaveNode here.
-                        // UpdateMeshNode auto-handles own/remote based on address — for
-                        // own hub, writes to local data source; for remote, pushes patch
-                        // via the remote MeshNode stream.
-                        var ownPath = hub.Address.ToString();
-                        if (string.Equals(ownPath, nodeToSave.Path, StringComparison.Ordinal))
-                            workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path);
-                        else
-                            workspace.UpdateMeshNode(_ => nodeToSave,
-                                address: new Address(nodeToSave.Path),
-                                nodePath: nodeToSave.Path);
+                        // Write via the workspace's local MeshNode partition stream — the
+                        // data source's persister flushes to persistence at the proper
+                        // boundary; subscribers receive the update through the workspace
+                        // synchronization protocol. We do NOT pass an address here:
+                        // routing UpdateMeshNode to a remote address sends a
+                        // SubscribeRequest to a per-node hub that may not be activated for
+                        // mesh-hub-loaded nodes (test scenarios + many production paths),
+                        // and the request hangs on DeliveryFailure with no response back.
+                        // The mesh hub's local InstanceCollection IS the source of truth
+                        // for any node loaded by MeshDataSource at init.
+                        workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path);
                         return Observable.Return(nodeToSave);
                     });
             })

@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
 
@@ -153,8 +154,13 @@ internal sealed class MeshService(
         if (persistence == null)
             return CreateNode(node);
 
-        // Persist directly with Transient state — bypasses the CreateNodeRequest handler
-        // which would force Active state.
+        // Persistence ALLOWED here — `CreateTransient` is the canonical entry that
+        // sets a transient MeshNode into the mesh. The request handler path for
+        // `CreateNodeRequest` would force the node to `Active`; we deliberately want
+        // a node in `Transient` state to register it without a permanent commit, so we
+        // write straight through `IMeshStorage`. This is the *only* IMeshService
+        // method allowed to bypass the hub-message pipeline — every other CRUD method
+        // routes through `Post + RegisterCallback` and never touches persistence.
         var transientNode = node with { State = MeshNodeState.Transient };
         return persistence.SaveNode(transientNode);
     }

@@ -42,7 +42,9 @@ Documentation is embedded in `src/MeshWeaver.Documentation/` and served under th
 
 The documentation on the architecture is accessible via src/MeshWeaver.Documentation/Data/Architecture/
 
-Topics: Message-based communication, Actor model, UI streaming, AI agents, Data versioning, Serialization, Access control, Partitioned persistence, Business rules & calculations
+Topics: Message-based communication, Actor model, UI streaming, AI agents, Data versioning, Serialization, Access control, Partitioned persistence, Business rules & calculations, **Debugging message flow**
+
+**When a hub-handler test hangs or a message disappears: read `Doc/Architecture/DebuggingMessageFlow.md` first.** It tells you exactly which trace tags to grep, where to crank the log levels, and **why you should never rerun a hung test 2-3 times "to see"** — the framework already prints a structured `MESSAGE_FLOW:` trace at `Trace` level. Run once, grep, fix.
 
 ### DataMesh
 

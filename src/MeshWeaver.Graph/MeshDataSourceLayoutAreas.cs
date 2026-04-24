@@ -367,10 +367,12 @@ public static class MeshDataSourceLayoutAreas
             logger?.LogInformation("Copy/Install complete: {Nodes} nodes, {Partitions} partitions",
                 result.NodesImported, result.PartitionsImported);
 
-            // On Install mode, mark source as disabled
+            // On Install mode, mark source as disabled — push the patch through the
+            // mesh hub via PatchDataChangeRequest. The owning hub validates + writes
+            // to persistence at the proper boundary; subscribers receive the update
+            // through the synchronization protocol.
             if (isInstall && sourceNode != null)
             {
-                var persistence = host.Hub.ServiceProvider.GetRequiredService<IMeshStorage>();
                 var updatedConfig = config with
                 {
                     Enabled = false,
@@ -378,13 +380,12 @@ public static class MeshDataSourceLayoutAreas
                     LastSyncedAt = DateTimeOffset.UtcNow
                 };
                 var updatedNode = sourceNode with { Content = updatedConfig };
-                persistence.SaveNode(updatedNode).Subscribe(
-                    saved => logger?.LogInformation(
-                        "Marked data source {Path} as installed to {Target}",
-                        saved.Path, updatedConfig.InstalledTo),
-                    ex => logger?.LogError(ex,
-                        "Failed to mark data source {Path} as installed",
-                        updatedNode.Path));
+                host.Hub.Post(
+                    new DataChangeRequest { ChangedBy = "data-source-install" }.WithUpdates([updatedNode]),
+                    o => o.WithTarget(new Address(updatedNode.Path)));
+                logger?.LogInformation(
+                    "Marked data source {Path} as installed to {Target}",
+                    updatedNode.Path, updatedConfig.InstalledTo);
             }
 
             var resultDialog = Controls.Dialog(
