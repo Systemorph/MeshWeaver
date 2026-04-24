@@ -77,6 +77,10 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         public IObservable<bool> DeleteNode(string path)
             => FromTask(async () => { await persistence.DeleteNodeAsync(path, true); return true; });
 
+        public IObservable<MeshNode> CopyNode(string sourcePath, string targetPath, bool includeDescendants = true, bool includeSatellites = false)
+            => System.Reactive.Linq.Observable.Throw<MeshNode>(new NotSupportedException(
+                "TestNodeFactory does not support CopyNode — tests should exercise CopyNode via the real mesh-hub orchestration."));
+
         private static IObservable<T> FromTask<T>(Func<Task<T>> factory)
             => System.Reactive.Linq.Observable.FromAsync(factory);
 

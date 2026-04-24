@@ -1,9 +1,11 @@
+using System.Reactive.Linq;
 using MeshWeaver.AI.Application.Layout;
 using MeshWeaver.AI.Completion;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI.Application;
@@ -38,33 +40,36 @@ public static class AgentsApplicationExtensions
                 .AddScoped<IAutocompleteProvider, CommandAutocompleteProvider>())
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);
 
-    private static async Task<IMessageDelivery> HandleAutocompleteRequest(
+    // Higher Priority = better. Sort descending so best comes first.
+    private static readonly IComparer<AutocompleteItem> AutocompleteByPriority =
+        Comparer<AutocompleteItem>.Create((a, b) => b.Priority.CompareTo(a.Priority));
+
+    private const int AutocompleteTopN = 50;
+
+    private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
-        IMessageDelivery<AutocompleteRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<AutocompleteRequest> request)
     {
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        var allItems = new List<AutocompleteItem>();
-        foreach (var provider in providers)
-        {
-            try
-            {
-                await foreach (var item in provider.GetItemsAsync(query, contextPath, ct))
-                {
-                    allItems.Add(item);
-                }
-            }
-            catch
-            {
-                // Skip providers that fail
-            }
-        }
+        // Request-response: AutocompleteRequest expects exactly one AutocompleteResponse.
+        // Merge every provider's IAsyncEnumerable into one observable stream, fold into a
+        // top-N sorted snapshot via ScanTopN, and wait until all providers complete (Last)
+        // before posting the final aggregated response. No await, no Task — the observable
+        // chain drives the post when the source completes.
+        providers
+            .Select(p => p.GetItemsAsync(query, contextPath, default)
+                .ToObservableSequence()
+                .Catch(Observable.Empty<AutocompleteItem>()))
+            .Merge()
+            .ScanTopN(AutocompleteTopN, AutocompleteByPriority)
+            .LastOrDefaultAsync()
+            .Subscribe(snapshot => hub.Post(
+                new AutocompleteResponse((snapshot ?? Array.Empty<AutocompleteItem>()).ToList()),
+                o => o.ResponseFor(request)));
 
-        var response = new AutocompleteResponse(allItems);
-        hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
 }

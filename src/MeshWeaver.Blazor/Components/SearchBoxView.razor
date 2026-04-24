@@ -4,6 +4,8 @@
 @using MeshWeaver.Data
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Reactive
+@using System.Reactive.Linq
 @using System.Text.Json
 @inject NavigationManager NavigationManager
 
@@ -19,7 +21,7 @@
                           ShowBorder="true"
                           CodeEditMode="false"
                           CompletionProvider="@SearchCompletionConfig"
-                          AsyncCompletionCallback="@GetCompletionsAsync" />
+                          CompletionCallback="@GetCompletions" />
     </div>
     <button type="button" @onclick="HandleSearch"
         style="padding: 8px 16px; background: var(--accent-fill-rest, #0078d4); color: var(--foreground-on-accent-rest, white); border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; height: 38px;">
@@ -79,68 +81,62 @@
         }
     }
 
+    // Higher score = better. Sort descending by score (smallest comparator value = best).
+    private static readonly IComparer<QuerySuggestion> SuggestionByScore =
+        Comparer<QuerySuggestion>.Create((a, b) => b.Score.CompareTo(a.Score));
+
     private Task OnValueChanged(string value)
     {
         _currentValue = value;
         return Task.CompletedTask;
     }
 
-    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    /// <summary>
+    /// Returns a stream of top-N completion snapshots for <paramref name="query"/>.
+    /// Monaco subscribes once per query; the editor pushes each snapshot to the suggest
+    /// widget as it arrives — no blocking, no Task, no state held in the component.
+    /// </summary>
+    private IObservable<IReadOnlyList<CompletionItem>> GetCompletions(string query)
     {
         if (MeshQuery == null || string.IsNullOrWhiteSpace(query))
-            return [];
+            return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
 
-        try
+        if (query.StartsWith("@"))
         {
-            // Handle @ reference mode with two-row display
-            if (query.StartsWith("@"))
-            {
-                var reference = query[1..]; // Strip @ prefix
-                // Results come pre-ordered by relevance from IMeshService.AutocompleteAsync
-                // (path length first, then score, then name)
-                var suggestions = await MeshQuery.AutocompleteAsync(
-                    BoundNamespace,
-                    reference,
-                    BoundMaxSuggestions
-                ).ToArrayAsync();
+            var reference = query[1..];
+            return MeshQuery
+                .AutocompleteAsync(BoundNamespace, reference, BoundMaxSuggestions)
+                .ScanTopN(BoundMaxSuggestions, SuggestionByScore)
+                .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
+                    .Select(s => new CompletionItem
+                    {
+                        Label = s.Name ?? s.Path,
+                        InsertText = $"@{s.Path}",
+                        Path = s.Path,
+                        Description = s.NodeType ?? "",
+                        Category = "References"
+                    })
+                    .ToArray());
+        }
 
-                return suggestions.Select(s => new CompletionItem
+        var searchQuery = string.IsNullOrEmpty(BoundNamespace)
+            ? $"*{query}* scope:descendants context:search"
+            : $"namespace:{BoundNamespace} *{query}* scope:descendants context:search";
+
+        return MeshQuery
+            .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = searchQuery, Limit = BoundMaxSuggestions })
+            .Select(change => (IReadOnlyList<CompletionItem>)change.Items
+                .Select(node => new CompletionItem
                 {
-                    Label = s.Name ?? s.Path,           // Row 1: Node name
-                    InsertText = $"@{s.Path}",          // Insert with @ prefix
-                    Path = s.Path,                       // Row 2: Full path
-                    Description = s.NodeType ?? "",
-                    Category = "References"
-                }).ToArray();
-            }
-
-            // Generic search (existing behavior for non-@ queries)
-            var searchQuery = string.IsNullOrEmpty(BoundNamespace)
-                ? $"*{query}* scope:descendants context:search"
-                : $"namespace:{BoundNamespace} *{query}* scope:descendants context:search";
-
-            var request = new MeshQueryRequest
-            {
-                Query = searchQuery,
-                Limit = BoundMaxSuggestions
-            };
-
-            var results = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
-
-            return results.Select(node => new CompletionItem
-            {
-                Label = node.Name ?? node.Id,           // Row 1: Node name
-                InsertText = node.Name ?? node.Id,
-                Path = node.Path,                        // Row 2: Full path
-                Description = node.NodeType ?? "",
-                Category = node.Category ?? ""
-            }).ToArray();
-        }
-        catch
-        {
-            return [];
-        }
+                    Label = node.Name ?? node.Id,
+                    InsertText = node.Name ?? node.Id,
+                    Path = node.Path,
+                    Description = node.NodeType ?? "",
+                    Category = node.Category ?? ""
+                })
+                .ToArray());
     }
+
 
     private async Task HandleSearch()
     {

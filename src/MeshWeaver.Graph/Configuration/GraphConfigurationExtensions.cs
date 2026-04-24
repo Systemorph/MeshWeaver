@@ -1,4 +1,5 @@
-﻿using MeshWeaver.ContentCollections;
+﻿using System.Reactive.Linq;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
@@ -136,44 +137,43 @@ public static class GraphConfigurationExtensions
     /// <summary>
     /// Handles GetDataRequest for NodeTypeReference.
     /// Returns CodeConfiguration from the node's partition.
-    /// The node type is encoded in the hub address.
+    /// Sync handler — composes via <c>IObservable</c>; no <c>await</c>.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleNodeTypeRequest(
+    private static IMessageDelivery HandleNodeTypeRequest(
         IMessageHub hub,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<GetDataRequest> request)
     {
         // Only handle NodeTypeReference, let other references pass through
         if (request.Message.Reference is not NodeTypeReference)
             return request;
 
-        try
-        {
-            var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var nodeTypePath = hub.Address.ToString();
+        var codeParentPath = $"{nodeTypePath}/{CodeNodeType.SourceSubNamespace}";
 
-            // The node type path is the hub address (e.g., "type/Person")
-            var nodeTypePath = hub.Address.ToString();
-
-            // Get CodeConfiguration from child MeshNodes under the Source path
-            CodeConfiguration? codeFile = null;
-            var codeParentPath = $"{nodeTypePath}/{CodeNodeType.SourceSubNamespace}";
-            await foreach (var child in meshQuery.QueryAsync<MeshNode>($"namespace:{codeParentPath} scope:subtree").WithCancellation(ct))
+        Observable.FromAsync(async ct =>
             {
-                if (child.Content is CodeConfiguration cf)
+                CodeConfiguration? codeFile = null;
+                await foreach (var child in meshQuery
+                    .QueryAsync<MeshNode>($"namespace:{codeParentPath} scope:subtree")
+                    .WithCancellation(ct))
                 {
-                    codeFile = cf;
-                    break;
+                    if (child.Content is CodeConfiguration cf)
+                    {
+                        codeFile = cf;
+                        break;
+                    }
                 }
-            }
+                return codeFile;
+            })
+            .Subscribe(
+                codeFile => hub.Post(
+                    new GetDataResponse(codeFile, hub.Version),
+                    o => o.ResponseFor(request)),
+                ex => hub.Post(
+                    new GetDataResponse(null, 0) { Error = ex.Message },
+                    o => o.ResponseFor(request)));
 
-            hub.Post(new GetDataResponse(codeFile, hub.Version), o => o.ResponseFor(request));
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new GetDataResponse(null, 0) { Error = ex.Message },
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        return request.Processed();
     }
 }

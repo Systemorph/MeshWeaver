@@ -340,6 +340,200 @@ hub.RegisterCallback((IMessageDelivery)delivery, response =>
 return delivery.Processed();
 ```
 
+## 🚨 Node-mutating requests must run on the owning hub — forward, don't process locally
+
+`UpdateNodeRequest`, `MoveNodeRequest`, and any future per-node mutation request **must** be processed on the owning per-node hub. The owning hub holds the authoritative MeshNode in its workspace (loaded by `MeshDataSource` at init via `MeshNodeReference`); the mesh hub does not.
+
+When a request arrives at a hub that is not the owning hub (typically the mesh hub, where `IMeshService.UpdateNode` posts by default), **forward** it to the owning hub and relay the response — same shape as `UpdateThreadMessageContent` (which posts to the message's per-node address and is handled there by `HandleUpdateContent`).
+
+```csharp
+// Mesh hub's UpdateNodeRequest handler — forward to owning hub.
+private static IMessageDelivery HandleUpdateNodeRequest(
+    IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request)
+{
+    var updatedNode = request.Message.Node;
+
+    if (!hub.Address.ToString().Equals(updatedNode.Path, StringComparison.Ordinal))
+    {
+        var fwd = hub.Post(request.Message, o => o.WithTarget(new Address(updatedNode.Path)));
+        hub.RegisterCallback((IMessageDelivery)fwd, response =>
+        {
+            if (response is IMessageDelivery<UpdateNodeResponse> ur)
+                hub.Post(ur.Message, o => o.ResponseFor(request));
+            else if (response.Message is DeliveryFailure df)
+                hub.Post(UpdateNodeResponse.Fail(df.Message ?? "Forwarding failed"),
+                    o => o.ResponseFor(request));
+            return response.Processed();
+        });
+        return request.Processed();
+    }
+
+    // Own hub: read existing via the local MeshNodeReference stream and validate locally.
+    var existingNodeObs = hub.GetWorkspace().GetMeshNodeStream()
+        .Take(1).Timeout(TimeSpan.FromSeconds(15));
+    // ... validate, persist, respond inside the Subscribe callback ...
+}
+```
+
+**Why:** the mesh hub workspace doesn't carry a MeshNode collection — it has no `MeshNodeReference` reducer, no per-node validation context, no version tracking for the target. Trying to read existing state via `workspace.GetMeshNodeStream()` on the mesh hub throws `Failed to create stream`. Trying via `GetMeshNodeStream(path)` (remote subscription) hangs because no per-node hub has been activated yet for nodes the caller hasn't touched. Forwarding the request lets routing activate the owning hub on demand; that hub's `MeshDataSource` init loads the node from persistence, the gate opens, and the handler runs locally with `GetMeshNodeStream()` (own).
+
+The 2026-04-24 PlanStorage / MeshNodeAuditing test failures all traced to the same bug: the mesh hub's UpdateNodeRequest handler was trying to read existing state locally. The fix is to forward to the owning hub. Same pattern applies to `MoveNodeRequest` (forward to source hub).
+
+## 🚨 Blazor / GUI rule — *no `await` ever, no `Task.FromResult`, stay in observables*
+
+**Never** `await` a mesh operation in a Blazor component lifecycle method, click handler, autocomplete callback, or anywhere else. This is non-negotiable: every `await meshService.QueryAsync(...)`, `await meshService.UpdateNode(...)`, `await Hub.AwaitResponse(...)` in GUI code is a deadlock waiting to happen, and `Task.FromResult(snapshot)` is no better — it freezes the snapshot at the call moment and ignores live updates.
+
+The pattern is: **maintain a state list (or scalar) outside the observable; subscribe to the mesh observable; when the observable emits, fold the new items into your state list (sorted/dedup as required) and call `StateHasChanged`**.
+
+```csharp
+public partial class MyView : ComponentBase, IDisposable
+{
+    // Maintained list — kept sorted by score / Path / whatever the view requires.
+    private readonly List<Suggestion> _suggestions = new();
+    private IDisposable? _sub;
+    private string _query = "";
+
+    private void RefreshSuggestions(string query)
+    {
+        if (query == _query) return;
+        _query = query;
+        _sub?.Dispose();
+        _suggestions.Clear();
+
+        // ObserveQuery — the live stream of result-set changes for this query.
+        // Initial / Reset → replace; Added / Updated → upsert; Removed → drop.
+        _sub = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Subscribe(change =>
+            {
+                ApplyChange(change);                  // updates _suggestions IN PLACE
+                _suggestions.Sort(BestMatchComparer); // keep the list sorted (e.g. by score)
+                InvokeAsync(StateHasChanged);
+            });
+    }
+
+    public void Dispose() => _sub?.Dispose();
+}
+```
+
+The view binds to `_suggestions` directly — no callback that returns `Task<T[]>`. Where a third-party control (FluentUI Autocomplete, etc.) requires a `Task<T[]>` callback, bind to a property/list instead of using the callback; the observable subscription pushes updates into the bound list and `StateHasChanged` triggers re-render.
+
+Specifically forbidden in GUI code (and the substitution to use):
+
+| ❌ Wrong | ✅ Right |
+|---|---|
+| `var x = await mesh.QueryAsync(...).ToListAsync()` | `mesh.ObserveQuery<T>(req).Subscribe(c => ApplyChange(c))` |
+| `await Hub.AwaitResponse<R>(req, ...)` | `Hub.Post(req, ...); Hub.RegisterCallback(delivery, r => { ... })` |
+| `var n = await mesh.GetMeshNodeStream(p).Take(1).ToTask()` | `mesh.GetMeshNodeStream(p).Subscribe(n => UpdateState(n))` |
+| `return Task.FromResult(_suggestions.ToArray())` | bind directly to `_suggestions`; let the `Subscribe` push updates |
+| `_ = LoadAsync(); await ...` | sync method that fires `Subscribe` |
+
+Lifecycle wiring:
+- `OnParametersSet` (sync) — kick off `Refresh*()`; never `OnParametersSetAsync` for mesh reads.
+- Click handlers — `() => { svc.Op().Subscribe(r => UpdateState(r)); }`; never `async ctx => await svc.Op()`.
+- `Dispose` — clean up all `IDisposable` subscriptions to stop emissions after the component unmounts.
+
+## 🚨 Copy / recursive subtree operations — `ObserveQuery` + `.Select(CreateNode)`
+
+Recursive node operations (Copy, and Move which is Copy + Delete) MUST stay in the observable world end to end. **Never** read source content via `GetRemoteStream<MeshNode, MeshNodeReference>` for this — the remote stream subscribes to the owning per-node hub, which may not be activated yet for newly-created nodes, and the subscription waits indefinitely. **Never** use `await meshService.QueryAsync(...)` either — drop into the observable world via `ObserveQuery`.
+
+The canonical shape for Copy:
+
+```csharp
+meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+        $"path:{sourcePath} scope:subtree"))
+    .Take(1)                                       // initial result set: source + descendants + satellites
+    .Timeout(TimeSpan.FromSeconds(15))
+    .SelectMany(change =>
+    {
+        var nodes = change.Items;
+        var sourceNode = nodes.FirstOrDefault(n => n.Path == sourcePath);
+        if (sourceNode is null)
+        {
+            hub.Post(CopyNodeResponse.Fail("Source not found", NodeCopyRejectionReason.SourceNotFound),
+                o => o.ResponseFor(request));
+            return Observable.Empty<MeshNode>();
+        }
+
+        var others = nodes.Where(/* IncludeDescendants / IncludeSatellites filter */);
+
+        return meshService.CreateNode(RetargetNode(sourceNode, sourcePath, targetPath))
+            .SelectMany(rootCreated => others.ToObservable()
+                .Select(n => RetargetNode(n, sourcePath, targetPath))
+                .SelectMany(retargeted => meshService.CreateNode(retargeted))   // ← Select(create)
+                .ToList()
+                .Select(_ => rootCreated));
+    })
+    .Subscribe(
+        rootCreated => hub.Post(CopyNodeResponse.Ok(rootCreated), o => o.ResponseFor(request)),
+        ex          => hub.Post(CopyNodeResponse.Fail(ex.Message),  o => o.ResponseFor(request)));
+```
+
+Move uses Copy then Delete — the Delete only fires after Copy completes (SelectMany short-circuits on Copy error):
+
+```csharp
+meshService.CopyNode(source, target, includeDescendants: true, includeSatellites: true)
+    .SelectMany(copied => meshService.DeleteNode(source).Select(_ => copied))
+    .Subscribe(
+        movedNode => hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request)),
+        ex        => hub.Post(MoveNodeResponse.Fail(ex.Message), o => o.ResponseFor(request)));
+```
+
+**Why:**
+- `ObserveQuery` is observable from the start — no `await`, no `Observable.FromAsync` bridge over `QueryAsync`.
+- The initial emission contains the full subtree snapshot we need to copy.
+- `meshService.CreateNode(...).SelectMany(...)` chain ensures each child create completes before we move on. `.ToList()` aggregates all child completions before propagating success.
+- `Move = Copy + Delete` keeps Move's handler trivial (no per-node logic, no subtree iteration); the Copy handler owns the recursion.
+- `IncludeSatellites`/`IncludeDescendants` flags on `CopyNodeRequest` let callers opt in. By default Copy includes descendants but not satellites — Move sets both `true` to hard-move activity logs, comments, etc.
+
+## 🚨 Updating a remote MeshNode — `GetRemoteStream` + `stream.Update`
+
+For mutations to a `MeshNode` that lives at **another hub's address**, the only correct primitive is the remote stream's `.Update(...)`:
+
+```csharp
+// ✅ Right — push the patch to the owning hub via the synchronization stream.
+var remote = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+    new Address(targetPath), new MeshNodeReference());
+remote.Update(current => current with { Name = "Renamed", LastModifiedBy = me });
+```
+
+`stream.Update` ships the patch through the synchronization protocol; the owning hub validates it, runs its node validators, writes to persistence, and republishes to all subscribers. The caller never touches `IMeshStorage`, never calls `GetNodeAsync`, never calls `SaveNodeAsync`.
+
+### Persistence belongs in MeshDataSource init — nowhere else
+
+`IMeshStorage` is loaded **once**, during `MeshDataSource` initialization, to populate the workspace. After init, the workspace is the source of truth. Every read/write goes through reactive streams. **No handler ever calls `persistence.GetNodeAsync` or `persistence.SaveNode`** — not even as a fallback, not even as a one-liner.
+
+The wrong patterns (every line is a deadlock or a stale-content bug):
+
+```csharp
+// ❌ Reading existing state via persistence in a handler.
+var existing = await persistence.GetNodeAsync(path, ct);
+
+// ❌ "Fallback" to persistence when the workspace stream is empty.
+//    The workspace being empty means the data isn't loaded — the fix is to
+//    fix MeshDataSource init, not to bypass the workspace.
+var obs = workspace.GetStream<MeshNode>() != null
+    ? workspace.GetMeshNodeStream(path)
+    : Observable.FromAsync(ct => persistence.GetNodeAsync(path, ct));
+
+// ❌ Writing to a remote node by reaching into persistence directly.
+//    Bypasses the owning hub's validators, version tracking, change feed,
+//    and post-write hooks.
+await persistence.SaveNode(node);
+```
+
+The right patterns:
+
+| Operation | Primitive |
+|---|---|
+| Read own MeshNode | `workspace.GetMeshNodeStream()` |
+| Read MeshNode at any path | `workspace.GetMeshNodeStream(path)` (auto-dispatches own / local collection / remote) |
+| Update remote MeshNode | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference()).Update(current => updated)` |
+| Update own MeshNode (in handler) | `workspace.UpdateMeshNode(node => updated)` |
+| Create node | `meshService.CreateNode(node).Subscribe(...)` |
+| Delete node | `meshService.DeleteNode(path).Subscribe(...)` |
+
+Symptom of getting this wrong: persistence reads from a non-owning hub return stale content (workspace had a fresh value the persistence layer hadn't flushed yet); persistence writes from a non-owning hub silently skip validators, fail to update version history, and let other subscribers read stale workspace state.
+
 ## Workspace Updates (Non-Blocking)
 
 `workspace.UpdateMeshNode` applies an update function to the current node state. It posts the update to the data stream — no blocking, no subscription:

@@ -1,6 +1,9 @@
 @page "/create"
+@using System.Reactive.Linq
 @using System.Text.RegularExpressions
 @using MeshWeaver.Blazor.Portal.Chat
+@using MeshWeaver.Data
+@using MeshWeaver.Graph
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Mesh.Security
@@ -264,7 +267,11 @@
     {
         try
         {
-            var node = await MeshService.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+            var node = await Hub.GetWorkspace().GetMeshNodeStream(path)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+                .FirstOrDefaultAsync();
             if (node != null)
                 setter(new QuerySuggestion(node.Path, node.Name ?? node.Id, node.NodeType, 1.0, node.Icon));
             else

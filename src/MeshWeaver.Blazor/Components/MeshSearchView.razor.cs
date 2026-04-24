@@ -9,6 +9,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -219,7 +220,7 @@ public partial class MeshSearchView : IDisposable
             _currentValue = BoundVisibleQuery;
             if (!IsPrecomputedMode)
             {
-                _ = LoadResultsAsync();
+                LoadResults();
             }
         }
 
@@ -228,7 +229,7 @@ public partial class MeshSearchView : IDisposable
             _lastBoundHiddenQuery = BoundHiddenQuery;
             if (!IsPrecomputedMode)
             {
-                _ = LoadResultsAsync();
+                LoadResults();
             }
         }
 
@@ -275,7 +276,7 @@ public partial class MeshSearchView : IDisposable
             }
 
             // Client-side query mode (one-shot)
-            await LoadResultsAsync();
+            LoadResults();
             StateHasChanged();
         }
     }
@@ -285,7 +286,7 @@ public partial class MeshSearchView : IDisposable
         _currentValue = value;
         if (BoundLiveSearch && !IsPrecomputedMode)
         {
-            _ = LoadResultsAsync();
+            LoadResults();
         }
         return Task.CompletedTask;
     }
@@ -299,7 +300,7 @@ public partial class MeshSearchView : IDisposable
 
         if (!IsPrecomputedMode)
         {
-            await LoadResultsAsync();
+            LoadResults();
         }
 
         // Update URL if we're on the search page so the URL is shareable
@@ -324,43 +325,59 @@ public partial class MeshSearchView : IDisposable
         Navigation.NavigateTo(url, replace: true);
     }
 
-    private async Task LoadResultsAsync()
+    private void LoadResults()
     {
         _isLoading = true;
         StateHasChanged();
 
-        try
-        {
-            var query = BuildFullQuery();
-            _nodes = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+        var query = BuildFullQuery();
+        // Subscribe to ObserveQuery so the result set stays live as data changes.
+        // _reactiveSubscription holds the active subscription (set up in SubscribeToReactiveUpdates).
+        _reactiveSubscription?.Dispose();
+        _reactiveSubscription = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Subscribe(
+                change =>
+                {
+                    var current = (IReadOnlyList<MeshNode>)_nodes;
+                    var merged = change.ChangeType switch
+                    {
+                        QueryChangeType.Initial or QueryChangeType.Reset => change.Items,
+                        QueryChangeType.Added => current.Concat(change.Items).ToList(),
+                        QueryChangeType.Updated => current
+                            .Select(n => change.Items.FirstOrDefault(c => c.Path == n.Path) ?? n)
+                            .ToList(),
+                        QueryChangeType.Removed => current
+                            .Where(n => !change.Items.Any(r => r.Path == n.Path))
+                            .ToList(),
+                        _ => current
+                    };
 
-            // Exclude base path node if configured
-            if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
-            {
-                var basePath = BoundNamespace.Trim('/');
-                _nodes = _nodes.Where(n => n.Path != basePath).ToList();
-            }
+                    if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
+                    {
+                        var basePath = BoundNamespace.Trim('/');
+                        merged = merged.Where(n => n.Path != basePath).ToList();
+                    }
 
-            // Compute groups locally
-            if (ViewModel != null)
-            {
-                _computedGroups = ProcessResults(_nodes);
-                InitializeCollapsedState(_computedGroups);
-            }
-        }
-        catch (Exception ex)
-        {
-            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("MeshWeaver.MeshSearchView");
-            logger?.LogWarning(ex, "MeshSearchView query failed: {Query}", BuildFullQuery());
-            _nodes = new List<MeshNode>();
-            _computedGroups = null;
-        }
-        finally
-        {
-            _isLoading = false;
-            StateHasChanged();
-        }
+                    _nodes = merged.ToList();
+
+                    if (ViewModel != null)
+                    {
+                        _computedGroups = ProcessResults(_nodes);
+                        InitializeCollapsedState(_computedGroups);
+                    }
+                    _isLoading = false;
+                    InvokeAsync(StateHasChanged);
+                },
+                ex =>
+                {
+                    var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.MeshSearchView");
+                    logger?.LogWarning(ex, "MeshSearchView query failed: {Query}", BuildFullQuery());
+                    _nodes = new List<MeshNode>();
+                    _computedGroups = null;
+                    _isLoading = false;
+                    InvokeAsync(StateHasChanged);
+                });
     }
 
     private void SubscribeToReactiveUpdates()
@@ -625,59 +642,62 @@ public partial class MeshSearchView : IDisposable
         return string.Join(" ", parts);
     }
 
-    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    private const int CompletionLimit = 20;
+
+    // Higher score = better. Sort descending.
+    private static readonly IComparer<QuerySuggestion> CompletionByScore =
+        Comparer<QuerySuggestion>.Create((a, b) => b.Score.CompareTo(a.Score));
+
+    /// <summary>
+    /// Returns a stream of top-N completion snapshots for <paramref name="query"/>.
+    /// Monaco subscribes per query and pushes each fresh snapshot to the suggest widget
+    /// as it arrives. No Task, no await, no component-level state.
+    /// </summary>
+    private IObservable<IReadOnlyList<CompletionItem>> GetCompletions(string query)
     {
         if (string.IsNullOrWhiteSpace(query))
-            return [];
+            return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
 
-        try
+        // Parse the query to split into basePath and prefix for AutocompleteAsync
+        var text = query.TrimStart('@');
+        string basePath;
+        string namePrefix;
+
+        if (text.EndsWith("/"))
         {
-            // Parse the query to split into basePath and prefix for AutocompleteAsync
-            var text = query.TrimStart('@');
-            string basePath;
-            string namePrefix;
-
-            if (text.EndsWith("/"))
+            basePath = text.TrimEnd('/');
+            namePrefix = "";
+        }
+        else
+        {
+            var lastSlash = text.LastIndexOf('/');
+            if (lastSlash >= 0)
             {
-                // User typed @path/ — get children of that path
-                basePath = text.TrimEnd('/');
-                namePrefix = "";
+                basePath = text[..lastSlash];
+                namePrefix = text[(lastSlash + 1)..];
             }
             else
             {
-                // Split into path and name parts: "ACME/Mark" → basePath="ACME", namePrefix="Mark"
-                var lastSlash = text.LastIndexOf('/');
-                if (lastSlash >= 0)
-                {
-                    basePath = text[..lastSlash];
-                    namePrefix = text[(lastSlash + 1)..];
-                }
-                else
-                {
-                    basePath = BoundNamespace ?? "";
-                    namePrefix = text;
-                }
+                basePath = BoundNamespace ?? "";
+                namePrefix = text;
             }
-
-            var suggestions = await MeshQuery
-                .AutocompleteAsync(basePath, namePrefix, AutocompleteMode.RelevanceFirst, 20, BoundNamespace)
-                .ToArrayAsync();
-
-            return suggestions.Select((s, i) => new CompletionItem
-            {
-                Label = s.Name,
-                InsertText = $"@{s.Path}/",
-                Description = s.NodeType ?? "",
-                Path = s.Path,
-                Category = s.NodeType ?? "Nodes",
-                IconUrl = s.Icon,
-                SortKey = (99999 - Math.Clamp((int)s.Score, 0, 99999)).ToString("D5")
-            }).ToArray();
         }
-        catch
-        {
-            return [];
-        }
+
+        return MeshQuery
+            .AutocompleteAsync(basePath, namePrefix, AutocompleteMode.RelevanceFirst, CompletionLimit, BoundNamespace)
+            .ScanTopN(CompletionLimit, CompletionByScore)
+            .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
+                .Select(s => new CompletionItem
+                {
+                    Label = s.Name,
+                    InsertText = $"@{s.Path}/",
+                    Description = s.NodeType ?? "",
+                    Path = s.Path,
+                    Category = s.NodeType ?? "Nodes",
+                    IconUrl = s.Icon,
+                    SortKey = (99999 - Math.Clamp((int)s.Score, 0, 99999)).ToString("D5")
+                })
+                .ToArray());
     }
 
     private IReadOnlyList<SearchResultGroup> GetGroups()
@@ -822,7 +842,7 @@ public partial class MeshSearchView : IDisposable
     {
         _overriddenHiddenQuery = _editableHiddenQuery;
         _showSearchOptions = false;
-        await LoadResultsAsync();
+        LoadResults();
         UpdateSearchUrl();
     }
 

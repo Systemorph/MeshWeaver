@@ -1,5 +1,8 @@
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -299,7 +302,11 @@ internal class NavigationService : INavigationService
         try
         {
             var address = (Address)resolution.Prefix;
-            var node = await _meshQuery.QueryAsync<MeshNode>($"path:{address}").FirstOrDefaultAsync();
+            var node = await _hub.GetWorkspace().GetMeshNodeStream(resolution.Prefix)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+                .FirstOrDefaultAsync();
             if (node == null)
                 return null;
 

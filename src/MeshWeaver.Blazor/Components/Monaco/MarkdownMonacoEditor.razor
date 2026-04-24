@@ -1,5 +1,8 @@
+@using System.Reactive.Linq
+@using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
+@using MeshWeaver.Reactive
 @inject IMeshService? MeshQuery
 @inject IMessageHub Hub
 
@@ -16,7 +19,7 @@
                   ShowBorder="@ShowBorder"
                   CodeEditMode="@CodeEditMode"
                   CompletionProvider="@DefaultCompletionProvider"
-                  AsyncCompletionCallback="@GetCompletionsAsync" />
+                  CompletionCallback="@GetCompletions" />
 
 @code {
     private MonacoEditorView? editorRef;
@@ -55,7 +58,7 @@
     /// Optional custom completion callback. If not provided, uses default UCR autocomplete.
     /// </summary>
     [Parameter]
-    public Func<string, Task<CompletionItem[]>>? CustomCompletionCallback { get; set; }
+    public Func<string, IObservable<IReadOnlyList<CompletionItem>>>? CustomCompletionCallback { get; set; }
 
     private static readonly CompletionProviderConfig DefaultCompletionProvider = new()
     {
@@ -63,101 +66,64 @@
         Items = []
     };
 
-    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    private const int CompletionLimit = 20;
+
+    // Higher score = better. Sort descending.
+    private static readonly IComparer<QuerySuggestion> CompletionByScore =
+        Comparer<QuerySuggestion>.Create((a, b) => b.Score.CompareTo(a.Score));
+
+    /// <summary>
+    /// Streams top-N UCR completion snapshots for the current query. Monaco subscribes
+    /// once per query and pushes each fresh snapshot into the suggest widget as it
+    /// arrives. No Task, no await.
+    /// </summary>
+    private IObservable<IReadOnlyList<CompletionItem>> GetCompletions(string query)
     {
-        // Use custom callback if provided
         if (CustomCompletionCallback != null)
-        {
-            return await CustomCompletionCallback(query);
-        }
+            return CustomCompletionCallback(query);
 
-        // Default UCR autocomplete using IMeshService
         if (MeshQuery == null || string.IsNullOrWhiteSpace(query))
-            return [];
+            return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
 
-        try
+        if (query.StartsWith("@"))
         {
-            if (query.StartsWith("@"))
-            {
-                var reference = query[1..];
-                return await GetReferenceCompletionsAsync(reference);
-            }
-
-            return await SearchNodesAsync(query);
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
-    private async Task<CompletionItem[]> GetReferenceCompletionsAsync(string reference)
-    {
-        if (string.IsNullOrWhiteSpace(reference))
-        {
-            return await GetTopLevelNodesAsync();
+            var reference = query[1..];
+            if (string.IsNullOrWhiteSpace(reference))
+                return BuildPathCompletions("", "", "Addresses");
+            if (reference.EndsWith("/"))
+                return BuildPathCompletions(reference.TrimEnd('/'), "", "");
+            return BuildPathCompletions("", reference, "Addresses");
         }
 
-        if (reference.EndsWith("/"))
-        {
-            var basePath = reference.TrimEnd('/');
-            return await GetChildNodesAsync(basePath);
-        }
-
-        return await GetNodesMatchingPrefixAsync(reference);
+        return MeshQuery
+            .AutocompleteAsync("", query, CompletionLimit)
+            .ScanTopN(CompletionLimit, CompletionByScore)
+            .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
+                .Select(s => new CompletionItem
+                {
+                    Label = s.Path,
+                    InsertText = s.Path,
+                    Description = s.NodeType ?? "",
+                    Detail = s.Name,
+                    Category = ""
+                })
+                .ToArray());
     }
 
-    private async Task<CompletionItem[]> GetTopLevelNodesAsync()
-    {
-        var suggestions = await MeshQuery!.AutocompleteAsync("", "", 20).ToArrayAsync();
-        return suggestions.Select(s => new CompletionItem
-        {
-            Label = $"{s.Path}/",
-            InsertText = $"@{s.Path}/",
-            Description = s.NodeType ?? s.Name,
-            Detail = s.Name,
-            Category = "Addresses"
-        }).ToArray();
-    }
-
-    private async Task<CompletionItem[]> GetChildNodesAsync(string basePath)
-    {
-        var suggestions = await MeshQuery!.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
-        return suggestions.Select(s => new CompletionItem
-        {
-            Label = $"{s.Path}/",
-            InsertText = $"@{s.Path}/",
-            Description = s.NodeType ?? "",
-            Detail = s.Name,
-            Category = ""
-        }).ToArray();
-    }
-
-    private async Task<CompletionItem[]> GetNodesMatchingPrefixAsync(string prefix)
-    {
-        var suggestions = await MeshQuery!.AutocompleteAsync("", prefix, 20).ToArrayAsync();
-        return suggestions.Select(s => new CompletionItem
-        {
-            Label = $"{s.Path}/",
-            InsertText = $"@{s.Path}/",
-            Description = s.NodeType ?? s.Name,
-            Detail = s.Name,
-            Category = "Addresses"
-        }).ToArray();
-    }
-
-    private async Task<CompletionItem[]> SearchNodesAsync(string query)
-    {
-        var suggestions = await MeshQuery!.AutocompleteAsync("", query, 20).ToArrayAsync();
-        return suggestions.Select(s => new CompletionItem
-        {
-            Label = s.Path,
-            InsertText = s.Path,
-            Description = s.NodeType ?? "",
-            Detail = s.Name,
-            Category = ""
-        }).ToArray();
-    }
+    private IObservable<IReadOnlyList<CompletionItem>> BuildPathCompletions(string basePath, string prefix, string category)
+        => MeshQuery!
+            .AutocompleteAsync(basePath, prefix, CompletionLimit)
+            .ScanTopN(CompletionLimit, CompletionByScore)
+            .Select(snapshot => (IReadOnlyList<CompletionItem>)snapshot
+                .Select(s => new CompletionItem
+                {
+                    Label = $"{s.Path}/",
+                    InsertText = $"@{s.Path}/",
+                    Description = s.NodeType ?? (string.IsNullOrEmpty(category) ? "" : s.Name),
+                    Detail = s.Name,
+                    Category = category
+                })
+                .ToArray());
 
     // Expose methods from the underlying editor
     public async ValueTask<string> GetValueAsync()

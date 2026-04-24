@@ -1,3 +1,5 @@
+@using System.Reactive.Disposables
+@using System.Reactive.Linq
 @using MeshWeaver.Blazor
 @using MeshWeaver.Blazor.Components.Monaco
 @using MeshWeaver.Data
@@ -37,7 +39,7 @@
                               ShowBorder="true"
                               CodeEditMode="true"
                               CompletionProvider="@GetCompletionConfig()"
-                              AsyncCompletionCallback="@GetCompletionsAsync"
+                              CompletionCallback="@GetCompletions"
                               ValueChanged="@OnValueChanged"
                               OnEditorReady="@OnEditorReady"
                               OnCommentRequested="@OnCommentFromEditor" />
@@ -270,38 +272,50 @@
         };
     }
 
-    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    /// <summary>
+    /// Streams completions through the local hub. Posts a single AutocompleteRequest;
+    /// the handler in AgentsApplicationExtensions ScanTopN-folds provider results and
+    /// posts a fresh AutocompleteResponse for each new snapshot. Each response is
+    /// projected into a top-N CompletionItem array and pushed downstream so Monaco
+    /// streams the suggest widget as items arrive.
+    /// </summary>
+    private IObservable<IReadOnlyList<CompletionItem>> GetCompletions(string query)
     {
         if (Hub == null || string.IsNullOrWhiteSpace(query))
-            return [];
+            return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
 
-        try
+        return Observable.Create<IReadOnlyList<CompletionItem>>(observer =>
         {
-            var request = new AutocompleteRequest(query, BoundNodePath);
-            var response = await Hub.AwaitResponse(
-                request,
-                o => o.WithTarget(Hub.Address),
-                default);
-
-            if (response.Message is not AutocompleteResponse autocompleteResponse)
-                return [];
-
-            return autocompleteResponse.Items
-                .Select(item => new CompletionItem
+            try
+            {
+                var request = new AutocompleteRequest(query, BoundNodePath);
+                var delivery = Hub.Post(request, o => o.WithTarget(Hub.Address));
+                Hub.RegisterCallback(delivery, response =>
                 {
-                    Label = item.Label,
-                    InsertText = item.InsertText,
-                    Description = item.Description,
-                    Category = item.Category,
-                    Kind = MapKind(item.Kind)
-                })
-                .ToArray();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to get autocomplete suggestions for query: {Query}", query);
-            return [];
-        }
+                    if (response.Message is AutocompleteResponse ar)
+                    {
+                        observer.OnNext(ar.Items
+                            .Select(item => new CompletionItem
+                            {
+                                Label = item.Label,
+                                InsertText = item.InsertText,
+                                Description = item.Description,
+                                Category = item.Category,
+                                Kind = MapKind(item.Kind)
+                            })
+                            .ToArray());
+                    }
+                    return response;
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to get autocomplete suggestions for query: {Query}", query);
+                observer.OnNext(Array.Empty<CompletionItem>());
+                observer.OnCompleted();
+            }
+            return Disposable.Empty;
+        });
     }
 
     private static CompletionItemKind MapKind(AutocompleteKind kind) => kind switch
@@ -423,7 +437,8 @@
             // preserves Name/Icon/Description and avoids the key-mapping failure that
             // DataChangeRequest + partial MeshNode triggers on the hosting hub.
             var workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
-            workspace.UpdateMeshNode(
+            MeshWeaver.Mesh.MeshNodeStreamExtensions.UpdateMeshNode(
+                workspace,
                 node => node with { Content = new MarkdownContent { Content = content } },
                 new Address(BoundAutoSaveAddress),
                 BoundNodePath);

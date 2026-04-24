@@ -11,6 +11,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -794,113 +795,38 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         };
     }
 
-    private CancellationTokenSource? _completionCts;
+    private const int CompletionTopN = 50;
+
+    // Sort by SortKey ascending — AutocompleteToCompletion encodes priority into a
+    // numeric prefix that puts higher-priority items first.
+    private static readonly IComparer<CompletionItem> CompletionBySortKey =
+        Comparer<CompletionItem>.Create((a, b) =>
+            string.Compare(a.SortKey ?? "", b.SortKey ?? "", StringComparison.Ordinal));
 
     /// <summary>
-    /// Main completion handler — delegates to IChatCompletionOrchestrator.
-    /// Returns the first batch immediately; streams remaining batches in the background
-    /// and pushes progressive updates to the Monaco widget.
+    /// Streams top-N completion snapshots from <see cref="IChatCompletionOrchestrator"/>.
+    /// The orchestrator yields batches as providers finish (fast local first, remote later);
+    /// each item flows through <see cref="ScanTopN"/>, which folds it into a sorted
+    /// snapshot. Monaco subscribes once per query and pushes each snapshot to the suggest
+    /// widget — no first-batch-then-collect-remaining bookkeeping, no Task, no await.
     /// </summary>
-    private async Task<CompletionItem[]> GetCompletionsAsync(string query)
+    private IObservable<IReadOnlyList<CompletionItem>> GetCompletions(string query)
     {
         if (string.IsNullOrWhiteSpace(query) || !query.StartsWith("@"))
-            return [];
+            return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
 
-        // Cancel any previous streaming request
-        _completionCts?.Cancel();
-        _completionCts = new CancellationTokenSource();
-        var ct = _completionCts.Token;
+        var currentAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
 
-        try
-        {
-            var currentAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
-
-            var allItems = new List<CompletionItem>();
-            var isFirst = true;
-
-            await foreach (var batch in CompletionOrchestrator.GetCompletionsAsync(query, currentAddress, ct))
+        return CompletionOrchestrator.GetCompletionsAsync(query, currentAddress)
+            .ToObservableSequence()
+            .SelectMany(batch => batch.Items
+                .Select(item => AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority)))
+            .ScanTopN(CompletionTopN, CompletionBySortKey)
+            .Catch<IReadOnlyList<CompletionItem>, Exception>(ex =>
             {
-                foreach (var item in batch.Items)
-                {
-                    allItems.Add(AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority));
-                }
-
-                if (isFirst)
-                {
-                    isFirst = false;
-                    // Return first batch immediately; collect remaining in background
-                    var firstResults = allItems.ToArray();
-                    _ = CollectRemainingBatchesAsync(query, currentAddress, allItems, ct);
-                    return firstResults;
-                }
-            }
-
-            return allItems.ToArray();
-        }
-        catch (OperationCanceledException)
-        {
-            return [];
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Error getting completions for query: {Query}", query);
-            return [];
-        }
-    }
-
-    /// <summary>
-    /// Continues collecting batches from the orchestrator after the first batch was returned.
-    /// Pushes progressive updates to the Monaco widget via PushCompletionUpdateAsync.
-    /// </summary>
-    private async Task CollectRemainingBatchesAsync(
-        string query,
-        string currentAddress,
-        List<CompletionItem> allItems,
-        CancellationToken ct)
-    {
-        try
-        {
-            // Start a new streaming call to get all batches (including any we already have).
-            // Deduplication below ensures we only push genuinely new items.
-            await foreach (var batch in CompletionOrchestrator.GetCompletionsAsync(query, currentAddress, ct))
-            {
-                var hadNew = false;
-                foreach (var item in batch.Items)
-                {
-                    var completionItem = AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority);
-                    // Deduplicate by InsertText
-                    if (!allItems.Any(existing =>
-                        string.Equals(existing.InsertText, completionItem.InsertText, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        allItems.Add(completionItem);
-                        hadNew = true;
-                    }
-                }
-
-                // Push updated list to Monaco if we got new items. Fire-and-forget by design —
-                // this runs inside the streaming completion loop and must not block; errors are
-                // non-fatal (debug-logged). Discard silences CS4014.
-                if (hadNew && monacoEditor != null)
-                {
-                    _ = InvokeAsync(async () =>
-                    {
-                        try
-                        {
-                            await monacoEditor.PushCompletionUpdateAsync(allItems.ToArray());
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogDebug(ex, "[ThreadChat] Failed to push completion update");
-                        }
-                    });
-                }
-            }
-        }
-        catch (OperationCanceledException) { /* expected when user types more */ }
-        catch (Exception ex)
-        {
-            Logger.LogDebug(ex, "[ThreadChat] Background completion collection failed");
-        }
+                Logger.LogError(ex, "Error streaming completions for query: {Query}", query);
+                return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
+            });
     }
 
     private static CompletionItem AutocompleteToCompletion(

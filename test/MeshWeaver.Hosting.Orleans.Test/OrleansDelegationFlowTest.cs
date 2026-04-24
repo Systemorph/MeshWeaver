@@ -310,7 +310,7 @@ public class DelegationSiloConfigurator : ISiloConfigurator, IHostConfigurator
         {
             AccessObject = "Public",
             DisplayName = "Public",
-            Roles = [new RoleAssignment { Role = "Editor" }]
+            Roles = [new RoleAssignment { Role = "Admin" }]
         };
         return
         [

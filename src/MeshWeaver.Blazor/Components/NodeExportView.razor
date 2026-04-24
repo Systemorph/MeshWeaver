@@ -1,3 +1,5 @@
+@using System.Reactive.Linq
+@using System.Reactive.Threading.Tasks
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using Microsoft.Extensions.DependencyInjection
@@ -134,7 +136,9 @@
                 ? ExcludedSatellites
                 : null;
 
-            var result = await exportService.ExportToDirectoryAsync(SourcePath, tempDir, excluded);
+            var result = await exportService.ExportToDirectory(SourcePath, tempDir, excluded)
+                .Take(1)
+                .ToTask();
 
             if (!result.Success)
             {

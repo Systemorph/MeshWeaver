@@ -1,4 +1,5 @@
-﻿using MeshWeaver.AI.Plugins;
+﻿using System.Reactive.Linq;
+using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -40,8 +41,8 @@ public static class AIExtensions
         }
     }
 
-    private static async Task<IMessageDelivery> HandleSaveContent(
-        IMessageHub hub, IMessageDelivery<Plugins.SaveContentRequest> delivery, CancellationToken ct)
+    private static IMessageDelivery HandleSaveContent(
+        IMessageHub hub, IMessageDelivery<Plugins.SaveContentRequest> delivery)
     {
         var request = delivery.Message;
         var fileProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
@@ -53,19 +54,15 @@ public static class AIExtensions
             return delivery.Processed();
         }
 
-        try
-        {
-            var stream = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(request.TextContent));
-            var result = await fileProvider.SaveFileContentAsync(request.CollectionName, request.FilePath, stream, ct);
-
-            hub.Post(new Plugins.SaveContentResponse { Success = result.Success, Error = result.Error },
-                o => o.ResponseFor(delivery));
-        }
-        catch (Exception ex)
-        {
-            hub.Post(new Plugins.SaveContentResponse { Success = false, Error = ex.Message },
-                o => o.ResponseFor(delivery));
-        }
+        var stream = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(request.TextContent));
+        fileProvider.SaveFileContent(request.CollectionName, request.FilePath, stream)
+            .Subscribe(
+                result => hub.Post(
+                    new Plugins.SaveContentResponse { Success = result.Success, Error = result.Error },
+                    o => o.ResponseFor(delivery)),
+                ex => hub.Post(
+                    new Plugins.SaveContentResponse { Success = false, Error = ex.Message },
+                    o => o.ResponseFor(delivery)));
 
         return delivery.Processed();
     }

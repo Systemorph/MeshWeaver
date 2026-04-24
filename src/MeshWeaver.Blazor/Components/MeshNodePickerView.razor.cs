@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -159,17 +160,22 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                 var userText = _searchText.Trim();
                 var tasks = queries.Select(async baseQuery =>
                 {
-                    // When Items are set, don't append user text — we filter in-memory
                     var fullQuery = HasItems || string.IsNullOrEmpty(userText)
                         ? baseQuery
                         : $"{baseQuery} {userText}";
                     try
                     {
-                        return await MeshQuery.QueryAsync<MeshNode>(fullQuery, ct: cts.Token).ToListAsync(cts.Token);
+                        // ObserveQuery initial-set snapshot — autocomplete is per-keystroke,
+                        // no live updates needed.
+                        return await MeshQuery
+                            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
+                            .Take(1)
+                            .Select(c => (IReadOnlyList<MeshNode>)c.Items)
+                            .ToTask(cts.Token);
                     }
                     catch
                     {
-                        return new List<MeshNode>();
+                        return (IReadOnlyList<MeshNode>)new List<MeshNode>();
                     }
                 });
 

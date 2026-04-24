@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Security;
@@ -50,11 +52,11 @@ public static class ApiTokenNodeType
     /// <summary>
     /// Validates an API token. Routes to ApiToken/{hashPrefix}, follows index to User/{userId}/_Api/{hash}.
     /// Results are cached for 5 minutes.
+    /// Sync handler — composes via <c>IObservable</c> + <c>Subscribe</c>; no <c>await</c>.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleValidateToken(
+    private static IMessageDelivery HandleValidateToken(
         IMessageHub hub,
-        IMessageDelivery<ValidateTokenRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<ValidateTokenRequest> request)
     {
         var rawToken = request.Message.RawToken;
 
@@ -73,70 +75,84 @@ public static class ApiTokenNodeType
             return request.Processed();
         }
 
-        // Load from persistence (bypasses RLS)
-        var hubPath = hub.Address.Path;
-        var persistenceCore = hub.ServiceProvider.GetService<IStorageService>();
-        if (persistenceCore == null)
-        {
-            hub.Post(ValidateTokenResponse.Fail("Persistence not available"), o => o.ResponseFor(request));
-            return request.Processed();
-        }
-
-        var node = await persistenceCore.GetNodeAsync(hubPath, hub.JsonSerializerOptions, ct);
-        if (node == null)
-        {
-            hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
-            return request.Processed();
-        }
-
-        // Check if this is an index pointer or a legacy full token
-        var index = node.Content as ApiTokenIndex ?? ExtractApiTokenIndex(node, hub.JsonSerializerOptions);
-        ApiToken? apiToken;
-
-        if (index != null)
-        {
-            if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+        // Read own MeshNode via the workspace stream — replaces persistence.GetNodeAsync(hubPath).
+        var workspace = hub.GetWorkspace();
+        workspace.GetMeshNodeStream()
+            .Select(n => (MeshNode?)n)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .SelectMany(node =>
             {
-                hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
-                return request.Processed();
-            }
+                if (node == null)
+                {
+                    hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
+                    return Observable.Empty<Unit>();
+                }
 
-            var tokenNode = await persistenceCore.GetNodeAsync(index.TokenPath, hub.JsonSerializerOptions, ct);
-            apiToken = tokenNode?.Content as ApiToken ?? ExtractApiToken(tokenNode, hub.JsonSerializerOptions);
-        }
-        else
-        {
-            apiToken = node.Content as ApiToken ?? ExtractApiToken(node, hub.JsonSerializerOptions);
-        }
+                var index = node.Content as ApiTokenIndex ?? ExtractApiTokenIndex(node, hub.JsonSerializerOptions);
 
-        if (apiToken == null)
-        {
-            hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                IObservable<MeshNode?> tokenNodeObs;
+                if (index != null)
+                {
+                    if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
+                        return Observable.Empty<Unit>();
+                    }
 
-        if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
-        {
-            hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                    // Cross-hub read for the actual token node — workspace dispatches local vs. remote.
+                    tokenNodeObs = workspace.GetMeshNodeStream(index.TokenPath)
+                        .Select(n => (MeshNode?)n)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(10))
+                        .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+                }
+                else
+                {
+                    tokenNodeObs = Observable.Return<MeshNode?>(node);
+                }
 
-        if (apiToken.IsRevoked)
-        {
-            hub.Post(ValidateTokenResponse.Fail("Token revoked"), o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                return tokenNodeObs.Select(tokenNode =>
+                {
+                    var apiToken = tokenNode?.Content as ApiToken ?? ExtractApiToken(tokenNode, hub.JsonSerializerOptions);
 
-        if (apiToken.ExpiresAt.HasValue && apiToken.ExpiresAt.Value < DateTimeOffset.UtcNow)
-        {
-            hub.Post(ValidateTokenResponse.Fail("Token expired"), o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                    if (apiToken == null)
+                    {
+                        hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
+                        return Unit.Default;
+                    }
 
-        var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail);
-        ValidationCache[hash] = (response, DateTimeOffset.UtcNow + CacheDuration);
+                    if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
+                        return Unit.Default;
+                    }
 
-        hub.Post(response, o => o.ResponseFor(request));
+                    if (apiToken.IsRevoked)
+                    {
+                        hub.Post(ValidateTokenResponse.Fail("Token revoked"), o => o.ResponseFor(request));
+                        return Unit.Default;
+                    }
+
+                    if (apiToken.ExpiresAt.HasValue && apiToken.ExpiresAt.Value < DateTimeOffset.UtcNow)
+                    {
+                        hub.Post(ValidateTokenResponse.Fail("Token expired"), o => o.ResponseFor(request));
+                        return Unit.Default;
+                    }
+
+                    var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail);
+                    ValidationCache[hash] = (response, DateTimeOffset.UtcNow + CacheDuration);
+                    hub.Post(response, o => o.ResponseFor(request));
+                    return Unit.Default;
+                });
+            })
+            .Subscribe(
+                _ => { },
+                ex => hub.Post(
+                    ValidateTokenResponse.Fail($"Validation error: {ex.Message}"),
+                    o => o.ResponseFor(request)));
+
         return request.Processed();
     }
 

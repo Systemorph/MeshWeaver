@@ -1,4 +1,6 @@
+using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -12,8 +14,8 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Exports mesh nodes to a directory using file persister formats
 /// (.md for markdown, .cs for code, .json for others).
 /// Mirrors MeshImportService but in reverse direction.
-/// Uses IMeshService for queries (works with both in-memory and file-system persistence).
-/// Falls back to IStorageAdapter for partition data when available.
+/// Reactive: hub-stream read composes via <c>SelectMany</c>; file I/O is
+/// kept inside a single <c>Observable.FromAsync</c> boundary adapter.
 /// </summary>
 public class MeshExportService : IMeshExportService
 {
@@ -31,118 +33,128 @@ public class MeshExportService : IMeshExportService
         _logger = logger;
     }
 
-    public async Task<ExportResult> ExportToDirectoryAsync(
+    public IObservable<ExportResult> ExportToDirectory(
         string rootPath,
         string outputDirectory,
-        IReadOnlySet<string>? excludedNodeTypes = null,
-        CancellationToken ct = default)
+        IReadOnlySet<string>? excludedNodeTypes = null) =>
+        _hub.GetWorkspace().GetMeshNodeStream(rootPath)
+            .Select(n => (MeshNode?)n)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .SelectMany(rootNode =>
+            {
+                if (rootNode == null)
+                    return Observable.Return(ExportResult.Fail($"Root node not found: {rootPath}"));
+
+                return Observable.FromAsync(ct =>
+                        WriteSubtreeAsync(rootNode, rootPath, outputDirectory, excludedNodeTypes, ct))
+                    .Catch((Exception ex) =>
+                    {
+                        _logger.LogError(ex, "Export failed for {Path}", rootPath);
+                        return Observable.Return(ExportResult.Fail($"Export failed: {ex.Message}"));
+                    });
+            });
+
+    // File I/O kernel — kept as async Task internally per the "non-hub I/O" exception in the
+    // reactive rules. Surfaced through a single Observable.FromAsync boundary above.
+    private async Task<ExportResult> WriteSubtreeAsync(
+        MeshNode rootNode,
+        string rootPath,
+        string outputDirectory,
+        IReadOnlySet<string>? excludedNodeTypes,
+        CancellationToken ct)
     {
-        try
+        var jsonOptions = _hub.JsonSerializerOptions;
+        var parserRegistry = new FileFormatParserRegistry(jsonOptions);
+
+        Directory.CreateDirectory(outputDirectory);
+
+        var nodeCount = 0;
+        var partitionCount = 0;
+
+        var allNodes = new List<MeshNode> { rootNode };
+        await foreach (var desc in _meshService.QueryAsync<MeshNode>(
+            $"path:{rootPath} scope:descendants").WithCancellation(ct))
         {
-            var jsonOptions = _hub.JsonSerializerOptions;
-            var parserRegistry = new FileFormatParserRegistry(jsonOptions);
+            if (excludedNodeTypes != null && desc.NodeType != null && excludedNodeTypes.Contains(desc.NodeType))
+                continue;
+            allNodes.Add(desc);
+        }
 
-            Directory.CreateDirectory(outputDirectory);
-
-            var nodeCount = 0;
-            var partitionCount = 0;
-
-            // Query the root node + all descendants
-            var rootNode = await _meshService.QueryAsync<MeshNode>($"path:{rootPath}").FirstOrDefaultAsync(ct);
-            if (rootNode == null)
-                return ExportResult.Fail($"Root node not found: {rootPath}");
-
-            var allNodes = new List<MeshNode> { rootNode };
-            await foreach (var desc in _meshService.QueryAsync<MeshNode>($"path:{rootPath} scope:descendants").WithCancellation(ct))
+        foreach (var node in allNodes)
+        {
+            try
             {
-                // Skip excluded satellite node types
-                if (excludedNodeTypes != null && desc.NodeType != null && excludedNodeTypes.Contains(desc.NodeType))
-                    continue;
-                allNodes.Add(desc);
-            }
+                var relativePath = GetRelativePath(node.Path, rootPath);
 
-            // Export each node
-            foreach (var node in allNodes)
-            {
-                try
+                var serializer = parserRegistry.GetSerializerFor(node);
+                string content;
+                string extension;
+                if (serializer != null)
                 {
-                    var relativePath = GetRelativePath(node.Path, rootPath);
+                    content = await serializer.SerializeAsync(node, ct);
+                    extension = serializer.SupportedExtensions[0];
+                }
+                else
+                {
+                    content = JsonSerializer.Serialize(node, jsonOptions);
+                    extension = ".json";
+                }
 
-                    // Use file format parsers to serialize in native format
-                    var serializer = parserRegistry.GetSerializerFor(node);
-                    string content;
-                    string extension;
-                    if (serializer != null)
+                var filePath = Path.Combine(outputDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar) + extension);
+                var fileDir = Path.GetDirectoryName(filePath);
+                if (fileDir != null)
+                    Directory.CreateDirectory(fileDir);
+
+                await File.WriteAllTextAsync(filePath, content, ct);
+                nodeCount++;
+
+                var storageAdapter = _hub.ServiceProvider.GetService<IStorageAdapter>();
+                if (storageAdapter != null)
+                {
+                    var subPaths = await storageAdapter.ListPartitionSubPathsAsync(node.Path, ct);
+                    foreach (var subPath in subPaths)
                     {
-                        content = await serializer.SerializeAsync(node, ct);
-                        extension = serializer.SupportedExtensions[0];
-                    }
-                    else
-                    {
-                        content = JsonSerializer.Serialize(node, jsonOptions);
-                        extension = ".json";
-                    }
-
-                    var filePath = Path.Combine(outputDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar) + extension);
-                    var fileDir = Path.GetDirectoryName(filePath);
-                    if (fileDir != null)
-                        Directory.CreateDirectory(fileDir);
-
-                    await File.WriteAllTextAsync(filePath, content, ct);
-                    nodeCount++;
-
-                    // Export partition data when storage adapter is available
-                    var storageAdapter = _hub.ServiceProvider.GetService<IStorageAdapter>();
-                    if (storageAdapter != null)
-                    {
-                        var subPaths = await storageAdapter.ListPartitionSubPathsAsync(node.Path, ct);
-                        foreach (var subPath in subPaths)
+                        try
                         {
-                            try
-                            {
-                                var objects = new List<object>();
-                                await foreach (var obj in storageAdapter.GetPartitionObjectsAsync(node.Path, subPath, jsonOptions, ct))
-                                    objects.Add(obj);
+                            var objects = new List<object>();
+                            await foreach (var obj in storageAdapter.GetPartitionObjectsAsync(node.Path, subPath, jsonOptions, ct))
+                                objects.Add(obj);
 
-                                if (objects.Count > 0)
+                            if (objects.Count > 0)
+                            {
+                                var partitionDir = Path.Combine(outputDirectory,
+                                    relativePath.Replace('/', Path.DirectorySeparatorChar), subPath);
+                                Directory.CreateDirectory(partitionDir);
+
+                                foreach (var obj in objects)
                                 {
-                                    var partitionDir = Path.Combine(outputDirectory,
-                                        relativePath.Replace('/', Path.DirectorySeparatorChar), subPath);
-                                    Directory.CreateDirectory(partitionDir);
-
-                                    foreach (var obj in objects)
-                                    {
-                                        var objJson = JsonSerializer.Serialize(obj, jsonOptions);
-                                        var objName = GetObjectFileName(obj);
-                                        var objPath = Path.Combine(partitionDir, objName + ".json");
-                                        await File.WriteAllTextAsync(objPath, objJson, ct);
-                                    }
-                                    partitionCount++;
+                                    var objJson = JsonSerializer.Serialize(obj, jsonOptions);
+                                    var objName = GetObjectFileName(obj);
+                                    var objPath = Path.Combine(partitionDir, objName + ".json");
+                                    await File.WriteAllTextAsync(objPath, objJson, ct);
                                 }
+                                partitionCount++;
                             }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning(ex, "Failed to export partition {Path}/{SubPath}", node.Path, subPath);
-                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to export partition {Path}/{SubPath}", node.Path, subPath);
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to export node {Path}", node.Path);
-                }
             }
-
-            _logger.LogInformation("Exported {Nodes} nodes and {Partitions} partitions from {Path}",
-                nodeCount, partitionCount, rootPath);
-
-            return ExportResult.Ok(nodeCount, partitionCount);
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to export node {Path}", node.Path);
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Export failed for {Path}", rootPath);
-            return ExportResult.Fail($"Export failed: {ex.Message}");
-        }
+
+        _logger.LogInformation("Exported {Nodes} nodes and {Partitions} partitions from {Path}",
+            nodeCount, partitionCount, rootPath);
+
+        return ExportResult.Ok(nodeCount, partitionCount);
     }
 
     private static string GetRelativePath(string nodePath, string rootPath)

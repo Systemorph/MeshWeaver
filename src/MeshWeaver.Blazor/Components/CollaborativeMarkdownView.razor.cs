@@ -524,9 +524,11 @@ public partial class CollaborativeMarkdownView
     {
         if (!commentPaths.TryGetValue(markerId, out var path) || string.IsNullOrEmpty(BoundHubAddress))
             return;
-        var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery == null) return;
-        var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+        var node = await Hub.GetWorkspace().GetMeshNodeStream(path)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+            .FirstOrDefaultAsync();
         if (node?.Content is Comment comment)
         {
             var updated = node with { Content = comment with { Status = CommentStatus.Resolved } };

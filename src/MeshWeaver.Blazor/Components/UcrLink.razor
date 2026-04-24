@@ -1,7 +1,11 @@
+@using System.Reactive.Linq
+@using MeshWeaver.Data
+@using MeshWeaver.Graph
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @inject IPathResolver PathResolver
-@inject IMeshService MeshQuery
+@inject IMessageHub Hub
 
 <a href="@Href" class="ucr-link" title="@Tooltip" data-raw-path="@Path">@DisplayText</a>
 
@@ -31,7 +35,11 @@
             var resolution = await PathResolver.ResolvePathAsync(Path);
             if (resolution != null)
             {
-                var node = await MeshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix}").FirstOrDefaultAsync();
+                var node = await Hub.GetWorkspace().GetMeshNodeStream(resolution.Prefix)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+                    .FirstOrDefaultAsync();
                 if (node != null)
                 {
                     Name = node.Name;

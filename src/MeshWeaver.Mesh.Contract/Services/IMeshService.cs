@@ -42,6 +42,15 @@ public interface IMeshService
     /// </summary>
     IObservable<MeshNode> CreateTransient(MeshNode node);
 
+    /// <summary>
+    /// Copies a node (and optionally its subtree and satellites) to a new path.
+    /// By default copies descendants but NOT satellites. Set
+    /// <see cref="CopyNodeRequest.IncludeSatellites"/> on a custom request to also copy satellites.
+    /// Routes through <see cref="CopyNodeRequest"/>; emits the root node at the new target path.
+    /// </summary>
+    IObservable<MeshNode> CopyNode(string sourcePath, string targetPath,
+        bool includeDescendants = true, bool includeSatellites = false);
+
     // === Query ===
 
     /// <summary>

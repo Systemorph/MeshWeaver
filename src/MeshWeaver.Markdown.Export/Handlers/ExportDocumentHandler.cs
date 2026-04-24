@@ -1,4 +1,6 @@
+using System.Reactive;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Markdown.Export.Ast;
 using MeshWeaver.Markdown.Export.Branding;
 using MeshWeaver.Markdown.Export.Configuration;
@@ -16,6 +18,7 @@ namespace MeshWeaver.Markdown.Export.Handlers;
 /// <summary>
 /// Handles <see cref="ExportDocumentRequest"/> by loading the source markdown (and optional descendants),
 /// resolving branding, building the document model, and running the appropriate renderer.
+/// Sync handler — composes via <c>IObservable</c> + <c>Subscribe</c>; no <c>await</c>.
 /// </summary>
 public static class ExportDocumentHandler
 {
@@ -24,97 +27,119 @@ public static class ExportDocumentHandler
     /// </summary>
     public static MessageHubConfiguration AddExportDocumentHandler(this MessageHubConfiguration config)
     {
-        // Short names via the shared AddMarkdownExportTypes — keeps $type discriminators in sync
-        // across mesh/node/client hubs.
         config.TypeRegistry.AddMarkdownExportTypes();
-        return config.WithHandler<ExportDocumentRequest>(HandleAsync);
+        return config.WithHandler<ExportDocumentRequest>(Handle);
     }
 
-    private static async Task<IMessageDelivery> HandleAsync(
-        IMessageHub hub, IMessageDelivery<ExportDocumentRequest> delivery, CancellationToken ct)
+    private static IMessageDelivery Handle(
+        IMessageHub hub, IMessageDelivery<ExportDocumentRequest> delivery)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(ExportDocumentHandler).FullName!);
         var request = delivery.Message;
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var brandingResolver = hub.ServiceProvider.GetRequiredService<BrandingResolver>();
+        var workspace = hub.GetWorkspace();
 
-        try
-        {
-            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = await meshService.QueryAsync<MeshNode>($"path:{request.SourcePath}").FirstOrDefaultAsync(ct);
-            if (node is null)
+        // Read root → resolve branding + collect descendants in parallel → build → respond.
+        // Each step in the chain is a Subscribe callback; the handler returns synchronously.
+        workspace.GetMeshNodeStream(request.SourcePath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Select(n => (MeshNode?)n)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .SelectMany(rootNode =>
             {
-                hub.Post(new ExportDocumentResponse(
-                        request.Options.Format, "", "", Array.Empty<byte>(),
-                        Error: $"Source node not found: {request.SourcePath}"),
-                    o => o.ResponseFor(delivery));
-                return delivery.Processed();
-            }
-
-            var title = request.Options.Title ?? node.Name ?? node.Id;
-
-            var branding = await hub.ServiceProvider.GetRequiredService<BrandingResolver>()
-                .ResolveAsync(request.Options.BrandNodePath, ct);
-
-            var chapters = new List<(string, string)>();
-            chapters.Add((title, ExtractMarkdown(node)));
-
-            if (request.Options.IncludeChildren)
-            {
-                var maxDepth = request.Options.MaxDepth;
-                var rootDepth = request.SourcePath.Count(c => c == '/');
-
-                await foreach (var desc in meshService.QueryAsync<MeshNode>(
-                    $"path:{request.SourcePath} scope:descendants").WithCancellation(ct))
+                if (rootNode is null)
                 {
-                    // Respect MaxDepth: skip nodes deeper than the allowed level (0 = unlimited).
-                    if (maxDepth > 0)
-                    {
-                        var descDepth = desc.Path.Count(c => c == '/') - rootDepth;
-                        if (descDepth > maxDepth)
-                            continue;
-                    }
-
-                    var md = ExtractMarkdown(desc);
-                    if (!string.IsNullOrWhiteSpace(md))
-                        chapters.Add((desc.Name ?? desc.Id, md));
+                    hub.Post(new ExportDocumentResponse(
+                            request.Options.Format, "", "", Array.Empty<byte>(),
+                            Error: $"Source node not found: {request.SourcePath}"),
+                        o => o.ResponseFor(delivery));
+                    return Observable.Empty<Unit>();
                 }
-            }
 
-            var document = new DocumentBuilder().Build(title, chapters, request.Options, branding);
+                var title = request.Options.Title ?? rootNode.Name ?? rootNode.Id;
 
-            byte[] bytes;
-            string mime;
-            string extension;
-            switch (request.Options.Format)
-            {
-                case ExportFormat.Pdf:
-                    bytes = new PdfDocumentRenderer().Render(document);
-                    mime = "application/pdf";
-                    extension = "pdf";
-                    break;
-                case ExportFormat.Docx:
-                    bytes = new DocxDocumentRenderer().Render(document);
-                    mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-                    extension = "docx";
-                    break;
-                default:
-                    throw new NotSupportedException($"Unsupported format {request.Options.Format}");
-            }
+                var brandingObs = brandingResolver.Resolve(request.Options.BrandNodePath);
 
-            var fileName = $"{Sanitize(title)}.{extension}";
-            hub.Post(new ExportDocumentResponse(request.Options.Format, fileName, mime, bytes),
-                o => o.ResponseFor(delivery));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Export failed for {Path}", request.SourcePath);
-            hub.Post(new ExportDocumentResponse(
-                    request.Options.Format, "", "", Array.Empty<byte>(),
-                    Error: ex.Message),
-                o => o.ResponseFor(delivery));
-        }
+                var chaptersObs = CollectChapters(meshService, request, rootNode, title);
+
+                return brandingObs.Zip(chaptersObs,
+                    (branding, chapters) => RenderAndPost(hub, delivery, request, title, chapters, branding));
+            })
+            .Subscribe(
+                _ => { },
+                ex =>
+                {
+                    logger.LogError(ex, "Export failed for {Path}", request.SourcePath);
+                    hub.Post(new ExportDocumentResponse(
+                            request.Options.Format, "", "", Array.Empty<byte>(),
+                            Error: ex.Message),
+                        o => o.ResponseFor(delivery));
+                });
 
         return delivery.Processed();
+    }
+
+    private static IObservable<List<(string, string)>> CollectChapters(
+        IMeshService meshService, ExportDocumentRequest request, MeshNode rootNode, string title) =>
+        Observable.FromAsync(async () =>
+        {
+            var chapters = new List<(string, string)> { (title, ExtractMarkdown(rootNode)) };
+            if (!request.Options.IncludeChildren)
+                return chapters;
+
+            var maxDepth = request.Options.MaxDepth;
+            var rootDepth = request.SourcePath.Count(c => c == '/');
+            await foreach (var desc in meshService.QueryAsync<MeshNode>(
+                $"path:{request.SourcePath} scope:descendants"))
+            {
+                if (maxDepth > 0)
+                {
+                    var depth = desc.Path.Count(c => c == '/') - rootDepth;
+                    if (depth > maxDepth) continue;
+                }
+                var md = ExtractMarkdown(desc);
+                if (!string.IsNullOrWhiteSpace(md))
+                    chapters.Add((desc.Name ?? desc.Id, md));
+            }
+            return chapters;
+        });
+
+    private static Unit RenderAndPost(
+        IMessageHub hub,
+        IMessageDelivery<ExportDocumentRequest> delivery,
+        ExportDocumentRequest request,
+        string title,
+        IReadOnlyList<(string, string)> chapters,
+        BrandingOptions branding)
+    {
+        var document = new DocumentBuilder().Build(title, chapters, request.Options, branding);
+
+        byte[] bytes;
+        string mime;
+        string extension;
+        switch (request.Options.Format)
+        {
+            case ExportFormat.Pdf:
+                bytes = new PdfDocumentRenderer().Render(document);
+                mime = "application/pdf";
+                extension = "pdf";
+                break;
+            case ExportFormat.Docx:
+                bytes = new DocxDocumentRenderer().Render(document);
+                mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                extension = "docx";
+                break;
+            default:
+                throw new NotSupportedException($"Unsupported format {request.Options.Format}");
+        }
+
+        var fileName = $"{Sanitize(title)}.{extension}";
+        hub.Post(new ExportDocumentResponse(request.Options.Format, fileName, mime, bytes),
+            o => o.ResponseFor(delivery));
+        return Unit.Default;
     }
 
     private static string ExtractMarkdown(MeshNode node)

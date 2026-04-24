@@ -458,7 +458,11 @@ using MeshWeaver.Messaging;
 
     private const string ViewId = "viewId";
     private const string IframeUrl = "iframeUrl";
-    public async Task<IMessageDelivery> HandleKernelCommandEnvelope(IMessageHub hub, IMessageDelivery<KernelCommandEnvelope> request, CancellationToken ct)
+
+    /// <summary>
+    /// Sync handler — composes via <c>Observable.FromAsync</c> + <c>Subscribe</c>; no <c>await</c>.
+    /// </summary>
+    public IMessageDelivery HandleKernelCommandEnvelope(IMessageHub hub, IMessageDelivery<KernelCommandEnvelope> request)
     {
         subscriptions.Add(request.Sender);
         var envelope = Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Deserialize(request.Message.Command);
@@ -469,10 +473,19 @@ using MeshWeaver.Messaging;
             if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
                 submit.Parameters[IframeUrl] = request.Message.IFrameUrl;
         }
-        await SubmitCommand(hub, request, ct, command);
+
+        Observable.FromAsync(ct => SubmitCommandAsync(hub, ct, command))
+            .Subscribe(
+                _ => { },
+                ex => logger.LogError(ex, "KernelCommandEnvelope dispatch failed"));
+
         return request.Processed();
     }
-    public async Task<IMessageDelivery> HandleKernelCommand(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request, CancellationToken ct)
+
+    /// <summary>
+    /// Sync handler — composes via <c>Observable.FromAsync</c> + <c>Subscribe</c>; no <c>await</c>.
+    /// </summary>
+    public IMessageDelivery HandleKernelCommand(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request)
     {
         subscriptions.Add(request.Sender);
         var submissionId = request.Message.Id;
@@ -483,50 +496,62 @@ using MeshWeaver.Messaging;
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
 
-        // If the caller passed an ActivityLogPath, swap the script's `Log` global
-        // to a logger that appends to that node. Messages stream through the
-        // node's MeshNodeReference for subscribers watching the run.
-        ActivityLogLogger? activityLogger = null;
-        if (!string.IsNullOrEmpty(request.Message.ActivityLogPath))
-        {
-            activityLogger = new ActivityLogLogger(hub, request.Message.ActivityLogPath!);
-            var kernel = await hub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
-            await Task.WhenAll(kernel.ChildKernels.OfType<CSharpKernel>()
-                .Select(k => k.SetValueAsync("Log", activityLogger, typeof(ILogger))));
-        }
+        // Compose the kernel work in an observable chain. The handler returns Processed
+        // immediately; the response is posted from the Subscribe callback when the kernel
+        // completes (success or error).
+        Observable.FromAsync(async ct =>
+            {
+                // If the caller passed an ActivityLogPath, swap the script's `Log` global
+                // to a logger that appends to that node. Messages stream through the node's
+                // MeshNodeReference for subscribers watching the run.
+                ActivityLogLogger? activityLogger = null;
+                if (!string.IsNullOrEmpty(request.Message.ActivityLogPath))
+                {
+                    activityLogger = new ActivityLogLogger(hub, request.Message.ActivityLogPath!);
+                    var kernelInstance = await hub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
+                    await Task.WhenAll(kernelInstance.ChildKernels.OfType<CSharpKernel>()
+                        .Select(k => k.SetValueAsync("Log", activityLogger, typeof(ILogger))));
+                }
 
-        string? error = null;
-        try
-        {
-            await SubmitCommand(hub, request, ct, command);
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            activityLogger?.LogError(ex, "Script dispatch failed");
-        }
+                string? error = null;
+                try
+                {
+                    await SubmitCommandAsync(hub, ct, command);
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    activityLogger?.LogError(ex, "Script dispatch failed");
+                }
 
-        // Finalize the activity log: flush pending messages and flip the terminal
-        // status on the node so subscribers see the run as Succeeded / Failed.
-        activityLogger?.Complete(error is null ? ActivityStatus.Succeeded : ActivityStatus.Failed);
+                // Finalize the activity log: flush pending messages and flip the terminal
+                // status on the node so subscribers see the run as Succeeded / Failed.
+                activityLogger?.Complete(error is null ? ActivityStatus.Succeeded : ActivityStatus.Failed);
 
-        // Post a completion response so callers using RegisterCallback / AwaitResponse
-        // (e.g. MeshOperations.ExecuteScript from MCP) see SubmitCodeRequest finish.
-        hub.Post(
-            new SubmitCodeResponse(submissionId, error is null) { Error = error },
-            o => o.ResponseFor(request));
+                return error;
+            })
+            .Subscribe(
+                error => hub.Post(
+                    new SubmitCodeResponse(submissionId, error is null) { Error = error },
+                    o => o.ResponseFor(request)),
+                ex => hub.Post(
+                    new SubmitCodeResponse(submissionId, false) { Error = ex.Message },
+                    o => o.ResponseFor(request)));
+
         return request.Processed();
     }
 
-    private async Task<IMessageDelivery> SubmitCommand(IMessageHub hub, IMessageDelivery request, CancellationToken ct, KernelCommand command)
+    // File-I/O / kernel-SDK kernel — kept as async Task internally (Microsoft.DotNet.Interactive
+    // requires Task-based kernel.SendAsync). Surfaced through Observable.FromAsync at the
+    // single hub-handler boundary above.
+    private async Task SubmitCommandAsync(IMessageHub hub, CancellationToken ct, KernelCommand command)
     {
         var kernel = await hub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
         if (command is SubmitCode submit)
         {
             (command, _) = await PreprocessSubmitCodeAsync(kernel, submit, ct);
         }
-        var ret = await kernel.SendAsync(command, ct);
-        return request.Processed();
+        await kernel.SendAsync(command, ct);
     }
 
     public IMessageDelivery HandleSubscribe(IMessageDelivery<SubscribeKernelEventsRequest> request)

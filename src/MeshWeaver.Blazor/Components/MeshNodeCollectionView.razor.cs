@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
@@ -14,65 +15,78 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
 {
     private List<MeshNode> _items = [];
     private bool _isLoading = true;
+    private readonly List<IDisposable> _subscriptions = new();
 
     protected override void BindData()
     {
         base.BindData();
-        _ = LoadItemsAsync();
+        LoadItems();
     }
 
-    private async Task LoadItemsAsync()
+    private void LoadItems()
     {
+        // Tear down any prior live subscriptions before re-binding.
+        foreach (var s in _subscriptions) s.Dispose();
+        _subscriptions.Clear();
+
         _isLoading = true;
-        await InvokeAsync(StateHasChanged);
+        _ = InvokeAsync(StateHasChanged);
 
-        try
-        {
-            var queries = ViewModel?.Queries ?? [];
-            if (queries.Length == 0)
-            {
-                _items = [];
-                return;
-            }
-
-            var tasks = queries.Select(async q =>
-            {
-                try
-                {
-                    return await MeshQuery.QueryAsync<MeshNode>(q).ToListAsync();
-                }
-                catch
-                {
-                    return new List<MeshNode>();
-                }
-            });
-
-            var results = await Task.WhenAll(tasks);
-            _items = results
-                .SelectMany(r => r)
-                .GroupBy(n => n.Path)
-                .Select(g => g.First())
-                .ToList();
-        }
-        catch
+        var queries = ViewModel?.Queries ?? [];
+        if (queries.Length == 0)
         {
             _items = [];
-        }
-        finally
-        {
             _isLoading = false;
-            await InvokeAsync(StateHasChanged);
+            _ = InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        // Per-query live subscription. The view aggregates the latest snapshots across queries
+        // (same dedup-by-Path semantics as before) but stays live: any change to the matching
+        // sets refreshes the view via the Subscribe callback.
+        var perQueryResults = new Dictionary<string, IReadOnlyList<MeshNode>>();
+        foreach (var q in queries)
+        {
+            var query = q;
+            var sub = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Subscribe(
+                    change =>
+                    {
+                        perQueryResults[query] = MergeQueryChange(
+                            perQueryResults.GetValueOrDefault(query, Array.Empty<MeshNode>()),
+                            change);
+                        _items = perQueryResults.Values
+                            .SelectMany(r => r)
+                            .GroupBy(n => n.Path)
+                            .Select(g => g.First())
+                            .ToList();
+                        _isLoading = false;
+                        _ = InvokeAsync(StateHasChanged);
+                    },
+                    _ => { });
+            _subscriptions.Add(sub);
         }
     }
+
+    private static IReadOnlyList<MeshNode> MergeQueryChange(IReadOnlyList<MeshNode> current,
+        QueryResultChange<MeshNode> change) => change.ChangeType switch
+    {
+        QueryChangeType.Initial or QueryChangeType.Reset => change.Items,
+        QueryChangeType.Added => current.Concat(change.Items).ToList(),
+        QueryChangeType.Updated => current
+            .Select(n => change.Items.FirstOrDefault(c => c.Path == n.Path) ?? n)
+            .ToList(),
+        QueryChangeType.Removed => current
+            .Where(n => !change.Items.Any(r => r.Path == n.Path))
+            .ToList(),
+        _ => current
+    };
 
     private void DeleteItem(string nodePath)
     {
         var nodeFactory = Hub!.ServiceProvider.GetRequiredService<IMeshService>();
         nodeFactory.DeleteNode(nodePath).Subscribe(
-            (bool _) =>
-            {
-                var ignore = LoadItemsAsync();
-            },
+            (bool _) => LoadItems(),
             (Exception _) => { });
     }
 
@@ -125,7 +139,7 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
     /// Removes a sub-entry (role or group) from a node's content and persists the change.
     /// Uses the same DataChangeRequest pattern as OverviewLayoutArea.SetupAutoSave.
     /// </summary>
-    private async Task RemoveSubEntry(MeshNode node, int index)
+    private void RemoveSubEntry(MeshNode node, int index)
     {
         if (node.Content is not JsonElement json)
             return;
@@ -134,7 +148,6 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
         if (jsonObj == null)
             return;
 
-        // Determine which array to modify
         string? arrayProp = null;
         if (jsonObj["roles"] is JsonArray) arrayProp = "roles";
         else if (jsonObj["groups"] is JsonArray) arrayProp = "groups";
@@ -148,11 +161,9 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
 
         arr.RemoveAt(index);
 
-        // Build updated node with modified content
         var updatedContent = JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString());
         var updatedNode = node with { Content = updatedContent };
 
-        // Persist via DataChangeRequest targeting the node's hub (namespace address)
         if (!string.IsNullOrEmpty(node.Namespace))
         {
             var targetAddress = new Address(node.Namespace);
@@ -161,7 +172,7 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
                 o => o.WithTarget(targetAddress));
         }
 
-        await LoadItemsAsync();
+        LoadItems();
     }
 
     private record SubEntry(int Index, string Label, bool IsDenied);

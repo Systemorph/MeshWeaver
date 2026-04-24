@@ -159,6 +159,48 @@ internal sealed class MeshService(
         return persistence.SaveNode(transientNode);
     }
 
+    public IObservable<MeshNode> CopyNode(string sourcePath, string targetPath,
+        bool includeDescendants = true, bool includeSatellites = false)
+    {
+        var captured = CaptureContext();
+        return Observable.Create<MeshNode>(observer =>
+        {
+            var cts = new CancellationTokenSource();
+            var req = new CopyNodeRequest(sourcePath, targetPath)
+            {
+                IncludeDescendants = includeDescendants,
+                IncludeSatellites = includeSatellites
+            };
+            var delivery = hub.Post(req, o => ConfigurePost(o, captured))!;
+
+            hub.RegisterCallback(delivery, (d, _) =>
+            {
+                var r = ((IMessageDelivery<CopyNodeResponse>)d).Message;
+                if (r.Success && r.Node != null)
+                {
+                    observer.OnNext(r.Node);
+                    observer.OnCompleted();
+                }
+                else
+                {
+                    observer.OnError(r.RejectionReason switch
+                    {
+                        NodeCopyRejectionReason.TargetAlreadyExists =>
+                            new InvalidOperationException(r.Error ?? "Target already exists"),
+                        NodeCopyRejectionReason.SourceNotFound =>
+                            new InvalidOperationException($"Source node not found: {sourcePath}"),
+                        NodeCopyRejectionReason.Unauthorized =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        _ => new InvalidOperationException(r.Error ?? "Node copy failed")
+                    });
+                }
+                return Task.FromResult(d);
+            }, cts.Token);
+
+            return Disposable.Create(() => cts.Cancel());
+        });
+    }
+
     // === Query (delegated to MeshQuery) ===
 
     public IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, CancellationToken ct = default)

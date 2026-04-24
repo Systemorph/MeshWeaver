@@ -1,9 +1,11 @@
 @page "/catalog"
 @page "/catalog/{*Namespace}"
+@using System.Reactive.Linq
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 @using Fluent = Microsoft.FluentUI.AspNetCore.Components
+@implements IDisposable
 @inject IMeshService MeshQuery
 @inject NavigationManager NavigationManager
 @inject IMessageHub Hub
@@ -153,47 +155,54 @@
     private List<MeshNode> Nodes { get; set; } = new();
     private bool IsLoading { get; set; } = true;
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
-        await LoadNodesAsync();
+        LoadNodes();
     }
 
-    private async Task LoadNodesAsync()
+    private IDisposable? _querySub;
+
+    private void LoadNodes()
     {
+        _querySub?.Dispose();
         IsLoading = true;
         StateHasChanged();
 
-        try
-        {
-            // Build query string
-            var queryParts = new List<string>();
+        // Build query string
+        var queryParts = new List<string>();
+        if (!string.IsNullOrEmpty(Namespace)) queryParts.Add($"namespace:{Namespace}");
+        if (!string.IsNullOrEmpty(Query)) queryParts.Add(Query);
+        var fullQuery = string.Join(" ", queryParts);
 
-            // Add namespace filter
-            if (!string.IsNullOrEmpty(Namespace))
-            {
-                queryParts.Add($"namespace:{Namespace}");
-            }
-
-            // Add user query
-            if (!string.IsNullOrEmpty(Query))
-            {
-                queryParts.Add(Query);
-            }
-
-            var fullQuery = string.Join(" ", queryParts);
-
-            // Execute query
-            Nodes = await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
-        }
-        catch
-        {
-            Nodes = new List<MeshNode>();
-        }
-        finally
-        {
-            IsLoading = false;
-        }
+        // Subscribe to ObserveQuery — keeps the view live as the underlying set changes.
+        _querySub = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
+            .Subscribe(
+                change =>
+                {
+                    Nodes = change.ChangeType switch
+                    {
+                        QueryChangeType.Initial or QueryChangeType.Reset => change.Items.ToList(),
+                        QueryChangeType.Added => Nodes.Concat(change.Items).ToList(),
+                        QueryChangeType.Updated => Nodes
+                            .Select(n => change.Items.FirstOrDefault(c => c.Path == n.Path) ?? n)
+                            .ToList(),
+                        QueryChangeType.Removed => Nodes
+                            .Where(n => !change.Items.Any(r => r.Path == n.Path))
+                            .ToList(),
+                        _ => Nodes
+                    };
+                    IsLoading = false;
+                    _ = InvokeAsync(StateHasChanged);
+                },
+                _ =>
+                {
+                    Nodes = new List<MeshNode>();
+                    IsLoading = false;
+                    InvokeAsync(StateHasChanged);
+                });
     }
+
+    public void Dispose() => _querySub?.Dispose();
 
     private void NavigateTo(string path)
     {

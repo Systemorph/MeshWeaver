@@ -63,11 +63,15 @@
     public CompletionProviderConfig? CompletionProvider { get; set; }
 
     /// <summary>
-    /// Optional async callback for server-side completion with fuzzy scoring.
-    /// When provided, this will be called instead of using static CompletionProvider items.
+    /// Optional reactive callback for server-side completion with fuzzy scoring.
+    /// When provided, this is invoked instead of using static <see cref="CompletionProvider"/>
+    /// items. The callback returns an <see cref="IObservable{T}"/> that emits a fresh
+    /// snapshot of the top-N completions whenever a new item arrives — the editor
+    /// pushes each snapshot to the suggest widget so the UI never blocks waiting for
+    /// the full result set.
     /// </summary>
     [Parameter]
-    public Func<string, Task<CompletionItem[]>>? AsyncCompletionCallback { get; set; }
+    public Func<string, IObservable<IReadOnlyList<CompletionItem>>>? CompletionCallback { get; set; }
 
     /// <summary>
     /// Show line numbers in the editor. Default is false (chat-style input).
@@ -197,7 +201,7 @@
             return;
 
         // Check if async mode should be used
-        var useAsync = AsyncCompletionCallback != null;
+        var useAsync = CompletionCallback != null;
         var currentItemCount = CompletionProvider?.Items?.Count ?? 0;
 
         // For async mode, we always register (the callback handles everything)
@@ -304,38 +308,65 @@
             await OnCompletionAccepted.InvokeAsync(path);
     }
 
+    // Latest snapshot from the active completion observable. Updated by the Subscribe
+    // handler in GetAsyncCompletions; returned synchronously to JS on subsequent invokes.
+    private CompletionItem[] _currentCompletions = [];
+    private string _currentCompletionsQuery = "";
+    private IDisposable? _activeCompletionSub;
+
     /// <summary>
     /// JSInvokable method called from JavaScript to get async completions.
+    /// Subscribes to the configured observable callback; returns the current snapshot
+    /// synchronously and pushes subsequent snapshots via <see cref="PushCompletionUpdateAsync"/>
+    /// so the suggest widget streams in results as they arrive.
     /// </summary>
     [JSInvokable]
-    public async Task<object[]> GetAsyncCompletions(string query)
+    public Task<object[]> GetAsyncCompletions(string query)
     {
-        if (AsyncCompletionCallback == null)
+        if (CompletionCallback == null)
+            return Task.FromResult(Array.Empty<object>());
+
+        if (!string.Equals(_currentCompletionsQuery, query, StringComparison.Ordinal))
         {
-            return [];
+            _currentCompletionsQuery = query;
+            _activeCompletionSub?.Dispose();
+            _currentCompletions = [];
+
+            try
+            {
+                _activeCompletionSub = CompletionCallback(query).Subscribe(
+                    snapshot =>
+                    {
+                        var arr = snapshot is CompletionItem[] a ? a : snapshot.ToArray();
+                        _currentCompletions = arr;
+                        // Fire-and-forget: order is preserved by JS event loop. We can't
+                        // await here — Subscribe handlers must stay synchronous.
+                        if (jsModule != null)
+                            _ = PushCompletionUpdateAsync(arr);
+                    },
+                    ex => Logger.LogError(ex, "Error getting async completions for query: {Query}", query));
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error subscribing to async completions for query: {Query}", query);
+            }
         }
 
-        try
-        {
-            var items = await AsyncCompletionCallback(query);
-            return items.Select(i => new
-            {
-                label = i.Label,
-                insertText = i.InsertText ?? i.Label,
-                description = i.Description ?? "",
-                detail = i.Detail ?? "",
-                category = i.Category ?? "",
-                path = i.Path ?? "",
-                iconUrl = i.IconUrl ?? "",
-                sortKey = i.SortKey ?? ""
-            }).ToArray<object>();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Error getting async completions for query: {Query}", query);
-            return [];
-        }
+        return Task.FromResult(MapCompletionsToJs(_currentCompletions));
     }
+
+    private static object[] MapCompletionsToJs(IReadOnlyList<CompletionItem> items)
+        => items.Select(i => (object)new
+        {
+            label = i.Label,
+            insertText = i.InsertText ?? i.Label,
+            description = i.Description ?? "",
+            detail = i.Detail ?? "",
+            category = i.Category ?? "",
+            path = i.Path ?? "",
+            iconUrl = i.IconUrl ?? "",
+            sortKey = i.SortKey ?? ""
+        }).ToArray();
 
     /// <summary>
     /// Pushes updated completion items to the editor and re-triggers the suggest widget.

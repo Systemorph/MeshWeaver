@@ -1,91 +1,62 @@
-﻿using MeshWeaver.Blazor.Components.Monaco;
-using MeshWeaver.Graph;
+using System.Reactive.Linq;
+using MeshWeaver.Blazor.Components.Monaco;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Graph;
 
-public partial class MeshNodeEditorView
+public partial class MeshNodeEditorView : IDisposable
 {
     private MonacoEditorView? _monacoEditor;
     private MeshNode? _node;
     private bool _isLoading = true;
-    private bool _isSaving;
 
-    // Metadata fields
-    private string _parentPath = string.Empty;
-    private string _lastSegment = string.Empty;
-    private string _originalPath = string.Empty;
+    // Bound fields — refreshed from the live stream and pushed back through it.
     private string _name = string.Empty;
     private string? _nodeType;
-
-    // Content field
     private string _contentText = string.Empty;
 
-    // Messages
-    private string? _metadataMessage;
-    private bool _metadataSuccess;
-    private string? _contentMessage;
-    private bool _contentSuccess;
+    // Suppress stream-echo refresh while the user is mid-typing in the content area.
+    private bool _userIsEditingContent;
+
+    // Backend editor: owns one long-lived subscription to the node's MeshNode stream
+    // and writes back through the same stream. No save buttons, no AwaitResponse —
+    // every change streams immediately.
+    private IMeshNodeEditor? _editor;
+    private IDisposable? _streamSub;
 
     protected override void BindData()
     {
         base.BindData();
-        _ = LoadNodeAsync();
+        _editor = new MeshNodeEditor(Hub, ViewModel.NodePath);
+        _streamSub = _editor.Node.Subscribe(node =>
+        {
+            _node = node;
+            ApplyNodeToFields(node);
+            _isLoading = false;
+            InvokeAsync(StateHasChanged);
+        }, ex =>
+        {
+            Logger.LogError(ex, "Error streaming node at path {Path}", ViewModel.NodePath);
+            _isLoading = false;
+            InvokeAsync(StateHasChanged);
+        });
     }
 
-    private async Task LoadNodeAsync()
+    private void ApplyNodeToFields(MeshNode node)
     {
-        _isLoading = true;
-        StateHasChanged();
+        _name = node.Name ?? string.Empty;
+        _nodeType = node.NodeType?.ToLowerInvariant();
 
-        try
-        {
-            var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
-            if (meshQuery == null)
-            {
-                Logger.LogError("IMeshService not available");
-                return;
-            }
-
-            var path = ViewModel.NodePath;
-            _originalPath = path;
-            _node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
-
-            if (_node != null)
-            {
-                // Parse path into parent and last segment
-                var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                if (segments.Length > 1)
-                {
-                    _parentPath = string.Join("/", segments.Take(segments.Length - 1));
-                    _lastSegment = segments[^1];
-                }
-                else
-                {
-                    _parentPath = "";
-                    _lastSegment = path;
-                }
-
-                _name = _node.Name ?? string.Empty;
-                _nodeType = _node.NodeType?.ToLowerInvariant();
-
-                // Load content based on node type
-                LoadContent();
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Error loading node at path {Path}", ViewModel.NodePath);
-        }
-        finally
-        {
-            _isLoading = false;
-            StateHasChanged();
-        }
+        // Don't clobber the user's in-flight edits with the round-trip echo from the
+        // stream — only refresh content text from the stream when the user isn't typing.
+        if (!_userIsEditingContent)
+            LoadContent();
     }
 
     private void LoadContent()
@@ -96,7 +67,7 @@ public partial class MeshNodeEditorView
             return;
         }
 
-        // Handle Story content using reflection (to avoid circular dependency with Graph.Domain)
+        // Reflect into Story.Text to avoid circular dependency with Graph.Domain.
         if (_nodeType == "story")
         {
             var textProperty = _node.Content.GetType().GetProperty("Text");
@@ -110,147 +81,41 @@ public partial class MeshNodeEditorView
         _contentText = string.Empty;
     }
 
+    private void OnNameChanged(string newName)
+    {
+        if (_name == newName) return;
+        _name = newName;
+        // Push name change through the stream — echo refreshes _node.
+        _editor?.Update(node => node with { Name = newName });
+    }
+
     private void OnContentChanged(string value)
     {
+        if (_contentText == value) return;
+        _userIsEditingContent = true;
         _contentText = value;
+        _editor?.Update(node => node with { Content = WithText(node.Content, value) });
     }
 
-    private async Task SaveMetadataAsync()
+    private object? WithText(object? currentContent, string newText)
     {
-        if (_node == null) return;
+        if (_nodeType != "story" || currentContent == null)
+            return currentContent;
 
-        _isSaving = true;
-        _metadataMessage = null;
-        StateHasChanged();
+        var textProperty = currentContent.GetType().GetProperty("Text");
+        if (textProperty == null)
+            return currentContent;
 
-        try
-        {
-            // Calculate new path
-            var newPath = string.IsNullOrEmpty(_parentPath)
-                ? _lastSegment
-                : $"{_parentPath}/{_lastSegment}";
+        // Records: use the compiler-generated <Clone>$ method so we don't lose any
+        // fields the editor doesn't surface.
+        var cloneMethod = currentContent.GetType().GetMethod("<Clone>$");
+        if (cloneMethod == null)
+            return currentContent;
 
-            // Check if path changed
-            var pathChanged = !newPath.Equals(_originalPath, StringComparison.OrdinalIgnoreCase);
-
-            if (pathChanged)
-            {
-                // Move the node to new path
-                Logger.LogInformation("Moving node from {OldPath} to {NewPath}", _originalPath, newPath);
-                var moveResponse = await Hub.AwaitResponse(
-                    new MoveNodeRequest(_originalPath, newPath),
-                    o => o.WithTarget(Hub.Address));
-                if (!moveResponse.Message.Success)
-                    throw new InvalidOperationException(moveResponse.Message.Error);
-                _node = moveResponse.Message.Node
-                    ?? throw new InvalidOperationException("Move succeeded but returned no node");
-                _originalPath = newPath;
-            }
-
-            // Update metadata
-            var updatedNode = MeshNode.FromPath(_node.Path) with
-            {
-                Name = _name,
-                NodeType = _node.NodeType,
-                Icon = _node.Icon,
-                Order = _node.Order,
-                Content = _node.Content,
-                AssemblyLocation = _node.AssemblyLocation,
-                HubConfiguration = _node.HubConfiguration,
-                GlobalServiceConfigurations = _node.GlobalServiceConfigurations
-            };
-
-            var updateResponse = await Hub.AwaitResponse(
-                new UpdateNodeRequest(updatedNode),
-                o => o.WithTarget(Hub.Address));
-            if (!updateResponse.Message.Success)
-                throw new InvalidOperationException(updateResponse.Message.Error);
-            _node = updateResponse.Message.Node;
-
-            _metadataMessage = pathChanged
-                ? $"Metadata saved. Node moved to {newPath}"
-                : "Metadata saved successfully";
-            _metadataSuccess = true;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Error saving metadata");
-            _metadataMessage = $"Error: {ex.Message}";
-            _metadataSuccess = false;
-        }
-        finally
-        {
-            _isSaving = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task SaveContentAsync()
-    {
-        if (_node == null) return;
-
-        _isSaving = true;
-        _contentMessage = null;
-        StateHasChanged();
-
-        try
-        {
-            // Update content based on node type
-            object? newContent = _node.Content;
-
-            if (_nodeType == "story" && _node.Content != null)
-            {
-                // Use reflection to update Story.Text (avoid circular dependency with Graph.Domain)
-                var textProperty = _node.Content.GetType().GetProperty("Text");
-                if (textProperty != null)
-                {
-                    // Create a new instance with updated Text using record's with expression via reflection
-                    // Since Story is a record, we can use the <Clone>$ method
-                    var cloneMethod = _node.Content.GetType().GetMethod("<Clone>$");
-                    if (cloneMethod != null)
-                    {
-                        var cloned = cloneMethod.Invoke(_node.Content, null);
-                        if (cloned != null)
-                        {
-                            textProperty.SetValue(cloned, _contentText);
-                            newContent = cloned;
-                        }
-                    }
-                }
-            }
-            var updatedNode = MeshNode.FromPath(_node.Path) with
-            {
-                Name = _node.Name,
-                NodeType = _node.NodeType,
-                Icon = _node.Icon,
-                Order = _node.Order,
-                Content = newContent,
-                AssemblyLocation = _node.AssemblyLocation,
-                HubConfiguration = _node.HubConfiguration,
-                GlobalServiceConfigurations = _node.GlobalServiceConfigurations
-            };
-
-            var updateResponse = await Hub.AwaitResponse(
-                new UpdateNodeRequest(updatedNode),
-                o => o.WithTarget(Hub.Address));
-            if (!updateResponse.Message.Success)
-                throw new InvalidOperationException(updateResponse.Message.Error);
-            _node = updateResponse.Message.Node;
-
-            _contentMessage = "Content saved successfully";
-            _contentSuccess = true;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Error saving content");
-            _contentMessage = $"Error: {ex.Message}";
-            _contentSuccess = false;
-        }
-        finally
-        {
-            _isSaving = false;
-            StateHasChanged();
-        }
+        var cloned = cloneMethod.Invoke(currentContent, null);
+        if (cloned == null) return currentContent;
+        textProperty.SetValue(cloned, newText);
+        return cloned;
     }
 
     private CompletionProviderConfig GetArticleCompletionProvider()
@@ -304,5 +169,11 @@ public partial class MeshNodeEditorView
                 }
             ]
         };
+    }
+
+    public void Dispose()
+    {
+        _streamSub?.Dispose();
+        _editor?.Dispose();
     }
 }
