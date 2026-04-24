@@ -4,13 +4,18 @@
 @using MeshWeaver.Blazor.Components.Monaco
 @using MeshWeaver.Data
 @using MeshWeaver.Data.Completion
+@using MeshWeaver.Data.Serialization
 @using MeshWeaver.Layout.Client
 @using MeshWeaver.Markdown
 @using MeshWeaver.Markdown.Collaboration
+@using MeshWeaver.Mesh
 @using MeshWeaver.Messaging
 @using Microsoft.Extensions.DependencyInjection
 @using Microsoft.Extensions.Logging
 @using MarkdownAnnotationType = MeshWeaver.Markdown.Collaboration.AnnotationType
+@using TrackedChange = MeshWeaver.Markdown.Collaboration.TrackedChange
+@using TrackedChangeType = MeshWeaver.Markdown.Collaboration.TrackedChangeType
+@using TrackedChangeStatus = MeshWeaver.Markdown.Collaboration.TrackedChangeStatus
 @namespace MeshWeaver.Blazor.Components
 @inherits BlazorView<MarkdownEditorControl, MarkdownEditorView>
 
@@ -149,6 +154,11 @@
     // Data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
 
+    // Long-standing per-node MeshNodeReference stream — subscribed once when
+    // BoundAutoSaveAddress is known. AutoSaveContentAsync calls _nodeStream.Update(...)
+    // to push edits through the same stream the editor renders from.
+    private ISynchronizationStream<MeshNode>? _nodeStream;
+
     protected override void BindData()
     {
         base.BindData();
@@ -202,6 +212,22 @@
 
         // Auto-save configuration (direct assignment, not bindable)
         BoundAutoSaveAddress = ViewModel.AutoSaveAddress;
+
+        // Open the long-standing MeshNodeReference stream for the auto-save target.
+        // Held as a field so AutoSaveContentAsync can call _nodeStream.Update(...) on
+        // every save without re-subscribing.
+        if (!string.IsNullOrEmpty(BoundAutoSaveAddress))
+        {
+            try
+            {
+                _nodeStream = Hub.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
+                    new Address(BoundAutoSaveAddress), new MeshNodeReference());
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to open node stream for auto-save at {Address}", BoundAutoSaveAddress);
+            }
+        }
         BoundNodePath = ViewModel.NodePath;
 
         // Resolve current user for annotation metadata
@@ -433,15 +459,20 @@
 
         try
         {
-            // Sync the full MeshNode via the remote stream and patch Content only —
-            // preserves Name/Icon/Description and avoids the key-mapping failure that
-            // DataChangeRequest + partial MeshNode triggers on the hosting hub.
-            var workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
-            MeshWeaver.Mesh.MeshNodeStreamExtensions.UpdateMeshNode(
-                workspace,
-                node => node with { Content = new MarkdownContent { Content = content } },
-                new Address(BoundAutoSaveAddress),
-                BoundNodePath);
+            // Push the edit through the long-standing MeshNodeReference stream.
+            // The framework's sync Update overload accepts Func<T?, ChangeItem<T>?>
+            // — pure synchronous transformation, no Task. The owning hub applies the
+            // patch and broadcasts the echo through the same subscription.
+            if (_nodeStream == null) return Task.FromResult(false);
+            _nodeStream.Update(current =>
+            {
+                if (current == null) return null;
+                var updated = current with { Content = new MarkdownContent { Content = content } };
+                return new ChangeItem<MeshNode>(
+                    updated, _nodeStream.StreamId, _nodeStream.StreamId,
+                    ChangeType.Patch, _nodeStream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
+            });
             Logger.LogDebug("Auto-saved content to {Address} for node {Path}", BoundAutoSaveAddress, BoundNodePath);
             return Task.FromResult(true);
         }

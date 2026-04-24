@@ -179,21 +179,26 @@ public class AgentChatClient : IAgentChat
         {
             var factory = GetFactoryForModel(currentModelName);
             var workspace = hub.ServiceProvider.GetRequiredService<Data.IWorkspace>();
-            workspace.UpdateMeshNode(node =>
-            {
-                if (node.Content is not Thread threadContent)
-                    return node;
-                if (!string.IsNullOrEmpty(threadContent.PersistentThreadId))
-                    return node; // Already set
-                return node with
+            // Single-op write to a remote MeshNode — read current via the workspace
+            // stream, apply the transform, post DataChangeRequest to the owning hub.
+            workspace.GetMeshNodeStream(threadNodePath)
+                .Take(1).Timeout(TimeSpan.FromSeconds(10))
+                .Subscribe(node =>
                 {
-                    Content = threadContent with
+                    if (node.Content is not Thread threadContent) return;
+                    if (!string.IsNullOrEmpty(threadContent.PersistentThreadId)) return;
+                    var newNode = node with
                     {
-                        PersistentThreadId = persistentThreadId,
-                        ProviderType = factory?.Name
-                    }
-                };
-            }, address: new Messaging.Address(threadNodePath));
+                        Content = threadContent with
+                        {
+                            PersistentThreadId = persistentThreadId,
+                            ProviderType = factory?.Name
+                        }
+                    };
+                    hub.Post(
+                        new Data.DataChangeRequest { Updates = [newNode] },
+                        o => o.WithTarget(new Messaging.Address(threadNodePath)));
+                });
 
             logger.LogInformation("Updated thread {Path} with PersistentThreadId={PersistentThreadId}",
                 threadNodePath, persistentThreadId);

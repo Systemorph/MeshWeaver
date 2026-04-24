@@ -77,18 +77,21 @@ public static class MeshNodeExtensions
 
     /// <summary>
     /// Updates a MeshNode's content with a typed update function.
-    /// Reads the current content as TContent, applies the update, and pushes the change.
-    /// Uses GetStream for the local hub or GetRemoteStream for a remote address.
+    /// Own-hub typed-content update wrapper. Reads the current MeshNode's
+    /// <typeparamref name="TContent"/>, applies <paramref name="update"/>, and writes
+    /// through the workspace's local MeshNode partition stream. For remote MeshNode
+    /// updates, callers should post a <see cref="DataChangeRequest"/> to the owning
+    /// hub's address — see <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
     public static void UpdateMeshNode<TContent>(this IWorkspace workspace,
-        Address? address, string nodePath, Func<MeshNode, TContent, MeshNode> update)
+        string nodePath, Func<MeshNode, TContent, MeshNode> update)
         where TContent : class
     {
         workspace.UpdateMeshNode(node =>
         {
             var content = node.Content as TContent;
             return content != null ? update(node, content) : node;
-        }, address, nodePath);
+        }, nodePath: nodePath);
     }
 
     /// <summary>

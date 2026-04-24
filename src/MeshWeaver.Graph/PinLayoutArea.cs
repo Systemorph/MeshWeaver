@@ -109,13 +109,23 @@ public static class PinLayoutArea
                        "border-radius: 50%; background: rgba(0,0,0,0.55); color: #fff;")
             .WithClickAction(ctx =>
             {
-                ctx.Host.Workspace.UpdateMeshNode<User>(userAddress, userPath, (n, user) =>
-                {
-                    var paths = user.PinnedPaths?.ToImmutableList() ?? ImmutableList<string>.Empty;
-                    var updated = paths.RemoveAll(p =>
-                        string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase));
-                    return n with { Content = user with { PinnedPaths = updated } };
-                });
+                // Remote write to a different hub's MeshNode (the User node lives at
+                // userAddress, not this host's hub). Single-op write → read current via
+                // GetMeshNodeStream(path), apply transform, post DataChangeRequest. The
+                // owning hub's data layer applies the patch and broadcasts to subscribers.
+                ctx.Host.Workspace.GetMeshNodeStream(userPath)
+                    .Take(1).Timeout(TimeSpan.FromSeconds(10))
+                    .Subscribe(n =>
+                    {
+                        if (n.Content is not User user) return;
+                        var paths = user.PinnedPaths?.ToImmutableList() ?? ImmutableList<string>.Empty;
+                        var updated = paths.RemoveAll(p =>
+                            string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase));
+                        var newNode = n with { Content = user with { PinnedPaths = updated } };
+                        ctx.Host.Hub.Post(
+                            new DataChangeRequest { Updates = [newNode] },
+                            o => o.WithTarget(userAddress));
+                    });
                 return Task.CompletedTask;
             });
 
@@ -139,18 +149,25 @@ public static class PinLayoutArea
         var userPath = $"User/{viewerId}";
         var userAddress = new Address(userPath);
 
-        // Apply the update remotely on the user hub. workspace.UpdateMeshNode<User>
-        // dispatches via GetRemoteStream when the address differs from the current hub.
-        host.Workspace.UpdateMeshNode<User>(userAddress, userPath, (node, user) =>
-        {
-            var paths = user.PinnedPaths?.ToImmutableList() ?? ImmutableList<string>.Empty;
-            var updated = unpin
-                ? paths.RemoveAll(p => string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase))
-                : (paths.Any(p => string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase))
-                    ? paths
-                    : paths.Add(hubPath));
-            return node with { Content = user with { PinnedPaths = updated } };
-        });
+        // Single-op remote write: read current user via GetMeshNodeStream(path), apply
+        // the pin/unpin transform, post DataChangeRequest to the owning user hub. The
+        // viewer's dashboard subscribes to that user node and re-renders on the echo.
+        host.Workspace.GetMeshNodeStream(userPath)
+            .Take(1).Timeout(TimeSpan.FromSeconds(10))
+            .Subscribe(node =>
+            {
+                if (node.Content is not User user) return;
+                var paths = user.PinnedPaths?.ToImmutableList() ?? ImmutableList<string>.Empty;
+                var updated = unpin
+                    ? paths.RemoveAll(p => string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase))
+                    : (paths.Any(p => string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase))
+                        ? paths
+                        : paths.Add(hubPath));
+                var newNode = node with { Content = user with { PinnedPaths = updated } };
+                host.Hub.Post(
+                    new DataChangeRequest { Updates = [newNode] },
+                    o => o.WithTarget(userAddress));
+            });
 
         var title = unpin ? "Unpinned" : "Pinned";
         var message = unpin

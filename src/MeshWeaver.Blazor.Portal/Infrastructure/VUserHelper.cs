@@ -22,11 +22,18 @@ public static class VUserHelper
     public static async Task EnsureVUserNodeAsync(PortalApplication portalApp, string virtualUserId, ILogger? logger = null)
     {
         var hub = portalApp.Hub;
-        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var queryCore = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
         var path = $"VUser/{virtualUserId}";
 
-        if (await persistence.ExistsAsync(path))
-            return;
+        // Existence check via IMeshQueryCore — infrastructure-scoped query (no access
+        // control) avoids reaching into IMeshStorage from a non-handler caller. Take
+        // the first item and break; if none, the node is missing.
+        await foreach (var _ in queryCore.QueryAsync(
+            MeshQueryRequest.FromQuery($"path:{path}"),
+            hub.JsonSerializerOptions))
+        {
+            return; // exists
+        }
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         using (accessService.ImpersonateAsHub(hub))

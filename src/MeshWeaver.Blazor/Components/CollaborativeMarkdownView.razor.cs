@@ -64,6 +64,11 @@ public partial class CollaborativeMarkdownView
     private string? _processedHtml;
     private List<ParsedAnnotation> Annotations = new();
 
+    // Long-standing per-node MeshNodeReference stream — subscribed at BindData,
+    // disposed on dispose. SaveContentAsync calls _nodeStream.Update(...) to push
+    // edits through the same stream the view is rendering from.
+    private ISynchronizationStream<MeshNode>? _nodeStream;
+
     // Comment data cache (markerId -> Comment), populated by mesh query subscription
     private Dictionary<string, Comment> commentNodes = new();
     // Comment path cache (markerId -> MeshNode path), for resolve/delete operations
@@ -107,19 +112,20 @@ public partial class CollaborativeMarkdownView
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
         CurrentAuthor = (accessService?.Context ?? accessService?.CircuitContext)?.Name ?? "";
 
-        // Subscribe to workspace stream for reactive content updates.
-        // When workspace.UpdateMeshNode() injects comment markers, the stream
-        // pushes the updated node and the view re-renders with the new content.
-        if (!string.IsNullOrEmpty(BoundHubAddress))
+        // Long-standing subscription to the owning hub's MeshNodeReference stream.
+        // Hold the stream itself (not a snapshot) so SaveContentAsync can call
+        // _nodeStream.Update(...) to push edits through the same stream the view
+        // is rendering from.
+        if (!string.IsNullOrEmpty(BoundNodePath))
         {
             var workspace = Hub.GetWorkspace();
-            var remoteStream = workspace.GetRemoteStream<MeshNode>(new Address(BoundHubAddress));
-            if (remoteStream != null)
+            try
             {
-                AddBinding(remoteStream
-                    .Select(nodes => nodes?.FirstOrDefault(n => n.Path == BoundNodePath))
-                    .Where(n => n != null)
-                    .Select(n => MarkdownOverviewLayoutArea.GetMarkdownContent(n))
+                _nodeStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                    new Address(BoundNodePath), new MeshNodeReference());
+                AddBinding(_nodeStream
+                    .Where(change => change.Value != null)
+                    .Select(change => MarkdownOverviewLayoutArea.GetMarkdownContent(change.Value!))
                     .DistinctUntilChanged()
                     .Subscribe(content =>
                     {
@@ -131,9 +137,10 @@ public partial class CollaborativeMarkdownView
                         }
                     }));
             }
-            else
+            catch
             {
-                // Fallback: one-time bind from ViewModel
+                // Workspace has no MeshNodeReference reducer for this address —
+                // fall back to one-time bind from the ViewModel.
                 DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
             }
         }
@@ -367,11 +374,20 @@ public partial class CollaborativeMarkdownView
 
         try
         {
-            var workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
-            workspace.UpdateMeshNode(
-                node => node with { Content = new MarkdownContent { Content = newContent } },
-                new Address(BoundHubAddress),
-                BoundNodePath);
+            // Push the edit through the long-standing MeshNodeReference stream.
+            // .Update applies the patch on the owning hub via the synchronization
+            // protocol; the same subscription receives the echo and the view
+            // re-renders without an extra read.
+            if (_nodeStream == null) return Task.FromResult(false);
+            _nodeStream.Update(current =>
+            {
+                if (current == null) return null;
+                var updated = current with { Content = new MarkdownContent { Content = newContent } };
+                return new ChangeItem<MeshNode>(
+                    updated, _nodeStream.StreamId, _nodeStream.StreamId,
+                    ChangeType.Patch, _nodeStream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
+            });
             return Task.FromResult(true);
         }
         catch

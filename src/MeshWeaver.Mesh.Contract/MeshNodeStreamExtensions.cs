@@ -30,92 +30,56 @@ public static class MeshNodeStreamExtensions
     }
 
     /// <summary>
-    /// Reactive handle to a MeshNode at <paramref name="path"/>. Dispatches in priority
-    /// order:
+    /// Reactive handle to a MeshNode at <paramref name="path"/>. Two cases only:
     /// <list type="number">
     ///   <item><description><b>Own hub</b> — when <paramref name="path"/> matches the hub's
     ///     address: returns the local <see cref="MeshNodeReference"/> stream.</description></item>
-    ///   <item><description><b>Local collection</b> — when the workspace's MeshNode
-    ///     <c>InstanceCollection</c> already contains the node (the common case for
-    ///     mesh-hub reads of any node loaded by <c>MeshDataSource</c> at init):
-    ///     filter the local stream by path. No <c>SubscribeRequest</c> goes to a remote
-    ///     hub.</description></item>
-    ///   <item><description><b>Remote</b> — fall back to
-    ///     <see cref="WorkspaceExtensions.GetRemoteStream{TReduced,TReference}"/> for
-    ///     nodes hosted on a separate hub.</description></item>
+    ///   <item><description><b>Remote</b> — subscribes to the owning per-node hub via
+    ///     <see cref="WorkspaceExtensions.GetRemoteStream{TReduced,TReference}"/> +
+    ///     <see cref="MeshNodeReference"/>.</description></item>
     /// </list>
-    /// Callers don't have to distinguish — just pass the path. Empty/no-match emits
-    /// nothing (combine with <c>.Take(1).Timeout(...)</c> for a "not found within X"
-    /// semantic).
-    ///
-    /// <para>
-    /// <b>Why the local-collection step matters:</b> for nodes that exist in the mesh
-    /// hub's collection but have no separately-activated per-node hub (test scenarios,
-    /// many production paths), going straight to <c>GetRemoteStream</c> sends a
-    /// <c>SubscribeRequest</c> to the per-node address. That hub has no
-    /// <c>SubscribeRequest</c> handler, the synchronization protocol gets a
-    /// <c>DeliveryFailure</c>, and the read returns null/error. Checking the local
-    /// collection first sidesteps that entire failure mode.
-    /// </para>
+    /// The owning hub's <c>MeshDataSource</c> loads its MeshNode at init, so
+    /// <c>GetStream(new MeshNodeReference())</c> on the owning side is always
+    /// populated. If the node does not exist at <paramref name="path"/>, the
+    /// per-node hub never activates and the remote subscription does not emit —
+    /// callers should bound with <c>.Take(1).Timeout(...)</c> and treat absence
+    /// of an emission as "not found".
     /// </summary>
     public static IObservable<MeshNode> GetMeshNodeStream(this IWorkspace workspace, string path)
     {
         if (string.Equals(workspace.Hub.Address.ToString(), path, StringComparison.Ordinal))
             return workspace.GetMeshNodeStream();
 
-        // Local collection — preferred for any mesh-hub-loaded node. Avoids the cross-hub
-        // SubscribeRequest round trip and works even when no per-node hub exists.
-        var localCollection = workspace.GetStream<MeshNode>();
-        if (localCollection != null)
-        {
-            return localCollection
-                .Select(nodes => nodes?.FirstOrDefault(n =>
-                    string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
-                .Where(n => n != null)
-                .Select(n => n!);
-        }
-
-        // Remote — node lives at a separate hub address, subscribe via MeshNodeReference.
-        var remote = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
-        return remote
+        return stream
             .Where(change => change.Value != null)
             .Select(change => change.Value!);
     }
 
     /// <summary>
-    /// Updates a MeshNode via the workspace. Local hub: routes through the data source's
-    /// MeshNode partition stream. Remote address: pushes a patch via
-    /// <c>GetRemoteStream&lt;InstanceCollection, CollectionReference&gt;</c>. Either path uses
-    /// the synchronization protocol — no <see cref="IMeshStorage"/> calls; persistence
-    /// belongs in <c>MeshDataSource</c> initialization only.
+    /// Updates the OWN MeshNode of <paramref name="workspace"/> by applying
+    /// <paramref name="update"/> through the data source's MeshNode partition stream
+    /// — the data source persister flushes to storage, subscribers receive the update
+    /// via the workspace synchronization protocol, no <see cref="IMeshStorage"/>
+    /// calls (persistence belongs in <c>MeshDataSource</c> initialization only).
+    ///
+    /// <para>
+    /// <b>Own-hub only.</b> To update a MeshNode at a remote address, post a
+    /// <see cref="DataChangeRequest"/> with the already-built target node:
+    /// <code>
+    /// hub.Post(new DataChangeRequest { Updates = [updated] },
+    ///     o =&gt; o.WithTarget(new Address(updated.Path)));
+    /// </code>
+    /// The owning hub's data layer (registered by <c>AddData()</c>) handles it
+    /// natively — no <c>GetRemoteStream</c> / <c>SubscribeRequest</c> round trip,
+    /// works even when no per-node hub has been separately activated.
+    /// </para>
     /// </summary>
     public static void UpdateMeshNode(this IWorkspace workspace,
         Func<MeshNode, MeshNode> update,
-        Address? address = null, string? nodePath = null)
+        string? nodePath = null)
     {
-        if (address != null && !address.Equals(workspace.Hub.Address))
-        {
-            // Remote: update via CollectionReference stream on the remote hub.
-            var remoteStream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
-                address, new CollectionReference(nameof(MeshNode)));
-            remoteStream?.Update(current =>
-            {
-                if (current == null) throw new InvalidOperationException("no state of mesh nodes");
-                var nId = nodePath?.Split('/').Last();
-                var node = (nId is null
-                    ? current.Instances.Values.First()
-                    : current.Instances.GetValueOrDefault(nId)) as MeshNode;
-                if (node is null) throw new InvalidOperationException("State is not a mesh node.");
-                var updated = update(node);
-                return new ChangeItem<InstanceCollection>(
-                    current.SetItem(updated.Id, updated),
-                    remoteStream.StreamId, remoteStream.StreamId,
-                    ChangeType.Patch, remoteStream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = node }]);
-            });
-            return;
-        }
 
         // Local: write to the data source's MeshNode partition stream — same stream the
         // workspace reduces from, so updates propagate to all subscribers (and to persistence

@@ -485,18 +485,192 @@ meshService.CopyNode(source, target, includeDescendants: true, includeSatellites
 - `Move = Copy + Delete` keeps Move's handler trivial (no per-node logic, no subtree iteration); the Copy handler owns the recursion.
 - `IncludeSatellites`/`IncludeDescendants` flags on `CopyNodeRequest` let callers opt in. By default Copy includes descendants but not satellites — Move sets both `true` to hard-move activity logs, comments, etc.
 
-## 🚨 Updating a remote MeshNode — `GetRemoteStream` + `stream.Update`
+## 🚨 Reading the OWN node — `GetStream(new MeshNodeReference())`, never `GetStream<MeshNode>().FirstOrDefault`
 
-For mutations to a `MeshNode` that lives at **another hub's address**, the only correct primitive is the remote stream's `.Update(...)`:
+To read the hub's **own** MeshNode (the node whose path equals the hub's address), use the dedicated own-node reducer:
 
 ```csharp
-// ✅ Right — push the patch to the owning hub via the synchronization stream.
+// ✅ Right — direct subscription to the MeshNodeReference reducer.
+//    Always populated when MeshDataSource is registered.
+workspace.GetStream(new MeshNodeReference())
+    .Select(change => change.Value)
+    .Where(node => node != null)
+    .Subscribe(node => /* handle the own node */);
+```
+
+**Anti-pattern** — filtering `GetStream<MeshNode>()` by path:
+
+```csharp
+// ❌ Wrong — pulls the WHOLE InstanceCollection on every emission and filters
+//    in C#. Allocates, scans, and emits one frame per collection mutation
+//    (every other-node update too). Drops on the floor when the collection
+//    hasn't loaded yet (FirstOrDefault returns null and the consumer waits).
+workspace.GetStream<MeshNode>()
+    ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hub.Address.ToString()))
+    .Where(n => n != null)
+    .Subscribe(...);
+```
+
+The `MeshNodeReference` reducer is registered by `MeshDataSource.AddMeshDataSource()` for every hub that owns a node. If the call **throws** `InvalidOperationException("Failed to create stream")`, the workspace was misconfigured (no MeshDataSource on this hub) — return a NodeNotFound error response, don't let the exception escape and crash the delivery pipeline.
+
+For reading any node by path (own or remote), use `workspace.GetMeshNodeStream(path)` which dispatches own → remote.
+
+## 🚨 Writing a remote MeshNode — pick the right primitive
+
+Two correct patterns, depending on what the caller is doing:
+
+### One-shot fire-and-forget mutation — `DataChangeRequest`
+
+When the caller just wants to push one update and walk away (handler that builds the new node and posts it, HTTP endpoint that performs an action, MCP tool, click action), post a `DataChangeRequest` directly:
+
+```csharp
+// ✅ Right for one-shot writes — owning hub's data layer (registered by
+//    AddData()) handles DataChangeRequest natively: applies the patch,
+//    persists, and broadcasts to subscribers via the synchronization
+//    protocol. No subscription required, no SubscribeRequest round trip,
+//    works even if no per-node hub is separately activated for the path.
+hub.Post(new DataChangeRequest { Updates = [updatedNode] },
+    o => o.WithTarget(new Address(updatedNode.Path)));
+```
+
+### Long-standing subscription that also writes — `GetRemoteStream + Update`
+
+When the caller is *already subscribed* to the remote stream (live editor, dashboard view, collaborative session) and wants to push edits back through the same channel they're watching, use the remote stream's `.Update(...)`:
+
+```csharp
+// ✅ Right for long-standing streams — caller is already paying the
+//    subscription cost; pushing the patch through the same stream means
+//    the same subscriber sees the update echo back without an extra read.
 var remote = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
     new Address(targetPath), new MeshNodeReference());
 remote.Update(current => current with { Name = "Renamed", LastModifiedBy = me });
+// keep the subscription alive — the editor renders subsequent updates from it.
 ```
 
-`stream.Update` ships the patch through the synchronization protocol; the owning hub validates it, runs its node validators, writes to persistence, and republishes to all subscribers. The caller never touches `IMeshStorage`, never calls `GetNodeAsync`, never calls `SaveNodeAsync`.
+`stream.Update` ships the patch through the synchronization protocol; the owning hub validates it, runs its node validators, writes to persistence, and republishes to all subscribers (including the caller).
+
+### Don't use `GetRemoteStream + Update` for one-shot writes
+
+Subscribing just to push one update is wasteful: it incurs a `SubscribeRequest` round trip, allocates the subscription, and then disposes it. For nodes whose per-node hub isn't separately activated, the `SubscribeRequest` gets `DeliveryFailure` and the write is silently dropped — `DataChangeRequest` doesn't have that failure mode. **Rule of thumb:** if you're not also reading from the stream, use `DataChangeRequest`.
+
+### `workspace.UpdateMeshNode(...)` is own-hub only
+
+The local `UpdateMeshNode` extension writes through the data source's MeshNode partition stream — there's no remote variant. For remote, choose between `DataChangeRequest` (one-shot) or `GetRemoteStream + Update` (subscribed) per the rules above.
+
+## 🚨 The canonical layout-area / Blazor view pattern — hold the stream, never the snapshot
+
+For any view that **reads and writes** the same MeshNode (collaborative editor, dashboard with edit, layout area with click actions), hold the **`ISynchronizationStream<MeshNode>`** as a field — not a snapshot, not a `Take(1)` re-subscription per click. Subscribe once at init, write through `stream.Update(...)` on save:
+
+```csharp
+public partial class MyEditor : BlazorView<MyControl, MyEditor>
+{
+    // Long-standing per-node stream: subscribed at BindData, disposed via AddBinding.
+    // Save handlers call _nodeStream.Update(...) to push edits through the same
+    // stream the view is rendering from — the echo updates the view, no extra read.
+    private ISynchronizationStream<MeshNode>? _nodeStream;
+
+    protected override void BindData()
+    {
+        base.BindData();
+
+        var workspace = Hub.GetWorkspace();
+        try
+        {
+            _nodeStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(BoundNodePath), new MeshNodeReference());
+            AddBinding(_nodeStream
+                .Where(change => change.Value != null)
+                .Select(change => change.Value!.Content as MarkdownContent)
+                .DistinctUntilChanged()
+                .Subscribe(content =>
+                {
+                    if (content?.Content is { } text && text != RawContent)
+                    {
+                        RawContent = text;
+                        InvokeAsync(StateHasChanged);
+                    }
+                }));
+        }
+        catch
+        {
+            // Workspace has no MeshNodeReference reducer for this address —
+            // fall back to one-time bind from the ViewModel.
+            DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
+        }
+    }
+
+    private Task SaveAsync(string newContent)
+    {
+        if (_nodeStream == null) return Task.FromResult(false);
+        _nodeStream.Update(current =>
+            current with { Content = new MarkdownContent { Content = newContent } });
+        return Task.FromResult(true);
+    }
+}
+```
+
+**Why this is the right shape:**
+
+- `GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` is the **per-node reducer** — direct, no FirstOrDefault on a collection, no per-emission filter that allocates and scans.
+- The stream is held **as a field**, not refetched on every save. One `SubscribeRequest` at view init; the subscription stays alive until the view is disposed.
+- `_nodeStream.Update(...)` writes through the same stream the view is rendering from — the patch goes to the owning hub, the owning hub broadcasts the echo, the view's existing subscription updates `_processedHtml` / `RawContent` and re-renders. No extra read, no DataChangeRequest, no second subscription.
+- Save-handler reuse is **free** — every click handler that needs the current node uses `_nodeStream.Update(current => ...)`. The lambda receives the live snapshot at apply time.
+
+### Anti-patterns that show up in views
+
+```csharp
+// ❌ WRONG — Take(1) per save; subscribes, reads, disposes, every click.
+private Task SaveAsync(string newContent)
+{
+    workspace.GetMeshNodeStream(BoundNodePath)
+        .Take(1).Timeout(TimeSpan.FromSeconds(10))
+        .Subscribe(node =>
+        {
+            var newNode = node with { Content = new MarkdownContent { Content = newContent } };
+            Hub.Post(new DataChangeRequest { Updates = [newNode] },
+                o => o.WithTarget(new Address(BoundHubAddress)));
+        });
+    return Task.FromResult(true);
+}
+
+// ❌ WRONG — caching a static MeshNode snapshot that goes stale.
+private MeshNode? _currentNode;
+// ... view subscribes, sets _currentNode on each emission ...
+private Task SaveAsync(string newContent)
+{
+    var newNode = _currentNode! with { Content = ... };
+    Hub.Post(new DataChangeRequest { Updates = [newNode] }, o => o.WithTarget(...));
+    return Task.FromResult(true);
+}
+
+// ❌ WRONG — GetRemoteStream<MeshNode>(addr) (collection variant) + FirstOrDefault.
+//   Pulls the WHOLE InstanceCollection on every emission; emits a frame whenever
+//   ANY other node in the collection mutates; loses the typed write-back path.
+workspace.GetRemoteStream<MeshNode>(new Address(addr))
+    ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == path))
+    .Subscribe(...);
+```
+
+**The reduce-to-MeshNode (`MeshNodeReference`) form is always preferred over reduce-to-`InstanceCollection` (`CollectionReference`) when you only care about one node** — direct reducer, narrower change feed, supports `.Update(...)` write-back.
+
+## 🚨 Decision rule — single op vs. long-standing stream
+
+The choice between `DataChangeRequest` and `GetRemoteStream + Update` is the same shape that comes up everywhere there's a hub-to-hub interaction (writes, reads, autocomplete, layout areas, …):
+
+| Caller shape | Use |
+|---|---|
+| **Single operation** — handler builds the value once and is done; HTTP / MCP / CLI endpoints; click actions; one-shot writes | `hub.Post(new DataChangeRequest { … }, o => o.WithTarget(addr))` (or the equivalent one-shot request/response message) |
+| **Long-standing stream** — anything that re-renders or re-computes when data changes; **all layout areas**; live editors; dashboards; collaborative views; **streaming autocomplete** | `workspace.GetRemoteStream<T, TRef>(addr, ref)` + `.Subscribe(...)` (and `.Update(...)` for write-back through the same stream) |
+
+> **Rule of thumb:** if any downstream code keeps re-rendering when data changes, you need a long-standing stream. One-shot writes use `DataChangeRequest`.
+
+The rule applies symmetrically:
+- **Layout areas always subscribe to a stream** (live updates) and push edits back through `stream.Update(...)` — never `DataChangeRequest` for a write the area is also rendering.
+- **Autocomplete** that streams suggestions in (the suggest widget repaints as items arrive) uses a long-standing stream subscription. A one-shot autocomplete (no incremental UI updates) uses request/response.
+- **MCP tools** (agent calls a tool, gets a response, session ends) are always one-shot — write via `DataChangeRequest`, read via `QueryAsync` / `Get`. There is no live observer downstream of an MCP tool result, so a long-standing stream would only allocate and tear down on every call.
+- **`MeshPlugin` tool methods** (Get / Search / Create / Update / Delete / NavigateTo) follow the same shape: each tool call maps to a single hub round-trip (request/response or `DataChangeRequest`) — never to a `GetRemoteStream` subscription.
+- **HTTP / CLI endpoints** that render once and close are one-shot — `DataChangeRequest` on writes, `QueryAsync` on reads.
+- **Handlers that persist a side-effect** (activity log, version write, audit) use `DataChangeRequest` — no live observer to keep alive.
 
 ### Persistence belongs in MeshDataSource init — nowhere else
 
