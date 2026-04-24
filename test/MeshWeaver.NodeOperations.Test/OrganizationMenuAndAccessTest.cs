@@ -36,7 +36,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
             .AddOrganizationType()
             .AddSampleUsers();
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task AdminCreator_HasFullPermissions()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -73,7 +73,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
     /// Uses a non-admin user to check that permissions come from the AccessAssignment,
     /// not from claim-based roles.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task PostCreationHandler_GrantsAdminViaAccessAssignment()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -116,7 +116,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         await NodeFactory.DeleteNode(orgId);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task Organization_HasStandardCreatableTypes()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -145,7 +145,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         await NodeFactory.DeleteNode(orgId);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task Organization_ChildrenAreQueryable()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];

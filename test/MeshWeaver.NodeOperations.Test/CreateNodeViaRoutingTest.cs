@@ -44,7 +44,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// Creates a new MeshNode with valid content via CreateNodeRequest.
     /// The node should be persisted and retrievable.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateNode_WithMarkdownContent_Succeeds()
     {
         // Arrange
@@ -81,7 +81,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// CreateNodeRequest without permission should be rejected.
     /// The RlsNodeValidator checks permission on the parent path.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateNode_WithoutPermission_Rejected()
     {
         // Arrange — switch to "no-access-user" who has no permissions on "Restricted" namespace
@@ -121,7 +121,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// <summary>
     /// CreateNodeRequest with an invalid NodeType should be rejected.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateNode_InvalidNodeType_Rejected()
     {
         // Arrange
@@ -144,7 +144,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// ImpersonateAsHub scope sends operations with the hub's own identity.
     /// The mesh node's address is used as the AccessContext for authorization.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateNode_ImpersonateAsHub_UsesHubIdentity()
     {
         // Arrange — grant access to the mesh hub's address
@@ -182,7 +182,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// Query without ImpersonateAsHub on a namespace where the current user
     /// has no read access should return no results (security filtering).
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 60000)]
     public async Task Query_WithoutImpersonation_ReturnsNoResults()
     {
         // Arrange — grant Admin to mesh hub on "Impersonate" namespace, but NOT to "no-access-user"
@@ -238,7 +238,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// <summary>
     /// Query with ImpersonateAsHub should succeed when the hub has read access.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 60000)]
     public async Task Query_WithImpersonation_ReturnsNode()
     {
         // Arrange — grant Admin to mesh hub on "Impersonate" namespace

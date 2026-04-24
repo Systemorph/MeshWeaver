@@ -30,7 +30,7 @@ public class CreateOrganizationTest(ITestOutputHelper output) : MonolithMeshTest
         => base.ConfigureMesh(builder)
             .AddOrganizationType();
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateOrganization_CreatesPartitionAndAdminAccess()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];

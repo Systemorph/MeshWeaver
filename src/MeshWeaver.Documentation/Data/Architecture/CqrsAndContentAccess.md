@@ -15,10 +15,11 @@ Tags:
   - "Consistency"
 ---
 
-## The four primitives
+## The five primitives
 
 | Intent | Primitive |
 |---|---|
+| **Bind a UI control to a node's content** | Declare a path-bound control (e.g. `new MeshNodeThumbnailControl { NodePath = path }`) or `JsonPointerReference`. The Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>` — **layout-area code never loads the node**. See [Data Binding](xref:GUI/DataBinding). |
 | **Find a set of nodes** (existence, listing, search) | `mesh.ObserveQuery<T>(request)` — or `QueryAsync` for `IAsyncEnumerable` |
 | **Read a known node's content (one-shot)** | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr))` + `hub.RegisterCallback` |
 | **Subscribe to a node's live updates** | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` |
@@ -34,6 +35,11 @@ consistent: there is a window — single-digit to tens of milliseconds in prod �
 successful write is not yet reflected in query results. That's acceptable for browsing
 and autocomplete but lethal for "read-your-writes" operations like Patch (read current
 content → merge → write), auditing ("did my change take?"), or any decision flow.
+
+> **Layout areas should bind, not fetch.** The whole lag problem disappears when the GUI
+> subscribes directly to `GetRemoteStream<MeshNode, MeshNodeReference>` — the view shows
+> the authoritative current state and re-renders on every change. See
+> [Data Binding](xref:GUI/DataBinding) for the bind-by-path pattern.
 
 `GetDataRequest(new MeshNodeReference())` goes to the **owning hub's workspace** — the
 source of truth. No staleness. It also activates the hub if it was cold; you don't have

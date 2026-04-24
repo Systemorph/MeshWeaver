@@ -56,35 +56,18 @@ public static class GroupMembershipLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var ownNode = host.Workspace.GetMeshNodeStream();
+        var permsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
-            ?? Observable.Return<MeshNode[]>([]);
-
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-
-            if (!permissions.HasFlag(Permission.Read))
-                return (UiControl?)Controls.Html("<p>Access denied.</p>");
-
-            var canEdit = permissions.HasFlag(Permission.Update);
-
-            // Build overview without children
-            var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
-
-            // Header
-            stack = stack.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, canEdit));
-
-            // Property form (Member + Groups)
-            if (node != null)
+        return ownNode.CombineLatest(permsStream, (node, perms) =>
             {
+                if (!perms.HasFlag(Permission.Read))
+                    return (UiControl?)Controls.Html("<p>Access denied.</p>");
+                var canEdit = perms.HasFlag(Permission.Update);
+                var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
+                stack = stack.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, canEdit));
                 stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit));
-            }
-
-            // No children section — GroupMembership nodes don't have meaningful children
-
-            return (UiControl?)stack;
-        });
+                return (UiControl?)stack;
+            });
     }
 }

@@ -1,14 +1,17 @@
 # Asynchronous Calls in MeshWeaver
 
+> **For GUI rendering, see [Data Binding](xref:GUI/DataBinding) — that is the authoritative pattern.** Layout areas should not load data at all; they declare bindings, and the Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>`. The rules below cover hub-handler / service code, where you still need to compose async work safely.
+
 MeshWeaver uses a **truly asynchronous** message-passing model. This is fundamentally different from C#'s `async/await` pattern, which is better described as "fake async" — you still block the calling context waiting for a result.
 
 ## 🚨 The absolute rules (no exceptions outside tests)
 
 1. **No `Task<T>` / `async` / `await` in mesh-reachable code.** Public methods on services, handlers, layout areas, and click actions return `IObservable<T>` (or `void`). Return types matter — an `async Task` method that `await`s a hub operation deadlocks the hub ActionBlock. No exceptions for "just a wrapper" or "small helper".
 2. **No `*Async` extension shims on `IMeshService`.** Use `meshService.CreateNode(node)` / `UpdateNode(node)` / `DeleteNode(path)` / `CreateTransient(node)` — these return `IObservable<MeshNode>`. **Never** use `.CreateNodeAsync(...)` / `.UpdateNodeAsync(...)` / `.DeleteNodeAsync(...)` / `.CreateTransientAsync(...)` — those extensions are being removed. They bridge the Observable to Task via `.ToTask()` and make the caller `await`, which deadlocks every time they are reached from a hub handler.
-3. **Never `.QueryAsync<MeshNode>($"path:X").FirstOrDefaultAsync()` to read a known node.** Queries go through a lagged read-side index. For a known path use `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference()).Take(1).Select(change => change.Value)`. Also the primitive for **wait-for-completion** — subscribe until a completion condition emits.
+3. **Never `.QueryAsync<MeshNode>($"path:X").FirstOrDefaultAsync()` to read a known node.** Queries go through a lagged read-side index. For a known path use `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference()).Select(change => change.Value)`. Stay subscribed — no `.Take(1)`. The view re-renders on every node change.
 4. **Never wrap a Task-returning query in `Observable.FromAsync(() => query.QueryAsync(...).FirstOrDefaultAsync().AsTask())`.** This is fake-reactive — runs through the lagged index and returns stale content. Use `GetRemoteStream<MeshNode, MeshNodeReference>` for the authoritative live view.
 5. **`ISynchronizationStream<T>.Update` callbacks must be synchronous.** Don't use the `Func<T?, CancellationToken, Task<ChangeItem<T>?>>` overload from hub-reachable code — it hides an `await` inside the stream update. Use the sync `Func<T?, ChangeItem<T>?>` form and compose any async I/O outside the callback.
+6. **🚨 NO `.Take(1)` on display streams.** A `.Take(1)` snapshots and unsubscribes — the view freezes on the first emission and **stops updating**. We want streams that keep emitting so the UI re-renders on every change. The only place `.Take(1)` is acceptable is a one-shot side effect inside a click action helper that does work *once* and then disposes (e.g. read-current-node-then-mutate). For display, compose with `CombineLatest` / `SelectMany` / `Switch` and let the chain stay live.
 
 ## 🚨🚨🚨 NEVER USE `QueryAsync` TO OBTAIN A `MeshNode` 🚨🚨🚨
 
@@ -51,6 +54,8 @@ This is also how you **wait for work to finish** — subscribe until a field in 
 ### Sets / listings — **prefer `ObserveQuery`**, not `QueryAsync`
 
 Even for the cases where a query is the right idea (listings, filters, existence across the mesh), **do not `await` the `IAsyncEnumerable<T>`** version — use the reactive `IMeshService.ObserveQuery<T>` overload. It returns `IObservable<QueryResultChange<T>>` with an initial full set and then incremental deltas, and it composes with `Select` / `Where` / `Subscribe` exactly like every other mesh observable.
+
+> **Even `ObserveQuery` is wrong inside a layout area for displaying values.** Declare a binding (a path-bound control or a `JsonPointerReference`) and let the Blazor view subscribe. See [Data Binding](xref:GUI/DataBinding). Backend rendering code should be fully synchronous and side-effect-free.
 
 **`QueryAsync` breaks the update flow.** It is a one-shot snapshot: you get the rows that existed at query time and nothing else. The view is frozen — if a row is added, removed, or mutated on the mesh, your list doesn't change. Any reactive chain downstream (a layout area, a dashboard, a dependent query) that re-renders when data changes is now silently broken because this particular upstream doesn't emit on updates. `ObserveQuery` emits the initial set plus a delta for every subsequent change, so the downstream chain stays live.
 

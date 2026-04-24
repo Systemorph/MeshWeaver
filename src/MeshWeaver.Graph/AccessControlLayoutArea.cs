@@ -1,5 +1,6 @@
 using System.Net;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -300,85 +301,56 @@ public static class AccessControlLayoutArea
                 }))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async saveCtx =>
+                .WithClickAction(saveCtx =>
                 {
-                    var formValues = await saveCtx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                    var selectedSubject = formValues.GetValueOrDefault("accessObject")?.ToString()?.Trim();
-                    var selectedRole = formValues.GetValueOrDefault("role")?.ToString()?.Trim();
-
-                    if (string.IsNullOrEmpty(selectedSubject))
-                    {
-                        ShowValidationError(saveCtx, "Please select a **Subject**.");
-                        return;
-                    }
-                    if (string.IsNullOrEmpty(selectedRole))
-                    {
-                        ShowValidationError(saveCtx, "Please select a **Role**.");
-                        return;
-                    }
-
-                    var subjectName = selectedSubject.Split('/').Last();
-                    var nodeId = $"{subjectName}_Access";
-                    var accessNs = $"{nodePath}/_Access";
-                    var path = $"{accessNs}/{nodeId}";
-
-                    // Check if an assignment already exists for this subject
-                    MeshNode? existing = null;
-                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshService>();
-                    if (query != null)
-                    {
-                        try
+                    // Subscribe to the form data stream (synchronous emission via Take(1) —
+                    // one-shot read for a click action, per DataBinding doc rule).
+                    saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(formValues =>
                         {
-                            existing = await query.QueryAsync<MeshNode>($"path:{path}")
-                                .FirstOrDefaultAsync();
-                        }
-                        catch { }
-                    }
+                            var selectedSubject = formValues.GetValueOrDefault("accessObject")?.ToString()?.Trim();
+                            var selectedRole = formValues.GetValueOrDefault("role")?.ToString()?.Trim();
 
-                    // Close dialog
-                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-
-                    if (existing != null)
-                    {
-                        // Assignment already exists for this subject — dialog closes, page stays
-                    }
-                    else
-                    {
-                        // Create the node directly with the role already set
-                        // Look up the subject node to copy their icon
-                        string? subjectIcon = null;
-                        if (query != null)
-                        {
-                            try
+                            if (string.IsNullOrEmpty(selectedSubject))
                             {
-                                var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject}")
-                                    .FirstOrDefaultAsync();
-                                subjectIcon = subjectNode?.Icon;
+                                ShowValidationError(saveCtx, "Please select a **Subject**.");
+                                return;
                             }
-                            catch { }
-                        }
-
-                        var newNode = new MeshNode(nodeId, accessNs)
-                        {
-                            NodeType = Configuration.AccessAssignmentNodeType.NodeType,
-                            Name = $"{subjectName} Access",
-                            Icon = subjectIcon,
-                            MainNode = nodePath,
-                            Content = new AccessAssignment
+                            if (string.IsNullOrEmpty(selectedRole))
                             {
-                                AccessObject = selectedSubject,
-                                DisplayName = subjectName,
-                                Roles = [new RoleAssignment { Role = selectedRole, Denied = false }]
+                                ShowValidationError(saveCtx, "Please select a **Role**.");
+                                return;
                             }
-                        };
 
-                        // Save directly — no transient/Create view needed
-                        saveCtx.Hub.Post(
-                            new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
-                            o => o.WithTarget(saveCtx.Hub.Address));
-                    }
+                            var subjectName = selectedSubject.Split('/').Last();
+                            var nodeId = $"{subjectName}_Access";
+                            var accessNs = $"{nodePath}/_Access";
+
+                            // Close dialog immediately. No backend existence check, no icon
+                            // lookup — both belong on the GUI (the path-bound thumbnail
+                            // subscribes to the subject's node stream). A duplicate path is
+                            // harmless (create handler rejects with NodeAlreadyExists).
+                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+
+                            var newNode = new MeshNode(nodeId, accessNs)
+                            {
+                                NodeType = Configuration.AccessAssignmentNodeType.NodeType,
+                                Name = $"{subjectName} Access",
+                                MainNode = nodePath,
+                                Content = new AccessAssignment
+                                {
+                                    AccessObject = selectedSubject,
+                                    DisplayName = subjectName,
+                                    Roles = [new RoleAssignment { Role = selectedRole, Denied = false }]
+                                }
+                            };
+
+                            saveCtx.Hub.Post(
+                                new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
+                                o => o.WithTarget(saveCtx.Hub.Address));
+                        });
+                    return Task.CompletedTask;
                 }));
 
         var dialog = Controls.Dialog(formContent, "Add Assignment")

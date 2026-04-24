@@ -44,24 +44,18 @@ public static class SettingsLayoutArea
         var hubAddress = host.Hub.Address;
         var tabId = host.Reference.Id?.ToString();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
+        var ownNode = host.Workspace.GetMeshNodeStream();
+        var permsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
 
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-            var canEdit = perms.HasFlag(Permission.Update);
-
-            var items = await host.Hub.Configuration
-                .EvaluateSettingsMenuItemsAsync(host, ctx, perms);
-
-            if (string.IsNullOrEmpty(tabId) && items.Count > 0)
-                tabId = items[0].Id;
-            tabId ??= MetadataTab;
-
-            return (UiControl?)BuildSettingsPage(host, node, hubAddress, hubPath, tabId, canEdit, items);
-        });
+        return ownNode.CombineLatest(permsStream, (node, perms) => (Node: node, Perms: perms))
+            .SelectMany(t => Observable.FromAsync(() =>
+                    host.Hub.Configuration.EvaluateSettingsMenuItemsAsync(host, ctx, t.Perms))
+                .Select(items =>
+                {
+                    var canEdit = t.Perms.HasFlag(Permission.Update);
+                    var selectedTab = string.IsNullOrEmpty(tabId) && items.Count > 0 ? items[0].Id : (tabId ?? MetadataTab);
+                    return (UiControl?)BuildSettingsPage(host, t.Node, hubAddress, hubPath, selectedTab, canEdit, items);
+                }));
     }
 
     private static UiControl BuildSettingsPage(

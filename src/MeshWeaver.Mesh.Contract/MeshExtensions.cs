@@ -1093,12 +1093,27 @@ public static class MeshExtensions
         logger.LogDebug("[UpdateNode] start hub={Hub}, target={Target}, sender={Sender}, deliveryId={DeliveryId}",
             hub.Address, updatedNode.Path, request.Sender, request.Id);
 
-        // The handler runs on the hub that owns the node's MeshNodeReference stream.
-        // workspace.GetStream(new MeshNodeReference()) returns the own MeshNode reducer
-        // stream when MeshDataSource is registered on this hub. If GetStream throws
-        // ("Failed to create stream") the hub has no reducer for the node — same
-        // semantic as "node not found here": post a NodeNotFound response instead of
-        // crashing the message pump.
+        // Forward to the owning per-node hub when this hub doesn't own the path.
+        // Only the per-node hub (registered via AddMeshDataSource) has a
+        // MeshNodeReference reducer. The mesh hub forwards and relays the response.
+        // Compare via Address.Path (segments only) — ToString() / ToFullString()
+        // include "~host" for hosted hubs, which would always mismatch a bare path.
+        if (!string.Equals(hub.Address.Path, updatedNode.Path, StringComparison.Ordinal))
+        {
+            logger.LogInformation("[UpdateNode] forwarding from {Hub} (path={HubPath}) to per-node hub {Target}",
+                hub.Address, hub.Address.Path, updatedNode.Path);
+            var forwarded = hub.Post(capturedRequest,
+                o => o.WithTarget(new Address(updatedNode.Path)))!;
+            hub.RegisterCallback(forwarded, (d, _) =>
+            {
+                hub.Post(((IMessageDelivery<UpdateNodeResponse>)d).Message,
+                    o => o.ResponseFor(request));
+                return Task.FromResult<IMessageDelivery>(d);
+            });
+            return request.Processed();
+        }
+
+        // We own the path — read our own MeshNodeReference stream.
         ISynchronizationStream<MeshNode>? ownStream;
         try
         {

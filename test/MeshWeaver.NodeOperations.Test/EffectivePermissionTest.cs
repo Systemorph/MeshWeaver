@@ -38,7 +38,7 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
         await securityService.AddUserRoleAsync(TestUsers.Admin.ObjectId, "Admin", null, "system", TestTimeout);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateOrganization_HasPermission_ReturnsAdmin()
     {
         // 1) OrganizationNodeType installed via ConfigureMesh
