@@ -250,12 +250,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // The second entry must be an assistant cell with the error in its Text.
         var errorCellId = final.Messages[1];
-        MeshNode? errorCell = null;
-        await foreach (var n in MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}/{errorCellId}", null, ct))
-        {
-            errorCell = n;
-            break;
-        }
+        var errorCell = await ReadNodeAsync($"{threadPath}/{errorCellId}", ct);
         errorCell.Should().NotBeNull();
         var content = errorCell!.Content as ThreadMessage;
         content.Should().NotBeNull();
@@ -462,12 +457,7 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     private async Task<MeshThread> ReadThreadAsync(string threadPath, CancellationToken ct)
     {
-        MeshNode? node = null;
-        await foreach (var n in MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}", null, ct))
-        {
-            node = n;
-            break;
-        }
+        var node = await ReadNodeAsync(threadPath, ct);
         node.Should().NotBeNull($"thread node {threadPath} must exist");
         var content = node!.Content as MeshThread;
         content.Should().NotBeNull($"thread {threadPath} must have MeshThread content");

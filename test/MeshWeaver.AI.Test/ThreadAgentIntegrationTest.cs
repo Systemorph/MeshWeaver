@@ -177,12 +177,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
-        MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
-        {
-            contextNode = node;
-            break;
-        }
+        var contextNode = await ReadNodeAsync("ACME/ProductLaunch", ct);
         contextNode.Should().NotBeNull("ACME/ProductLaunch node should exist in test data");
 
         agentChat.SetContext(new AgentContext
@@ -277,12 +272,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
-        MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
-        {
-            contextNode = node;
-            break;
-        }
+        var contextNode = await ReadNodeAsync("ACME/ProductLaunch", ct);
 
         agentChat.SetContext(new AgentContext
         {
@@ -348,12 +338,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
-        MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
-        {
-            contextNode = node;
-            break;
-        }
+        var contextNode = await ReadNodeAsync("ACME/ProductLaunch", ct);
 
         agentChat.SetContext(new AgentContext
         {

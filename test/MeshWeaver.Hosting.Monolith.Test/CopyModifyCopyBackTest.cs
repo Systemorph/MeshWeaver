@@ -59,7 +59,7 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
         nodesCopied.Should().Be(4, "should copy root + 3 children");
 
         // The copy places nodes at CopyNs/Orig, CopyNs/Orig/A, CopyNs/Orig/B, CopyNs/Orig/C
-        var copiedB = await meshService.QueryAsync<MeshNode>($"path:{CopyNs}/Orig/B").FirstOrDefaultAsync();
+        var copiedB = await ReadNodeAsync($"{CopyNs}/Orig/B");
         copiedB.Should().NotBeNull("copied B should exist at CopyNs/Orig/B");
 
         // 2. Modify node B in the copy
@@ -71,7 +71,7 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
         await meshService.UpdateNode(modifiedB);
 
         // Verify the modification took effect
-        var verifyB = await meshService.QueryAsync<MeshNode>($"path:{CopyNs}/Orig/B").FirstOrDefaultAsync();
+        var verifyB = await ReadNodeAsync($"{CopyNs}/Orig/B");
         verifyB!.Name.Should().Be("Node B Modified");
 
         // 3. Copy back from CopyNs/Orig to OrigNs with force=true (overwrite)
@@ -86,19 +86,19 @@ public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTest
         // The copy back creates OrigNs/Orig (root) and OrigNs/Orig/A, B, C
         // But the original B is at OrigNs/B which is untouched.
         // The new B is at OrigNs/Orig/B
-        var resultOrigB = await meshService.QueryAsync<MeshNode>($"path:{OrigNs}/Orig/B").FirstOrDefaultAsync();
+        var resultOrigB = await ReadNodeAsync($"{OrigNs}/Orig/B");
         resultOrigB.Should().NotBeNull("copied-back B should exist");
         resultOrigB!.Name.Should().Be("Node B Modified", "B should have the modified name");
         (resultOrigB.Content as MarkdownContent)?.Content.Should().Be("Modified content of B",
             "B should have the modified content");
 
         // 5. The original OrigNs/A and OrigNs/C should be untouched
-        var resultA = await meshService.QueryAsync<MeshNode>($"path:{OrigNs}/A").FirstOrDefaultAsync();
+        var resultA = await ReadNodeAsync($"{OrigNs}/A");
         resultA.Should().NotBeNull();
         resultA!.Name.Should().Be("Node A", "original A should be unchanged");
         (resultA.Content as MarkdownContent)?.Content.Should().Be("Content of A");
 
-        var resultC = await meshService.QueryAsync<MeshNode>($"path:{OrigNs}/C").FirstOrDefaultAsync();
+        var resultC = await ReadNodeAsync($"{OrigNs}/C");
         resultC.Should().NotBeNull();
         resultC!.Name.Should().Be("Node C", "original C should be unchanged");
         (resultC.Content as MarkdownContent)?.Content.Should().Be("Content of C");

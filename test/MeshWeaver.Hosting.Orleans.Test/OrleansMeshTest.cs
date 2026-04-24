@@ -1,17 +1,24 @@
-﻿using System.Threading.Tasks;
+using System;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using Xunit;
 using System.Threading;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.Connection.Orleans;
 using Orleans;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-public class OrleansMeshTests(ITestOutputHelper output) : OrleansTestBase(output)
+[Collection(nameof(OrleansClusterCollection))]
+public class OrleansMeshTests(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
 {
+    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+        => await fixture.GetClientAsync($"mesh-{name}-{Guid.NewGuid():N}", "Roland");
+
     [Fact(Timeout = 30000)]
     public async Task PingPong()
     {

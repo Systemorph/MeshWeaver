@@ -29,6 +29,8 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture — uses MarkdownExportSiloConfigurator with AddMarkdownExport(),
+// which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end Orleans tests for the markdown PDF / DOCX export pipeline. Exercises the full
 /// cross-hub serialization path: client hub → routing → node hub → handler → response back.

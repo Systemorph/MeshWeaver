@@ -1,9 +1,11 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -19,14 +21,16 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Uses standard CreateNodeRequest with nodeType=ApiToken — same satellite pattern
 /// as Thread/Comment. The RLS validator maps ApiToken → Permission.Api.
 /// </summary>
-public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(output)
+[Collection(nameof(OrleansClusterCollection))]
+public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
     {
-        configuration.TypeRegistry
+        var client = await fixture.GetClientAsync($"apitoken-{name}-{Guid.NewGuid():N}", "Roland");
+        client.TypeRegistry
             .WithType(typeof(ValidateTokenRequest), nameof(ValidateTokenRequest))
             .WithType(typeof(ValidateTokenResponse), nameof(ValidateTokenResponse));
-        return base.ConfigureClient(configuration);
+        return client;
     }
 
     [Fact]
@@ -34,7 +38,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(out
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = await GetClientAsync();
-        var meshAddress = ClientMesh.Address;
+        var meshAddress = fixture.ClientMesh.Address;
 
         // Generate token hash
         var rawToken = $"mw_{Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant()}";

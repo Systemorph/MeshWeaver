@@ -117,7 +117,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:User/TestUser").FirstOrDefaultAsync();
+        var node = await ReadNodeAsync("User/TestUser");
         node.Should().NotBeNull("Oliver user node should exist in samples/Graph/Data/User/TestUser.json");
         node!.NodeType.Should().Be("User");
 

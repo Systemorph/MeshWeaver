@@ -405,12 +405,12 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges.Count.Should().BeGreaterThanOrEqualTo(2);
 
         // Verify the node exists at the new path
-        var movedNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project1Moved").FirstOrDefaultAsync();
+        var movedNode = await ReadNodeAsync("ACME/Project1Moved");
         movedNode.Should().NotBeNull();
         movedNode!.Name.Should().Be("Project 1");
 
         // Verify the old node doesn't exist
-        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project1").FirstOrDefaultAsync();
+        var oldNode = await ReadNodeAsync("ACME/Project1");
         oldNode.Should().BeNull();
 
         subscription.Dispose();

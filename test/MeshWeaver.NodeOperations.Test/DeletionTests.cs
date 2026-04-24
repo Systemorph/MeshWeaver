@@ -40,8 +40,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.DeleteNode($"{TestPartition}/delleaf");
 
         // Assert — node should be gone
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/delleaf")
-            .FirstOrDefaultAsync(TestTimeout);
+        var result = await ReadNodeAsync($"{TestPartition}/delleaf", TestTimeout);
         result.Should().BeNull("leaf node should be deleted");
     }
 
@@ -60,10 +59,10 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.DeleteNode($"{TestPartition}/del2parent");
 
         // Assert — parent and both children should be gone
-        var parent = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del2parent")
-            .FirstOrDefaultAsync(TestTimeout);
+        var parent = await ReadNodeAsync($"{TestPartition}/del2parent", TestTimeout);
         parent.Should().BeNull("parent should be deleted");
 
+        // Listing children: queries are correct here — set existence, not single-node content.
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/del2parent")
             .ToListAsync(TestTimeout);
         children.Should().BeEmpty("all children should be deleted");
@@ -114,10 +113,10 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.DeleteNode($"{TestPartition}/del4parent/delete");
 
         // Assert — the kept sibling should still exist
-        var kept = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del4parent/keep")
-            .FirstOrDefaultAsync(TestTimeout);
+        var kept = await ReadNodeAsync($"{TestPartition}/del4parent/keep", TestTimeout);
         kept.Should().NotBeNull("sibling node should not be affected");
 
+        // Subtree existence: query is appropriate here (set, not specific content read)
         var deleted = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del4parent/delete scope:subtree")
             .ToListAsync(TestTimeout);
         deleted.Should().BeEmpty("target subtree should be fully deleted");
@@ -140,8 +139,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Assert
         response.Message.Success.Should().BeTrue("deletion via client should succeed");
 
-        var result = await MeshQuery.QueryAsync<MeshNode>("path:del5/target")
-            .FirstOrDefaultAsync(TestTimeout);
+        var result = await ReadNodeAsync("del5/target", TestTimeout);
         result.Should().BeNull("node should be deleted");
     }
 
@@ -180,8 +178,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await nodeService.DeleteNode(nodePath);
 
         // Assert — node should be deleted
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
-            .FirstOrDefaultAsync(TestTimeout);
+        var result = await ReadNodeAsync(nodePath, TestTimeout);
         result.Should().BeNull("deletion from node hub should work");
     }
 }

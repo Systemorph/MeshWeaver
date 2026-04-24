@@ -8,12 +8,14 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Xunit;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -45,8 +47,11 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     private IMeshService GetNodeFactory()
         => GetHost().ServiceProvider.GetRequiredService<IMeshService>();
 
-    private async Task<MeshNode?> GetNodeAsync(string path)
-        => await GetMeshQuery().QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+    // Read via the workspace's MeshNodeReference reducer (CQRS-correct, no
+    // catalog/index lag). The returned IObservable is converted to a Task at the
+    // test edge — single emission then complete.
+    private Task<MeshNode> GetNode(string path)
+        => GetHost().GetWorkspace().GetMeshNodeStream(path).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
     private async Task SaveNode(string path, string? name = null, string? nodeType = null, object? content = null)
     {
@@ -169,7 +174,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         copied.Should().Be(1);
 
-        var target = await GetNodeAsync("workspace/Acme");
+        var target = await GetNode("workspace/Acme");
         target.Should().NotBeNull();
         target!.Name.Should().Be("Acme Corp");
         target.NodeType.Should().Be("Organization");
@@ -190,12 +195,12 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         copied.Should().Be(4);
 
-        (await GetNodeAsync("workspace/Acme")).Should().NotBeNull();
-        (await GetNodeAsync("workspace/Acme/Team1")).Should().NotBeNull();
-        (await GetNodeAsync("workspace/Acme/Team2")).Should().NotBeNull();
-        (await GetNodeAsync("workspace/Acme/Team1/Alice")).Should().NotBeNull();
+        (await GetNode("workspace/Acme")).Should().NotBeNull();
+        (await GetNode("workspace/Acme/Team1")).Should().NotBeNull();
+        (await GetNode("workspace/Acme/Team2")).Should().NotBeNull();
+        (await GetNode("workspace/Acme/Team1/Alice")).Should().NotBeNull();
 
-        var alice = await GetNodeAsync("workspace/Acme/Team1/Alice");
+        var alice = await GetNode("workspace/Acme/Team1/Alice");
         alice!.Name.Should().Be("Alice");
         alice.NodeType.Should().Be("Person");
     }
@@ -216,7 +221,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         copied.Should().Be(1); // Only Team1 copied, Acme skipped
 
-        var existing = await GetNodeAsync("workspace/Acme");
+        var existing = await GetNode("workspace/Acme");
         existing!.Name.Should().Be("Existing Acme"); // Not overwritten
     }
 
@@ -235,7 +240,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         copied.Should().Be(1);
 
-        var overwritten = await GetNodeAsync("workspace/Acme");
+        var overwritten = await GetNode("workspace/Acme");
         overwritten!.Name.Should().Be("Acme Corp"); // Overwritten
     }
 
@@ -264,8 +269,8 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         copied.Should().Be(2);
 
         // With empty target namespace, nodes go to root with source relative paths
-        (await GetNodeAsync("Acme")).Should().NotBeNull();
-        (await GetNodeAsync("Acme/Sub")).Should().NotBeNull();
+        (await GetNode("Acme")).Should().NotBeNull();
+        (await GetNode("Acme/Sub")).Should().NotBeNull();
     }
 
     [HubFact]
@@ -280,7 +285,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         copied.Should().Be(1);
 
-        var target = await GetNodeAsync("dest/Doc");
+        var target = await GetNode("dest/Doc");
         target.Should().NotBeNull();
         target!.Content.Should().NotBeNull();
     }
@@ -296,7 +301,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         copied.Should().Be(1);
 
-        var target = await GetNodeAsync("workspace/TopLevel");
+        var target = await GetNode("workspace/TopLevel");
         target.Should().NotBeNull();
         target!.Name.Should().Be("Top Level Node");
     }

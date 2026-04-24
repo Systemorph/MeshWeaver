@@ -32,6 +32,10 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture — uses DelegationSiloConfigurator with a custom
+// DelegationToolFakeChatClientFactory whose tool-calling behavior is essential to the test.
+// Migration would require either swapping the chat factory per-test (violates structural-only
+// rule) or a dedicated shared fixture variant.
 /// <summary>
 /// End-to-end test for delegation: the agent calls delegate_to_agent,
 /// which creates a sub-thread and submits to it. Verifies that:
@@ -148,8 +152,9 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
         for (var i = 0; i < 60; i++)
         {
             var nodeId = msgIds[1];
+            // Canonical CQRS read via per-node MeshNodeReference reducer.
             var resp = await client.AwaitResponse(
-                new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+                new GetDataRequest(new MeshNodeReference()),
                 o => o.WithTarget(new Address($"{threadPath}/{nodeId}")), ct);
             var node = resp.Message.Data as MeshNode;
             if (node == null && resp.Message.Data is JsonElement je)

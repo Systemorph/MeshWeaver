@@ -386,7 +386,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
             Content = new { name = "Roland Buergi", email = "roland@example.com", role = "Admin" }
         });
 
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{p}/Roland").FirstOrDefaultAsync();
+        var node = await ReadNodeAsync($"{p}/Roland");
 
         node.Should().NotBeNull();
         node!.NodeType.Should().Be("Markdown");

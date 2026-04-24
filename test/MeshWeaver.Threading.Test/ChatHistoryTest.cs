@@ -80,13 +80,13 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // Wait for execution to complete (Messages count reaches expected)
         for (var i = 0; i < 60; i++)
         {
-            var node = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+            var node = await ReadNodeAsync(threadPath, ct);
             var thread = node?.Content as MeshThread;
             if (thread is { IsExecuting: false } && thread.Messages.Count >= expectedMsgCount)
             {
                 // Read the last response message
                 var lastMsgId = thread.Messages[^1];
-                var msgNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}/{lastMsgId}").FirstOrDefaultAsync(ct);
+                var msgNode = await ReadNodeAsync($"{threadPath}/{lastMsgId}", ct);
                 var tmsg = msgNode?.Content as ThreadMessage;
                 if (tmsg?.Text is { Length: > 0 })
                     return tmsg.Text;

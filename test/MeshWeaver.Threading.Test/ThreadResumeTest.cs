@@ -99,8 +99,8 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var threadPath = messagePath[..messagePath.LastIndexOf('/')];
         for (var i = 0; i < 50; i++)
         {
-            var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
-            var msgNode = await MeshQuery.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync(ct);
+            var threadNode = await ReadNodeAsync(threadPath, ct);
+            var msgNode = await ReadNodeAsync(messagePath, ct);
             if (threadNode?.Content is MeshThread { IsExecuting: false } && msgNode?.Content is ThreadMessage { Text.Length: > 0 })
                 return;
             await Task.Delay(200, ct);
@@ -156,8 +156,8 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         // 2. Wait for response to complete
         await WaitForMessageCompleteAsync($"{threadPath}/{msgIds[1]}", ct);
 
-        // 3. Verify messages are persisted in the database
-        var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+        // 3. Verify messages are persisted (stream read)
+        var threadNode = await ReadNodeAsync(threadPath, ct);
         threadNode.Should().NotBeNull();
         var thread = threadNode!.Content as MeshThread;
         thread.Should().NotBeNull();
@@ -181,7 +181,7 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         // 5. Verify each message content is accessible
         foreach (var msgId in resumedMsgIds)
         {
-            var msgNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}/{msgId}").FirstOrDefaultAsync(ct);
+            var msgNode = await ReadNodeAsync($"{threadPath}/{msgId}", ct);
             msgNode.Should().NotBeNull($"message {msgId} should be retrievable after resume");
             var tmsg = msgNode!.Content as ThreadMessage;
             tmsg.Should().NotBeNull($"message {msgId} should have ThreadMessage content");

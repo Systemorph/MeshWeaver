@@ -65,9 +65,8 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
         result.Success.Should().BeTrue();
         result.NodesImported.Should().BeGreaterThanOrEqualTo(2);
 
-        // Verify nodes are queryable via IMeshService
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var alpha = await meshService.QueryAsync<MeshNode>("path:TestNs/Alpha").FirstOrDefaultAsync();
+        // Verify nodes are readable via the per-node hub
+        var alpha = await ReadNodeAsync("TestNs/Alpha");
         alpha.Should().NotBeNull();
         alpha!.Name.Should().Be("Alpha Node");
     }
@@ -95,8 +94,7 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
         result.NodesImported.Should().BeGreaterThanOrEqualTo(1);
 
         // Verify the node was remapped to ImportedData/Item1
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var node1 = await meshService.QueryAsync<MeshNode>("path:ImportedData/Item1").FirstOrDefaultAsync();
+        var node1 = await ReadNodeAsync("ImportedData/Item1");
         node1.Should().NotBeNull();
     }
 
@@ -205,7 +203,7 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
         result.NodesImported.Should().Be(1);
         result.NodesSkipped.Should().Be(0);
 
-        var updated = await meshService.QueryAsync<MeshNode>("path:ForceTest/Existing").FirstOrDefaultAsync();
+        var updated = await ReadNodeAsync("ForceTest/Existing");
         updated.Should().NotBeNull();
         updated!.Name.Should().Be("Updated");
     }
@@ -240,10 +238,10 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
         result.Success.Should().BeTrue();
         result.NodesRemoved.Should().BeGreaterThanOrEqualTo(1);
 
-        var removed = await meshService.QueryAsync<MeshNode>("path:RemoveTest/Remove").FirstOrDefaultAsync();
+        var removed = await ReadNodeAsync("RemoveTest/Remove");
         removed.Should().BeNull("node not in source should be removed");
 
-        var kept = await meshService.QueryAsync<MeshNode>("path:RemoveTest/Keep").FirstOrDefaultAsync();
+        var kept = await ReadNodeAsync("RemoveTest/Keep");
         kept.Should().NotBeNull("node in source should be kept");
     }
 }

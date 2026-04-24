@@ -270,6 +270,70 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
             because: "the content read of an existing Code node must succeed — Error here means the script wasn't found or wasn't recognised as executable");
     }
 
+    /// <summary>
+    /// Negative coverage for ExecuteScript: a Script that throws a runtime exception
+    /// must surface as <c>status="Error"</c> with the exception message in the
+    /// <c>error</c> field — silently swallowing it (status="Executed" + no signal)
+    /// would let broken Scripts ship.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ExecuteScript_ForBrokenScript_ReportsErrorStatus()
+    {
+        var id = $"err-{Guid.NewGuid():N}";
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(
+            new MeshNode(id, "Scripts")
+            {
+                Name = "Broken Script",
+                NodeType = "Code",
+                Content = new CodeConfiguration
+                {
+                    // Deliberate runtime failure — the kernel should report this back
+                    // through the ExecuteScriptResponse.Error field.
+                    Code = "throw new InvalidOperationException(\"intentional script failure\");",
+                    IsExecutable = true
+                }
+            });
+
+        var ops = new MeshOperations(Mesh);
+        var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 30)
+            .FirstAsync().ToTask();
+
+        result.Should().Contain("\"status\":\"Error\"",
+            because: "a script that throws must surface as Error status, not Executed");
+        result.Should().Contain("intentional script failure",
+            because: "the kernel's exception message must round-trip into the response so callers can diagnose");
+    }
+
+    /// <summary>
+    /// A script that targets a node which is not flagged executable must be rejected
+    /// up-front (no kernel dispatch, no silent success).
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task ExecuteScript_ForNonExecutableCodeNode_ReportsError()
+    {
+        var id = $"noexec-{Guid.NewGuid():N}";
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(
+            new MeshNode(id, "Scripts")
+            {
+                Name = "Non-Executable",
+                NodeType = "Code",
+                Content = new CodeConfiguration
+                {
+                    Code = "Console.WriteLine(\"should not run\");",
+                    IsExecutable = false
+                }
+            });
+
+        var ops = new MeshOperations(Mesh);
+        var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 10)
+            .FirstAsync().ToTask();
+
+        result.Should().Contain("\"status\":\"Error\"",
+            because: "non-executable Code nodes must reject ExecuteScript explicitly");
+    }
+
     // ---- Delete + Get --------------------------------------------------------
 
     [Fact(Timeout = 30_000)]

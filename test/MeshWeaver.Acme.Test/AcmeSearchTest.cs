@@ -148,8 +148,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             "authenticated users should have Read access to ACME via Public_Access.json Viewer role");
 
         // Also verify the node is actually fetchable (not just permission-granted)
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var node = await meshService.QueryAsync<MeshNode>("path:ACME").FirstOrDefaultAsync();
+        var node = await ReadNodeAsync("ACME");
         node.Should().NotBeNull("ACME node should exist");
         node!.NodeType.Should().Be("Organization");
     }

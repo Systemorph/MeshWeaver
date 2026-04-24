@@ -143,9 +143,8 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
                     // Also check if it's a content reference (contains ':')
                     if (!refPath.Contains(':'))
                     {
-                        // Try querying persistence
-                        var found = await MeshQuery.QueryAsync<MeshNode>($"path:{refPath}")
-                            .FirstOrDefaultAsync(ct);
+                        // Try reading via per-node stream
+                        var found = await ReadNodeAsync(refPath, ct);
                         if (found == null)
                             missingRefs.Add($"{node.Path}: @@{refPath} — node not found");
                     }

@@ -154,13 +154,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.InitializeAsync("ACME");
 
-        var query = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME", null, ct))
-        {
-            contextNode = node;
-            break;
-        }
+        var contextNode = await ReadNodeAsync("ACME", ct);
         contextNode.Should().NotBeNull();
 
         agentChat.SetContext(new AgentContext

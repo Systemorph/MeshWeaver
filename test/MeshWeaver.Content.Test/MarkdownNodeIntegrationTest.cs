@@ -105,7 +105,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditing_NodeExists_InMeshWeaverNamespace()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Doc/DataMesh/CollaborativeEditing");
 
         node.Should().NotBeNull("CollaborativeEditing node should exist");
         node!.Path.Should().Be("Doc/DataMesh/CollaborativeEditing");
@@ -119,7 +119,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditing_HasMarkdownDocumentContent()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Doc/DataMesh/CollaborativeEditing");
 
         node.Should().NotBeNull();
         node!.Content.Should().NotBeNull("Node should have content");
@@ -139,7 +139,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditing_ContentContainsDocumentation()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Doc/DataMesh/CollaborativeEditing");
 
         node.Should().NotBeNull();
 
@@ -492,8 +492,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task MeshWeaver_MarkdownNodes_HaveCorrectNodeType()
     {
-        var collaborativeEditing = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-        var nodeTypeConfig = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/NodeTypeConfiguration").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var collaborativeEditing = await ReadNodeAsync("Doc/DataMesh/CollaborativeEditing");
+        var nodeTypeConfig = await ReadNodeAsync("Doc/DataMesh/NodeTypeConfiguration");
 
         collaborativeEditing.Should().NotBeNull();
         collaborativeEditing!.NodeType.Should().Be("Markdown");
@@ -887,7 +887,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task InteractiveMarkdown_NodeExists_WithExecutableCodeBlocks()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Doc/DataMesh/InteractiveMarkdown");
 
         node.Should().NotBeNull("InteractiveMarkdown node should exist at Doc/DataMesh/InteractiveMarkdown");
         node!.Path.Should().Be("Doc/DataMesh/InteractiveMarkdown");
@@ -900,7 +900,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task InteractiveMarkdown_ContentContainsRenderFlags()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Doc/DataMesh/InteractiveMarkdown");
 
         node.Should().NotBeNull();
 
@@ -920,7 +920,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task InteractiveMarkdown_ParsesExecutableCodeBlocks()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Doc/DataMesh/InteractiveMarkdown");
         node.Should().NotBeNull();
 
         // Extract markdown content from node
@@ -982,7 +982,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task InteractiveMarkdown_PrerenderedHtml_ContainsKernelPlaceholder()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync("Doc/DataMesh/InteractiveMarkdown");
         node.Should().NotBeNull();
 
         // Extract markdown content from node

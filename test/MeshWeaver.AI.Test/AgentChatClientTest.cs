@@ -64,14 +64,8 @@ public class AgentChatClientTest : MonolithMeshTestBase
         var expectedNodeType = "ACME/Project";
         var expectedTodoAgentPath = "ACME/Project/TodoAgent";
 
-        // Load the actual node from the file system
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        MeshNode? productLaunchNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}", null, TestContext.Current.CancellationToken))
-        {
-            productLaunchNode = node;
-            break;
-        }
+        // Load the actual node via per-node stream (CQRS-correct read)
+        var productLaunchNode = await ReadNodeAsync(contextPath, TestContext.Current.CancellationToken);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist in test data");
 
         // CRITICAL: Verify the node has the expected NodeType
@@ -117,14 +111,8 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Arrange - Use a path that should have agents in hierarchy
         var contextPath = "ACME";
 
-        // Load the actual node from the file system
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        MeshNode? acmeNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}", null, TestContext.Current.CancellationToken))
-        {
-            acmeNode = node;
-            break;
-        }
+        // Load the actual node via per-node stream (CQRS-correct read)
+        var acmeNode = await ReadNodeAsync(contextPath, TestContext.Current.CancellationToken);
         acmeNode.Should().NotBeNull("ACME node should exist in test data");
 
         // Act

@@ -54,53 +54,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// - NodeChangeEntry aggregation across delegation boundaries
 /// - Correct routing of deeply nested sub-thread paths in Orleans
 /// </summary>
-public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : TestBase(output)
+[Collection(nameof(OrleansClusterCollection))]
+public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
 {
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
-
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<RlsChatSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    /// <summary>
-    /// Creates a client hub with user identity — same as the Blazor portal does
-    /// when a user opens a chat panel.
-    /// </summary>
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "nodechange"),
-            config =>
-            {
-                config.TypeRegistry.AddAITypes();
-                return config.AddLayoutClient();
-            });
-        // Simulate Blazor CircuitContext — user identity for access control
-        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
-        {
-            ObjectId = "Roland",
-            Name = "Roland Buergi",
-            Email = "rbuergi@systemorph.com"
-        });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
+    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+        => await fixture.GetClientAsync($"nodechange-{name}-{Guid.NewGuid():N}", "Roland");
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
@@ -129,16 +87,16 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : TestBa
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+        // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+            new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
+            node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
         if (node?.Content is T typed) return typed;
         if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(ClientMesh.JsonSerializerOptions);
+            return contentJe.Deserialize<T>(fixture.ClientMesh.JsonSerializerOptions);
         return null;
     }
 
@@ -217,7 +175,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : TestBa
         Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
 
         // 7. Verify the Markdown node was created by the Create tool
-        var meshService = Cluster.Client.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshService = fixture.Cluster.Client.ServiceProvider.GetRequiredService<IMeshService>();
         var createdNodes = await meshService
             .QueryAsync<MeshNode>("path:User/Roland/test-doc-nodechange", ct: ct)
             .ToListAsync(ct);

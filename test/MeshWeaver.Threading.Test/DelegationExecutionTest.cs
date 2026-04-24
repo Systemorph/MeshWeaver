@@ -174,8 +174,8 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
 
         // 8. Verify full hierarchy is navigable
 
-        // 8a. Parent thread has messages
-        var parentThread = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+        // 8a. Parent thread has messages (via stream — no catalog lag)
+        var parentThread = await ReadNodeAsync(threadPath, ct);
         parentThread.Should().NotBeNull();
         var parentContent = parentThread!.Content as MeshThread;
         parentContent!.Messages.Should().HaveCount(2);
@@ -187,19 +187,19 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         subThreads.Should().ContainSingle("should find exactly one sub-thread");
         subThreads[0].Path.Should().Be(subThreadPath);
 
-        // 8c. Sub-thread has its own messages
-        var subThread = await MeshQuery.QueryAsync<MeshNode>($"path:{subThreadPath}").FirstOrDefaultAsync(ct);
+        // 8c. Sub-thread has its own messages (stream read)
+        var subThread = await ReadNodeAsync(subThreadPath, ct);
         var subContent = subThread!.Content as MeshThread;
         subContent!.Messages.Should().HaveCount(2);
 
         // 8d. Sub-thread user message has correct text
-        var subUserMsg = await MeshQuery.QueryAsync<MeshNode>($"path:{subThreadPath}/{subMsgIds[0]}").FirstOrDefaultAsync(ct);
+        var subUserMsg = await ReadNodeAsync($"{subThreadPath}/{subMsgIds[0]}", ct);
         var subUserContent = subUserMsg!.Content as ThreadMessage;
         subUserContent!.Role.Should().Be("user");
         subUserContent.Text.Should().Contain("reinsurance pricing");
 
         // 8e. Sub-thread response message has agent output
-        var subRespMsg = await MeshQuery.QueryAsync<MeshNode>($"path:{subResponsePath}").FirstOrDefaultAsync(ct);
+        var subRespMsg = await ReadNodeAsync(subResponsePath, ct);
         var subRespContent = subRespMsg!.Content as ThreadMessage;
         subRespContent!.Role.Should().Be("assistant");
         subRespContent.Text.Should().NotBeNullOrEmpty("sub-agent should have produced a response");
@@ -221,8 +221,8 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         var threadPath = messagePath[..messagePath.LastIndexOf('/')];
         for (var i = 0; i < 50; i++)
         {
-            var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
-            var msgNode = await MeshQuery.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync(ct);
+            var threadNode = await ReadNodeAsync(threadPath, ct);
+            var msgNode = await ReadNodeAsync(messagePath, ct);
             if (threadNode?.Content is MeshThread { IsExecuting: false } && msgNode?.Content is ThreadMessage { Text.Length: > 0 })
                 return;
             await Task.Delay(200, ct);

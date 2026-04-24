@@ -33,7 +33,9 @@ public static class MoveLayoutArea
     }
 
     /// <summary>
-    /// Layout area handler for the Move action.
+    /// Layout area handler for the Move action. Pure observable — no await, no
+    /// Observable.FromAsync(async ...). Permission gating composes via
+    /// <see cref="PermissionHelper.ObservePermissions"/>.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Move(LayoutAreaHost host, RenderingContext _)
@@ -41,19 +43,17 @@ public static class MoveLayoutArea
         var currentPath = host.Hub.Address.ToString();
         var currentId = currentPath.Contains('/') ? currentPath[(currentPath.LastIndexOf('/') + 1)..] : currentPath;
 
-        return Observable.FromAsync(async () =>
-        {
-            var canDelete = await PermissionHelper.CanDeleteAsync(host.Hub, currentPath);
-            if (!canDelete)
+        return PermissionHelper.ObservePermissions(host.Hub, currentPath)
+            .Select(perms =>
             {
-                return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                    .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
-                    .WithView(Controls.Html(
-                        "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to move this node.</p>"));
-            }
+                if (!perms.HasFlag(Permission.Delete))
+                    return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
+                        .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
+                        .WithView(Controls.Html(
+                            "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to move this node.</p>"));
 
-            return (UiControl?)BuildMoveForm(host, currentPath, currentId);
-        });
+                return (UiControl?)BuildMoveForm(host, currentPath, currentId);
+            });
     }
 
     private static UiControl BuildMoveForm(LayoutAreaHost host, string currentPath, string currentId)
@@ -103,7 +103,11 @@ public static class MoveLayoutArea
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // Buttons
+        // Buttons — sync click action; reads form via Take(1)+Subscribe and posts
+        // MoveNodeRequest, then registers a callback for the response. No await
+        // anywhere on the click path: the form-data Take(1) is a one-shot read
+        // that completes after the first emission, and the response handling
+        // runs from the registered callback (off the click pump).
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
@@ -114,61 +118,70 @@ public static class MoveLayoutArea
             .WithView(Controls.Button("Move")
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.ArrowMove())
-                .WithClickAction(async ctx =>
+                .WithClickAction(ctx =>
                 {
-                    var formValues = await ctx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                    var targetNs = formValues?.GetValueOrDefault("targetNamespace")?.ToString()?.Trim() ?? "";
-                    var newId = formValues?.GetValueOrDefault("newId")?.ToString()?.Trim() ?? currentId;
-
-                    if (string.IsNullOrWhiteSpace(newId))
-                    {
-                        ShowDialog(ctx, "Validation Error", "Please enter a node Id.");
-                        return;
-                    }
-
-                    var targetPath = string.IsNullOrEmpty(targetNs) ? newId : $"{targetNs}/{newId}";
-
-                    if (targetPath == currentPath)
-                    {
-                        ShowDialog(ctx, "Validation Error", "Target path is the same as source path.");
-                        return;
-                    }
-
-                    try
-                    {
-                        logger?.LogInformation("Moving node from {Source} to {Target}", currentPath, targetPath);
-
-                        var response = await host.Hub.AwaitResponse<MoveNodeResponse>(
-                            new MoveNodeRequest(currentPath, targetPath),
-                            o => o.WithTarget(host.Hub.Address));
-
-                        if (!response.Message.Success)
+                    host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(formValues =>
                         {
-                            ShowDialog(ctx, "Move Failed", response.Message.Error ?? "Unknown error.");
-                            return;
-                        }
+                            var targetNs = formValues?.GetValueOrDefault("targetNamespace")?.ToString()?.Trim() ?? "";
+                            var newId = formValues?.GetValueOrDefault("newId")?.ToString()?.Trim() ?? currentId;
 
-                        logger?.LogInformation("Move complete: {Source} -> {Target}", currentPath, targetPath);
+                            if (string.IsNullOrWhiteSpace(newId))
+                            {
+                                ShowDialog(ctx, "Validation Error", "Please enter a node Id.");
+                                return;
+                            }
 
-                        var overviewUrl = MeshNodeLayoutAreas.BuildUrl(targetPath, MeshNodeLayoutAreas.OverviewArea);
+                            var targetPath = string.IsNullOrEmpty(targetNs) ? newId : $"{targetNs}/{newId}";
 
-                        var successDialog = Controls.Dialog(
-                            Controls.Markdown($"**Move Complete**\n\nMoved to `{targetPath}`."),
-                            "Move Complete"
-                        ).WithSize("M").WithClosable(true).WithCloseAction(_ =>
-                        {
-                            ctx.NavigateTo(overviewUrl);
-                            return Task.CompletedTask;
+                            if (targetPath == currentPath)
+                            {
+                                ShowDialog(ctx, "Validation Error", "Target path is the same as source path.");
+                                return;
+                            }
+
+                            logger?.LogInformation("Moving node from {Source} to {Target}", currentPath, targetPath);
+
+                            var delivery = host.Hub.Post(
+                                new MoveNodeRequest(currentPath, targetPath),
+                                o => o.WithTarget(host.Hub.Address));
+
+                            host.Hub.RegisterCallback((IMessageDelivery)delivery!, response =>
+                            {
+                                if (response is IMessageDelivery<MoveNodeResponse> mr)
+                                {
+                                    if (!mr.Message.Success)
+                                    {
+                                        ShowDialog(ctx, "Move Failed", mr.Message.Error ?? "Unknown error.");
+                                    }
+                                    else
+                                    {
+                                        logger?.LogInformation("Move complete: {Source} -> {Target}", currentPath, targetPath);
+
+                                        var overviewUrl = MeshNodeLayoutAreas.BuildUrl(targetPath, MeshNodeLayoutAreas.OverviewArea);
+
+                                        var successDialog = Controls.Dialog(
+                                            Controls.Markdown($"**Move Complete**\n\nMoved to `{targetPath}`."),
+                                            "Move Complete"
+                                        ).WithSize("M").WithClosable(true).WithCloseAction(_ =>
+                                        {
+                                            ctx.NavigateTo(overviewUrl);
+                                            return Task.CompletedTask;
+                                        });
+                                        ctx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
+                                    }
+                                }
+                                else if (response is IMessageDelivery<DeliveryFailure> df)
+                                {
+                                    logger?.LogError("Move failed for {Source} -> {Target}: {Error}",
+                                        currentPath, targetPath, df.Message.Message);
+                                    ShowDialog(ctx, "Move Failed", $"Move failed: {df.Message.Message}");
+                                }
+                                return response;
+                            });
                         });
-                        ctx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger?.LogError(ex, "Move failed for {Source} -> {Target}", currentPath, targetPath);
-                        ShowDialog(ctx, "Move Failed", $"Move failed: {ex.Message}");
-                    }
+                    return Task.CompletedTask;
                 })));
 
         return stack;

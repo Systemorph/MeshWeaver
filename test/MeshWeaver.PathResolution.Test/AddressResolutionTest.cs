@@ -29,7 +29,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
     private async Task EnsureNodesCreated()
     {
-        var existingPricing = await MeshQuery.QueryAsync<MeshNode>("path:pricing").FirstOrDefaultAsync();
+        var existingPricing = await ReadNodeAsync("pricing");
         if (existingPricing == null)
         {
             await NodeFactory.CreateNode(MeshNode.FromPath(PricingPath) with
@@ -39,7 +39,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             });
         }
 
-        var existingApp = await MeshQuery.QueryAsync<MeshNode>("path:app").FirstOrDefaultAsync();
+        var existingApp = await ReadNodeAsync("app");
         if (existingApp == null)
         {
             await NodeFactory.CreateNode(MeshNode.FromPath(AppPath) with

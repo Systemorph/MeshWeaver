@@ -13,6 +13,8 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture — depends on TestSiloConfigurator's AddFileSystemAssemblyStore,
+// which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Proves the distributed-cache invariant in an actual Orleans cluster: the
 /// content-addressed <see cref="IAssemblyStore"/> is registered on every silo, and a

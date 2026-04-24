@@ -157,9 +157,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         // The BusinessRules.md contains @@Cession/MotorXL which should resolve
         // relative to its own path Doc/Architecture/BusinessRules
         var ct = TestContext.Current.CancellationToken;
-        var docNode = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{BusinessRulesDocPath}", ct: ct)
-            .FirstOrDefaultAsync(ct);
+        var docNode = await ReadNodeAsync(BusinessRulesDocPath, ct);
 
         docNode.Should().NotBeNull("BusinessRules doc node should exist");
 

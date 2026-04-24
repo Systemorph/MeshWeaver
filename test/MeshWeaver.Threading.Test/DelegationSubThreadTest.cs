@@ -88,8 +88,8 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         subThreadPath.Should().Contain("/_Thread/",
             "sub-thread path should contain _Thread from the parent thread");
 
-        // Verify sub-thread is retrievable
-        var subThread = await MeshQuery.QueryAsync<MeshNode>($"path:{subThreadPath}").FirstOrDefaultAsync(ct);
+        // Verify sub-thread is retrievable via stream
+        var subThread = await ReadNodeAsync(subThreadPath, ct);
         subThread.Should().NotBeNull();
         subThread!.NodeType.Should().Be(ThreadNodeType.NodeType);
         subThread.Name.Should().Be("Explore mesh schema");
@@ -345,8 +345,8 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
                 Content = new MeshThread { Messages = [] }
             });
 
-        // Verify: Plan exists as Markdown child of thread
-        var plan = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}/Plan").FirstOrDefaultAsync(ct);
+        // Verify: Plan exists as Markdown child of thread (stream read)
+        var plan = await ReadNodeAsync($"{threadPath}/Plan", ct);
         plan.Should().NotBeNull();
         plan!.NodeType.Should().Be("Markdown");
 
@@ -356,8 +356,8 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             .ToListAsync(ct);
         subThreads.Should().ContainSingle();
 
-        // Verify: Sub-thread is accessible under response message namespace
-        var respNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}/{responseMsgId}").FirstOrDefaultAsync(ct);
+        // Verify: Sub-thread is accessible under response message namespace (stream read)
+        var respNode = await ReadNodeAsync($"{threadPath}/{responseMsgId}", ct);
         respNode.Should().NotBeNull();
     }
 }

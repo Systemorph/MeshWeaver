@@ -87,8 +87,7 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
         await NodeFactory.CreateNode(
             new MeshNode("stamp-check", TestPartition) { Name = "Stamp Check", NodeType = "Markdown" });
 
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
-            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
         node!.CreatedDate.Should().NotBe(default, "Created timestamp must be stamped at creation time");

@@ -72,12 +72,7 @@ public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithM
         client.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
         await Task.Delay(50, ct); // let dispose settle
 
-        MeshNode? current = null;
-        await foreach (var n in NodeFactory.QueryAsync<MeshNode>($"path:{path}", ct: ct).WithCancellation(ct))
-        {
-            current = n;
-            break;
-        }
+        var current = await ReadNodeAsync(path, ct);
         current.Should().NotBeNull();
         await NodeFactory.UpdateNode(current! with { Name = "Updated" });
 

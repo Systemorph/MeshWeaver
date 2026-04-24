@@ -82,8 +82,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var expectedPath = $"{threadPath}/Plan";
         Output.WriteLine($"Expected plan path: {expectedPath}");
 
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{expectedPath}")
-            .FirstOrDefaultAsync(ct);
+        var retrievedNode = await ReadNodeAsync(expectedPath, ct);
 
         retrievedNode.Should().NotBeNull("plan node should be retrievable at {threadPath}/Plan");
         retrievedNode!.Path.Should().Be(expectedPath);
@@ -170,7 +169,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // Verify updated content
         var planPath = $"{threadPath}/Plan";
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{planPath}").FirstOrDefaultAsync(ct);
+        var node = await ReadNodeAsync(planPath, ct);
 
         node.Should().NotBeNull();
         node!.Name.Should().Be("Execution Plan (revised)");

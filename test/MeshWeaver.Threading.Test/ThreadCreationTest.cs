@@ -78,8 +78,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         speakingId.Should().Contain("hello",
             "speaking ID should be derived from the message text");
 
-        // Assert — retrieve node and verify MainNode (satellite auto-set)
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+        // Assert — retrieve node and verify MainNode (satellite auto-set, stream read)
+        var node = await ReadNodeAsync(threadPath, ct);
         node.Should().NotBeNull("thread node should be retrievable");
         node!.NodeType.Should().Be(ThreadNodeType.NodeType);
         node.MainNode.Should().Be(contextPath,
@@ -232,8 +232,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Act - Create
         var createdNode = await NodeFactory.CreateNode(node);
 
-        // Act - Retrieve
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync();
+        // Act - Retrieve via stream
+        var retrievedNode = await ReadNodeAsync(threadPath);
 
         // Assert
         retrievedNode.Should().NotBeNull();
@@ -369,8 +369,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Verify MainNode points to the logical parent
         createdNode.MainNode.Should().Be(parentPath, "MainNode should point to logical parent for navigation");
 
-        // Verify the thread can be retrieved by full path
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync();
+        // Verify the thread can be retrieved by full path (stream read)
+        var retrievedNode = await ReadNodeAsync(threadPath);
         retrievedNode.Should().NotBeNull();
         retrievedNode!.MainNode.Should().Be(parentPath);
 

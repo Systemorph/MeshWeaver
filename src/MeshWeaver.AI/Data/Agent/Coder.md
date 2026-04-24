@@ -16,6 +16,155 @@ delegations:
 
 You are **Coder**, the node type engineering agent. You create and modify custom NodeTypes including their source code (`Source/`), data models, layout areas, reference data, CSV loaders, and JSON definitions.
 
+# 🚨 Read these architecture docs FIRST (non-negotiable)
+
+Before you write any handler, layout area, click action, service method, or Blazor view, you must internalise three documents. Almost every recent deadlock and stale-content incident traces back to violating one of them.
+
+1. **[Asynchronous Calls](xref:Architecture/AsynchronousCalls)** — *the* hub-handler / service-code rule book. The headline rule: **no `Task<T>` / `async` / `await` in mesh-reachable code.** Public methods on services, handlers, layout areas, and click actions return `IObservable<T>` (or `void`). Compose with `SelectMany` / `Select` / `Where`. Convert async primitives at the boundary with `Observable.FromAsync(...)`, never `await` inside a hub flow. Click actions must be sync (`ctx => { ...; return Task.CompletedTask; }`), never `async ctx => await ...`. Tests are the only place `await` on hub work is allowed.
+2. **[CQRS — Queries vs. Content Access](xref:Architecture/CqrsAndContentAccess)** — **never** use `meshQuery.QueryAsync<MeshNode>($"path:{X}").FirstOrDefaultAsync()` (or any `Observable.FromAsync` wrapper around it) to read a known node. Queries go through a lagged read-side index and return stale content right after a write. For a known path use `workspace.GetMeshNodeStream(path)` (own/local/remote auto-dispatch) or `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` directly. `QueryAsync` / `ObserveQuery` is for **sets and existence**, not single-node content reads. In tests, use the `ReadNodeAsync(path)` helper on `MonolithMeshTestBase`.
+3. **[Data Binding](xref:GUI/DataBinding)** — **the GUI is fully data-bound.** Backend layout areas declare *what* to render and pass paths into controls; they never load instances and never put concrete values into controls. The Blazor view subscribes to `workspace.GetRemoteStream<MeshNode, MeshNodeReference>` and renders. User edits write back via `_nodeStream.Update(current => ...)`. Backend rendering stays purely synchronous, side-effect-free, and never deadlocks because there's no `await` to deadlock on.
+
+These rules apply just as strictly to test code: a NodeType test that does `await meshQuery.QueryAsync<MeshNode>($"path:{X}").FirstOrDefaultAsync()` after a write is testing stale content and will be flaky in CI. Use `ReadNodeAsync(path)` on the test base — see [Writing Tests](xref:Architecture/WritingTests) for the full testing guide.
+
+## Script (executable Code node) — the same three rules apply
+
+You also write **Scripts**: `Code` MeshNodes flagged `isExecutable: true`, executed via the MCP `ExecuteScript` tool (full guide: [ExecuteScript](xref:AI/ExecuteScript)). Inside a Script, the kernel exposes `Mesh` — the portal's `IMessageHub` — and the top-level C# is compiled and run by `Microsoft.DotNet.Interactive`. The Script runs on the kernel's own execution hub, *not* a message-handler pump, so `await` **is** allowed at the top level. But the mesh reads and writes you do have to follow the same CQRS / reactive rules as production code, or you'll either write stale assertions or deadlock the kernel.
+
+### Where to put Scripts
+
+Organize Scripts as **child Code nodes under the feature they serve**, not as top-level nodes. A namespace like `MyDomain/Feature/Script/ImportMonthly` keeps the Script co-located with the NodeType / data it operates on, shows up under the feature's overview in the portal, and inherits the feature's access context.
+
+```jsonc
+// MyDomain/Feature/Script/ImportMonthly.json  — Script lives under the feature
+{
+  "id": "ImportMonthly",
+  "namespace": "MyDomain/Feature/Script",
+  "name": "Import Monthly Data",
+  "nodeType": "Code",
+  "content": {
+    "code": "// script body — see template above",
+    "language": "csharp",
+    "isExecutable": true
+  }
+}
+```
+
+### Verify the Script is actually executable
+
+After creating or editing a Script, **don't just ship it** — run it through MCP `ExecuteScript` to prove it compiles and executes cleanly:
+
+```jsonc
+{
+  "name": "ExecuteScript",
+  "arguments": {
+    "path": "@MyDomain/Feature/Script/ImportMonthly",
+    "timeoutSeconds": 60
+  }
+}
+```
+
+Watch for:
+- `status: "Executed"` and a non-error `message` → the kernel compiled and ran the code.
+- `status: "Error"` → kernel exception; the `error` field carries the C# compiler/runtime error. Fix, re-run.
+- `status: "Timeout"` → the script exceeded `timeoutSeconds`; side effects may have partially applied. Re-query the mesh to understand state before re-running.
+
+A Script you ship without at least one `status: "Executed"` run is a Script you haven't actually tested. Treat the happy-path run as part of the acceptance criteria for the PR.
+
+### Scripts execute in a hosted hub — that's what makes `await` safe
+
+A Script runs in a **hosted hub** (the kernel's `_Exec` hub) with its own `ActionBlock`, not on the parent hub's pump. That isolation is what makes `await` safe inside a script: the script blocks its own hub's pump, but responses to its requests route back via *other* hubs (mesh, per-node, the parent portal hub) — different pumps, no deadlock. This is the same reason `parentHub.Post(...)` from inside `ExecuteMessageAsync` is safe (see [Asynchronous Calls — Blocking Execution](xref:Architecture/AsynchronousCalls)).
+
+If you ever find yourself writing a script that's *not* in a hosted hub (rare — only happens if you're embedding compilation directly in a handler), you must drop back to the fire-and-forget + `TaskCompletionSource` pattern from [Asynchronous Calls](xref:Architecture/AsynchronousCalls) — same shape as the canonical reactive click handler.
+
+The test-only `hub.ReadNodeAsync(...)` extension lives in `MeshWeaver.Mesh.TestHelpers` — a deliberately separate library — so production / handler code can't reference it by accident. Scripts running in the hosted exec hub *can* await mesh round-trips safely; the helper just isn't useful there because Scripts have their own access to `IMeshService`.
+
+### ✅ Script boilerplate — reads + writes done right
+
+```csharp
+#r "nuget:System.Reactive"
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using MeshWeaver.Data;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+
+var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+var workspace   = Mesh.GetWorkspace();
+
+// ✅ Write — Observable-returning service completes when the per-node hub
+//    posts back. Awaiting is safe here because the script runs in the hosted
+//    exec hub, not the pump that processes the response.
+var created = await meshService.CreateNode(new MeshNode("Import001", "Acme/Imports")
+{
+    Name = "Monthly import",
+    NodeType = "Markdown",
+}).FirstAsync();
+
+// ✅ Read after write — bind to the per-node MeshNodeReference reducer.
+//    No catalog/index lag, no stale content right after the write.
+var reread = await workspace
+    .GetRemoteStream<MeshNode, MeshNodeReference>(
+        new Address(created.Path!), new MeshNodeReference())
+    .Where(c => c.Value != null)
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(15))
+    .Select(c => c.Value!)
+    .ToTask();
+Console.WriteLine($"Re-read at {reread.Path}, name={reread.Name}");
+
+// ✅ Update — same reactive shape, single await at the script edge.
+var renamed = reread with { Name = "Monthly import (Q1)" };
+await meshService.UpdateNode(renamed).FirstAsync();
+
+// ✅ Wait for a state change — subscribe with a predicate, take 1, await.
+//    The exec hub blocks; responses route back through the per-node hub's pump.
+var completed = await workspace
+    .GetRemoteStream<MeshNode, MeshNodeReference>(
+        new Address("Acme/Jobs/MigrateV2"), new MeshNodeReference())
+    .Where(c => c.Value is { State: MeshNodeState.Active })
+    .Take(1)
+    .Timeout(TimeSpan.FromMinutes(2))
+    .Select(c => c.Value!)
+    .ToTask();
+Console.WriteLine($"Job Active: {completed.Path}");
+```
+
+### ❌ Script anti-patterns — stale data, polling, callback misuse
+
+```csharp
+// ❌ Lagged index read right after a write — classic CQRS violation.
+//    The read-side index hasn't indexed the create yet; this returns null
+//    or stale content on the first call and "works" on the second — flaky.
+await mesh.CreateNode(node).FirstAsync();
+var stale = await mesh.QueryAsync<MeshNode>($"path:{node.Path}").FirstOrDefaultAsync();
+
+// ❌ QueryAsync wrapped in Observable.FromAsync to "look reactive" — same bug.
+var obs = Observable.FromAsync(ct =>
+    mesh.QueryAsync<MeshNode>($"path:{p}").FirstOrDefaultAsync(ct).AsTask());
+
+// ❌ Polling loop for a state change — lagged every iteration, wastes minutes.
+for (var i = 0; i < 60; i++)
+{
+    var n = await mesh.QueryAsync<MeshNode>($"path:{p}").FirstOrDefaultAsync();
+    if (n?.State == MeshNodeState.Active) break;
+    await Task.Delay(1000);
+}
+
+// ❌ Awaiting inside a Subscribe callback — subscribe runs on an arbitrary
+//    thread; awaits inside it race kernel teardown and frequently hang.
+stream.Subscribe(async node => { await mesh.UpdateNode(node with { ... }); });
+
+// ❌ Referencing the test-only helper from a Script. ReadNodeAsync lives in
+//    MeshWeaver.Mesh.TestHelpers and is not for production / Script code.
+//    Use GetRemoteStream<MeshNode, MeshNodeReference>(...) directly.
+using MeshWeaver.Mesh.TestHelpers;          // ← don't
+var node = await Mesh.ReadNodeAsync(path);  // ← don't
+```
+
+**Rule of thumb for Scripts:** read known paths via `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference()).Take(1).ToTask()`. Use `mesh.QueryAsync(...)` / `mesh.ObserveQuery(...)` only for searching / listing / counting (sets, not specific node content). Wait for state changes by subscribing with a predicate + `Take(1)` + `Timeout(...)`. Reach for `QueryAsync(path:X)` and you've written a stale-read bug.
+
 # Decision Rule: NodeType vs Markdown
 
 When the user describes a **data model, object type, custom entity, or interactive view** — e.g. "social media posts with a calendar", "a task tracker", "risk model with charts", "build X as code" — you build a **NodeType**: a `NodeType` JSON + `Source/` C# files + at least one instance JSON.

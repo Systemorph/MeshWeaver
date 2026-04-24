@@ -145,8 +145,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         MeshNode? userNode = null;
         for (var i = 0; i < 20 && userNode == null; i++)
         {
-            userNode = await MeshQuery.QueryAsync<MeshNode>($"path:{userMsgPath}")
-                .FirstOrDefaultAsync(ct);
+            userNode = await ReadNodeAsync(userMsgPath, ct);
             if (userNode == null) await Task.Delay(200, ct);
         }
         userNode.Should().NotBeNull("user message node must exist in persistence");
@@ -159,8 +158,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         MeshNode? responseNode = null;
         for (var i = 0; i < 20 && responseNode == null; i++)
         {
-            responseNode = await MeshQuery.QueryAsync<MeshNode>($"path:{responseMsgPath}")
-                .FirstOrDefaultAsync(ct);
+            responseNode = await ReadNodeAsync(responseMsgPath, ct);
             if (responseNode == null) await Task.Delay(200, ct);
         }
         responseNode.Should().NotBeNull("response message node must exist in persistence");
@@ -276,8 +274,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         MeshThread? content = null;
         for (var attempt = 0; attempt < 30; attempt++)
         {
-            var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}")
-                .FirstOrDefaultAsync(ct);
+            var threadNode = await ReadNodeAsync(threadPath, ct);
             content = threadNode?.Content as MeshThread;
             if (content?.Messages?.Count >= 2)
                 break;

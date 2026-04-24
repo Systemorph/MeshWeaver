@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -39,41 +40,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 3. Submit a message and verify cells are pushed
 /// 4. Verify streaming response arrives
 /// </summary>
-public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output)
+[Collection(nameof(OrleansClusterCollection))]
+public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
 {
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
-
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<RlsChatSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "threadaccess"),
-            config =>
-            {
-                config.TypeRegistry.AddAITypes();
-                return config.AddLayoutClient();
-            });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
+    private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+        => await fixture.GetClientAsync($"threadaccess-{name}-{Guid.NewGuid():N}", "Roland");
 
     /// <summary>
     /// Creates a node via CreateNodeRequest, returns the created path.
@@ -105,16 +76,18 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
-        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+        // Canonical CQRS-correct read: target the per-node hub's MeshNodeReference
+        // reducer, not an EntityCollection lookup. The owning hub is the source of
+        // truth for MeshNode content; this avoids any catalog / index lag.
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+            new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
+            node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
         if (node?.Content is T typed) return typed;
         if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(ClientMesh.JsonSerializerOptions);
+            return contentJe.Deserialize<T>(fixture.ClientMesh.JsonSerializerOptions);
         return null;
     }
 

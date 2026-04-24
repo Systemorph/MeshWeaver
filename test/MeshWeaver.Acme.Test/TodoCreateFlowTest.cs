@@ -391,8 +391,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
             Output.WriteLine($"Observed node state: {confirmedNode.State}");
 
-            // Verify success by checking persisted node state directly
-            var persistedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+            // Verify success by checking persisted node state directly (CQRS-correct read)
+            var persistedNode = await ReadNodeAsync(nodePath);
             Output.WriteLine($"Persisted node state: {persistedNode?.State}");
             persistedNode.Should().NotBeNull("Node should be persisted after CreateNodeRequest");
             persistedNode!.State.Should().Be(MeshNodeState.Active, "Node should be Active after confirmation");
@@ -438,8 +438,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             createdNode.Name.Should().Be("E2E Test Task");
             Output.WriteLine($"Created transient node: {createdNode.Path}");
 
-            // Step 2: Retrieve the node
-            var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
+            // Step 2: Retrieve the node via stream
+            var retrievedNode = await ReadNodeAsync(nodePath);
             retrievedNode.Should().NotBeNull("Transient node should be retrievable");
             retrievedNode!.State.Should().Be(MeshNodeState.Transient);
             retrievedNode.Name.Should().Be("E2E Test Task");

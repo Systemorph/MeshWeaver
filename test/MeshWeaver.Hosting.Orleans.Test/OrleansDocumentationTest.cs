@@ -25,6 +25,8 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
+// TODO: needs custom shared fixture — uses DocSiloConfigurator with AddDocumentation(),
+// which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Tests that Documentation static nodes (from DocumentationNodeProvider) work
 /// correctly with Orleans routing — same setup as the distributed portal.

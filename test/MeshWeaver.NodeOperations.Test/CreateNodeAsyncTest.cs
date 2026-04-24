@@ -116,8 +116,8 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         createdComment.HighlightedText.Should().Be("some selected text");
         createdComment.Status.Should().Be(CommentStatus.Active);
 
-        // Verify round-trip via GetNodeAsync
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
+        // Verify round-trip via stream
+        var retrievedNode = await ReadNodeAsync(commentPath);
         retrievedNode.Should().NotBeNull();
         retrievedNode!.Path.Should().Be(commentPath);
         var retrievedComment = retrievedNode.Content.Should().BeOfType<Comment>().Subject;
@@ -181,8 +181,8 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         replyContent.Author.Should().Be("Bob");
         replyContent.Text.Should().Be("This is a reply");
 
-        // Verify reply round-trips via path
-        var retrievedReply = await MeshQuery.QueryAsync<MeshNode>($"path:{replyPath}").FirstOrDefaultAsync();
+        // Verify reply round-trips via stream
+        var retrievedReply = await ReadNodeAsync(replyPath);
         retrievedReply.Should().NotBeNull("Reply should be retrievable by path");
         retrievedReply!.Path.Should().StartWith(parentCommentPath);
 
