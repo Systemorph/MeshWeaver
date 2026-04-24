@@ -31,7 +31,18 @@ public static class ApiTokenNodeType
         builder.AddAutocompleteExcludedTypes(NodeType);
         // Access control: GetPermissionForNodeType maps "ApiToken" → Permission.Api
         // The RLS validator checks Permission.Api on the MainNode (User path)
-        // Same pattern as Thread → Permission.Thread and Comment → Permission.Comment
+        // Same pattern as Thread → Permission.Thread and Comment → Permission.Comment.
+        //
+        // Register all ApiToken domain + message types in the hub's type registry so
+        // they serialize correctly across silos (Orleans). Mirrors CommentNodeType /
+        // ThreadNodeType which do the same — without this, cross-silo CreateNodeRequest
+        // for nodeType=ApiToken fails with "NodeType 'ApiToken' is not registered"
+        // because the receiving silo can't deserialize the typed payload.
+        builder.ConfigureHub(config => config
+            .WithType<ApiToken>(nameof(ApiToken))
+            .WithType<ApiTokenIndex>(nameof(ApiTokenIndex))
+            .WithType<ValidateTokenRequest>(nameof(ValidateTokenRequest))
+            .WithType<ValidateTokenResponse>(nameof(ValidateTokenResponse)));
         return builder;
     }
 
