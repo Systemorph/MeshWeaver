@@ -30,21 +30,55 @@ public static class MeshNodeStreamExtensions
     }
 
     /// <summary>
-    /// Reactive handle to a MeshNode at the given path. If <paramref name="path"/> matches
-    /// the hub's own address, returns the local own-node stream via
-    /// <see cref="MeshNodeReference"/>; otherwise subscribes to the owning hub via
-    /// <see cref="MeshNodeReference"/>. Callers don't have to distinguish — just pass the path.
-    /// Empty/no-match emits nothing (combine with <c>.Take(1).Timeout(...)</c> for a
-    /// "not found within X" semantic).
+    /// Reactive handle to a MeshNode at <paramref name="path"/>. Dispatches in priority
+    /// order:
+    /// <list type="number">
+    ///   <item><description><b>Own hub</b> — when <paramref name="path"/> matches the hub's
+    ///     address: returns the local <see cref="MeshNodeReference"/> stream.</description></item>
+    ///   <item><description><b>Local collection</b> — when the workspace's MeshNode
+    ///     <c>InstanceCollection</c> already contains the node (the common case for
+    ///     mesh-hub reads of any node loaded by <c>MeshDataSource</c> at init):
+    ///     filter the local stream by path. No <c>SubscribeRequest</c> goes to a remote
+    ///     hub.</description></item>
+    ///   <item><description><b>Remote</b> — fall back to
+    ///     <see cref="WorkspaceExtensions.GetRemoteStream{TReduced,TReference}"/> for
+    ///     nodes hosted on a separate hub.</description></item>
+    /// </list>
+    /// Callers don't have to distinguish — just pass the path. Empty/no-match emits
+    /// nothing (combine with <c>.Take(1).Timeout(...)</c> for a "not found within X"
+    /// semantic).
+    ///
+    /// <para>
+    /// <b>Why the local-collection step matters:</b> for nodes that exist in the mesh
+    /// hub's collection but have no separately-activated per-node hub (test scenarios,
+    /// many production paths), going straight to <c>GetRemoteStream</c> sends a
+    /// <c>SubscribeRequest</c> to the per-node address. That hub has no
+    /// <c>SubscribeRequest</c> handler, the synchronization protocol gets a
+    /// <c>DeliveryFailure</c>, and the read returns null/error. Checking the local
+    /// collection first sidesteps that entire failure mode.
+    /// </para>
     /// </summary>
     public static IObservable<MeshNode> GetMeshNodeStream(this IWorkspace workspace, string path)
     {
         if (string.Equals(workspace.Hub.Address.ToString(), path, StringComparison.Ordinal))
             return workspace.GetMeshNodeStream();
 
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+        // Local collection — preferred for any mesh-hub-loaded node. Avoids the cross-hub
+        // SubscribeRequest round trip and works even when no per-node hub exists.
+        var localCollection = workspace.GetStream<MeshNode>();
+        if (localCollection != null)
+        {
+            return localCollection
+                .Select(nodes => nodes?.FirstOrDefault(n =>
+                    string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
+                .Where(n => n != null)
+                .Select(n => n!);
+        }
+
+        // Remote — node lives at a separate hub address, subscribe via MeshNodeReference.
+        var remote = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
-        return stream
+        return remote
             .Where(change => change.Value != null)
             .Select(change => change.Value!);
     }
