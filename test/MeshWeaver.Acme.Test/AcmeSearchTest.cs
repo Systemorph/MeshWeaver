@@ -82,16 +82,20 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     }
 
     [Fact(Timeout = 60000)]
-    public async Task DescendantsSearch_MissesOrganizationRootNode()
+    public async Task DescendantsSearch_IncludesOrganizationRootNode()
     {
+        // Updated 2026-04-24: was DescendantsSearch_MissesOrganizationRootNode and asserted
+        // the bug behavior. The query engine was fixed elsewhere; scope:descendants now
+        // returns the ACME root node when its name matches the wildcard. Test now asserts
+        // the corrected behavior so a future regression of the original bug is caught.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var results = await meshService
             .QueryAsync<MeshNode>("*ACME* scope:descendants is:main limit:50")
             .ToListAsync();
 
-        results.Should().NotContain(n => n.Path == "ACME",
-            "scope:descendants should NOT include the ACME root node (documents the bug behavior)");
+        results.Should().Contain(n => n.Path == "ACME",
+            "scope:descendants should include the ACME root node when its name matches the wildcard");
     }
 
     [Fact]
