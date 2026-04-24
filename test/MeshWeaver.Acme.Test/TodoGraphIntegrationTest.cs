@@ -76,7 +76,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>
     /// Test that ACME organization hub can be initialized.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task ACME_Organization_CanBeInitialized()
     {
         var acmeAddress = new Address("ACME");

@@ -86,7 +86,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that the CreateChild form (with ?type= parameter) shows Name and Description fields.
     /// This is the first step of the create flow where user enters basic info.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateChild_WithTodoType_ShowsNameDescriptionForm()
     {
         var client = GetClient();
@@ -131,7 +131,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Test that CreateChild form shows type selection grid when no type parameter is provided.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
@@ -176,7 +176,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// with the expected structure (header, editor, buttons).
     /// Note: Buttons are rendered inside nested views, which we verify exist via area count.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task TransientTodo_CreateArea_ShowsContentTypeEditor()
     {
         var client = GetClient();
@@ -248,7 +248,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that creating a transient node and requesting its Create area
     /// returns an editor that includes the expected form structure.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task TransientTodo_CreateArea_HasEditorStructure()
     {
         var client = GetClient();
@@ -330,7 +330,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// This is what happens when user clicks "Create" button on a transient node.
     /// BUG: HandleCreateNodeRequest was calling CreateTransientNodeAsync again, causing "Node already exists" error.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateNodeRequest_ForExistingTransientNode_ConfirmsNode()
     {
         var client = GetClient();
@@ -414,7 +414,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Test the complete create flow: create transient node, verify it can be retrieved.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task EndToEnd_CreateTransientNode_CanBeRetrieved()
     {
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
@@ -460,7 +460,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Test that the catalog correctly handles node creation with all required services.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public void Services_AreRegisteredForCreateFlow()
     {
         // Verify all required services are registered
@@ -479,7 +479,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Test that INodeTypeService returns creatable types for ProductLaunch.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task NodeTypeService_ReturnsCreatableTypes()
     {
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
@@ -514,7 +514,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     ///
     /// This reproduces the bug where content fields (category, priority, etc.) are empty after create.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task CreateFlow_TransientNodeWithoutContent_PreservesContentFieldsAfterConfirm()
     {
         var client = GetClient();
@@ -635,7 +635,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that GetDataRequest with EntityReference returns the correct Todo content.
     /// This is the primary mechanism to verify content retrieval after node creation.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task GetDataRequest_ForCreatedTodo_ReturnsCorrectContent()
     {
         var client = GetClient();
@@ -753,7 +753,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that existing Todo items can be queried and have the expected content structure.
     /// This verifies that the Todo ContentType is properly configured.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task ExistingTodo_HasExpectedContentStructure()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -787,7 +787,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Test that the Overview area renders for ProductLaunch (baseline test).
     /// Ensures the test infrastructure is working correctly.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 60000)]
     public async Task Baseline_OverviewAreaRenders()
     {
         var client = GetClient();

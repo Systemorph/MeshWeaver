@@ -1,5 +1,11 @@
 @inherits BlazorView<MeshNodeThumbnailControl, MeshNodeThumbnailView>
 @inject NavigationManager NavigationManager
+@using System.Reactive.Linq
+@using MeshWeaver.Data
+@using MeshWeaver.Data.Serialization
+@using MeshWeaver.Graph
+@using MeshWeaver.Mesh
+@using MeshWeaver.Messaging
 
 <FluentCard Class="mesh-node-thumbnail" Style="min-width: 320px; cursor: pointer; margin: 8px;" @onclick="Navigate">
     <div class="mesh-node-thumbnail-content">
@@ -97,6 +103,7 @@
     private string? Description { get; set; }
     private string? ImageUrl { get; set; }
     private string NodePath { get; set; } = string.Empty;
+    private ISynchronizationStream<MeshNode>? _nodeStream;
 
     private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
 
@@ -107,10 +114,31 @@
     protected override void BindData()
     {
         base.BindData();
+        // Seed from ViewModel so callers that hand-built the control still render.
         Title = ViewModel.Title;
         Description = ViewModel.Description;
         ImageUrl = ViewModel.ImageUrl;
         NodePath = ViewModel.NodePath;
+
+        // Bind to the per-node stream so the view stays live with the underlying node.
+        // Backend layout areas should pass NodePath only; this subscription does the lookup.
+        if (!string.IsNullOrEmpty(NodePath))
+        {
+            var workspace = Hub.GetWorkspace();
+            _nodeStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(NodePath), new MeshNodeReference());
+            AddBinding(_nodeStream
+                .Where(change => change.Value != null)
+                .Select(change => change.Value!)
+                .DistinctUntilChanged()
+                .Subscribe(node =>
+                {
+                    Title = node.Name ?? NodePath;
+                    var img = MeshNodeThumbnailControl.GetImageUrlForNode(node);
+                    if (!string.IsNullOrEmpty(img)) ImageUrl = img;
+                    InvokeAsync(StateHasChanged);
+                }));
+        }
     }
 
     private void Navigate()

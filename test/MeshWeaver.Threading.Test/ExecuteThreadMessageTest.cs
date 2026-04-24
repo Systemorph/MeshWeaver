@@ -621,16 +621,22 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(m => m.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        // 3. Update via MeshNodeReference stream
+        // 3. Cross-hub update via DataChangeRequest. The thread lives on its own
+        // per-node hub; client posts the patched node with target=threadPath and
+        // the owning hub's data layer applies it natively.
         var workspace = client.GetWorkspace();
-        workspace.UpdateMeshNode(node =>
+        var threadStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+            new Address(threadPath), new MeshNodeReference());
+        var current = await threadStream
+            .Where(c => c.Value != null).Take(1).Timeout(5.Seconds())
+            .Select(c => c.Value!).FirstAsync().ToTask(ct);
+        var thread = current.Content as MeshThread ?? new MeshThread();
+        var patched = current with
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with
-            {
-                Content = thread with { Messages = thread.Messages.AddRange(["msg1", "msg2"]) }
-            };
-        }, new Address(threadPath), threadPath);
+            Content = thread with { Messages = thread.Messages.AddRange(["msg1", "msg2"]) }
+        };
+        client.Post(new DataChangeRequest { Updates = [patched] },
+            o => o.WithTarget(new Address(threadPath)));
 
         // 4. Verify
         var messages = await messagesChanged;

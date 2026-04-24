@@ -294,18 +294,24 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         delegations![0].DelegationPath.Should().Be(subThreadPath);
         Output.WriteLine($"Phase 2: delegation appeared — {delegations[0].DisplayName}");
 
-        // 3. Mark thread as not executing
-        workspace.UpdateMeshNode(node =>
+        // 3. Mark thread as not executing — long-standing stream + Update
+        var threadStream = workspace.GetRemoteStream<MeshNode>(
+            new Address(threadPath), new MeshNodeReference());
+        // Wait for first emission so Update has a current value to transform
+        await threadStream.Where(ci => ci.Value != null).Timeout(10.Seconds()).FirstAsync().ToTask(ct);
+        threadStream.Update(current =>
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with
+            if (current == null) return null;
+            var thread = current.Content as MeshThread ?? new MeshThread();
+            var updated = current with
             {
                 Content = thread with { IsExecuting = false, ActiveMessageId = null }
             };
-        }, new Address(threadPath), threadPath);
+            return new ChangeItem<MeshNode>(updated, threadStream.StreamId,
+                threadStream.StreamId, ChangeType.Patch, threadStream.Hub.Version,
+                [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
+        });
 
-        var threadStream = workspace.GetRemoteStream<MeshNode>(
-            new Address(threadPath), new MeshNodeReference());
         var idle = await threadStream
             .Select(ci => ci.Value?.Content as MeshThread)
             .Where(t => t is { IsExecuting: false })

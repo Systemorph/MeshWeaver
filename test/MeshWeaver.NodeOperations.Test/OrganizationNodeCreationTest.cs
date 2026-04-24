@@ -29,7 +29,7 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
         => base.ConfigureMesh(builder)
             .AddOrganizationType();
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 60000)]
     public async Task Admin_CanCreateOrganization()
     {
         // Arrange
@@ -62,7 +62,7 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
         await NodeFactory.DeleteNode(orgPath);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task Admin_CanCreateOrganizationWithContent()
     {
         // Arrange

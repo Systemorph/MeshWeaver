@@ -1,5 +1,7 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
+using Microsoft.Extensions.Logging;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -25,83 +27,49 @@ public static class AccessAssignmentLayoutAreas
             .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 
-    /// <summary>   
-    /// Custom thumbnail — rich card showing user icon + name, role names + icons, × buttons.
-    /// Async: queries IMeshService for user and role node details.
+    /// <summary>
+    /// Custom thumbnail — rich card showing user icon + name (path-bound via
+    /// MeshNodeThumbnailControl) and role chips. Backend declares structure only;
+    /// the GUI subscribes to per-node streams. No await, no fetch, no resolution
+    /// of user/role node values on the backend.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
-            ?? Observable.Return<MeshNode[]>([]);
+        // There is always exactly one MeshNode per path — GetMeshNodeStream returns it.
+        var ownNode = host.Workspace.GetMeshNodeStream();
+        var permsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
 
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            if (node == null)
-                return (UiControl?)MeshNodeThumbnailControl.FromNode(null, hubPath);
-
-            var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
-            if (assignment == null)
-                return (UiControl?)MeshNodeThumbnailControl.FromNode(node, hubPath);
-
-            var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-            var canDelete = permissions.HasFlag(Permission.Delete);
-
-            return (UiControl?)await BuildThumbnailCardAsync(host, hubPath, assignment, node, meshQuery, canDelete);
-        });
+        return ownNode.CombineLatest(permsStream, (node, perms) =>
+            {
+                var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+                if (assignment == null)
+                    return (UiControl?)new MeshNodeThumbnailControl(hubPath, node.Name ?? hubPath);
+                return (UiControl?)BuildThumbnailCardSync(host, hubPath, assignment, perms.HasFlag(Permission.Delete));
+            });
     }
 
-    private static async Task<UiControl> BuildThumbnailCardAsync(
+    /// <summary>
+    /// Builds the thumbnail card structure. Values for user / role nodes are not
+    /// loaded here — the backend declares <see cref="MeshNodeThumbnailControl"/>
+    /// with NodePath only and the GUI binds to the per-node MeshNodeReference stream.
+    /// </summary>
+    private static UiControl BuildThumbnailCardSync(
         LayoutAreaHost host, string hubPath,
-        AccessAssignment assignment, MeshNode node,
-        IMeshService meshQuery, bool canDelete)
+        AccessAssignment assignment, bool canDelete)
     {
-        // Load user node for name + icon
-        MeshNode? userNode = null;
-        if (!string.IsNullOrEmpty(assignment.AccessObject))
-        {
-            try
-            {
-                userNode = await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{assignment.AccessObject}").FirstOrDefaultAsync();
-            }
-            catch { }
-        }
-
-        var userName = userNode?.Name ?? assignment.DisplayName ?? assignment.AccessObject;
-        var userImageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(userNode)
-            ?? MeshNodeThumbnailControl.GetImageUrlForNode(node);
-
+        var userPath = assignment.AccessObject;
+        var userFallback = assignment.DisplayName ?? userPath;
         var card = Controls.Stack.WithStyle("gap: 6px; padding: 8px; width: 100%;");
 
-        // Top row: user icon + name + "+" button
+        // Top row: bound user thumbnail + "+" button. The thumbnail control declares
+        // its NodePath; MeshNodeThumbnailView subscribes to the per-node stream and
+        // renders avatar + name live.
         var topRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 8px;");
+            .WithStyle("align-items: center; gap: 8px;")
+            .WithView(new MeshNodeThumbnailControl(userPath, userFallback));
 
-        // User icon
-        if (!string.IsNullOrEmpty(userImageUrl))
-        {
-            topRow = topRow.WithView(Controls.Html(
-                $"<img src=\"{EscapeHtml(userImageUrl)}\" alt=\"{EscapeHtml(userName)}\" " +
-                "style=\"width:36px;height:36px;min-width:36px;border-radius:6px;object-fit:cover;\" />"));
-        }
-        else
-        {
-            var initial = !string.IsNullOrEmpty(userName) ? userName[0].ToString().ToUpper() : "?";
-            topRow = topRow.WithView(Controls.Html(
-                "<div style=\"width:36px;height:36px;min-width:36px;border-radius:6px;" +
-                "background:var(--accent-fill-rest,#0078d4);color:var(--foreground-on-accent-rest,white);" +
-                $"display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:14px;\">{initial}</div>"));
-        }
-
-        // User name
-        topRow = topRow.WithView(Controls.Html(
-            $"<span style=\"font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;\">{EscapeHtml(userName)}</span>"));
-
-        // + button next to name (admin only)
         if (canDelete)
         {
             topRow = topRow.WithView(Controls.Button("+")
@@ -116,26 +84,16 @@ public static class AccessAssignmentLayoutAreas
 
         card = card.WithView(topRow);
 
-        // Role chips — compact inline wrapping, max ~2 rows
+        // Role chips — display name derived from the path's last segment. (For live
+        // role-name updates, callers can switch chips to MeshNodeThumbnailControl per
+        // role; today the chip shows the segment name which rarely changes.)
         if (assignment.Roles.Count > 0)
         {
-            // Resolve role display names
             var roleInfos = new List<(string Name, bool Denied, int Index)>();
             for (int i = 0; i < assignment.Roles.Count; i++)
             {
                 var role = assignment.Roles[i];
-                MeshNode? roleNode = null;
-                if (!string.IsNullOrEmpty(role.Role))
-                {
-                    try
-                    {
-                        roleNode = await meshQuery.QueryAsync<MeshNode>(
-                            $"path:{role.Role}").FirstOrDefaultAsync();
-                    }
-                    catch { }
-                }
-                var roleName = roleNode?.Name ?? GetRoleDisplayName(role.Role);
-                roleInfos.Add((roleName, role.Denied, i));
+                roleInfos.Add((GetRoleDisplayName(role.Role), role.Denied, i));
             }
 
             // Build chip container as HTML for compactness
@@ -164,14 +122,15 @@ public static class AccessAssignmentLayoutAreas
                         ? "text-decoration:line-through;color:var(--error-foreground);font-size:12px;padding:0 6px;height:22px;min-width:auto;"
                         : "font-size:12px;padding:0 6px;height:22px;min-width:auto;";
 
-                    // Role chip: click to toggle denied
+                    // Role chip: click to toggle denied — bind directly to workspace stream
                     chipsRow = chipsRow.WithView(Controls.Button(info.Name)
                         .WithAppearance(Appearance.Stealth)
                         .WithStyle(chipTextStyle +
                             "border-radius:12px 0 0 12px;background:var(--neutral-fill-secondary-rest);")
-                        .WithClickAction(async ctx =>
+                        .WithClickAction(ctx =>
                         {
-                            await ToggleDeniedAsync(ctx.Host, hubPath, capturedIndex);
+                            ToggleDenied(ctx.Host, hubPath, capturedIndex);
+                            return Task.CompletedTask;
                         }));
 
                     // × button: remove role
@@ -179,9 +138,10 @@ public static class AccessAssignmentLayoutAreas
                         .WithAppearance(Appearance.Stealth)
                         .WithStyle("font-size:12px;padding:0 4px;height:22px;min-width:auto;" +
                             "border-radius:0 12px 12px 0;background:var(--neutral-fill-secondary-rest);margin-left:-4px;")
-                        .WithClickAction(async ctx =>
+                        .WithClickAction(ctx =>
                         {
-                            await RemoveRoleAsync(ctx.Host, hubPath, capturedIndex);
+                            RemoveRole(ctx.Host, hubPath, capturedIndex);
+                            return Task.CompletedTask;
                         }));
                 }
 
@@ -204,60 +164,42 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Custom overview — user thumbnail + roles in LayoutGrid loaded from IMeshService.
+    /// Custom overview — user thumbnail + roles in LayoutGrid.
+    /// Backend declares path-bound controls only; GUI subscribes to per-node streams.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var ownNode = host.Workspace.GetMeshNodeStream();
+        var permsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
-            ?? Observable.Return<MeshNode[]>([]);
-
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-
-            if (!permissions.HasFlag(Permission.Read))
-                return (UiControl?)Controls.Html("<p>Access denied.</p>");
-
-            var canEdit = permissions.HasFlag(Permission.Update);
-            return (UiControl?)await BuildOverviewContentAsync(host, node, hubPath, canEdit);
-        });
+        return ownNode.CombineLatest(permsStream, (node, perms) =>
+            {
+                if (!perms.HasFlag(Permission.Read))
+                    return (UiControl?)Controls.Html("<p>Access denied.</p>");
+                var canEdit = perms.HasFlag(Permission.Update);
+                return BuildOverviewContentSync(host, node, hubPath, canEdit);
+            });
     }
 
-    private static async Task<UiControl> BuildOverviewContentAsync(
+    private static UiControl BuildOverviewContentSync(
         LayoutAreaHost host, MeshNode? node, string hubPath, bool canEdit)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
-
-        // Header
         stack = stack.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, canEdit));
 
-        if (node?.Content == null)
-            return stack;
+        var assignment = node?.Content == null ? null
+            : (node.Content as AccessAssignment ?? AccessControlLayoutArea.DeserializeAssignment(node));
 
-        var assignment = node.Content as AccessAssignment
-            ?? AccessControlLayoutArea.DeserializeAssignment(node);
         if (assignment == null)
             return stack;
 
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-        // User card — load from IMeshService
+        // User card: declare NodePath-bound thumbnail; GUI subscribes to the per-node stream.
         if (!string.IsNullOrEmpty(assignment.AccessObject))
         {
-            try
-            {
-                var userNode = await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{assignment.AccessObject}").FirstOrDefaultAsync();
-                stack = stack.WithView(MeshNodeThumbnailControl.FromNode(
-                    userNode, assignment.AccessObject));
-            }
-            catch
-            {
-                stack = stack.WithView(MeshNodeThumbnailControl.FromNode(null, assignment.AccessObject));
-            }
+            stack = stack.WithView(new MeshNodeThumbnailControl(
+                assignment.AccessObject,
+                assignment.DisplayName ?? assignment.AccessObject));
         }
 
         // Change Subject button (admin only)
@@ -290,19 +232,12 @@ public static class AccessAssignmentLayoutAreas
             for (int i = 0; i < assignment.Roles.Count; i++)
             {
                 var role = assignment.Roles[i];
-                MeshNode? roleNode = null;
-                if (!string.IsNullOrEmpty(role.Role))
-                {
-                    try
-                    {
-                        roleNode = await meshQuery.QueryAsync<MeshNode>(
-                            $"path:{role.Role}").FirstOrDefaultAsync();
-                    }
-                    catch { }
-                }
-
-                var card = MeshNodeThumbnailControl.FromNode(
-                    roleNode, string.IsNullOrEmpty(role.Role) ? "(no role)" : role.Role);
+                var rolePath = role.Role;
+                var fallback = string.IsNullOrEmpty(rolePath) ? "(no role)" : GetRoleDisplayName(rolePath);
+                // Path-bound: the GUI binds to the per-role MeshNodeReference stream.
+                var card = string.IsNullOrEmpty(rolePath)
+                    ? new MeshNodeThumbnailControl(string.Empty, "(no role)")
+                    : new MeshNodeThumbnailControl(rolePath, fallback);
 
                 if (canEdit)
                 {
@@ -314,9 +249,10 @@ public static class AccessAssignmentLayoutAreas
                         .WithView(Controls.Button("×")
                             .WithAppearance(Appearance.Stealth)
                             .WithStyle("min-width:28px;padding:0 4px;height:28px;font-size:16px;")
-                            .WithClickAction(async ctx =>
+                            .WithClickAction(ctx =>
                             {
-                                await RemoveRoleAsync(ctx.Host, hubPath, capturedIndex);
+                                RemoveRole(ctx.Host, hubPath, capturedIndex);
+                                return Task.CompletedTask;
                             }));
                     grid = grid.WithView(row, s => s.WithXs(12).WithSm(6).WithMd(4));
                 }
@@ -345,83 +281,91 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Toggles the Denied flag on a role at the given index.
-    /// Uses workspace.RequestChange directly for reliable reactive updates.
+    /// Toggles the Denied flag on a role at the given index. Pure subscribe — no await.
+    /// Reads current node from the workspace stream, mutates Roles, requests change.
+    /// Errors propagate via OnError to the subscription instead of being swallowed.
     /// </summary>
-    internal static async Task ToggleDeniedAsync(LayoutAreaHost host, string nodePath, int roleIndex)
+    internal static void ToggleDenied(LayoutAreaHost host, string nodePath, int roleIndex)
     {
-        var node = await GetCurrentNodeAsync(host, nodePath);
-        if (node == null) return;
-
-        var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
-        if (assignment == null) return;
-
-        var roles = assignment.Roles.ToList();
-        if (roleIndex < 0 || roleIndex >= roles.Count) return;
-
-        roles[roleIndex] = roles[roleIndex] with { Denied = !roles[roleIndex].Denied };
-
-        var updated = node with { Content = assignment with { Roles = roles } };
-        host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
-    }
-
-    /// <summary>
-    /// Removes a role from the assignment. Reads current node from workspace stream,
-    /// then uses workspace.RequestChange directly for reliable reactive updates.
-    /// </summary>
-    internal static async Task RemoveRoleAsync(LayoutAreaHost host, string nodePath, int indexToRemove)
-    {
-        var node = await GetCurrentNodeAsync(host, nodePath);
-        if (node == null) return;
-
-        var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
-        if (assignment == null) return;
-
-        var roles = assignment.Roles.ToList();
-        if (indexToRemove < 0 || indexToRemove >= roles.Count) return;
-        roles.RemoveAt(indexToRemove);
-
-        if (roles.Count == 0)
+        SubscribeOnceToCurrentNode(host, nodePath, node =>
         {
-            // No roles left — delete entire node
-            host.Workspace.RequestChange(
-                new DataChangeRequest().WithDeletions(node), null, null);
-        }
-        else
-        {
+            var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+            if (assignment == null) return;
+            var roles = assignment.Roles.ToList();
+            if (roleIndex < 0 || roleIndex >= roles.Count) return;
+            roles[roleIndex] = roles[roleIndex] with { Denied = !roles[roleIndex].Denied };
             var updated = node with { Content = assignment with { Roles = roles } };
             host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
-        }
+        });
     }
 
     /// <summary>
-    /// Reads the current node from the workspace stream (no IMeshCatalog/IMeshService dependency).
+    /// Removes a role from the assignment. Pure subscribe — no await.
     /// </summary>
-    private static async Task<MeshNode?> GetCurrentNodeAsync(LayoutAreaHost host, string path)
+    internal static void RemoveRole(LayoutAreaHost host, string nodePath, int indexToRemove)
+    {
+        SubscribeOnceToCurrentNode(host, nodePath, node =>
+        {
+            var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+            if (assignment == null) return;
+            var roles = assignment.Roles.ToList();
+            if (indexToRemove < 0 || indexToRemove >= roles.Count) return;
+            roles.RemoveAt(indexToRemove);
+            if (roles.Count == 0)
+            {
+                host.Workspace.RequestChange(
+                    new DataChangeRequest().WithDeletions(node), null, null);
+            }
+            else
+            {
+                var updated = node with { Content = assignment with { Roles = roles } };
+                host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Adds a role to the assignment. Pure subscribe — no await.
+    /// </summary>
+    internal static void AddRole(LayoutAreaHost host, string nodePath, string selectedRole)
+    {
+        SubscribeOnceToCurrentNode(host, nodePath, node =>
+        {
+            var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+            if (assignment == null) return;
+            var roles = assignment.Roles.ToList();
+            roles.Add(new RoleAssignment { Role = selectedRole, Denied = false });
+            var updated = node with { Content = assignment with { Roles = roles } };
+            host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
+        });
+    }
+
+    /// <summary>
+    /// Subscribes to the workspace stream, takes the current node at <paramref name="path"/>,
+    /// invokes <paramref name="onNode"/> exactly once. Errors propagate to the layout host's
+    /// log via OnError; no swallowed exceptions, no await.
+    /// </summary>
+    private static void SubscribeOnceToCurrentNode(
+        LayoutAreaHost host, string path, Action<MeshNode> onNode)
     {
         var stream = host.Workspace.GetStream<MeshNode>();
-        if (stream == null) return null;
-        var nodes = await stream.Select(n => n ?? []).FirstAsync();
-        return nodes.FirstOrDefault(n => n.Path == path);
-    }
-
-    /// <summary>
-    /// Adds a role to the assignment. Reads current node from workspace stream,
-    /// then uses workspace.RequestChange directly for reliable reactive updates.
-    /// </summary>
-    internal static async Task AddRoleAsync(LayoutAreaHost host, string nodePath, string selectedRole)
-    {
-        var node = await GetCurrentNodeAsync(host, nodePath);
-        if (node == null) return;
-
-        var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
-        if (assignment == null) return;
-
-        var roles = assignment.Roles.ToList();
-        roles.Add(new RoleAssignment { Role = selectedRole, Denied = false });
-
-        var updated = node with { Content = assignment with { Roles = roles } };
-        host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
+        if (stream == null)
+        {
+            host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger(typeof(AccessAssignmentLayoutAreas))
+                .LogWarning("No MeshNode workspace stream for {Path}", path);
+            return;
+        }
+        stream.Select(n => n ?? [])
+            .Select(nodes => nodes.FirstOrDefault(n => n.Path == path))
+            .Where(n => n != null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Subscribe(
+                onNext: node => onNode(node!),
+                onError: ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(AccessAssignmentLayoutAreas))
+                    .LogWarning(ex, "Failed reading node {Path} from workspace", path));
     }
 
     internal static string GetRoleDisplayName(string rolePath)
@@ -483,7 +427,7 @@ public static class AccessAssignmentLayoutAreas
                     }
 
                     addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    await AddRoleAsync(addCtx.Host, nodePath, selectedRole);
+                    AddRole(addCtx.Host, nodePath, selectedRole);
                 }));
 
         ctx.Host.UpdateArea(DialogControl.DialogArea,
@@ -540,7 +484,7 @@ public static class AccessAssignmentLayoutAreas
                     }
 
                     saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    await UpdateAccessObjectAsync(saveCtx.Host, nodePath, selectedSubject);
+                    UpdateAccessObject(saveCtx.Host, nodePath, selectedSubject);
                 }));
 
         ctx.Host.UpdateArea(DialogControl.DialogArea,
@@ -548,19 +492,17 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Updates the AccessObject on the assignment node.
+    /// Updates the AccessObject on the assignment node. Pure subscribe — no await.
     /// </summary>
-    internal static async Task UpdateAccessObjectAsync(LayoutAreaHost host, string nodePath, string newAccessObject)
+    internal static void UpdateAccessObject(LayoutAreaHost host, string nodePath, string newAccessObject)
     {
         if (string.IsNullOrEmpty(newAccessObject)) return;
-
-        var node = await GetCurrentNodeAsync(host, nodePath);
-        if (node == null) return;
-
-        var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
-        if (assignment == null) return;
-
-        var updated = node with { Content = assignment with { AccessObject = newAccessObject } };
-        host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
+        SubscribeOnceToCurrentNode(host, nodePath, node =>
+        {
+            var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+            if (assignment == null) return;
+            var updated = node with { Content = assignment with { AccessObject = newAccessObject } };
+            host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
+        });
     }
 }

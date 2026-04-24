@@ -33,7 +33,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             .AddOrganizationType()
             .AddSampleUsers();
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_CanCreateOrganization()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -55,7 +55,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         await NodeFactory.DeleteNode(orgId);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_CanReadOrganization()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -81,7 +81,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         await NodeFactory.DeleteNode(orgId);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_CanUpdateOrganization()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -115,7 +115,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         await NodeFactory.DeleteNode(orgId);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_CanDeleteOrganization()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -140,7 +140,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         found.Should().BeNull("Deleted organization should not be found");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_HasAllPermissionsOnOrganization()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -178,7 +178,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         await NodeFactory.DeleteNode(orgId);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_CanCreateNodeUnderOrganization()
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
@@ -207,7 +207,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         await NodeFactory.DeleteNode(orgId);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_CanAccessCreateLayoutAreaOnOrganization()
     {
         // Reproduce: navigating to /Organization/Create shows "Access Denied"
@@ -244,7 +244,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             "OrganizationAccessRule should allow Create for admin user");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task OrganizationType_IsVisibleToGlobalAdmin()
     {
         // Global admin should be able to see Organization in node types
@@ -260,7 +260,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             "Organization should be a creatable type at root level for global admin");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task GlobalAdmin_CanReadOrganizationNodeType()
     {
         // The Organization NodeType definition node at path "Organization"

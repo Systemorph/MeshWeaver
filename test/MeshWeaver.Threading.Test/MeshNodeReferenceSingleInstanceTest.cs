@@ -107,16 +107,22 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
                 return t?.Messages.Count >= 1;
             }).ToTask(ct);
 
-        Output.WriteLine($"[TEST] Calling UpdateMeshNode for {threadPath}");
-        workspace.UpdateMeshNode(node =>
+        // Cross-hub update via DataChangeRequest — read current via the
+        // collectionStream subscription, build the patch, post.
+        Output.WriteLine($"[TEST] Posting DataChangeRequest for {threadPath}");
         {
-            if (node?.Content is null)
-                throw new InvalidOperationException("Node content is null");
-            Output.WriteLine($"[TEST] UpdateMeshNode callback: node={node.Id}, Content={node.Content.GetType().Name}");
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = thread with { Messages = ImmutableList.Create("msg1") } };
-        }, new Address(threadPath), threadPath);
-        Output.WriteLine("[TEST] UpdateMeshNode called, waiting for stream emission");
+            var current = collectionStream!.Current?.Value?.Instances.Values
+                .OfType<MeshNode>().FirstOrDefault();
+            if (current is null)
+                throw new InvalidOperationException("Node not found in collection stream");
+            Output.WriteLine($"[TEST] DataChangeRequest: node={current.Id}, Content={current.Content?.GetType().Name}");
+            var thread = current.Content as MeshThread ?? new MeshThread();
+            var patched = current with { Content = thread with { Messages = ImmutableList.Create("msg1") } };
+            client.Post(
+                new DataChangeRequest { Updates = [patched] },
+                o => o.WithTarget(new Address(threadPath)));
+        }
+        Output.WriteLine("[TEST] DataChangeRequest posted, waiting for stream emission");
 
         var result = await updated;
         result.Should().NotBeNull();
@@ -178,11 +184,16 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 1)
             .ToTask(ct);
 
-        workspace.UpdateMeshNode(node =>
+        // Cross-hub update via DataChangeRequest — read current via the
+        // collectionStream subscription above, build the patch, post.
+        var current = collectionStream!.Current?.Value?.Instances.Values
+            .OfType<MeshNode>().FirstOrDefault();
+        if (current is { Content: MeshThread t1 })
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = thread with { Messages = thread.Messages.Add("msg1") } };
-        }, new Address(threadPath), threadPath);
+            client.Post(
+                new DataChangeRequest { Updates = [current with { Content = t1 with { Messages = t1.Messages.Add("msg1") } }] },
+                o => o.WithTarget(new Address(threadPath)));
+        }
 
         var r1 = await afterFirst;
         Output.WriteLine($"After update 1: Messages=[{string.Join(", ", ((MeshThread)r1!.Content!).Messages)}]");
@@ -194,11 +205,18 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 2)
             .ToTask(ct);
 
-        workspace.UpdateMeshNode(node =>
+        // Cross-hub update via DataChangeRequest — read current via the
+        // collectionStream subscription, build the patch, post.
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = thread with { Messages = thread.Messages.Add("msg2") } };
-        }, new Address(threadPath), threadPath);
+            var c = collectionStream!.Current?.Value?.Instances.Values
+                .OfType<MeshNode>().FirstOrDefault();
+            if (c is { Content: MeshThread t2 })
+            {
+                client.Post(
+                    new DataChangeRequest { Updates = [c with { Content = t2 with { Messages = t2.Messages.Add("msg2") } }] },
+                    o => o.WithTarget(new Address(threadPath)));
+            }
+        }
 
         var r2 = await afterSecond;
         var finalContent = r2!.Content as MeshThread;
@@ -212,11 +230,17 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 3)
             .ToTask(ct);
 
-        workspace.UpdateMeshNode(node =>
+        // Cross-hub update via DataChangeRequest
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with { Content = thread with { Messages = thread.Messages.Add("msg3") } };
-        }, new Address(threadPath), threadPath);
+            var c = collectionStream!.Current?.Value?.Instances.Values
+                .OfType<MeshNode>().FirstOrDefault();
+            if (c is { Content: MeshThread t3 })
+            {
+                client.Post(
+                    new DataChangeRequest { Updates = [c with { Content = t3 with { Messages = t3.Messages.Add("msg3") } }] },
+                    o => o.WithTarget(new Address(threadPath)));
+            }
+        }
 
         var r3 = await afterThird;
         var final3 = r3!.Content as MeshThread;

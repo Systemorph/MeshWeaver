@@ -151,21 +151,14 @@ public static class GraphConfigurationExtensions
         var nodeTypePath = hub.Address.ToString();
         var codeParentPath = $"{nodeTypePath}/{CodeNodeType.SourceSubNamespace}";
 
-        Observable.FromAsync(async ct =>
-            {
-                CodeConfiguration? codeFile = null;
-                await foreach (var child in meshQuery
-                    .QueryAsync<MeshNode>($"namespace:{codeParentPath} scope:subtree")
-                    .WithCancellation(ct))
-                {
-                    if (child.Content is CodeConfiguration cf)
-                    {
-                        codeFile = cf;
-                        break;
-                    }
-                }
-                return codeFile;
-            })
+        meshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{codeParentPath} scope:subtree"))
+            .Take(1).Timeout(TimeSpan.FromSeconds(30))
+            .Select(change => change.Items
+                .Select(n => n.Content)
+                .OfType<CodeConfiguration>()
+                .FirstOrDefault())
             .Subscribe(
                 codeFile => hub.Post(
                     new GetDataResponse(codeFile, hub.Version),

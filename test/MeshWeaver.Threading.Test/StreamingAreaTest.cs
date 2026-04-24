@@ -176,11 +176,15 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
 
         Output.WriteLine("Got executing emission, now completing...");
 
-        // Mark execution as complete
-        workspace.UpdateMeshNode(node =>
+        // Mark execution as complete — long-standing thread stream + Update
+        var threadStream = workspace.GetRemoteStream<MeshNode>(
+            new Address(threadPath), new MeshNodeReference());
+        await threadStream.Where(ci => ci.Value != null).Timeout(10.Seconds()).FirstAsync();
+        threadStream.Update(current =>
         {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with
+            if (current == null) return null;
+            var thread = current.Content as MeshThread ?? new MeshThread();
+            var updated = current with
             {
                 Content = thread with
                 {
@@ -189,7 +193,10 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
                     ExecutionStatus = null
                 }
             };
-        }, new Address(threadPath), threadPath);
+            return new ChangeItem<MeshNode>(updated, threadStream.StreamId,
+                threadStream.StreamId, ChangeType.Patch, threadStream.Hub.Version,
+                [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
+        });
 
         // Should get a null emission (idle)
         var idle = await streamingArea
