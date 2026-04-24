@@ -47,22 +47,41 @@ internal interface IMeshStorage
         => GetDescendantsAsync(parentPath);
 
     /// <summary>
-    /// Creates or updates a node. Returns an observable that emits the saved node on success
-    /// or signals OnError on failure. Subscribe to drive — do not await.
+    /// 🚨 INTERNAL — DO NOT USE FROM APPLICATION / LAYOUT / HUB-HANDLER CODE.
+    /// Direct, instant, no-debounce write to the underlying storage. Bypasses
+    /// the workspace's data layer (no in-memory state update, no DataChange fan-out,
+    /// no MeshChangeFeed publish, no validators, no access control).
+    /// <para>
+    /// The ONLY legitimate callers are the framework's <c>HandleCreateNodeRequest</c>
+    /// and <c>HandleDeleteNodeRequest</c> handlers in <c>MeshExtensions</c>, which
+    /// orchestrate validators, change-feed publishing, and the activity log on top
+    /// of this raw write.
+    /// </para>
+    /// <para>
+    /// All other callers must go through <see cref="Workspace.UpdateMeshNode"/>
+    /// or post a <c>DataChangeRequest</c> / <c>UpdateNodeRequest</c> — the workspace
+    /// debounces, validates, fans out, and (for Update) preserves CQRS read-your-writes
+    /// semantics through the proper hub channels.
+    /// </para>
+    /// Don't try this at home — never use this pattern outside the two named handlers.
     /// </summary>
-    /// <param name="node">The node to save</param>
-    /// <returns>Observable emitting the saved node (OnNext + OnCompleted) or OnError</returns>
-    IObservable<MeshNode> SaveNode(MeshNode node);
+    internal IObservable<MeshNode> SaveNode(MeshNode node);
 
     /// <summary>
-    /// Deletes a node and optionally its descendants. Returns an observable that emits the
-    /// deleted path on success or OnError on failure. Subscribe to drive — do not await.
-    /// Atomic at the storage layer; no pre-read (avoids TOCTOU).
+    /// 🚨 INTERNAL — DO NOT USE FROM APPLICATION / LAYOUT / HUB-HANDLER CODE.
+    /// Direct, instant, no-debounce delete from the underlying storage. Bypasses
+    /// the workspace's data layer entirely (no validators, no change feed, no fan-out).
+    /// <para>
+    /// The ONLY legitimate caller is the framework's <c>HandleDeleteNodeRequest</c>
+    /// handler in <c>MeshExtensions</c>, which orchestrates validators + change-feed
+    /// publishing on top of this raw delete.
+    /// </para>
+    /// <para>
+    /// All other callers must post a <c>DeleteNodeRequest</c> to the mesh hub.
+    /// </para>
+    /// Don't try this at home — never use this pattern outside the named handler.
     /// </summary>
-    /// <param name="path">The node path</param>
-    /// <param name="recursive">If true, also delete all descendants</param>
-    /// <returns>Observable emitting the deleted path, or OnError</returns>
-    IObservable<string> DeleteNode(string path, bool recursive = false);
+    internal IObservable<string> DeleteNode(string path, bool recursive = false);
 
     /// <summary>
     /// Moves a node and all its descendants to a new path.
