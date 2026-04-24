@@ -1077,16 +1077,13 @@ public static class MeshExtensions
         var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
         var meshConfig = hub.ServiceProvider.GetService<IMeshCatalog>()?.Configuration;
 
-        // Read existing from our own workspace when the hub is backed by MeshDataSource —
-        // the workspace's replay-cached MeshNode stream already has the live node. Fall back
-        // to persistence when the hub doesn't expose the stream (some test/infra configs).
-        // No catalog usage either way.
-        var nodeStream = hub.GetWorkspace()?.GetStream<MeshNode>();
-        var existingNodeObs = nodeStream != null
-            ? nodeStream
-                .Take(1)
-                .Select(nodes => nodes?.FirstOrDefault(n => n.Path == updatedNode.Path))
-            : Observable.FromAsync(token => persistence.GetNodeAsync(updatedNode.Path, token));
+        // Read existing from persistence — the source of truth, just-written by CreateNode
+        // is always visible. The previous workspace-stream "optimization" hung in CI when
+        // the hub had just activated and the stream's first emission was delayed (Take(1)
+        // waited forever). Persistence is the right read for known-path content per
+        // AsynchronousCalls.md (no FirstOrDefault-on-collection anti-pattern).
+        var existingNodeObs = Observable.FromAsync(token =>
+            persistence.GetNodeAsync(updatedNode.Path, token));
 
         // Read existing → check NodeType → validate → persist → workspace ack → response.
         // Each step lives in a Subscribe callback; the handler returns synchronously below.
