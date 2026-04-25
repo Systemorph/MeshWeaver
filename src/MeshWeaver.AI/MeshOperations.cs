@@ -220,34 +220,15 @@ public class MeshOperations
     /// owning per-node hub's <c>MeshNodeReference</c> reducer — the authoritative
     /// source of truth, no catalog lag. <c>GetDataRequest</c> activates the cold
     /// per-node hub on receipt; the response carries the live MeshNode.
-    /// Returns <c>null</c> on timeout or routing failure (node does not exist /
-    /// hub couldn't be activated). See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
+    ///
+    /// Bounded by <c>MessageHubConfiguration.RequestTimeout</c> (the framework
+    /// applies it inside <c>RegisterCallback</c> when no caller token is supplied).
+    /// Returns <c>null</c> on timeout / routing failure / no handler — never hangs.
+    /// See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
     /// </summary>
-    private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10) =>
+    private IObservable<MeshNode?> FetchNode(string resolvedPath) =>
         Observable.Create<MeshNode?>(observer =>
         {
-            // ct is the only timeout source; everything (post, callback, response
-            // routing) honors it. RegisterCallback's Task either resolves with the
-            // response delivery (callback path) or faults with DeliveryFailureException
-            // when routing posts DeliveryFailure (the framework short-circuits the user
-            // callback there). Either case ends up in this Subscribe — exception path
-            // logs + emits null, success path emits the parsed MeshNode.
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-            var emitted = 0;
-
-            void EmitOnce(MeshNode? node)
-            {
-                if (Interlocked.Exchange(ref emitted, 1) != 0) return;
-                observer.OnNext(node);
-                observer.OnCompleted();
-            }
-
-            cts.Token.Register(() =>
-            {
-                logger.LogDebug("FetchNode timeout ({Timeout}s) for {Path}", timeoutSeconds, resolvedPath);
-                EmitOnce(null);
-            });
-
             IMessageDelivery? delivery;
             try
             {
@@ -258,18 +239,25 @@ public class MeshOperations
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "FetchNode post failed for {Path}", resolvedPath);
-                EmitOnce(null);
-                return Disposable.Create(() => cts.Dispose());
+                observer.OnNext(null);
+                observer.OnCompleted();
+                return Disposable.Empty;
             }
 
             if (delivery == null)
             {
-                EmitOnce(null);
-                return Disposable.Create(() => cts.Dispose());
+                observer.OnNext(null);
+                observer.OnCompleted();
+                return Disposable.Empty;
             }
 
-            var sub = Observable.FromAsync(() =>
-                    hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token))
+            // RegisterCallback's Task either resolves with the response delivery
+            // (success path) or faults with DeliveryFailureException (when routing
+            // posts a DeliveryFailure — every "no route" / "no handler") or
+            // TimeoutException (when the framework's RequestTimeout fires).
+            // Subscribe handles all three: success → parse + emit, exception → log + emit null.
+            return Observable.FromAsync(() =>
+                    hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default))
                 .Subscribe(
                     d =>
                     {
@@ -281,12 +269,14 @@ public class MeshOperations
                                 GetDataResponse { Data: JsonElement je } => je.Deserialize<MeshNode>(hub.JsonSerializerOptions),
                                 _ => null
                             };
-                            EmitOnce(node);
+                            observer.OnNext(node);
+                            observer.OnCompleted();
                         }
                         catch (Exception ex)
                         {
                             logger.LogWarning(ex, "FetchNode response parse failed for {Path}", resolvedPath);
-                            EmitOnce(null);
+                            observer.OnNext(null);
+                            observer.OnCompleted();
                         }
                     },
                     ex =>
@@ -298,10 +288,9 @@ public class MeshOperations
                             logger.LogDebug("FetchNode no route/handler for {Path}: {Error}", resolvedPath, ex.Message);
                         else
                             logger.LogWarning(ex, "FetchNode failed for {Path}", resolvedPath);
-                        EmitOnce(null);
+                        observer.OnNext(null);
+                        observer.OnCompleted();
                     });
-
-            return Disposable.Create(() => { sub.Dispose(); cts.Dispose(); });
         });
 
     /// <summary>
