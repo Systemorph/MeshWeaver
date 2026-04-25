@@ -483,11 +483,8 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        // The caller's ct (if any) and the hub's disposal token are linked so the
-        // wait ends as soon as either fires. The framework does NOT impose a default
-        // timeout — routing is required to always respond (DeliveryFailure for
-        // unknown targets / no handler), and handlers must not hang. If a callsite
-        // wants a timeout, it composes one (e.g. .Timeout(...) on the IObservable).
+        // Create a combined cancellation token that cancels when either the provided token
+        // or disposal begins
         var disposalCts = new CancellationTokenSource();
         var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
