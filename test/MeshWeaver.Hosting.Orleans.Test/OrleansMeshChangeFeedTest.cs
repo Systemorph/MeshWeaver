@@ -97,7 +97,7 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
 
     /// <summary>
     /// The original production bug: delegation creates a sub-thread,
-    /// then SubmitMessageRequest must route to it correctly.
+    /// then AppendUserMessageRequest must route to it correctly.
     /// The path resolver cache must not serve a stale partial match.
     /// </summary>
     [Fact(Timeout = 30000)]
@@ -125,10 +125,11 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
             .ToTask(ct);
 
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Test routing",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Test routing",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);
@@ -154,18 +155,19 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
         // NOW submit to the sub-thread — this is where routing failed before
-        // (stale cache sent SubmitMessageRequest to the parent message grain)
+        // (stale cache sent the request to the parent message grain)
         var subSubmitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = subThreadPath,
-                UserMessageText = "Hello sub-thread",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Hello sub-thread",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(subThreadPath)), ct);
 
         subSubmitResponse.Message.Success.Should().BeTrue(
-            $"Sub-thread SubmitMessage should succeed but got: {subSubmitResponse.Message.Error}");
-        Output.WriteLine("PASSED — sub-thread SubmitMessage routed correctly");
+            $"Sub-thread AppendUserMessage should succeed but got: {subSubmitResponse.Message.Error}");
+        Output.WriteLine("PASSED — sub-thread AppendUserMessage routed correctly");
     }
 }

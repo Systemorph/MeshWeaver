@@ -38,13 +38,13 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// Exercises the FULL production flow:
 /// 1. Client creates a thread (like ThreadChatView.SendMessageAsync)
-/// 2. Client submits a message (SubmitMessageRequest → thread grain)
+/// 2. Client submits a message (AppendUserMessageRequest → thread grain)
 /// 3. Thread grain creates user + response cells via Observable
 /// 4. Execution starts on _Exec hosted hub (streaming loop via InvokeAsync)
 /// 5. Top-level agent calls Create tool (MeshPlugin) → NodeChangeEntry generated
 /// 6. Top-level agent delegates to sub-agent → sub-thread created, SubmitMessage posted
 /// 7. Sub-agent calls Patch tool → NodeChangeEntry generated in sub-thread
-/// 8. Sub-thread completes → SubmitMessageResponse.UpdatedNodes propagates up
+/// 8. Sub-thread completes → server-internal SubmitMessageResponse.UpdatedNodes propagates up
 /// 9. Parent merges node changes via ForwardNodeChange → aggregated with min/max versions
 /// 10. Parent completes → final NodeChangeEntry list on response message
 ///
@@ -126,17 +126,18 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         //    Turn 1: calls Create (creates a Markdown node)
         //    Turn 2: calls delegate_to_agent (Executor)
         //    Turn 3: returns summary text after delegation completes
-        Output.WriteLine("Posting SubmitMessageRequest (Create + Delegate chain)...");
+        Output.WriteLine("Posting AppendUserMessageRequest (Create + Delegate chain)...");
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Create a doc and delegate updates to Executor",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Create a doc and delegate updates to Executor",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("SubmitMessageRequest succeeded — cells created");
+        Output.WriteLine("AppendUserMessageRequest succeeded — submission queued");
 
         // 4. Wait for message IDs
         var msgIds = await twoMessages;
@@ -242,10 +243,11 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
             .ToTask(ct);
 
         await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "First message",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "First message",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);

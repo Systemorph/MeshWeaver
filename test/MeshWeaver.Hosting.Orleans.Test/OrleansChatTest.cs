@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 // which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end chat test on Orleans infrastructure with FileSystem persistence.
-/// Verifies CreateNodeRequest, SubmitMessageRequest, ThreadMessages streaming,
+/// Verifies CreateNodeRequest, AppendUserMessageRequest, ThreadMessages streaming,
 /// and GetDataRequest on Thread + ThreadMessage nodes.
 /// </summary>
 public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
@@ -131,13 +131,14 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message
+        // 3. Submit message via AppendUserMessageRequest
         Output.WriteLine("Submitting message...");
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Hello from Orleans",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Hello from Orleans",
                 ContextPath = ContextPath
             },
             o => o.WithTarget(new Address(threadPath)), ct);

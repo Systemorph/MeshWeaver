@@ -130,17 +130,18 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
             .ToTask(ct);
 
         // Submit message — this triggers the DelegationToolFakeChatClient which calls delegate_to_agent
-        Output.WriteLine("Posting SubmitMessageRequest (should trigger delegation)...");
+        Output.WriteLine("Posting AppendUserMessageRequest (should trigger delegation)...");
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Please delegate this task",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Please delegate this task",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("SubmitMessageRequest succeeded — cells created");
+        Output.WriteLine("AppendUserMessageRequest succeeded");
 
         // Wait for message IDs
         var msgIds = await twoMessages;

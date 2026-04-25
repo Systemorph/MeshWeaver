@@ -30,6 +30,15 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 4. SubmitMessageRequest (state update only) → verify
 /// 5. WatchForExecution triggers execution
 /// 6. Response cell gets agent text
+///
+/// TODO(append-migration): SubmitMessageRequest still used because this test
+/// specifically exercises the legacy "client creates user + response cells then
+/// posts SubmitMessageRequest with both UserMessageId + ResponseMessageId" flow.
+/// The new AppendUserMessageRequest path makes the server own cell creation
+/// (via PendingUserMessages + the watcher), so the explicit pre-created cell ids
+/// have no equivalent. Production code (thread hub → _Exec) still routes through
+/// SubmitMessageRequest with explicit ResponseMessageId, so this Orleans-level
+/// flow check remains meaningful until the legacy code is removed.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
 public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
@@ -55,6 +64,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
     /// <summary>
     /// Exact portal flow: create thread → create cells (verified) → submit → execution → response.
     /// </summary>
+    // TODO(append-migration): kept on SubmitMessageRequest — see class-level comment.
     [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
     {
@@ -154,6 +164,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
     /// Existing thread: second message on a thread that already has messages.
     /// Verifies WatchForExecution triggers for new ActiveMessageId.
     /// </summary>
+    // TODO(append-migration): kept on SubmitMessageRequest — see class-level comment.
     [Fact]
     public async Task ExistingThread_SecondMessage_ExecutionCompletes()
     {

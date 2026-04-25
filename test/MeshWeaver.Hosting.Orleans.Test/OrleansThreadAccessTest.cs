@@ -173,18 +173,19 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message (like side panel SendMessageAsync)
-        Output.WriteLine("Posting SubmitMessageRequest...");
+        // 3. Submit message via AppendUserMessageRequest (like side panel SendMessageAsync)
+        Output.WriteLine("Posting AppendUserMessageRequest...");
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Hello from side panel test",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Hello from side panel test",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("SubmitMessageRequest succeeded");
+        Output.WriteLine("AppendUserMessageRequest succeeded");
 
         // 4. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
@@ -231,7 +232,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
     /// <summary>
     /// Reproduces the production identity chain failure:
     /// Simulates the Blazor GUI flow where UserContextMiddleware sets CircuitContext
-    /// on the portal hub's AccessService, then the component posts SubmitMessageRequest.
+    /// on the portal hub's AccessService, then the component posts AppendUserMessageRequest.
     /// Verifies that the user identity propagates through:
     ///   PostPipeline → OrleansRoutingService → MessageHubGrain → AccessControlPipeline
     /// </summary>
@@ -266,14 +267,15 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             .ToTask(ct);
 
         // 6. Submit message — this is the critical path that fails in production.
-        //    The SubmitMessageRequest has [RequiresPermission(Permission.Thread)].
+        //    AppendUserMessageRequest has [SubmitMessagePermission] which checks Thread on the parent partition.
         //    If identity is lost, AccessControlPipeline rejects with "(anonymous)".
-        Output.WriteLine("Posting SubmitMessageRequest with CircuitContext identity...");
+        Output.WriteLine("Posting AppendUserMessageRequest with CircuitContext identity...");
         var submitDelivery = client.Post(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Hello with identity",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Hello with identity",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)));
@@ -284,11 +286,11 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         _ = client.RegisterCallback((IMessageDelivery)submitDelivery!, response =>
         {
             string? error = null;
-            if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
-                error = sr.Message.Error ?? "SubmitMessageResponse.Success=false";
+            if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } sr)
+                error = sr.Message.Error ?? "AppendUserMessageResponse.Success=false";
             else if (response is IMessageDelivery<DeliveryFailure> df)
                 error = $"DeliveryFailure: {df.Message.Message}";
-            else if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: true })
+            else if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: true })
                 error = null;
             else
                 error = $"Unexpected response type: {response.Message?.GetType().Name}";
@@ -301,9 +303,9 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             ? await responseTcs.Task
             : "TIMEOUT: No response received within 15s";
 
-        Output.WriteLine($"SubmitMessageRequest result: {responseError ?? "SUCCESS"}");
+        Output.WriteLine($"AppendUserMessageRequest result: {responseError ?? "SUCCESS"}");
         responseError.Should().BeNull(
-            $"SubmitMessageRequest should succeed with identity 'Roland'. Got: {responseError}");
+            $"AppendUserMessageRequest should succeed with identity 'Roland'. Got: {responseError}");
 
         // 6. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
@@ -337,7 +339,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
     }
 
     /// <summary>
-    /// Verifies that when a user lacks Thread permission, the SubmitMessageRequest
+    /// Verifies that when a user lacks Thread permission, AppendUserMessageRequest
     /// returns a clear DeliveryFailure error — NOT a silent timeout/hang.
     /// Uses Viewer role which has Read+Execute but NOT Thread.
     /// </summary>
@@ -376,10 +378,11 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
 
         // Submit message — should fail with a clear error, not hang
         var submitDelivery = client.Post(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Should be denied",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Should be denied",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)));
@@ -390,7 +393,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         {
             if (response is IMessageDelivery<DeliveryFailure> df)
                 responseTcs.TrySetResult(df.Message.Message);
-            else if (response is IMessageDelivery<SubmitMessageResponse> sr)
+            else if (response is IMessageDelivery<AppendUserMessageResponse> sr)
                 responseTcs.TrySetResult(sr.Message.Success ? null : sr.Message.Error);
             else
                 responseTcs.TrySetResult($"Unexpected: {response.Message?.GetType().Name}");
@@ -427,10 +430,11 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Test child nodes",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Test child nodes",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);

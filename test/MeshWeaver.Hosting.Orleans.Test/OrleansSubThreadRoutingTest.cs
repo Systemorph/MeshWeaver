@@ -114,15 +114,16 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
             .ToTask(ct);
 
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Test message for sub-thread routing",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Test message for sub-thread routing",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("First SubmitMessageRequest succeeded");
+        Output.WriteLine("First AppendUserMessageRequest succeeded");
 
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
@@ -164,19 +165,20 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
             .FirstAsync()
             .ToTask(ct);
 
-        Output.WriteLine($"Posting SubmitMessageRequest to sub-thread: {subThreadPath}");
+        Output.WriteLine($"Posting AppendUserMessageRequest to sub-thread: {subThreadPath}");
         var subSubmitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = subThreadPath,
-                UserMessageText = "Hello from sub-thread!",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Hello from sub-thread!",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(subThreadPath)), ct);
 
         subSubmitResponse.Message.Success.Should().BeTrue(
-            $"Sub-thread SubmitMessage should succeed but got: {subSubmitResponse.Message.Error}");
-        Output.WriteLine("Sub-thread SubmitMessageRequest succeeded!");
+            $"Sub-thread AppendUserMessage should succeed but got: {subSubmitResponse.Message.Error}");
+        Output.WriteLine("Sub-thread AppendUserMessageRequest succeeded!");
 
         // 5. Wait for sub-thread cells to appear
         var subMsgIds = await subTwoMessages;
@@ -230,10 +232,11 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
             .ToTask(ct);
 
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Access context test msg",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Access context test msg",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);

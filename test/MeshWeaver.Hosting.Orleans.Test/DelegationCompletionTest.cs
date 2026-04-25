@@ -32,6 +32,16 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// This is critical for delegation: the parent thread's RegisterCallback
 /// waits for the second response to resolve the delegation TCS.
 /// Without it, the parent thread hangs forever after delegation.
+///
+/// TODO(append-migration): SubmitMessageRequest still used because this test
+/// specifically validates the dual-response (CellsCreated + ExecutionCompleted)
+/// semantic of the legacy submit pipeline. The new AppendUserMessageRequest API
+/// returns a single Success/Error response and the agent's response text lives
+/// only on the response satellite cell — there's no equivalent of the second
+/// completion response for this test to assert against. Internal production code
+/// (thread hub → _Exec sub-hub) still uses SubmitMessageRequest with this dual
+/// response semantic, so the underlying behaviour is still worth exercising
+/// while the legacy contract is in place.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
 public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
@@ -47,6 +57,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
     /// The test uses RegisterCallback (same pattern as delegation tool)
     /// and collects all responses until ExecutionCompleted arrives.
     /// </summary>
+    // TODO(append-migration): kept on SubmitMessageRequest — see class-level comment.
     [Fact(Timeout = 60000)]
     public async Task SubmitMessage_ReceivesBothCellsCreated_AndExecutionCompleted()
     {
