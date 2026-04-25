@@ -189,6 +189,53 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
+    /// Subscribes to <c>ObserveQuery&lt;MeshNode&gt;</c> for <paramref name="query"/>
+    /// and folds the live deltas (Initial / Reset / Added / Updated / Removed) into
+    /// a running path set. Returns the path set the moment <paramref name="predicate"/>
+    /// is satisfied. Wall-clock-bounded by <see cref="ReadNodeTimeout"/>.
+    /// <para>
+    /// Use this when a write changed the catalog state (Active ↔ Deleted, hard
+    /// delete, etc.) and a follow-up <see cref="QueryAsync"/> would race the
+    /// catalog update. Lossless replacement for poll-loops on stale snapshots.
+    /// </para>
+    /// </summary>
+    protected async Task<IReadOnlySet<string>> WaitForQueryPathSetAsync(
+        string query,
+        Func<IReadOnlySet<string>, bool> predicate,
+        CancellationToken ct)
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var observable = MeshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Scan(paths, (acc, change) =>
+            {
+                if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                {
+                    acc.Clear();
+                    foreach (var n in change.Items) if (n.Path is { } p) acc.Add(p);
+                }
+                else if (change.ChangeType is QueryChangeType.Added or QueryChangeType.Updated)
+                {
+                    foreach (var n in change.Items) if (n.Path is { } p) acc.Add(p);
+                }
+                else if (change.ChangeType is QueryChangeType.Removed)
+                {
+                    foreach (var n in change.Items) if (n.Path is { } p) acc.Remove(p);
+                }
+                return acc;
+            })
+            .Where(predicate);
+
+        var set = await Task.WhenAny(
+            observable.FirstAsync().ToTask(ct),
+            Task.Delay(ReadNodeTimeout, ct).ContinueWith<IReadOnlySet<string>>(_ =>
+                throw new TimeoutException(
+                    $"WaitForQueryPathSetAsync('{query}') exceeded {ReadNodeTimeout.TotalSeconds:F0}s. " +
+                    $"Likely cause: a write completed but the query catalog never reflected the change. " +
+                    $"Current path set ({paths.Count}): [{string.Join(", ", paths)}]"), ct));
+        return await set;
+    }
+
+    /// <summary>
     /// Recognise the two routing-failure flavours that mean "this path has no
     /// readable MeshNode" so the helper can return <c>null</c> instead of
     /// surfacing a noisy exception:

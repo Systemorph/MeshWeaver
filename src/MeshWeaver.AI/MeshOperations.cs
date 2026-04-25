@@ -217,15 +217,16 @@ public class MeshOperations
     /// <summary>
     /// One-shot read of the MeshNode at <paramref name="resolvedPath"/>.
     ///
-    /// Uses <c>ObserveQuery</c> rather than <c>GetDataRequest(MeshNodeReference)</c>
-    /// because the query read path is invalidated by <c>MeshChangeFeed</c> after
-    /// writes via <c>mesh.CreateNode / UpdateNode / DeleteNode</c>, whereas a
-    /// GetDataRequest against the node hub's workspace can return stale state —
-    /// <c>HandleUpdateNodeRequest</c> fires a fire-and-forget DataChangeRequest
-    /// fan-out to the node's own address but the handler explicitly acknowledges
-    /// it may silently fail. Until that workspace-tick path is made reliable,
-    /// Take(1) on ObserveQuery gives us the consistent read-after-write behaviour
-    /// the AgentWriteFailure / PatchWorkspace / Security test suites depend on.
+    /// KNOWN BUG: uses ObserveQuery (catalog read path) which lags behind writes,
+    /// so post-Patch / post-Update Get can return stale state. Tracked by the
+    /// PatchWorkspaceAck / McpReadYourWrites suites. The fix is to switch to
+    /// GetDataRequest(new MeshNodeReference()) via Post+RegisterCallback (which
+    /// activates cold per-node hubs and reads authoritative state) — see
+    /// OrleansReentrancyTest.GetHubContentAsync for the canonical shape.
+    /// GetMeshNodeStream(path) is NOT a drop-in replacement: subscribing to the
+    /// remote MeshNodeReference stream does not reliably activate a cold per-node
+    /// hub for a just-created node, so Patch returns "not found" before the hub
+    /// is ready.
     /// </summary>
     private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10) =>
         mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))

@@ -37,8 +37,6 @@ public static class ThreadMessageLayoutAreas
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
-    private const string MessageDataKey = "msg";
-
     /// <summary>
     /// Compact streaming view for parent thread consumption.
     /// Shows last 3 lines of text + tool call chips + delegation links.
@@ -145,10 +143,14 @@ public static class ThreadMessageLayoutAreas
 
     /// <summary>
     /// Renders the Overview area for a ThreadMessage node.
-    /// Emits control once from first node emission. Text and tool calls are data-bound
-    /// via JsonPointerReference — updates flow through host.UpdateData, no control rebuilds.
-    /// Editing is handled purely on the Blazor UI side (ThreadMessageBubbleView toggles
-    /// between readonly and Edit LayoutArea).
+    /// Ships a path-bound <see cref="ThreadMessageBubbleControl"/> — the Blazor view
+    /// subscribes to <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;(NodePath, ...)</c>
+    /// directly and renders Text / ToolCalls / UpdatedNodes from the live message.
+    /// No layout data section, no <see cref="JsonPointerReference"/> chain, no
+    /// per-node republish. See <c>Doc/Architecture/ThreadExecutionStreaming.md</c>.
+    ///
+    /// Editing branch (EditingPrompt) still uses the legacy snapshot path — it needs
+    /// the editor pre-populated with current text and that's a one-shot read.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -156,47 +158,26 @@ public static class ThreadMessageLayoutAreas
         var lastSlash = hubPath.LastIndexOf('/');
         var threadPath = lastSlash > 0 ? hubPath[..lastSlash] : hubPath;
         var messageId = lastSlash > 0 ? hubPath[(lastSlash + 1)..] : hubPath;
+        var nodePath = $"{threadPath}/{messageId}";
 
-        // Subscribe to the MeshNodeReference sync stream — receives updates from
-        // responseStream.Update() / PatchDataChangeRequest. Map to ThreadMessageViewModel
-        // and push to data section. The bubble binds to the view model via JsonPointerReference.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-
         var msgLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.MsgLayout");
-        host.SubscribeToDataStream(MessageDataKey, syncStream!
-            .Select(change =>
-            {
-                var msg = change.Value?.Content as ThreadMessage;
-                msgLogger?.LogInformation("[MsgLayout] STREAM_EMIT: hub={Hub}, hasContent={HasContent}, textLen={TextLen}",
-                    host.Hub.Address, msg != null, msg?.Text?.Length ?? -1);
-                return msg;
-            })
-            .Where(m => m != null)
-            .Select(m => (ThreadMessageViewModel.FromMessage(m!) with
-            {
-                Text = ConvertReferencesToLinks(m!.Text ?? "")
-            }))
-            .DistinctUntilChanged()
-            .Select(vm =>
-            {
-                msgLogger?.LogInformation("[MsgLayout] DATA_PUSH: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
-                    host.Hub.Address, ((ThreadMessageViewModel)vm).Text.Length, ((ThreadMessageViewModel)vm).ToolCalls.Count);
-                return (object)vm;
-            }));
 
-        // Emit control once — role/author are static, text/toolCalls are data-bound.
-        // Try current value first (synchronous) — the stream may have already replayed
-        // before this subscription started. Fall back to observable for lazy activation.
+        // Editing-prompt branch still needs the current message snapshot so the editor
+        // pre-populates with the user's text. Build it lazily off the first emission.
+        // Regular bubble branch ships the path-bound control immediately.
         var currentMsg = syncStream!.Current?.Value?.Content as ThreadMessage;
+        if (currentMsg is { Type: ThreadMessageType.EditingPrompt })
+        {
+            msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_SYNC_EDIT: hub={Hub}", hubPath);
+            return Observable.Return((UiControl?)BuildEditingOverview(host, currentMsg, threadPath, messageId));
+        }
+
         if (currentMsg != null)
         {
-            msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_SYNC: hub={Hub}, role={Role}, textLen={TextLen}",
-                hubPath, currentMsg.Role, currentMsg.Text?.Length ?? 0);
-            var control = currentMsg.Type == ThreadMessageType.EditingPrompt
-                ? BuildEditingOverview(host, currentMsg, threadPath, messageId)
-                : BuildMessageOverview(host, currentMsg, threadPath, messageId);
-            return Observable.Return((UiControl?)control);
+            msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_SYNC: hub={Hub}, role={Role}", hubPath, currentMsg.Role);
+            return Observable.Return((UiControl?)BuildMessageOverview(host, currentMsg, threadPath, messageId, nodePath));
         }
 
         msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_ASYNC: hub={Hub}, waiting for first emission", hubPath);
@@ -204,13 +185,9 @@ public static class ThreadMessageLayoutAreas
             .Select(change => change.Value?.Content as ThreadMessage)
             .Where(m => m != null)
             .Take(1)
-            .Select(msg =>
-            {
-                if (msg!.Type == ThreadMessageType.EditingPrompt)
-                    return (UiControl?)BuildEditingOverview(host, msg, threadPath, messageId);
-
-                return (UiControl?)BuildMessageOverview(host, msg, threadPath, messageId);
-            });
+            .Select(msg => msg!.Type == ThreadMessageType.EditingPrompt
+                ? (UiControl?)BuildEditingOverview(host, msg, threadPath, messageId)
+                : (UiControl?)BuildMessageOverview(host, msg, threadPath, messageId, nodePath));
     }
 
     /// <summary>
@@ -281,25 +258,21 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Overview for messages. Role/author are static from the initial message.
-    /// Text and tool calls are data-bound via JsonPointerReference.
+    /// Builds the Overview for messages. Bubble is path-bound — the Blazor view
+    /// subscribes to the message-node remote stream directly and pulls Role,
+    /// AuthorName, Text, ToolCalls, UpdatedNodes, ModelName, Timestamp from there.
+    /// The <paramref name="msg"/> snapshot is only used for click-handler defaults
+    /// (Resubmit text fallback) where a one-shot read at render time is acceptable.
     /// </summary>
     private static UiControl BuildMessageOverview(
-        LayoutAreaHost host, ThreadMessage msg, string threadPath, string messageId)
+        LayoutAreaHost host, ThreadMessage msg, string threadPath, string messageId, string nodePath)
     {
         var isUser = msg.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
-        var authorName = msg.AuthorName ?? (isUser ? "You" : msg.AgentName ?? "Assistant");
 
-        // Bind to ThreadMessageViewModel in data section
-        var dataPointer = LayoutAreaReference.GetDataPointer(MessageDataKey);
+        // Path-bound bubble — view subscribes to nodePath via GetRemoteStream<MeshNode, MeshNodeReference>.
+        // No JsonPointerReference, no layout data section, no per-chunk republish.
         var bubble = new ThreadMessageBubbleControl()
-            .WithRole(msg.Role)
-            .WithAuthorName(authorName)
-            .WithModelName(msg.ModelName)
-            .WithTimestamp(msg.Timestamp)
-            .WithText(new JsonPointerReference($"{dataPointer}/text"))
-            .WithToolCalls(new JsonPointerReference($"{dataPointer}/toolCalls"))
-            .WithUpdatedNodes(new JsonPointerReference($"{dataPointer}/updatedNodes"))
+            .WithNodePath(nodePath)
             .WithThreadPath(threadPath)
             .WithMessageId(messageId);
 

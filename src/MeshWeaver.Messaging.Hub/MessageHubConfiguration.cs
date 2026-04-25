@@ -44,20 +44,42 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithInitializationGate(string name, Predicate<IMessageDelivery>? allowDuringInit = null)
         => this with { InitializationGates = InitializationGates.SetItem(name, allowDuringInit ?? (_ => false)) };
 
-    public IMessageHub? ParentHub
-    {
-        get
-        {
-            try
-            {
-                return ParentServiceProvider?.GetService<IMessageHub>();
-            }
-            catch
-            {
-                return null;
-            }
-        }
-    }
+    /// <summary>
+    /// Resolves the parent hub by going through DI on the parent scope.
+    /// Do NOT call during disposal — the parent scope may already be disposed,
+    /// and an ObjectDisposedException here pollutes test output. If you need
+    /// the parent hub at disposal time, capture it at construction (e.g.
+    /// <see cref="MessageService.ParentHub"/>).
+    /// </summary>
+    public IMessageHub? ParentHub => ParentServiceProvider?.GetService<IMessageHub>();
+
+    /// <summary>
+    /// TaskScheduler used by this hub's message-dispatch ActionBlocks. Each hub is
+    /// an actor and gets its own scheduler so async continuations don't serialise
+    /// through some other hub's single thread.
+    ///
+    /// <para>
+    /// <b>Default behaviour:</b> when unset, the hub uses <see cref="TaskScheduler.Default"/>
+    /// (the thread pool). The Orleans grain glue (<c>MessageHubGrain</c>) sets this
+    /// explicitly to the grain's scheduler for the root grain hub so Orleans can
+    /// attribute work to the grain (keep-alive, statistics, RequestContext flow).
+    /// Hosted hubs created via <c>GetHostedHub(...)</c> default to <c>TaskScheduler.Default</c> —
+    /// they are sibling actors, not extensions of the parent.
+    /// </para>
+    ///
+    /// <para>See <c>Doc/Architecture/OrleansTaskScheduler.md</c> for the threading model.</para>
+    /// </summary>
+    public TaskScheduler? TaskScheduler { get; init; }
+
+    /// <summary>
+    /// Sets the <see cref="TaskScheduler"/> this hub's ActionBlocks run on.
+    /// Use the grain's scheduler ONLY for the root grain hub; every other hub
+    /// (hosted hubs, per-node hubs, _Exec, kernel hubs) should use a separate
+    /// scheduler — usually leave it unset so the default <see cref="System.Threading.Tasks.TaskScheduler.Default"/>
+    /// applies. See <c>Doc/Architecture/OrleansTaskScheduler.md</c>.
+    /// </summary>
+    public MessageHubConfiguration WithTaskScheduler(TaskScheduler scheduler)
+        => this with { TaskScheduler = scheduler };
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 

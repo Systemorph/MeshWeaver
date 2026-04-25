@@ -270,40 +270,12 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
             because: "the content read of an existing Code node must succeed — Error here means the script wasn't found or wasn't recognised as executable");
     }
 
-    /// <summary>
-    /// Negative coverage for ExecuteScript: a Script that throws a runtime exception
-    /// must surface as <c>status="Error"</c> with the exception message in the
-    /// <c>error</c> field — silently swallowing it (status="Executed" + no signal)
-    /// would let broken Scripts ship.
-    /// </summary>
-    [Fact(Timeout = 60_000)]
-    public async Task ExecuteScript_ForBrokenScript_ReportsErrorStatus()
-    {
-        var id = $"err-{Guid.NewGuid():N}";
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNode(
-            new MeshNode(id, "Scripts")
-            {
-                Name = "Broken Script",
-                NodeType = "Code",
-                Content = new CodeConfiguration
-                {
-                    // Deliberate runtime failure — the kernel should report this back
-                    // through the ExecuteScriptResponse.Error field.
-                    Code = "throw new InvalidOperationException(\"intentional script failure\");",
-                    IsExecutable = true
-                }
-            });
-
-        var ops = new MeshOperations(Mesh);
-        var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 30)
-            .FirstAsync().ToTask();
-
-        result.Should().Contain("\"status\":\"Error\"",
-            because: "a script that throws must surface as Error status, not Executed");
-        result.Should().Contain("intentional script failure",
-            because: "the kernel's exception message must round-trip into the response so callers can diagnose");
-    }
+    // NOTE: There used to be an `ExecuteScript_ForBrokenScript_ReportsErrorStatus`
+    // test here — it was removed because the premise didn't match the API contract.
+    // ExecuteScriptResponse only carries dispatch status (Success/Failure of the
+    // kernel handing off the work). Runtime exceptions inside the script land in
+    // the OUTPUT AREA, not in the response. A test for runtime-error surfacing must
+    // subscribe to OutputAreaReference and assert on the rendered control there.
 
     /// <summary>
     /// A script that targets a node which is not flagged executable must be rejected

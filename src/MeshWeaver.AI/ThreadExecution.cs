@@ -451,23 +451,77 @@ public static class ThreadExecution
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        // Helper: push content to response message hub.
-        // Posts UpdateThreadMessageContent which is handled ON the response grain —
-        // calls workspace.UpdateMeshNode() locally → sync stream → clients.
+        // Long-lived per-message remote stream. Opened once at the start of
+        // execution; every chunk-tick / tool-result / final write goes through
+        // _responseStream.Update(...). Disposed in the Task.Run finally block.
+        // See Doc/Architecture/ThreadExecutionStreaming.md.
+        ISynchronizationStream<MeshNode>? responseStream = null;
+        try
+        {
+            responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(responsePath), new MeshNodeReference());
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[ThreadExec] Could not open response stream for {ResponsePath} — falling back to UpdateThreadMessageContent posts",
+                responsePath);
+        }
+
+        // Helper: push content to the response message via the long-lived remote
+        // stream. Fire-and-forget: ISynchronizationStream.Update posts an
+        // UpdateStreamRequest to the workspace hub, which forwards the patch to
+        // the owning per-message hub and broadcasts the echo to subscribers.
         void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
             ImmutableList<NodeChangeEntry> updatedNodes,
-            string? agentName, string? modelName)
+            string? agentName, string? modelName,
+            int? inputTokens = null, int? outputTokens = null, int? totalTokens = null,
+            DateTime? completedAt = null)
         {
             logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}",
                 responsePath, text.Length, toolCalls.Count, updatedNodes.Count);
-            parentHub.Post(new UpdateThreadMessageContent
+
+            if (responseStream == null)
             {
-                Text = text,
-                ToolCalls = toolCalls,
-                UpdatedNodes = updatedNodes,
-                AgentName = agentName,
-                ModelName = modelName
-            }, o => o.WithTarget(new Address(responsePath)));
+                // Fallback path — should only fire when GetRemoteStream threw above.
+                parentHub.Post(new UpdateThreadMessageContent
+                {
+                    Text = text,
+                    ToolCalls = toolCalls,
+                    UpdatedNodes = updatedNodes,
+                    AgentName = agentName,
+                    ModelName = modelName,
+                    InputTokens = inputTokens,
+                    OutputTokens = outputTokens,
+                    TotalTokens = totalTokens,
+                    CompletedAt = completedAt
+                }, o => o.WithTarget(new Address(responsePath)));
+                return;
+            }
+
+            responseStream.Update(node =>
+            {
+                if (node == null) return null;
+                var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
+                var updated = node with
+                {
+                    Content = current with
+                    {
+                        Text = text,
+                        ToolCalls = toolCalls,
+                        UpdatedNodes = updatedNodes,
+                        AgentName = agentName ?? current.AgentName,
+                        ModelName = modelName ?? current.ModelName,
+                        InputTokens = inputTokens ?? current.InputTokens,
+                        OutputTokens = outputTokens ?? current.OutputTokens,
+                        TotalTokens = totalTokens ?? current.TotalTokens,
+                        CompletedAt = completedAt ?? current.CompletedAt
+                    }
+                };
+                return new ChangeItem<MeshNode>(
+                    updated, responseStream.StreamId, responseStream.StreamId,
+                    ChangeType.Patch, responseStream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = node }]);
+            });
         }
 
         // Helper: update Thread execution state via parentHub workspace.
@@ -825,22 +879,14 @@ public static class ThreadExecution
                         return e;
                     }).ToImmutableList();
 
-                    var delta = responseText.Length > lastPushedTextLength
-                        ? responseText.ToString(lastPushedTextLength, responseText.Length - lastPushedTextLength)
-                        : null;
-                    // First push replaces the "Generating response…" placeholder; subsequent
-                    // pushes append deltas only.
-                    var isFirstPush = lastPushedTextLength == 0;
+                    // We own the running text accumulator (responseText) — push the
+                    // full string each tick. The TextDelta append protocol from the
+                    // legacy UpdateThreadMessageContent path is gone: ChangeType.Patch
+                    // through the synchronization protocol is idempotent for equal
+                    // payloads, and there is no second writer racing this one.
                     lastPushedTextLength = responseText.Length;
-                    parentHub.Post(new UpdateThreadMessageContent
-                    {
-                        Text = isFirstPush ? responseText.ToString() : null,
-                        TextDelta = isFirstPush ? null : delta,
-                        ToolCalls = toolCallLog,
-                        UpdatedNodes = nodeChangeLog,
-                        AgentName = request.AgentName,
-                        ModelName = request.ModelName
-                    }, o => o.WithTarget(new Address(responsePath)));
+                    PushToResponseMessage(responseText.ToString(), toolCallLog, nodeChangeLog,
+                        request.AgentName, request.ModelName);
                     lastUpdate = DateTimeOffset.UtcNow;
                 }
             }
@@ -854,18 +900,10 @@ public static class ThreadExecution
                         DateTime.UtcNow, threadPath, responseText.Length, toolCallLog.Count,
                         inputTokens, outputTokens, totalTokens);
                     var finalText = responseText.ToString();
-                    parentHub.Post(new UpdateThreadMessageContent
-                    {
-                        Text = finalText,
-                        ToolCalls = toolCallLog,
-                        UpdatedNodes = aggregatedChanges,
-                        AgentName = request.AgentName,
-                        ModelName = request.ModelName,
-                        InputTokens = inputTokens,
-                        OutputTokens = outputTokens,
-                        TotalTokens = totalTokens,
-                        CompletedAt = DateTime.UtcNow
-                    }, o => o.WithTarget(new Address(responsePath)));
+                    PushToResponseMessage(finalText, toolCallLog, aggregatedChanges,
+                        request.AgentName, request.ModelName,
+                        inputTokens: inputTokens, outputTokens: outputTokens,
+                        totalTokens: totalTokens, completedAt: DateTime.UtcNow);
                     // Clear streaming state
                     UpdateThreadExecution(t => t with
                     {
@@ -907,6 +945,14 @@ public static class ThreadExecution
                     {
                         ExecutionCancellations.TryRemove(threadPath, out _);
                         executionCts.Dispose();
+                        // Tear down the per-message remote stream now that streaming
+                        // is done. The stream stays alive for the whole run because
+                        // throttled / final / cancel / error paths all touch it.
+                        try { (responseStream as IDisposable)?.Dispose(); }
+                        catch (Exception disposeEx)
+                        {
+                            logger.LogDebug(disposeEx, "[ThreadExec] disposing responseStream for {ThreadPath} threw — non-fatal", threadPath);
+                        }
                     }
                 });
                     }); // end of historyObs.Subscribe

@@ -758,9 +758,11 @@ The rule is simple: **if your code runs inside a hub message handler (registered
 
 Sometimes you genuinely need long-running I/O — for example, streaming an AI response. This uses a **hosted hub** (`_Exec`) that runs the blocking work on its own thread via `hub.InvokeAsync`. But even here:
 
-- All **state updates** (workspace, thread content) go through the **parent hub** (`parentHub.GetWorkspace().UpdateMeshNode(...)`, `parentHub.Post(...)`)
+- All **state updates** (workspace, thread content) go through the **parent hub** or through a long-lived workspace stream — never via per-chunk messages between hubs
 - All **messages** go through the parent hub — never post to the execution hub
 - The execution hub is purely for hosting the blocking I/O — it should never own state
+
+> **Streaming content into a thread message: use a long-lived `GetRemoteStream(...).Update(...)` from the writer.** Posting `UpdateThreadMessageContent` (or any per-chunk message) between hubs causes the deadlock surface that `OrleansReentrancyTest.ToolCall_DuringStreaming_DoesNotDeadlock` exists to catch. See [Thread Execution Streaming](xref:Architecture/ThreadExecutionStreaming) for the full design and [Per-Hub TaskScheduler](xref:Architecture/OrleansTaskScheduler) for the threading-model rules that complete the picture (each non-grain hub gets its own `TaskScheduler`; the grain hub keeps the grain's scheduler for activity attribution).
 
 ```csharp
 // In HandleSubmitMessage (runs on thread hub):
@@ -769,8 +771,17 @@ executionHub.Post(request);  // Only message to execution hub: start the work
 
 // In ExecuteMessageAsync (runs on _Exec hub):
 var parentHub = hub.Configuration.ParentHub!;
-parentHub.Post(new UpdateThreadMessageContent { ... });  // State via parent hub
-parentHub.GetWorkspace().UpdateMeshNode(...);              // Workspace via parent hub
+var workspace = parentHub.GetWorkspace();
+
+// Open the per-message remote stream once at start, hold for the streaming run.
+var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+    new Address(responsePath), new MeshNodeReference());
+
+// Push every delta through the stream — fire-and-forget, no shared scheduler in the write path.
+responseStream.Update(node => node with { Content = (ThreadMessage)node.Content with { Text = ... } });
+
+// Thread-state updates that aren't on the message itself stay on parentHub.UpdateMeshNode.
+parentHub.GetWorkspace().UpdateMeshNode(node => node with { /* IsExecuting, etc. */ });
 ```
 
-The parent hub's scheduler is free (the handler returned `delivery.Processed()` immediately). State updates and callbacks process normally on it.
+The parent hub's scheduler is free (the handler returned `delivery.Processed()` immediately). State updates and callbacks process normally on it. Per-message content writes flow through the workspace stream so the renderer sees them without the writer paying for a hub-to-hub round trip per chunk.

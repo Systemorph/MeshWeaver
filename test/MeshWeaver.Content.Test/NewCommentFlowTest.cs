@@ -387,9 +387,11 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("3. Updating comment text via NodeFactory.UpdateNodeAsync...");
         await NodeFactory.UpdateNode(editedNode);
 
-        // 4. "Reload" — read fresh via per-node stream
-        Output.WriteLine("4. Simulating reload — reading via per-node stream...");
-        var reloaded = await ReadNodeAsync(created.Path!);
+        // 4. "Reload" — read content via the per-node MeshNodeReference stream.
+        // QueryAsync would race the eventually-consistent catalog and return stale.
+        var ct = TestContext.Current.CancellationToken;
+        Output.WriteLine("4. Simulating reload — reading content via per-node stream...");
+        var reloaded = await ReadNodeAsync(created.Path!, ct);
         reloaded.Should().NotBeNull("Comment must survive reload");
         var reloadedComment = reloaded!.Content.Should().BeOfType<Comment>().Subject;
         reloadedComment.Text.Should().Be("This is my important feedback about the document.",
@@ -398,11 +400,12 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         reloadedComment.MarkerId.Should().Be(markerId);
         Output.WriteLine($"   Reloaded comment: Text='{reloadedComment.Text}', Author={reloadedComment.Author}");
 
-        // 5. Also verify via namespace: query (how ReadView finds comments)
+        // 5. Also verify via namespace: query (how ReadView finds comments) — wait
+        // for the catalog to surface the comment under the doc namespace.
         Output.WriteLine("5. Verifying via namespace: query...");
-        var children = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
-        ).ToListAsync();
+        var nsQuery = $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}";
+        await WaitForQueryPathSetAsync(nsQuery, set => set.Contains(created.Path!), ct);
+        var children = await MeshQuery.QueryAsync<MeshNode>(nsQuery).ToListAsync(ct);
 
         var found = children.FirstOrDefault(n => n.Path == created.Path);
         found.Should().NotBeNull("Comment must appear in namespace: query after reload");

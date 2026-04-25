@@ -88,8 +88,17 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 Interleave = true
             });
 
+        // Couple the root grain hub to the grain's TaskScheduler. Every message processed
+        // on this hub runs on the grain's scheduler — Orleans attributes the work
+        // (activity counters, RequestContext flow, distributed-tracing scopes,
+        // deactivation timing). Hosted hubs created from here (via GetHostedHub) keep
+        // the default TaskScheduler.Default and are independent actors. See
+        // Doc/Architecture/OrleansTaskScheduler.md.
+        var grainScheduler = TaskScheduler.Current;
+
         Hub = meshHub.GetHostedHub(address, config =>
             node.HubConfiguration(config)
+                .WithTaskScheduler(grainScheduler)
                 .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
                 .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation)))!;
 

@@ -201,8 +201,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // This test verifies that MeshNode.Content is correctly persisted
         // and can be loaded back from the persistence service
 
-        // Get story node from persistence (directly, without routing)
-        var storyNode = await ReadNodeAsync("graph/story1");
+        // Static node read — no write before, catalog read is correct (no CQRS lag).
+        var storyNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert - content should be available
         storyNode.Should().NotBeNull("Story node should exist in persistence");
@@ -287,8 +287,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // and UpdateNodeRequest requires DataChangeRequest handlers which are not
         // registered on the mesh hub in this minimal test setup.
 
-        // Verify initial data exists
-        var initialNode = await ReadNodeAsync("graph/story1");
+        // Static node read — no write before, catalog read is correct (no CQRS lag).
+        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         initialNode.Should().NotBeNull();
         var initialContent = initialNode!.Content as TestStory;
         initialContent!.Points.Should().Be(5);
@@ -306,8 +306,9 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         };
         await _persistence!.SaveNodeAsync(updatedNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
-        // Assert - get updated data from persistence
-        var persistedNode = await ReadNodeAsync("graph/story1");
+        // Static node read — write went through persistence directly (bypassing per-node hub),
+        // so the catalog query is the authoritative read here.
+        var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull();
         var content = persistedNode!.Content as TestStory;
         content.Should().NotBeNull();

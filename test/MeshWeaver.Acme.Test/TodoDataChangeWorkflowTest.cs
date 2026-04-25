@@ -508,24 +508,35 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task QueryWithStateActive_ExcludesDeletedItems()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
+        var ct = TestContext.Current.CancellationToken;
+        var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
 
-        // Get the original todo
-        var originalNode = await ReadNodeAsync(todoPath);
-        originalNode.Should().NotBeNull();
+        // Capture the initial active set + the original todo from the same
+        // ObserveQuery subscription — initial emission is the full snapshot.
+        var initialItems = await MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Select(c => c.Items)
+            .FirstAsync()
+            .ToTask(ct);
+
+        var originalNode = initialItems.FirstOrDefault(n => n.Path == todoPath);
+        originalNode.Should().NotBeNull("DefinePersona should be in the initial active set");
 
         // Soft delete the node
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
         await NodeFactory.UpdateNode(deletedNode);
 
-        // Query for active items only
-        var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
-        var activeResults = await MeshQuery.QueryAsync<MeshNode>(activeQuery, null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        // Wait for the catalog to reflect the state change — ObserveQuery emits a
+        // Removed/Updated delta when DefinePersona stops matching state:Active.
+        var paths = await WaitForQueryPathSetAsync(
+            activeQuery,
+            set => !set.Contains(todoPath),
+            ct);
 
-        // The deleted item should not be in active results
-        activeResults.Should().NotContain(n => n.Path == todoPath,
+        paths.Should().NotContain(todoPath,
             "Deleted item should not appear in state:Active query results");
-        Output.WriteLine($"Active query returned {activeResults.Count} items, excluding the deleted one");
+        Output.WriteLine($"Active query reflects soft-delete: {paths.Count} active items, deleted excluded");
         // Note: No restore needed - test uses local copy of data
     }
 
@@ -536,24 +547,34 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task QueryWithStateDeleted_OnlyReturnsDeletedItems()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
+        var ct = TestContext.Current.CancellationToken;
+        var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
+        var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
 
-        // Get the original todo
-        var originalNode = await ReadNodeAsync(todoPath);
-        originalNode.Should().NotBeNull();
+        // Capture original from the live active set (set query — ObserveQuery is correct).
+        var initialActive = await MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Select(c => c.Items)
+            .FirstAsync()
+            .ToTask(ct);
 
-        // Soft delete the node
+        var originalNode = initialActive.FirstOrDefault(n => n.Path == todoPath);
+        originalNode.Should().NotBeNull("DefinePersona should be in the initial active set");
+
+        // Soft delete
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
         await NodeFactory.UpdateNode(deletedNode);
 
-        // Query for deleted items only
-        var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
-        var deletedResults = await MeshQuery.QueryAsync<MeshNode>(deletedQuery, null, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        // Wait for the catalog to surface DefinePersona in the deleted set.
+        var paths = await WaitForQueryPathSetAsync(
+            deletedQuery,
+            set => set.Contains(todoPath),
+            ct);
 
-        // The deleted item should be in deleted results
-        deletedResults.Should().Contain(n => n.Path == todoPath,
+        paths.Should().Contain(todoPath,
             "Deleted item should appear in state:Deleted query results");
-        Output.WriteLine($"Deleted query returned {deletedResults.Count} items, including the soft-deleted one");
+        Output.WriteLine($"Deleted query reflects soft-delete: {paths.Count} deleted items, target included");
         // Note: No restore needed - test uses local copy of data
     }
 
@@ -598,6 +619,8 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         // Create a temporary test node for this test
         var testId = $"TestTodo_{Guid.NewGuid():N}";
         var testPath = $"ACME/ProductLaunch/Todo/{testId}";
+        var ct = TestContext.Current.CancellationToken;
+        var subtreeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
 
         var testNode = new MeshNode(testId, "ACME/ProductLaunch/Todo")
         {
@@ -607,22 +630,20 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             State = MeshNodeState.Active
         };
 
-        // Create the test node
+        // Create the test node and wait for the catalog to surface it.
         await NodeFactory.CreateNode(testNode);
         Output.WriteLine($"Created test node at {testPath}");
-
-        // Verify it exists via stream
-        var createdNode = await ReadNodeAsync(testPath);
-        createdNode.Should().NotBeNull("Test node should exist after creation");
+        await WaitForQueryPathSetAsync(subtreeQuery, set => set.Contains(testPath), ct);
 
         // Permanently delete it
         await NodeFactory.DeleteNode(testPath);
         Output.WriteLine("Permanently deleted test node");
 
-        // Verify it no longer exists
-        var deletedNode = await ReadNodeAsync(testPath);
-        deletedNode.Should().BeNull("Node should not exist after permanent delete");
-        Output.WriteLine("Confirmed node no longer exists after permanent delete");
+        // Wait for the catalog to drop the deleted path.
+        var paths = await WaitForQueryPathSetAsync(subtreeQuery, set => !set.Contains(testPath), ct);
+        paths.Should().NotContain(testPath, "Node should not exist after permanent delete");
+        Output.WriteLine($"Catalog reflects permanent delete: {paths.Count} remaining items");
         // Note: No cleanup needed - test uses local copy of data
     }
 }
+

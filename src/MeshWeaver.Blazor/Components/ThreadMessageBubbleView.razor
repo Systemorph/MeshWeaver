@@ -3,17 +3,17 @@
 @using MeshWeaver.Messaging
 
 <div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
-    <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@ViewModel.AuthorName</div>
-    @if (!IsUser && (!string.IsNullOrEmpty(ViewModel.ModelName) || ViewModel.Timestamp.HasValue))
+    <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@AuthorName</div>
+    @if (!IsUser && (!string.IsNullOrEmpty(ModelName) || Timestamp.HasValue))
     {
         <div class="thread-msg-meta">
-            @if (!string.IsNullOrEmpty(ViewModel.ModelName))
+            @if (!string.IsNullOrEmpty(ModelName))
             {
-                <span>@ViewModel.ModelName</span>
+                <span>@ModelName</span>
             }
-            @if (ViewModel.Timestamp.HasValue)
+            @if (Timestamp.HasValue)
             {
-                <span>@ViewModel.Timestamp.Value.ToString("HH:mm:ss")</span>
+                <span>@Timestamp.Value.ToString("HH:mm:ss")</span>
             }
         </div>
     }

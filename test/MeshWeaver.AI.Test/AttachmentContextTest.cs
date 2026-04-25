@@ -154,7 +154,8 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.InitializeAsync("ACME");
 
-        var contextNode = await ReadNodeAsync("ACME", ct);
+        // Static node read — no write before, catalog read is correct (no CQRS lag).
+        var contextNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME", null, ct).FirstOrDefaultAsync(ct);
         contextNode.Should().NotBeNull();
 
         agentChat.SetContext(new AgentContext
