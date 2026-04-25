@@ -25,6 +25,7 @@ public class AutocompleteStreamProviderTests
 {
     // ──────────────────────── Single provider, incremental snapshots ────────────────────────
 
+    /// <summary>Single provider emits one snapshot per item and the final snapshot contains every item.</summary>
     [Fact]
     public async Task SingleProvider_EmitsSnapshotPerItem_FinalContainsAll()
     {
@@ -49,6 +50,7 @@ public class AutocompleteStreamProviderTests
         snapshots[3].Select(i => i.Label).Should().Equal("a", "b", "c");
     }
 
+    /// <summary>Items emitted out of priority order are sorted by descending priority in the snapshot.</summary>
     [Fact]
     public async Task ItemsArrivingOutOfOrder_AreSortedByPriorityDescending()
     {
@@ -71,6 +73,7 @@ public class AutocompleteStreamProviderTests
 
     // ──────────────────────── Multiple providers, fast-then-slow ────────────────────────
 
+    /// <summary>With a fast and a slow provider, fast items appear in early snapshots and slow ones merge in later.</summary>
     [Fact]
     public async Task FastAndSlowProviders_FastItemsAppearBeforeSlowOnes()
     {
@@ -115,6 +118,7 @@ public class AutocompleteStreamProviderTests
             $"snapshot count never reached {expected} within timeout");
     }
 
+    /// <summary>An exception thrown by one provider does not terminate the merged stream — other providers keep emitting.</summary>
     [Fact]
     public async Task FailingProvider_DoesNotKillTheStream()
     {
@@ -142,6 +146,7 @@ public class AutocompleteStreamProviderTests
 
     // ──────────────────────── Top-N truncation ────────────────────────
 
+    /// <summary>Top-N truncation drops items whose priority falls below the current Nth-ranked item.</summary>
     [Fact]
     public async Task TopN_DropsItemsBelowTheCurrentNthPriority()
     {
@@ -166,6 +171,7 @@ public class AutocompleteStreamProviderTests
 
     // ──────────────────────── Monaco-style: varying input over time ────────────────────────
 
+    /// <summary>Sequential subscriptions with different queries each receive their own snapshot stream without leakage between queries.</summary>
     [Fact]
     public async Task UserTypingMultipleQueries_EachQueryGetsItsOwnSnapshotStream()
     {
@@ -194,6 +200,7 @@ public class AutocompleteStreamProviderTests
         collected["abc"][^1].Select(i => i.Label).Should().Equal("abc-1", "abc-2", "abc-3");
     }
 
+    /// <summary>Disposing the subscription before the provider completes stops further snapshots from reaching the observer.</summary>
     [Fact]
     public async Task UnsubscribeBeforeCompletion_StopsReceivingFurtherSnapshots()
     {

@@ -73,7 +73,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
         var delivery = Mesh.Post(
             new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
             o => o.WithTarget(new Address(path)))!;
-        Mesh.RegisterCallback(delivery, (d, _) =>
+        _ = Mesh.RegisterCallback(delivery, (d, _) =>
         {
             if (d is IMessageDelivery<PatchDataResponse> r) patchTcs.TrySetResult(r.Message);
             else patchTcs.TrySetException(new InvalidOperationException(
@@ -89,7 +89,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
         var getDelivery = Mesh.Post(
             new GetDataRequest(new MeshNodeReference()),
             o => o.WithTarget(new Address(path)))!;
-        Mesh.RegisterCallback(getDelivery, (d, _) =>
+        _ = Mesh.RegisterCallback(getDelivery, (d, _) =>
         {
             if (d is IMessageDelivery<GetDataResponse> r) getTcs.TrySetResult(r.Message.Data as MeshNode);
             else getTcs.TrySetResult(null);

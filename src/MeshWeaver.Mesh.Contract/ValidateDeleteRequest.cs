@@ -49,14 +49,20 @@ public sealed record ValidateDeleteResponse
     /// </summary>
     public ImmutableList<string> Warnings { get; init; } = ImmutableList<string>.Empty;
 
+    /// <summary>True when there are no blocking errors.</summary>
     public bool IsValid => Errors.IsEmpty;
+
+    /// <summary>True when at least one advisory warning was reported.</summary>
     public bool HasWarnings => !Warnings.IsEmpty;
 
+    /// <summary>Empty response — no errors, no warnings.</summary>
     public static ValidateDeleteResponse Ok() => new();
 
+    /// <summary>Response with a single blocking error.</summary>
     public static ValidateDeleteResponse FromError(string error) =>
         new() { Errors = [error] };
 
+    /// <summary>Response with a single advisory warning.</summary>
     public static ValidateDeleteResponse FromWarning(string warning) =>
         new() { Warnings = [warning] };
 }

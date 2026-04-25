@@ -38,7 +38,7 @@ namespace MeshWeaver.AI.Test;
 /// <c>ExecuteScript</c> needs an actual kernel and lives in
 /// OrleansKernelProgressTest.
 ///
-/// Each test uses <see cref="Task.WhenAny"/> with a short budget so a
+/// Each test uses <see cref="Task.WhenAny(Task, Task)"/> with a short budget so a
 /// regression that hangs forever shows up quickly and isn't hidden by the
 /// xUnit <c>[Fact(Timeout=...)]</c>.
 /// </summary>

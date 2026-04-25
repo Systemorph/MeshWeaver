@@ -74,7 +74,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         var delivery = Mesh.Post(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(path)))!;
-        Mesh.RegisterCallback(delivery, (d, _) =>
+        _ = Mesh.RegisterCallback(delivery, (d, _) =>
         {
             if (d is IMessageDelivery<ExecuteScriptResponse> r) execTcs.TrySetResult(r.Message);
             else execTcs.TrySetException(new InvalidOperationException(
@@ -131,7 +131,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         var delivery = Mesh.Post(
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(path)))!;
-        Mesh.RegisterCallback(delivery, (d, _) =>
+        _ = Mesh.RegisterCallback(delivery, (d, _) =>
         {
             if (d is IMessageDelivery<ExecuteScriptResponse> r) execTcs.TrySetResult(r.Message);
             return Task.FromResult(d);

@@ -316,6 +316,12 @@
             {
                 var request = new AutocompleteRequest(query, BoundNodePath);
                 var delivery = Hub.Post(request, o => o.WithTarget(Hub.Address));
+                if (delivery == null)
+                {
+                    observer.OnError(new InvalidOperationException("Autocomplete: Hub.Post returned null."));
+                    observer.OnCompleted();
+                    return Disposable.Empty;
+                }
                 Hub.RegisterCallback(delivery, response =>
                 {
                     if (response.Message is AutocompleteResponse ar)
