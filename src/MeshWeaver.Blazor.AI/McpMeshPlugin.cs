@@ -103,7 +103,9 @@ public class McpMeshPlugin
                 .WithRoutes(routes => routes.RouteAddressToHostedHub(
                     AddressExtensions.KernelType,
                     c => c.AddKernelSubHubHandlers())),
-            HostedHubCreation.Always);
+            HostedHubCreation.Always)
+            ?? throw new InvalidOperationException(
+                $"Failed to materialise MCP session hub at {address}.");
     }
 
     private static string? ResolveSessionId(HttpContext? ctx)

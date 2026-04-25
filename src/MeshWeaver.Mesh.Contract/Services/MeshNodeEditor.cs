@@ -58,6 +58,7 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
     private readonly BehaviorSubject<MeshNode?> node = new(null);
     private IDisposable? activeSub;
 
+    /// <summary>Creates an editor for the MeshNode at <paramref name="path"/>. Subscribes immediately.</summary>
     public MeshNodeEditor(IMessageHub hub, string path)
     {
         ArgumentNullException.ThrowIfNull(hub);
@@ -69,11 +70,14 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
         SubscribeToCurrentPath();
     }
 
+    /// <inheritdoc />
     public string CurrentPath { get; private set; }
 
+    /// <inheritdoc />
     public IObservable<MeshNode> Node =>
         node.Where(n => n != null).Select(n => n!);
 
+    /// <inheritdoc />
     public void Update(Func<MeshNode, MeshNode> transform)
     {
         ArgumentNullException.ThrowIfNull(transform);
@@ -89,6 +93,7 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
             o => o.WithTarget(new Address(CurrentPath)));
     }
 
+    /// <inheritdoc />
     public IObservable<MoveNodeResponse> Move(string targetPath)
     {
         if (string.IsNullOrWhiteSpace(targetPath))
@@ -98,6 +103,11 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
         {
             var delivery = hub.Post(new MoveNodeRequest(CurrentPath, targetPath),
                 o => o.WithTarget(hub.Address));
+            if (delivery == null)
+            {
+                observer.OnError(new InvalidOperationException("Move: hub.Post returned null."));
+                return Disposable.Empty;
+            }
             hub.RegisterCallback(delivery, response =>
             {
                 if (response.Message is MoveNodeResponse moveResp)
@@ -124,6 +134,7 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
             ex => node.OnError(ex));
     }
 
+    /// <inheritdoc />
     public void Dispose()
     {
         activeSub?.Dispose();

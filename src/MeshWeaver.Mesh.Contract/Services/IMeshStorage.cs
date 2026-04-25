@@ -58,7 +58,7 @@ internal interface IMeshStorage
     /// of this raw write.
     /// </para>
     /// <para>
-    /// All other callers must go through <see cref="Workspace.UpdateMeshNode"/>
+    /// All other callers must go through <see cref="MeshNodeStreamExtensions.UpdateMeshNode"/>
     /// or post a <c>DataChangeRequest</c> / <c>UpdateNodeRequest</c> — the workspace
     /// debounces, validates, fans out, and (for Update) preserves CQRS read-your-writes
     /// semantics through the proper hub channels.

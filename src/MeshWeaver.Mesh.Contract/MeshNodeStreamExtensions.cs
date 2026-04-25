@@ -35,7 +35,7 @@ public static class MeshNodeStreamExtensions
     ///   <item><description><b>Own hub</b> — when <paramref name="path"/> matches the hub's
     ///     address: returns the local <see cref="MeshNodeReference"/> stream.</description></item>
     ///   <item><description><b>Remote</b> — subscribes to the owning per-node hub via
-    ///     <see cref="WorkspaceExtensions.GetRemoteStream{TReduced,TReference}"/> +
+    ///     <c>workspace.GetRemoteStream&lt;TReduced, TReference&gt;</c> +
     ///     <see cref="MeshNodeReference"/>.</description></item>
     /// </list>
     /// The owning hub's <c>MeshDataSource</c> loads its MeshNode at init, so
@@ -61,7 +61,7 @@ public static class MeshNodeStreamExtensions
     /// Updates the OWN MeshNode of <paramref name="workspace"/> by applying
     /// <paramref name="update"/> through the data source's MeshNode partition stream
     /// — the data source persister flushes to storage, subscribers receive the update
-    /// via the workspace synchronization protocol, no <see cref="IMeshStorage"/>
+    /// via the workspace synchronization protocol, no <see cref="Services.IMeshStorage"/>
     /// calls (persistence belongs in <c>MeshDataSource</c> initialization only).
     ///
     /// <para>
