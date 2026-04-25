@@ -2,6 +2,22 @@
 
 > **For GUI rendering, see [Data Binding](xref:GUI/DataBinding) — that is the authoritative pattern.** Layout areas should not load data at all; they declare bindings, and the Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>`. The rules below cover hub-handler / service code, where you still need to compose async work safely.
 
+## 🚨 `No handler found for message type X` is almost always a serialization/type-registry bug
+
+When a routed `IRequest<T>` comes back as a `DeliveryFailure` saying *"No handler found for message type X"*, the handler usually IS registered via `WithHandler<X>(...)` on the target hub. The framework's `FinishDelivery` only emits this when an `IRequest<T>` reached the hub but no `Register<T>(...)` filter matched — and the most common reason is the message arriving on the wire **deserialized as a different type** (or as `JsonElement`) because the receiving hub's `ITypeRegistry` is missing the `WithType(typeof(X), nameof(X))` entry that the sender used as the `$type` discriminator.
+
+**Triage in this order — don't skip steps:**
+
+1. Verify `X` is registered on **both** the sender and the receiver via `config.TypeRegistry.WithType(typeof(X), nameof(X))` — typically through a module-level `AddXxxTypes(this ITypeRegistry)` extension.
+2. For Orleans / cross-process: confirm the registration is wired into BOTH the silo's mesh / hub config AND any client / portal hub that posts the request. The shared mesh-level registry inherits to all hubs in the same DI scope, but client hubs created via `CreateMessageHub` get their own registry that needs an explicit `config.TypeRegistry.AddXxxTypes()` call.
+3. Only after ruling out (1)–(2): suspect an actual missing handler / wrong target address.
+
+It's *almost never* a "the `WithHandler<X>` line is missing" bug. Always verify the type-registry parity first — a message that deserializes into the wrong CLR type can never match the handler filter `d is IMessageDelivery<X>`.
+
+## Streams are reactive — subscribe, don't snapshot
+
+`ISynchronizationStream<T>` is consumed via `.Select(...)` / `.Where(...)` / `.Take(1)` / `.Subscribe(...)`. The framework's snapshot accessor is `internal` — application code can't see it, so the temptation to `.Current?.Value` doesn't exist. If a sync handler needs a value it can't subscribe for, the handler is wrong: derive it from the request payload, or defer the work to a follow-up message posted from inside `Subscribe`.
+
 MeshWeaver uses a **truly asynchronous** message-passing model. This is fundamentally different from C#'s `async/await` pattern, which is better described as "fake async" — you still block the calling context waiting for a result.
 
 ## 🚨 The absolute rules (no exceptions outside tests)
@@ -91,30 +107,6 @@ Anywhere else — layout areas, dashboards, chained reactive consumers, hub hand
 
 Rule of thumb: **if any downstream code re-renders or re-computes when data changes, you need `ObserveQuery`.** `QueryAsync` is only safe when the caller serialises the snapshot and walks away.
 
-## 🚨 Hard rule — never read `.Current` off a stream
-
-Streams (`ISynchronizationStream<T>`, any `workspace.GetStream(...)` /
-`GetRemoteStream(...)` result) **must be consumed reactively**. That means
-`.Select(...)` / `.Where(...)` / `.Take(1)` / `.Subscribe(...)` — never
-`.Current` / `.Current?.Value`.
-
-`Current` is a snapshot that is only populated *after* the stream has emitted its
-first value. Inside a handler that has just caused the hub to activate, the
-workspace may not have loaded its data yet — `Current` will be null and you will
-ship a wrong answer. The reactive chain handles this correctly: Subscribe fires
-once the stream actually emits.
-
-```csharp
-// ❌ NEVER — looks sync, returns wrong answer on cold workspaces.
-var node = hub.GetWorkspace().GetStream(new MeshNodeReference())?.Current?.Value;
-
-// ✅ ALWAYS — reactive chain, fires when the stream emits.
-hub.GetWorkspace().GetStream(new MeshNodeReference())
-    ?.Select(change => change.Value)
-    .Where(node => node is not null)
-    .Take(1)
-    .Subscribe(node => { /* handler body */ });
-```
 
 The handler method itself still returns `request.Processed()` immediately —
 the Subscribe callback fires later, posts the response via
