@@ -44,10 +44,6 @@ public static class OrleansServerRegistryExtensions
         builder.ConfigureHub(conf => conf
             .WithTypes(typeof(StreamActivity))
             .AddMeshTypes()
-            // Start the per-silo persistence coordinator on mesh-hub init.
-            // All writes via WriteRequest land here; the hub's single-threaded
-            // ActionBlock serializes them. See Doc/Architecture/PersistencePipeline.md.
-            .WithInitialization(hub => hub.StartPersistenceCoordinator())
         );
 
         return builder;
