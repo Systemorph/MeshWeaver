@@ -46,6 +46,17 @@ Topics: Message-based communication, Actor model, UI streaming, AI agents, Data 
 
 **When a hub-handler test hangs or a message disappears: read `Doc/Architecture/DebuggingMessageFlow.md` first.** It tells you exactly which trace tags to grep, where to crank the log levels, and **why you should never rerun a hung test 2-3 times "to see"** — the framework already prints a structured `MESSAGE_FLOW:` trace at `Trace` level. Run once, grep, fix.
 
+### `No handler found for message type X` — almost always a serialization / type-registry problem
+
+When a routed message comes back with `DeliveryFailure` saying *"No handler found for message type X"*, the handler usually IS registered on the target hub. The framework's `FinishDelivery` only emits this when an `IRequest<T>` reached the hub but matched no `WithHandler<T>(...)` registration — which most often means the message arrived **deserialized as the wrong type** (e.g. the receiving hub's `ITypeRegistry` doesn't have `X` registered with the same `$type` discriminator the sender used, so the polymorphic deserializer falls back to a base type and the handler filter `d.Message is X` returns false).
+
+**Triage order:**
+1. Verify the type IS registered on **both** sides — sender and receiver — via `config.TypeRegistry.WithType(typeof(X), nameof(X))` or via the `Add<Module>Types(this ITypeRegistry)` extension that the module exposes.
+2. For Orleans/cross-process: confirm the type registration is wired into the silo's hub config AND any client/portal hub that posts the request.
+3. Only after ruling out (1)–(2): suspect actual missing handler / wrong target address.
+
+It's *almost never* a "the WithHandler line is missing" bug.
+
 ### DataMesh
 
 The documentation on the data mesh is accessible via src/MeshWeaver.Documentation/Data/DataMesh/
