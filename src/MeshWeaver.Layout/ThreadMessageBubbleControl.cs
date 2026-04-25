@@ -47,6 +47,16 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     public string? MessageId { get; init; }
 
     /// <summary>
+    /// The full message-node path. When set, the Blazor view subscribes directly
+    /// to <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;(NodePath, ...)</c>
+    /// and renders Text / ToolCalls / UpdatedNodes from the live node — no layout
+    /// data section, no per-chunk hub message. See
+    /// <c>Doc/Architecture/ThreadExecutionStreaming.md</c>. Legacy callers that
+    /// pass concrete <c>Text</c>/<c>ToolCalls</c>/<c>UpdatedNodes</c> still work.
+    /// </summary>
+    public string? NodePath { get; init; }
+
+    /// <summary>
     /// Data-bound list of completed tool calls for post-execution inspection.
     /// Rendered as collapsible entries in the Blazor view.
     /// </summary>
@@ -74,6 +84,7 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     public ThreadMessageBubbleControl WithExecutionStatus(object? status) => this with { ExecutionStatus = status };
     public ThreadMessageBubbleControl WithMessageId(string? id) => this with { MessageId = id };
     public ThreadMessageBubbleControl WithThreadPath(string? path) => this with { ThreadPath = path };
+    public ThreadMessageBubbleControl WithNodePath(string? path) => this with { NodePath = path };
     public ThreadMessageBubbleControl WithToolCalls(object? toolCalls) => this with { ToolCalls = toolCalls };
     public ThreadMessageBubbleControl WithUpdatedNodes(object? updatedNodes) => this with { UpdatedNodes = updatedNodes };
 }

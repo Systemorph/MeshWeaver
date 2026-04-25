@@ -28,14 +28,18 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 20000)]
     public async Task DeleteNode_DeletesNode()
     {
+        var ct = TestContext.Current.CancellationToken;
         var nodePath = $"{TestPartition}/del-fandf";
+        var subtreeQuery = $"path:{TestPartition} nodeType:Markdown scope:subtree";
+
         await NodeFactory.CreateNode(
             new MeshNode("del-fandf", TestPartition) { Name = "Fire And Forget", NodeType = "Markdown" });
+        await WaitForQueryPathSetAsync(subtreeQuery, set => set.Contains(nodePath), ct);
 
         await NodeFactory.DeleteNode(nodePath);
 
-        var result = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
-        result.Should().BeNull("node should be deleted");
+        var paths = await WaitForQueryPathSetAsync(subtreeQuery, set => !set.Contains(nodePath), ct);
+        paths.Should().NotContain(nodePath, "node should be deleted");
     }
 
     /// <summary>
@@ -46,9 +50,13 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 20000)]
     public async Task DeleteNode_FromNodeHub_Succeeds()
     {
+        var ct = TestContext.Current.CancellationToken;
         var nodePath = $"{TestPartition}/del-nodehub";
+        var subtreeQuery = $"path:{TestPartition} nodeType:Markdown scope:subtree";
+
         await NodeFactory.CreateNode(
             new MeshNode("del-nodehub", TestPartition) { Name = "Node Hub Delete", NodeType = "Markdown" });
+        await WaitForQueryPathSetAsync(subtreeQuery, set => set.Contains(nodePath), ct);
 
         // Route a message to create the node hub on demand
         var client = GetClient();
@@ -66,8 +74,8 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         // Delete from node hub — this is the production pattern
         await nodeService.DeleteNode(nodePath);
 
-        var result = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
-        result.Should().BeNull("deletion from node hub should work");
+        var paths = await WaitForQueryPathSetAsync(subtreeQuery, set => !set.Contains(nodePath), ct);
+        paths.Should().NotContain(nodePath, "deletion from node hub should work");
     }
 
     /// <summary>
@@ -76,21 +84,28 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 20000)]
     public async Task DeleteNode_WithChildren_DeletesAll()
     {
+        var ct = TestContext.Current.CancellationToken;
+        var parentPath = $"{TestPartition}/del-parent";
+        var subtreeQuery = $"path:{TestPartition} scope:subtree";
+
         await NodeFactory.CreateNode(
             new MeshNode("del-parent", TestPartition) { Name = "Parent", NodeType = "Group" });
         await NodeFactory.CreateNode(
-            new MeshNode("child1", $"{TestPartition}/del-parent") { Name = "Child 1", NodeType = "Markdown" });
+            new MeshNode("child1", parentPath) { Name = "Child 1", NodeType = "Markdown" });
         await NodeFactory.CreateNode(
-            new MeshNode("child2", $"{TestPartition}/del-parent") { Name = "Child 2", NodeType = "Markdown" });
+            new MeshNode("child2", parentPath) { Name = "Child 2", NodeType = "Markdown" });
+        await WaitForQueryPathSetAsync(subtreeQuery,
+            set => set.Contains(parentPath) && set.Contains($"{parentPath}/child1") && set.Contains($"{parentPath}/child2"), ct);
 
-        await NodeFactory.DeleteNode($"{TestPartition}/del-parent");
+        await NodeFactory.DeleteNode(parentPath);
 
-        var parent = await ReadNodeAsync($"{TestPartition}/del-parent", TestContext.Current.CancellationToken);
-        parent.Should().BeNull("parent should be deleted");
-
-        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/del-parent")
-            .ToListAsync(TestContext.Current.CancellationToken);
-        children.Should().BeEmpty("all children should be deleted");
+        var paths = await WaitForQueryPathSetAsync(subtreeQuery,
+            set => !set.Contains(parentPath)
+                && !set.Contains($"{parentPath}/child1")
+                && !set.Contains($"{parentPath}/child2"), ct);
+        paths.Should().NotContain(parentPath, "parent should be deleted");
+        paths.Should().NotContain($"{parentPath}/child1", "all children should be deleted");
+        paths.Should().NotContain($"{parentPath}/child2", "all children should be deleted");
     }
 
     /// <summary>
@@ -103,9 +118,13 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 20000)]
     public async Task DeleteNode_PostRegisterCallback_DoesNotDeadlock()
     {
+        var ct = TestContext.Current.CancellationToken;
         var nodePath = $"{TestPartition}/del-reactive";
+        var subtreeQuery = $"path:{TestPartition} nodeType:Markdown scope:subtree";
+
         await NodeFactory.CreateNode(
             new MeshNode("del-reactive", TestPartition) { Name = "Reactive Delete", NodeType = "Markdown" });
+        await WaitForQueryPathSetAsync(subtreeQuery, set => set.Contains(nodePath), ct);
 
         var client = GetClient();
         var nodeAddress = new Address(nodePath);
@@ -124,11 +143,11 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
             return Task.FromResult<IMessageDelivery>(d);
         });
 
-        var response = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var response = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
         response.Success.Should().BeTrue($"delete should succeed (error: {response.Error})");
 
-        var lookup = await ReadNodeAsync(nodePath, TestContext.Current.CancellationToken);
-        lookup.Should().BeNull("node should be gone after Post+RegisterCallback delete");
+        var paths = await WaitForQueryPathSetAsync(subtreeQuery, set => !set.Contains(nodePath), ct);
+        paths.Should().NotContain(nodePath, "node should be gone after Post+RegisterCallback delete");
     }
 
     /// <summary>
@@ -139,14 +158,19 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 20000)]
     public async Task DeleteNode_PostRegisterCallback_Recursive_DoesNotDeadlock()
     {
+        var ct = TestContext.Current.CancellationToken;
+        var parentPath = $"{TestPartition}/del-rec-parent";
+        var subtreeQuery = $"path:{TestPartition} scope:subtree";
+
         await NodeFactory.CreateNode(
             new MeshNode("del-rec-parent", TestPartition) { Name = "Parent", NodeType = "Group" });
         await NodeFactory.CreateNode(
-            new MeshNode("c1", $"{TestPartition}/del-rec-parent") { Name = "C1", NodeType = "Markdown" });
+            new MeshNode("c1", parentPath) { Name = "C1", NodeType = "Markdown" });
         await NodeFactory.CreateNode(
-            new MeshNode("c2", $"{TestPartition}/del-rec-parent") { Name = "C2", NodeType = "Markdown" });
+            new MeshNode("c2", parentPath) { Name = "C2", NodeType = "Markdown" });
+        await WaitForQueryPathSetAsync(subtreeQuery,
+            set => set.Contains(parentPath) && set.Contains($"{parentPath}/c1") && set.Contains($"{parentPath}/c2"), ct);
 
-        var parentPath = $"{TestPartition}/del-rec-parent";
         var client = GetClient();
         await client.AwaitResponse(new PingRequest(), o => o.WithTarget(new Address(parentPath)));
 
@@ -160,13 +184,15 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
             return Task.FromResult<IMessageDelivery>(d);
         });
 
-        var response = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var response = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
         response.Success.Should().BeTrue($"recursive delete should succeed (error: {response.Error})");
 
-        var parent = await ReadNodeAsync(parentPath, TestContext.Current.CancellationToken);
-        parent.Should().BeNull();
-        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{parentPath}")
-            .ToListAsync(TestContext.Current.CancellationToken);
-        children.Should().BeEmpty();
+        var paths = await WaitForQueryPathSetAsync(subtreeQuery,
+            set => !set.Contains(parentPath)
+                && !set.Contains($"{parentPath}/c1")
+                && !set.Contains($"{parentPath}/c2"), ct);
+        paths.Should().NotContain(parentPath);
+        paths.Should().NotContain($"{parentPath}/c1");
+        paths.Should().NotContain($"{parentPath}/c2");
     }
 }

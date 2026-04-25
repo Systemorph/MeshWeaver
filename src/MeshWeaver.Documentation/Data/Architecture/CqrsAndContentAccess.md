@@ -261,6 +261,7 @@ return request.Processed();   // handler returns immediately
 | Run the script on Code node X | `hub.Post(ExecuteScriptRequest(), WithTarget(X))` + `RegisterCallback<ExecuteScriptResponse>` |
 | Wait until the run finishes | `workspace.GetRemoteStream` on X's output area until a terminal condition |
 | Move/Copy node X | `hub.Post(MoveNodeRequest(...), WithTarget(X))` — same pattern, different request type |
+| Stream content into node X during execution (AI streaming, long-running output) | Open `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` once at start, push every delta via `.Update(node => node with { Content = ... })`, dispose at end. See [Thread Execution Streaming](xref:Architecture/ThreadExecutionStreaming) for the canonical writer + renderer pair. |
 
 ## Anti-patterns
 

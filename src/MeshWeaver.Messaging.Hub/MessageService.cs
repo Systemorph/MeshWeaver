@@ -18,7 +18,7 @@ public class MessageService : IMessageService
     private readonly BufferBlock<Func<Task<IMessageDelivery>>> deferredBuffer = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
-    private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
+    private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock;
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
@@ -46,6 +46,17 @@ public class MessageService : IMessageService
         this.logger = logger;
         this.hub = hub;
 
+        // Per-hub TaskScheduler. Default = TaskScheduler.Default (thread pool) so
+        // hosted hubs are independent actors regardless of where they were created.
+        // The Orleans grain glue overrides this for the root grain hub via
+        // .WithTaskScheduler(TaskScheduler.Current) so Orleans can attribute work.
+        // See Doc/Architecture/OrleansTaskScheduler.md.
+        var blockOptions = new ExecutionDataflowBlockOptions
+        {
+            TaskScheduler = hub.Configuration.TaskScheduler ?? TaskScheduler.Default,
+            MaxDegreeOfParallelism = 1
+        };
+
         deliveryAction = new(async x =>
         {
             try { await x.Invoke(); }
@@ -53,7 +64,9 @@ public class MessageService : IMessageService
             {
                 logger.LogError(ex, "Unhandled exception in delivery pipeline for hub {Address}", address);
             }
-        });
+        }, blockOptions);
+
+        executionBlock = new(f => f.Invoke(default), blockOptions);
         postPipeline = hub.Configuration.PostPipeline
             .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);

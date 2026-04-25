@@ -44,6 +44,12 @@ public sealed class MessageHub : IMessageHub
 
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
+    /// <summary>
+    /// Parent hub address captured at construction. Used in disposal logging so we
+    /// don't re-resolve from <see cref="MessageHubConfiguration.ParentHub"/> on a
+    /// scope that may already be disposed.
+    /// </summary>
+    private readonly Address? parentAddress;
     public ITypeRegistry TypeRegistry { get; }
     public void Start()
     {
@@ -97,6 +103,7 @@ public sealed class MessageHub : IMessageHub
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
+        parentAddress = parentHub?.Address;
 
 
         messageService = new MessageService(configuration.Address,
@@ -900,8 +907,12 @@ public sealed class MessageHub : IMessageHub
                     RunLevel = MessageHubRunLevel.Dead;
                     disposalStopwatch.Stop();
                     //await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
+                    // Use parentAddress captured at construction — Configuration.ParentHub
+                    // re-resolves from ParentServiceProvider, which is often disposed by the
+                    // time we get here, throwing ObjectDisposedException that pollutes test
+                    // logs. Never call DI from a disposal path.
                     logger.LogDebug("Finished shutdown of hub {address} with parent {parent} - final phase took {elapsed}ms, total disposal time: {totalElapsed}ms",
-                        Address, Configuration.ParentHub?.Address, phaseStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
+                        Address, parentAddress, phaseStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
                 }
 
                 break;

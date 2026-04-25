@@ -74,6 +74,17 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         return node != null;
     }
 
+    /// <summary>
+    /// Catalog-aware "node is gone" check that does not suffer from the ancestor
+    /// routing fallback in <see cref="ReadNodeAsync"/>. Subscribes to a
+    /// subtree query and waits until <paramref name="path"/> drops out.
+    /// </summary>
+    private Task WaitForNodeAbsenceAsync(string path, CancellationToken ct)
+        => WaitForQueryPathSetAsync(
+            $"path:{TestPartition} scope:subtree",
+            set => !set.Contains(path),
+            ct);
+
     private static bool LogMentions(DeleteNodeResponse r, string path) =>
         r.Log?.Messages.Any(m => m.Message.Contains(path, StringComparison.Ordinal)) == true;
 
@@ -94,8 +105,9 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         response.Log!.Status.Should().Be(ActivityStatus.Succeeded);
         response.Log.AffectedPaths.Should().ContainSingle().Which.Should().Be($"{TestPartition}/leaf");
 
-        (await NodeExistsAsync($"{TestPartition}/leaf", ct))
-            .Should().BeFalse("leaf must be gone after OK response");
+        // Catalog-bound wait — ReadNodeAsync would falsely "find" the leaf via
+        // the TestPartition ancestor's MeshNodeReference reducer.
+        await WaitForNodeAbsenceAsync($"{TestPartition}/leaf", ct);
     }
 
     [Fact(Timeout = 20_000)]
@@ -116,10 +128,18 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
             $"{Root}/c1/gc"
         });
 
-        (await NodeExistsAsync(Root, ct)).Should().BeFalse();
-        (await NodeExistsAsync($"{Root}/c1", ct)).Should().BeFalse();
-        (await NodeExistsAsync($"{Root}/c2", ct)).Should().BeFalse();
-        (await NodeExistsAsync($"{Root}/c1/gc", ct)).Should().BeFalse();
+        // Wait once for the catalog to drop ALL four — single subscription, not four.
+        var paths = await WaitForQueryPathSetAsync(
+            $"path:{TestPartition} scope:subtree",
+            set => !set.Contains(Root)
+                && !set.Contains($"{Root}/c1")
+                && !set.Contains($"{Root}/c2")
+                && !set.Contains($"{Root}/c1/gc"),
+            ct);
+        paths.Should().NotContain(Root);
+        paths.Should().NotContain($"{Root}/c1");
+        paths.Should().NotContain($"{Root}/c2");
+        paths.Should().NotContain($"{Root}/c1/gc");
     }
 
     [Fact(Timeout = 20_000)]
@@ -332,8 +352,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
             m.LogLevel == Microsoft.Extensions.Logging.LogLevel.Warning
             && m.Message.Contains(WarningValidator.WarnText));
 
-        (await NodeExistsAsync($"{TestPartition}/warny2", ct)).Should().BeFalse(
-            "ConfirmWarnings=true proceeds with the delete");
+        await WaitForNodeAbsenceAsync($"{TestPartition}/warny2", ct);
     }
 
     // ─── Phase 4: bulk atomicity + ActivityLog ─────────────────────────────
