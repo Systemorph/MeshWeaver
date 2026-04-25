@@ -147,45 +147,39 @@ public static class MoveLayoutArea
                                 new MoveNodeRequest(currentPath, targetPath),
                                 o => o.WithTarget(host.Hub.Address));
 
-                            // Subscribe to the Task so DeliveryFailure surfaces via onError
-                            // (RegisterCallback short-circuits the user callback for DeliveryFailure).
-                            Observable.FromAsync(() =>
-                                    host.Hub.RegisterCallback((IMessageDelivery)delivery!, (d, _) => Task.FromResult(d), default))
-                                .Subscribe(
-                                    response =>
+                            host.Hub.RegisterCallback((IMessageDelivery)delivery!, response =>
+                            {
+                                if (response is IMessageDelivery<MoveNodeResponse> mr)
+                                {
+                                    if (!mr.Message.Success)
                                     {
-                                        if (response.Message is MoveNodeResponse mr)
-                                        {
-                                            if (!mr.Success)
-                                            {
-                                                ShowDialog(ctx, "Move Failed", mr.Error ?? "Unknown error.");
-                                            }
-                                            else
-                                            {
-                                                logger?.LogInformation("Move complete: {Source} -> {Target}", currentPath, targetPath);
-                                                var overviewUrl = MeshNodeLayoutAreas.BuildUrl(targetPath, MeshNodeLayoutAreas.OverviewArea);
-                                                var successDialog = Controls.Dialog(
-                                                    Controls.Markdown($"**Move Complete**\n\nMoved to `{targetPath}`."),
-                                                    "Move Complete"
-                                                ).WithSize("M").WithClosable(true).WithCloseAction(_ =>
-                                                {
-                                                    ctx.NavigateTo(overviewUrl);
-                                                    return Task.CompletedTask;
-                                                });
-                                                ctx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
-                                            }
-                                        }
-                                        else
-                                        {
-                                            ShowDialog(ctx, "Move Failed",
-                                                $"Unexpected response type {response.Message?.GetType().Name ?? "null"}");
-                                        }
-                                    },
-                                    ex =>
+                                        ShowDialog(ctx, "Move Failed", mr.Message.Error ?? "Unknown error.");
+                                    }
+                                    else
                                     {
-                                        logger?.LogError(ex, "Move failed for {Source} -> {Target}", currentPath, targetPath);
-                                        ShowDialog(ctx, "Move Failed", $"Move failed: {ex.Message}");
-                                    });
+                                        logger?.LogInformation("Move complete: {Source} -> {Target}", currentPath, targetPath);
+
+                                        var overviewUrl = MeshNodeLayoutAreas.BuildUrl(targetPath, MeshNodeLayoutAreas.OverviewArea);
+
+                                        var successDialog = Controls.Dialog(
+                                            Controls.Markdown($"**Move Complete**\n\nMoved to `{targetPath}`."),
+                                            "Move Complete"
+                                        ).WithSize("M").WithClosable(true).WithCloseAction(_ =>
+                                        {
+                                            ctx.NavigateTo(overviewUrl);
+                                            return Task.CompletedTask;
+                                        });
+                                        ctx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
+                                    }
+                                }
+                                else if (response is IMessageDelivery<DeliveryFailure> df)
+                                {
+                                    logger?.LogError("Move failed for {Source} -> {Target}: {Error}",
+                                        currentPath, targetPath, df.Message.Message);
+                                    ShowDialog(ctx, "Move Failed", $"Move failed: {df.Message.Message}");
+                                }
+                                return response;
+                            });
                         });
                     return Task.CompletedTask;
                 })));
