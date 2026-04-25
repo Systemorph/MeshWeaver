@@ -613,28 +613,17 @@ public static class ThreadExecution
                         if (del != null)
                         {
                             logger.LogDebug("[ThreadExec] HISTORY_REQ: posted, delivery={Id} for {MsgId}", del.Id, msgId);
-                            // Subscribe to the Task so DeliveryFailureException surfaces via onError.
-                            // RegisterCallback short-circuits the user callback for DeliveryFailure —
-                            // without this Subscribe, a failed history fetch hangs CombineLatest forever.
-                            Observable.FromAsync(() =>
-                                    parentHub.RegisterCallback((IMessageDelivery)del, (d, _) => Task.FromResult(d), default))
-                                .Subscribe(
-                                    resp =>
-                                    {
-                                        ThreadMessage? tmsg = null;
-                                        if (resp is IMessageDelivery<GetDataResponse> gdr)
-                                            tmsg = (gdr.Message.Data as MeshNode)?.Content as ThreadMessage;
-                                        logger.LogDebug("[ThreadExec] HISTORY_RESP: {MsgId} → role={Role}, textLen={Len}, respType={Type}",
-                                            msgId, tmsg?.Role ?? "(null)", tmsg?.Text?.Length ?? -1, resp.Message?.GetType().Name);
-                                        subject.OnNext((msgId, tmsg));
-                                        subject.OnCompleted();
-                                    },
-                                    ex =>
-                                    {
-                                        logger.LogWarning(ex, "[ThreadExec] HISTORY_FAIL: {MsgId} — treating as missing", msgId);
-                                        subject.OnNext((msgId, null));
-                                        subject.OnCompleted();
-                                    });
+                            parentHub.RegisterCallback((IMessageDelivery)del, resp =>
+                            {
+                                ThreadMessage? tmsg = null;
+                                if (resp is IMessageDelivery<GetDataResponse> gdr)
+                                    tmsg = (gdr.Message.Data as MeshNode)?.Content as ThreadMessage;
+                                logger.LogDebug("[ThreadExec] HISTORY_RESP: {MsgId} → role={Role}, textLen={Len}, respType={Type}",
+                                    msgId, tmsg?.Role ?? "(null)", tmsg?.Text?.Length ?? -1, resp.Message?.GetType().Name);
+                                subject.OnNext((msgId, tmsg));
+                                subject.OnCompleted();
+                                return resp;
+                            });
                         }
                         else
                         {

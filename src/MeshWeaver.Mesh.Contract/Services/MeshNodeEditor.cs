@@ -96,50 +96,23 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
 
         return Observable.Create<MoveNodeResponse>(observer =>
         {
-            IMessageDelivery? delivery;
-            try
+            var delivery = hub.Post(new MoveNodeRequest(CurrentPath, targetPath),
+                o => o.WithTarget(hub.Address));
+            hub.RegisterCallback(delivery, response =>
             {
-                delivery = hub.Post(new MoveNodeRequest(CurrentPath, targetPath),
-                    o => o.WithTarget(hub.Address));
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-                return Disposable.Empty;
-            }
-
-            if (delivery == null)
-            {
-                observer.OnError(new InvalidOperationException("Move: hub.Post returned null."));
-                return Disposable.Empty;
-            }
-
-            // Subscribe to the Task returned by RegisterCallback. The Task faults with
-            // DeliveryFailureException when routing posts a DeliveryFailure (no route /
-            // no handler) — without this Subscribe, the user callback never fires for
-            // that case and the observer waits forever.
-            return Observable.FromAsync(() =>
-                    hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default))
-                .Subscribe(
-                    response =>
+                if (response.Message is MoveNodeResponse moveResp)
+                {
+                    if (moveResp.Success)
                     {
-                        if (response.Message is MoveNodeResponse moveResp)
-                        {
-                            if (moveResp.Success)
-                            {
-                                CurrentPath = targetPath;
-                                SubscribeToCurrentPath();
-                            }
-                            observer.OnNext(moveResp);
-                            observer.OnCompleted();
-                        }
-                        else
-                        {
-                            observer.OnError(new InvalidOperationException(
-                                $"Move: unexpected response type {response.Message?.GetType().Name ?? "null"}"));
-                        }
-                    },
-                    observer.OnError);
+                        CurrentPath = targetPath;
+                        SubscribeToCurrentPath();
+                    }
+                    observer.OnNext(moveResp);
+                    observer.OnCompleted();
+                }
+                return response;
+            });
+            return Disposable.Empty;
         });
     }
 
