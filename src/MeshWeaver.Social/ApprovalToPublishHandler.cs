@@ -1,6 +1,9 @@
 using System;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -79,11 +82,19 @@ public sealed class ApprovalToPublishHandler : IHostedService, IDisposable
     {
         try
         {
-            MeshNode? approvalNode = null;
-            await foreach (var n in _mesh.QueryAsync<MeshNode>($"path:{approvalPath}"))
+            // Single-node-by-path content read — use the per-node MeshNodeReference reducer
+            // (NOT QueryAsync, which lags through the read-side index; see
+            // Doc/Architecture/AsynchronousCalls.md).
+            MeshNode? approvalNode;
+            try
             {
-                approvalNode = n;
-                break;
+                approvalNode = await _hub.GetWorkspace().GetMeshNodeStream(approvalPath)
+                    .Take(1).Timeout(TimeSpan.FromSeconds(15))
+                    .ToTask();
+            }
+            catch
+            {
+                approvalNode = null;
             }
             if (approvalNode?.Content is not Approval approval) return;
             if (approval.Status != ApprovalStatus.Approved) return;

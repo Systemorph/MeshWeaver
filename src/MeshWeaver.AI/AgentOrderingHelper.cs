@@ -84,6 +84,13 @@ public static class AgentOrderingHelper
 
     /// <summary>
     /// Gets the NodeType for a given context path.
+    /// <para>
+    /// <b>Test-only legacy.</b> Production code (e.g. <see cref="AgentChatClient"/>)
+    /// MUST read single nodes via <c>hub.GetWorkspace().GetMeshNodeStream(path)</c>
+    /// — the per-node MeshNodeReference reducer is authoritative and live; the
+    /// catalog read-side index used by <c>QueryAsync</c> lags writes and returns
+    /// stale content. See Doc/Architecture/AsynchronousCalls.md.
+    /// </para>
     /// </summary>
     public static async Task<string?> GetNodeTypeAsync(IMeshService? meshQuery, string? contextPath)
     {

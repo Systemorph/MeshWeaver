@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -998,19 +999,22 @@ public class AgentChatClient : IAgentChat
 
         var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
 
-        // 1. Get NodeType of current node
+        // 1. Get NodeType of current node — single-node-by-path content read MUST go through
+        // the per-node MeshNodeReference reducer, NOT QueryAsync (which lags through the
+        // read-side index; see Doc/Architecture/AsynchronousCalls.md).
         string? nodeTypePath = null;
         if (!string.IsNullOrEmpty(contextPath))
         {
             try
             {
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}"))
+                var contextNode = await hub.GetWorkspace().GetMeshNodeStream(contextPath)
+                    .Take(1).Timeout(TimeSpan.FromSeconds(15))
+                    .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
+                    .ToTask();
+                if (!string.IsNullOrEmpty(contextNode?.NodeType)
+                    && contextNode.NodeType != "Agent" && contextNode.NodeType != "Markdown")
                 {
-                    if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
-                    {
-                        nodeTypePath = node.NodeType;
-                        break;
-                    }
+                    nodeTypePath = contextNode.NodeType;
                 }
             }
             catch (Exception ex)

@@ -3,6 +3,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -140,15 +141,23 @@ internal class MeshNodeCompilationService(
 
             string? resolvedCode = null;
 
-            await foreach (var referencedNode in meshQuery
-                               .QueryAsync<MeshNode>($"path:{path}", ct: ct)
-                               .WithCancellation(ct))
+            // Single-node-by-path content read — use the per-node MeshNodeReference
+            // reducer (NOT QueryAsync; see Doc/Architecture/AsynchronousCalls.md).
+            try
             {
-                if (referencedNode.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
+                var referencedNode = await hub.GetWorkspace().GetMeshNodeStream(path)
+                    .Take(1).Timeout(TimeSpan.FromSeconds(15))
+                    .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
+                    .ToTask(ct);
+                if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
                 {
                     resolvedCode = cf.Code;
                 }
-                break;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch
+            {
+                // Treat as unresolved — falls into the "Could not resolve" path below.
             }
 
             if (resolvedCode != null)
@@ -243,14 +252,21 @@ internal class MeshNodeCompilationService(
         else
         {
             selfPath = node.NodeType;
-            if (meshQuery != null)
+            // Single-node-by-path content read — use the per-node MeshNodeReference
+            // reducer (NOT QueryAsync; see Doc/Architecture/AsynchronousCalls.md).
+            try
             {
-                await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}", ct: ct).WithCancellation(ct))
-                {
-                    if (nodeTypeNode?.Content is NodeTypeDefinition fetched)
-                        ntDef = fetched;
-                    break;
-                }
+                var nodeTypeNode = await hub.GetWorkspace().GetMeshNodeStream(node.NodeType)
+                    .Take(1).Timeout(TimeSpan.FromSeconds(15))
+                    .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
+                    .ToTask(ct);
+                if (nodeTypeNode?.Content is NodeTypeDefinition fetched)
+                    ntDef = fetched;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch
+            {
+                // ntDef stays null — the caller will handle "no NodeType definition".
             }
         }
 

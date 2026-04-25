@@ -275,12 +275,16 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
             }
         }
 
+        // Single-node-by-path content read — use the per-node MeshNodeReference reducer
+        // (NOT QueryAsync; see Doc/Architecture/AsynchronousCalls.md).
         try
         {
-            var nodes = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{Value}")
-                .ToListAsync();
-            _selectedNode = nodes.FirstOrDefault();
+            _selectedNode = await Hub.GetWorkspace().GetMeshNodeStream(Value)
+                .Take(1).Timeout(TimeSpan.FromSeconds(10))
+                .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
+                .ToTask();
+            if (_selectedNode == null)
+                _selectedNode = new MeshNode(Value) { Name = Value };
             StateHasChanged();
         }
         catch
