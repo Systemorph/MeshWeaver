@@ -146,12 +146,13 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message — triggers delegation via production ChatClientAgentFactory
+        // 3. Submit message via AppendUserMessageRequest — triggers delegation via production ChatClientAgentFactory
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Please delegate this research task",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Please delegate this research task",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);
@@ -226,10 +227,11 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync().ToTask(ct);
 
         await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Delegate something",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Delegate something",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);

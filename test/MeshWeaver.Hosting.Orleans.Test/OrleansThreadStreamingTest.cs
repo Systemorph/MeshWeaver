@@ -121,12 +121,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
             .Where(ids => ids.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        // Submit
+        // Submit via AppendUserMessageRequest
         var submit = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Tell me something",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Tell me something",
                 ContextPath = ContextPath
             },
             o => o.WithTarget(new Address(threadPath)), ct);
@@ -197,13 +198,14 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
             .FirstAsync()
             .ToTask(ct);
 
-        // Submit message
+        // Submit message via AppendUserMessageRequest
         Output.WriteLine("2. Submitting message...");
         var submit = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Use the test tool please",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Use the test tool please",
                 ContextPath = ContextPath
             },
             o => o.WithTarget(new Address(threadPath)), ct);
@@ -288,12 +290,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        // 2. Submit message
+        // 2. Submit message via AppendUserMessageRequest
         var submitResp = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Use the test tool please",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Use the test tool please",
                 ContextPath = ContextPath
             },
             o => o.WithTarget(new Address(threadPath)), ct);
@@ -372,10 +375,11 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         Output.WriteLine($"1. Thread: {threadPath}");
 
         var submitResp = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Test",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Test",
                 ContextPath = ContextPath
             },
             o => o.WithTarget(new Address(threadPath)), ct);

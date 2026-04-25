@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -49,45 +52,63 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
             // This simulates a cold start: grains not yet activated, data in persistence.
             Output.WriteLine("Thread pre-seeded with 4 messages via AddMeshNodes");
 
-            // Submit and wait for response
-            // Post + collect TWO responses: CellsCreated then ExecutionCompleted
-            Output.WriteLine("Posting SubmitMessageRequest...");
-            var completionTcs = new TaskCompletionSource<SubmitMessageResponse>();
-            var delivery = client.Post(new SubmitMessageRequest
+            // Submit via AppendUserMessageRequest, then wait for the response cell to settle.
+            // The new API returns Success/Error only — the agent's response text lives on the
+            // response satellite cell. Read it via the workspace stream once execution completes.
+            Output.WriteLine("Posting AppendUserMessageRequest...");
+            var workspace = client.GetWorkspace();
+
+            // Subscribe BEFORE submitting to capture the moment Messages.Count >= 2.
+            var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(ThreadPath))!
+                .Select(nodes =>
+                {
+                    var node = nodes?.FirstOrDefault(n => n.Path == ThreadPath);
+                    return (node?.Content as MeshThread)?.Messages ?? [];
+                })
+                .Where(ids => ids.Count >= 2)
+                .Timeout(20.Seconds())
+                .FirstAsync()
+                .ToTask(ct);
+
+            var submitResp = await client.AwaitResponse(new AppendUserMessageRequest
             {
                 ThreadPath = ThreadPath,
-                UserMessageText = "Third question — can you see history?",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Third question — can you see history?",
                 ContextPath = "User/Roland"
-            }, o => o.WithTarget(new Address(ThreadPath)));
-            delivery.Should().NotBeNull("Post should return a delivery");
+            }, o => o.WithTarget(new Address(ThreadPath)), ct);
+            submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
+            Output.WriteLine($"Append accepted: success={submitResp.Message.Success}");
 
-            var originalDelivery = (IMessageDelivery)delivery!;
-            void RegisterForCompletion()
+            // Resolve message ids (user + response).
+            var msgIds = await twoMessages;
+            var responseMsgId = msgIds[1];
+            var responsePath = $"{ThreadPath}/{responseMsgId}";
+            Output.WriteLine($"Response cell: {responseMsgId}");
+
+            // Wait for the response cell text to fill in (= execution finished streaming).
+            ThreadMessage? responseMsg = null;
+            for (var i = 0; i < 100; i++)
             {
-                _ = client.RegisterCallback(originalDelivery, resp =>
-                {
-                    if (resp is IMessageDelivery<SubmitMessageResponse> smr)
-                    {
-                        var msg = smr.Message;
-                        Output.WriteLine($"Response: status={msg.Status}, success={msg.Success}, text={msg.ResponseText?[..Math.Min(60, msg.ResponseText?.Length ?? 0)]}");
-                        if (msg.Status == SubmitMessageStatus.ExecutionCompleted ||
-                            msg.Status == SubmitMessageStatus.ExecutionFailed)
-                            completionTcs.TrySetResult(msg);
-                        else
-                            RegisterForCompletion(); // Re-register for completion response
-                    }
-                    return resp;
-                });
+                var resp = await client.AwaitResponse(
+                    new GetDataRequest(new MeshNodeReference()),
+                    o => o.WithTarget(new Address(responsePath)), ct);
+                var node = resp.Message.Data as MeshNode;
+                if (node == null && resp.Message.Data is JsonElement je)
+                    node = je.Deserialize<MeshNode>(client.JsonSerializerOptions);
+                if (node?.Content is ThreadMessage tm) responseMsg = tm;
+                else if (node?.Content is JsonElement cje)
+                    responseMsg = cje.Deserialize<ThreadMessage>(client.JsonSerializerOptions);
+
+                if (!string.IsNullOrEmpty(responseMsg?.Text)) break;
+                await Task.Delay(200, ct);
             }
-            RegisterForCompletion();
 
-            var completion = await completionTcs.Task.WaitAsync(TimeSpan.FromSeconds(20), ct);
-            Output.WriteLine($"Execution completed: success={completion.Success}, text={completion.ResponseText}");
-
-            completion.Success.Should().BeTrue("execution should succeed");
+            Output.WriteLine($"Execution completed: text={responseMsg?.Text}");
+            responseMsg.Should().NotBeNull("response cell must be populated");
             // The agent MUST see 6 separate messages (4 pre-seeded history + 1 new input cell + 1 new user).
             // If this fails, the ChatClientAgent is flattening conversation turns into a single prompt.
-            completion.ResponseText.Should().Contain("6 messages",
+            responseMsg!.Text.Should().Contain("6 messages",
                 "agent must receive 6 separate ChatMessage objects, not a flattened prompt");
         }
         finally

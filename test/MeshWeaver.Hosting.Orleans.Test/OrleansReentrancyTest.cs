@@ -137,10 +137,11 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         // Submit message — the ToolCallingReentrancyClient will call a tool
         Output.WriteLine("Submitting message...");
         var submitResp = await client.AwaitResponse(
-            new SubmitMessageRequest
+            new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
-                UserMessageText = "Call a tool please",
+                UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                UserText = "Call a tool please",
                 ContextPath = "User/Roland"
             },
             o => o.WithTarget(new Address(threadPath)), ct);
