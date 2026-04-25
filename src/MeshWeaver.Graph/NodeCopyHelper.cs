@@ -26,12 +26,17 @@ public static class NodeCopyHelper
         bool force,
         ILogger? logger = null)
     {
-        // Pull the source + descendants as a single reactive snapshot via ObserveQuery (initial emission).
-        var source = meshQuery.ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{sourcePath}"))
+        // Source node: authoritative read via the per-node MeshNodeReference reducer
+        // (NEVER ObserveQuery/QueryAsync for a single node's content — see
+        // Doc/Architecture/AsynchronousCalls.md "Never use QueryAsync to obtain a MeshNode").
+        // Bound with Timeout so a missing path / cold hub doesn't hang forever.
+        var source = hub.GetWorkspace().GetMeshNodeStream(sourcePath)
             .Take(1)
-            .Select(c => c.Items.FirstOrDefault());
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
 
+        // Descendants is a listing — ObserveQuery is the correct primitive for
+        // namespace/predicate sets.
         var descendants = meshQuery.ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{sourcePath} scope:descendants"))
             .Take(1)
@@ -73,12 +78,14 @@ public static class NodeCopyHelper
                     if (force)
                         return create;
 
-                    // Existence-check via ObserveQuery initial snapshot — no FromAsync, no
-                    // GetMeshNodeStream (which requires IWorkspace registration). One-shot
-                    // copy operation; ObserveQuery.Take(1) returns the current snapshot.
-                    return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{newPath}"))
+                    // Existence-check via the per-node MeshNodeReference reducer — direct,
+                    // authoritative, no read-side index lag. Bound with Timeout so a
+                    // never-existed path (cold hub never activates) returns "doesn't exist"
+                    // promptly instead of hanging.
+                    return hub.GetWorkspace().GetMeshNodeStream(newPath)
                         .Take(1)
-                        .Select(c => c.Items.Count > 0)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Select(_ => true)
                         .Catch<bool, Exception>(_ => Observable.Return(false))
                         .SelectMany(exists =>
                         {

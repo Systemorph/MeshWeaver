@@ -295,12 +295,13 @@ public static class VersionLayoutArea
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var activityNodePath = $"{hubPath}/_activity/{msg.ActivityLogId}";
 
-        // Read the activity-log node via ObserveQuery — initial result-set covers the
-        // exact path we want, .Take(1) returns immediately, no persistence read.
-        meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{activityNodePath}"))
+        // Read the activity-log node via the per-node MeshNodeReference reducer
+        // (single-node-by-path content reads MUST NOT use ObserveQuery — read-side index lags;
+        // see Doc/Architecture/AsynchronousCalls.md "Never use QueryAsync to obtain a MeshNode").
+        hub.GetWorkspace().GetMeshNodeStream(activityNodePath)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
-            .Select(change => change.Items.FirstOrDefault())
+            .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
             .SelectMany(activityNode =>
             {
                 if (activityNode?.Content is not ActivityLog activityLog)
