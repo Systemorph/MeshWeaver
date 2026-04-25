@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
@@ -366,12 +367,18 @@ public static class LayoutClientExtensions
     {
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var delivery = stream.Hub.Post(
                 new DataChangeRequest { Updates = [data.Submit()] },
                 o => o.WithTarget(stream.Owner))!;
-            var callbackResponse = await stream.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
-            var responseMsg = ((IMessageDelivery<DataChangeResponse>)callbackResponse).Message;
+            var callbackResponse = await stream.Hub.Observe(delivery).FirstAsync().ToTask();
+            if (callbackResponse.Message is not DataChangeResponse responseMsg)
+            {
+                return new ActivityLog(ActivityCategory.DataUpdate)
+                {
+                    End = DateTime.UtcNow,
+                    Messages = [new($"Unexpected response shape '{callbackResponse.Message?.GetType().Name ?? "null"}'.", LogLevel.Error)]
+                };
+            }
             if (responseMsg.Status == DataChangeStatus.Committed)
             {
                 data.Confirm();

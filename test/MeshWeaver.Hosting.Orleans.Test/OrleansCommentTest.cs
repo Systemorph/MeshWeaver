@@ -28,12 +28,12 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture — uses CommentSiloConfigurator with AddFileSystemPersistence(SamplesGraphData)
+// TODO: needs custom shared fixture â€” uses CommentSiloConfigurator with AddFileSystemPersistence(SamplesGraphData)
 // and a CommentClientConfigurator (custom client wiring), which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Orleans integration test for CreateCommentRequest.
 /// Follows the same pattern as OrleansChatTest: GetRemoteStream for reactive verification,
-/// GetDataRequest for content verification — no QueryAsync.
+/// GetDataRequest for content verification â€” no QueryAsync.
 /// </summary>
 public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
 {
@@ -86,9 +86,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
         // Canonical CQRS-correct read via per-node MeshNodeReference reducer (not catalog lookup).
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
@@ -115,22 +113,20 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
 
         // Activate the grain
         Output.WriteLine("Pinging document grain...");
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(docAddress), ct);
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
         Output.WriteLine("Grain activated.");
 
         // 1) Send CreateCommentRequest
         Output.WriteLine("Sending CreateCommentRequest...");
-        var response = await client.AwaitResponse(
-            new CreateCommentRequest
+        var response = await client.Observe(new CreateCommentRequest
             {
                 DocumentId = DocPath,
                 SelectedText = "satellite entities",
                 CommentText = "Orleans integration test comment",
                 Author = "TestAuthor"
-            },
-            o => o.WithTarget(docAddress), ct);
+            }, o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
 
-        // 2) Verify response (no deadlock — handler is non-blocking)
+        // 2) Verify response (no deadlock â€” handler is non-blocking)
         var commentResponse = response.Message as CreateCommentResponse;
         commentResponse.Should().NotBeNull("Expected CreateCommentResponse, got {0}", response.Message?.GetType().Name);
         commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error);
@@ -166,19 +162,17 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
         var docAddress = new Address(DocPath);
 
         // Activate the grain
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(docAddress), ct);
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
 
         // Send page-level comment
         Output.WriteLine("Sending page-level CreateCommentRequest...");
-        var response = await client.AwaitResponse(
-            new CreateCommentRequest
+        var response = await client.Observe(new CreateCommentRequest
             {
                 DocumentId = DocPath,
                 SelectedText = "",
                 CommentText = "A page-level comment via Orleans",
                 Author = "TestAuthor"
-            },
-            o => o.WithTarget(docAddress), ct);
+            }, o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
 
         var commentResponse = response.Message as CreateCommentResponse;
         commentResponse.Should().NotBeNull();

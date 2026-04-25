@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -988,12 +989,32 @@ public static class NodeTypeLayoutAreas
                     Content = updatedDefinition
                 };
 
-                using var cts = new CancellationTokenSource(10.Seconds());
                 var delivery = actx.Host.Hub.Post(
                     new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedNode),
                     o => o.WithTarget(hubAddress))!;
-                var callbackResponse = await actx.Host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
-                var responseMsg = ((IMessageDelivery<DataChangeResponse>)callbackResponse).Message;
+                IMessageDelivery callbackResponse;
+                try
+                {
+                    callbackResponse = await actx.Host.Hub.Observe(delivery).FirstAsync().ToTask();
+                }
+                catch (Exception ex)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    return;
+                }
+                if (callbackResponse.Message is not DataChangeResponse responseMsg)
+                {
+                    var errorDialog = Controls.Dialog(
+                        Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                    return;
+                }
 
                 if (responseMsg.Log.Status != ActivityStatus.Succeeded)
                 {

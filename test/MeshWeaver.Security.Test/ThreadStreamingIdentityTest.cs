@@ -29,7 +29,7 @@ namespace MeshWeaver.Security.Test;
 
 /// <summary>
 /// Tests that thread chat streaming works end-to-end with RLS enabled.
-/// Verifies the identity chain: CreateThread → SubmitMessage → AI streaming → response node update.
+/// Verifies the identity chain: CreateThread â†’ SubmitMessage â†’ AI streaming â†’ response node update.
 /// This is the monolith equivalent of OrleansChatTest but with access control restrictions.
 /// The streaming response should complete even though the _Exec sub-hub runs asynchronously.
 /// </summary>
@@ -85,9 +85,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         var client = GetClient();
         var ct = new CancellationTokenSource(20.Seconds()).Token;
 
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Test thread")),
-            o => o.WithTarget(new Address(UserPath)), ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Test thread")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
 
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "CreateThread should succeed for user with Editor role");
         response.Message.Node?.Path.Should().Contain("_Thread/");
@@ -102,22 +100,18 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         var ct = new CancellationTokenSource(25.Seconds()).Token;
 
         // 1. Create thread
-        var createResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Streaming test")),
-            o => o.WithTarget(new Address(UserPath)), ct);
+        var createResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Streaming test")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
         var threadPath = createResponse.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // 2. Submit message — this triggers AI streaming on the _Exec sub-hub
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+        // 2. Submit message â€” this triggers AI streaming on the _Exec sub-hub
+        var submitResponse = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Hello from identity test",
                 ContextPath = UserPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("Message submitted, waiting for streaming...");
 
@@ -141,7 +135,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         }
 
         responseMessage.Should().NotBeNull(
-            "AI streaming should produce a response message — " +
+            "AI streaming should produce a response message â€” " +
             "if this fails, the identity chain is broken during async _Exec sub-hub execution");
         responseMessage!.Text.Should().NotBeNullOrEmpty();
         Output.WriteLine($"Response: '{responseMessage.Text}'");
@@ -155,25 +149,21 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         var ct = new CancellationTokenSource(12.Seconds()).Token;
 
         // Create thread
-        var createResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Incremental test")),
-            o => o.WithTarget(new Address(UserPath)), ct);
+        var createResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Incremental test")), o => o.WithTarget(new Address(UserPath))).FirstAsync().ToTask(ct);
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
         var threadPath = createResponse.Message.Node!.Path!;
 
         // Submit message
         var submitTime = DateTimeOffset.UtcNow;
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+        var submitResponse = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Stream incrementally please",
                 ContextPath = UserPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
-        // Poll for first partial response — should arrive within 5 seconds,
+        // Poll for first partial response â€” should arrive within 5 seconds,
         // NOT after full streaming completes (which would take longer)
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         DateTimeOffset? firstResponseTime = null;
@@ -200,14 +190,14 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         // The first partial response should arrive within 5 seconds.
         // If updates are blocked (old bug), they'd all arrive at once after streaming completes.
         latency.Should().BeLessThan(5000,
-            "first streaming update should arrive within 5s — if it takes longer, " +
+            "first streaming update should arrive within 5s â€” if it takes longer, " +
             "updates are blocked in the _Exec hub's message buffer (the bug we fixed)");
     }
 
 }
 
 /// <summary>
-/// Fake chat client for testing — returns a simple response.
+/// Fake chat client for testing â€” returns a simple response.
 /// </summary>
 internal class TestChatClientFactory : IChatClientFactory
 {

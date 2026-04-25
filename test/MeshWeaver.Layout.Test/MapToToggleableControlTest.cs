@@ -17,6 +17,7 @@ using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Layout.Test;
 
 /// <summary>
@@ -506,9 +507,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
                     initialJson = currentJson;
 
                     // Persist via DataChangeRequest
-                    await host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(entity),
-                        o => o.WithTarget(host.Hub.Address));
+                    await host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(entity), o => o.WithTarget(host.Hub.Address)).FirstAsync().ToTask();
                 }));
     }
 

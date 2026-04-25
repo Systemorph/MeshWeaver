@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq.Expressions;
+using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
 using MeshWeaver.Domain;
@@ -24,8 +25,10 @@ public sealed class MessageHub : IMessageHub
     public IServiceProvider ServiceProvider { get; }
 
 
-    private readonly Dictionary<string, List<AsyncDelivery>> callbacks = new();
-    private readonly HashSet<CancellationTokenSource> pendingCallbackCancellations = new();
+    // Per-message response subjects. Observe(...) creates and stores; HandleCallbacks
+    // pushes the response onto the matching subject. AsyncSubject emits the last value
+    // on subscribe, so subscribers added before AND after the response arrives both see it.
+    private readonly Dictionary<string, System.Reactive.Subjects.AsyncSubject<IMessageDelivery>> responseSubjects = new();
 
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
@@ -404,168 +407,65 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    public Task<object?> AwaitResponse(object r, Func<PostOptions, PostOptions> options, Func<IMessageDelivery, object?> selector, CancellationToken cancellationToken = default)
-    {
-        // Check if r is already a delivery (in which case it's already posted)
-        if (r is IMessageDelivery existingDelivery)
-        {
-            var response = RegisterCallback(
-                existingDelivery.Id,
-                d => d,
-                cancellationToken
-            );
-            return response.ContinueWith(t =>
-            {
-                var ret = t.Result;
-                return InnerCallback(existingDelivery.Id, ret, selector);
-            }, cancellationToken);
-        }
+    /// <summary>
+    /// Sync factory that returns an <see cref="IObservable{IMessageDelivery}"/> for the
+    /// response to <paramref name="delivery"/>. The observable emits exactly one item
+    /// when the response arrives (or <c>OnError</c> for <see cref="DeliveryFailureException"/> /
+    /// <see cref="TimeoutException"/>). No Task, no <c>TaskCompletionSource</c>, no
+    /// <c>async</c>: just an <see cref="System.Reactive.Subjects.AsyncSubject{T}"/> whose
+    /// emission is triggered when <see cref="HandleCallbacks"/> matches the response.
+    /// </summary>
+    public IObservable<IMessageDelivery> Observe(IMessageDelivery delivery)
+        => ObserveById(delivery.Id);
 
-        // For new messages, we need to generate the ID first, register callback, THEN post
-        // to avoid race condition where response arrives before callback is registered
+    /// <summary>
+    /// Posts <paramref name="r"/> with a pre-generated message id and returns the
+    /// observable for its response. Registering the subject BEFORE posting avoids the
+    /// race where a synchronously-handled response arrives before the subscription is
+    /// in place.
+    /// </summary>
+    public IObservable<IMessageDelivery> Observe(object r, Func<PostOptions, PostOptions> options)
+    {
+        if (r is IMessageDelivery existing)
+            return Observe(existing);
+
         var messageId = Guid.NewGuid().AsString();
-        var response2 = RegisterCallback(messageId, d => d, cancellationToken);
-
-        // Now post the message with the pre-generated ID
-        var request = Post(r, opts =>
-        {
-            var configured = options(opts);
-            return configured.WithMessageId(messageId);
-        })!;
-
-        var task = response2
-            .ContinueWith(t =>
-            {
-                var ret = t.Result;
-                return InnerCallback(request.Id, ret, selector);
-
-            },
-                cancellationToken
-            );
-        return task;
+        var subject = GetOrAddResponseSubject(messageId);
+        Post(r, opts => options(opts).WithMessageId(messageId));
+        return ApplyTimeout(subject);
     }
 
-    private object? InnerCallback(
-        string id,
-        IMessageDelivery response,
-        Func<IMessageDelivery, object?> selector)
+    private IObservable<IMessageDelivery> ObserveById(string messageId)
     {
-
-        try
-        {
-            return selector.Invoke(response);
-        }
-        catch (DeliveryFailureException)
-        {
-            throw;
-        }
-        catch (Exception e)
-        {
-            throw new DeliveryFailureException($"Error while awaiting response for {id}", e);
-        }
+        var subject = GetOrAddResponseSubject(messageId);
+        return ApplyTimeout(subject);
     }
 
+    private IObservable<IMessageDelivery> ApplyTimeout(IObservable<IMessageDelivery> source)
+        => source.Timeout(Configuration.RequestTimeout, System.Reactive.Linq.Observable.Throw<IMessageDelivery>(
+            new TimeoutException(
+                $"No response received in hub {Address} within {Configuration.RequestTimeout}. " +
+                "The request may have been undeliverable or the target hub was not found.")));
 
-    public Task<IMessageDelivery> RegisterCallback(
-        string messageId,
-        SyncDelivery callback,
-        CancellationToken cancellationToken
-    ) => RegisterCallback(messageId, (d, _) => Task.FromResult(callback(d)), cancellationToken);
-
-
-    public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback,
-        CancellationToken cancellationToken)
-        => RegisterCallback(delivery.Id, callback, cancellationToken);
-
-    public Task<IMessageDelivery> RegisterCallback(
-        string messageId,
-        AsyncDelivery callback,
-        CancellationToken cancellationToken
-    )
+    private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(string messageId)
     {
-        // Create a combined cancellation token that cancels when ANY of:
-        //   - the caller's token fires
-        //   - hub disposal begins
-        //   - the framework-level RequestTimeout elapses (Configuration.RequestTimeout)
-        // The framework owns the timeout so callsites don't pass per-call CancellationTokenSource(TimeSpan…).
-        // Routing always responds (DeliveryFailure for unknown target / no handler), so the timeout is a
-        // safety net for genuinely lost messages, not a per-callsite knob.
-        var disposalCts = new CancellationTokenSource();
-        var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            disposalCts.Token);
-        combinedCts.CancelAfter(Configuration.RequestTimeout);
-
-        var tcs = new TaskCompletionSource<IMessageDelivery>(combinedCts.Token);
-
-        // Register cancellation callback so the TCS completes when the token fires
-        // This prevents the TCS from waiting forever when no response arrives
-        var cancellationRegistration = combinedCts.Token.Register(() =>
-        {
-            tcs.TrySetException(new TimeoutException(
-                $"No response received for message {messageId} in hub {Address} within {Configuration.RequestTimeout}. " +
-                $"The request may have been undeliverable or the target hub was not found."));
-        });
-
-        // Register for disposal cancellation
-        lock (locker)
+        lock (responseSubjects)
         {
             if (RunLevel >= MessageHubRunLevel.ShutDown)
             {
-                // If already disposing, immediately cancel the callback
-                cancellationRegistration.Dispose();
-                tcs.SetCanceled(combinedCts.Token);
-                disposalCts.Dispose();
-                combinedCts.Dispose();
-                return tcs.Task;
+                var disposed = new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>();
+                disposed.OnError(new ObjectDisposedException(nameof(MessageHub),
+                    $"Hub {Address} is shutting down — cannot register new response subject for {messageId}."));
+                return disposed;
             }
-
-            // Store the disposal CTS so we can cancel it during disposal
-            pendingCallbackCancellations.Add(disposalCts);
-        }
-
-        async Task<IMessageDelivery> ResolveCallback(IMessageDelivery d, CancellationToken ct)
-        {
-            try
+            if (!responseSubjects.TryGetValue(messageId, out var subject))
             {
-                // Clean up cancellation registration and disposal token
-                await cancellationRegistration.DisposeAsync();
-                lock (locker)
-                {
-                    pendingCallbackCancellations.Remove(disposalCts);
-                }
-                disposalCts.Dispose();
-                combinedCts.Dispose();
-                if (d.Message is DeliveryFailure failure)
-                {
-                    tcs.TrySetException(new DeliveryFailureException(failure));
-                    return d.Failed(failure.Message ?? "Delivery failed");
-                }
-
-                combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken);
-                var ret = await callback(d, combinedCts.Token);
-                tcs.TrySetResult(ret);
-                return ret;
+                subject = new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>();
+                responseSubjects[messageId] = subject;
+                logger.LogDebug("Adding response subject for {Id}", messageId);
             }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "ResolveCallback failed for message {MessageId} in hub {Address}", messageId, Address);
-                tcs.TrySetException(ex);
-                throw;
-            }
-            finally
-            {
-                combinedCts.Dispose();
-            }
+            return subject;
         }
-
-        lock (callbacks)
-        {
-            logger.LogDebug("Adding callback for {Id}", messageId);
-            callbacks.GetOrAdd(messageId, _ => new()).Add(ResolveCallback);
-        }
-
-        return tcs.Task;
     }
 
 
@@ -580,7 +480,7 @@ public sealed class MessageHub : IMessageHub
         return delivery.Processed();
     }
 
-    private async Task<IMessageDelivery> HandleCallbacks(
+    private Task<IMessageDelivery> HandleCallbacks(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
@@ -595,34 +495,36 @@ public sealed class MessageHub : IMessageHub
         {
             logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
-            return delivery;
+            return Task.FromResult(delivery);
         }
 
-        List<AsyncDelivery>? myCallbacks;
-        lock (callbacks)
+        System.Reactive.Subjects.AsyncSubject<IMessageDelivery>? subject;
+        lock (responseSubjects)
         {
-            if (!callbacks.Remove(requestIdString, out myCallbacks))
+            if (!responseSubjects.Remove(requestIdString, out subject))
             {
-                logger.LogDebug("No callbacks found for response message {MessageType} (ID: {MessageId}) - treating as processed",
+                logger.LogDebug("No subject found for response message {MessageType} (ID: {MessageId}) - treating as processed",
                     delivery.Message.GetType().Name, delivery.Id);
-                return delivery.Processed();
+                return Task.FromResult(delivery.Processed());
             }
         }
 
-        logger.LogDebug("Resolving callbacks for | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}",
-            delivery.Message.GetType().Name, Address, delivery.Id, myCallbacks.Count);
-        foreach (var callback in myCallbacks)
+        logger.LogDebug("Dispatching response to subject | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+            delivery.Message.GetType().Name, Address, delivery.Id);
+
+        if (delivery.Message is DeliveryFailure failure)
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
-            delivery = await callback(delivery, cancellationToken);
-            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
-                delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
+            subject.OnError(new DeliveryFailureException(failure));
+        }
+        else
+        {
+            subject.OnNext(delivery);
+            subject.OnCompleted();
         }
 
         logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        return delivery.Processed();
+        return Task.FromResult(delivery.Processed());
     }
 
     Address IMessageHub.Address => Address;
@@ -929,24 +831,29 @@ public sealed class MessageHub : IMessageHub
 
     private void CancelCallbacks()
     {
-        // Cancel all pending callbacks to prevent them from waiting indefinitely
-        var pendingCallbacks = pendingCallbackCancellations.ToArray();
-        logger.LogDebug("Cancelling {callbackCount} pending callbacks during disposal for hub {address}",
-            pendingCallbacks.Length, Address);
+        // Push ObjectDisposedException to all pending response subjects so anyone
+        // currently subscribed gets onError instead of waiting forever.
+        System.Reactive.Subjects.AsyncSubject<IMessageDelivery>[] pendingSubjects;
+        lock (responseSubjects)
+        {
+            pendingSubjects = responseSubjects.Values.ToArray();
+            responseSubjects.Clear();
+        }
+        logger.LogDebug("Cancelling {SubjectCount} pending response subjects during disposal for hub {Address}",
+            pendingSubjects.Length, Address);
 
-        foreach (var cts in pendingCallbacks)
+        foreach (var subject in pendingSubjects)
         {
             try
             {
-                cts.Cancel();
+                subject.OnError(new ObjectDisposedException(nameof(MessageHub),
+                    $"Hub {Address} was disposed before the response arrived."));
             }
-            catch (ObjectDisposedException)
+            catch
             {
-                // Ignore - callback already completed and disposed
+                // Subject may already be terminated — ignore.
             }
         }
-        pendingCallbackCancellations.Clear();
-
     }
 
 

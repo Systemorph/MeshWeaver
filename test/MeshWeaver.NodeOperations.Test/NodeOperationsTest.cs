@@ -219,9 +219,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.CreateNode(child);
 
         // Act - try to delete parent without recursive flag — target the TestData partition node (real Markdown hub)
-        var deleteResponse = await client.AwaitResponse(
-            new DeleteNodeRequest($"{TestPartition}/HierParent") { Recursive = false },
-            o => o.WithTarget(new Address(TestPartition)));
+        var deleteResponse = await client.Observe(new DeleteNodeRequest($"{TestPartition}/HierParent") { Recursive = false }, o => o.WithTarget(new Address(TestPartition))).FirstAsync().ToTask();
 
         // Assert
         deleteResponse.Message.Success.Should().BeFalse();

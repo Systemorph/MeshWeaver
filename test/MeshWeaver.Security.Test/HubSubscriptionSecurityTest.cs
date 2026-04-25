@@ -13,6 +13,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -36,7 +37,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
         => base.ConfigureClient(configuration).AddData(d => d);
 
     /// <summary>
-    /// Skip PublicAdminAccess — security tests need granular permissions.
+    /// Skip PublicAdminAccess â€” security tests need granular permissions.
     /// </summary>
     protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
@@ -71,9 +72,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
 
         // Ensure hub is started
         var client = GetClient();
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(hubAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(hubAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<EntityStore>(hubAddress, new CollectionsReference("test"));
@@ -82,7 +81,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
             .Timeout(5.Seconds())
             .FirstAsync();
 
-        // With access, we don't get "Access denied" — the error is about unmapped collections
+        // With access, we don't get "Access denied" â€” the error is about unmapped collections
         var ex = await Assert.ThrowsAnyAsync<Exception>(act);
         ex.ToString().Should().NotContain("Access denied",
             "with read access, the error should NOT be about access denial");

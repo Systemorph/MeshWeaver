@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Domain;
@@ -21,6 +22,37 @@ public static class MessageHubExtensions
 
     public static string? GetRequestId(this IMessageDelivery delivery)
         => delivery.Properties.GetValueOrDefault(PostOptions.RequestId) as string;
+
+    /// <summary>
+    /// Subscribes to the response for an already-posted <paramref name="delivery"/> as an observable.
+    /// Emits exactly one IMessageDelivery on the response (or an error). Replaces the
+    /// Task-returning RegisterCallback overloads — IObservable composes cleanly with Subscribe(onNext, onError),
+    /// so DeliveryFailure flows through onError as a DeliveryFailureException without the
+    /// Task-await temptation that deadlocks hub handlers.
+    /// </summary>
+    public static IObservable<IMessageDelivery> Observe(this IMessageHub hub, IMessageDelivery delivery)
+        => hub.Observe(delivery);
+
+    /// <summary>
+    /// Posts <paramref name="request"/> and observes the typed response.
+    /// <para>
+    /// Pre-registers the callback BEFORE posting (via the framework's
+    /// <see cref="IMessageHub.AwaitResponse(object,Func{PostOptions,PostOptions},Func{IMessageDelivery,object?},CancellationToken)"/>
+    /// primitive which uses <see cref="PostOptions.WithMessageId"/>) so a synchronously-handled
+    /// response can't slip through before the callback is registered. Emits exactly one
+    /// <see cref="IMessageDelivery{TResponse}"/> on the response, or <c>OnError</c> for
+    /// <see cref="DeliveryFailureException"/> / <see cref="TimeoutException"/>.
+    /// </para>
+    /// </summary>
+    public static IObservable<IMessageDelivery<TResponse>> Observe<TResponse>(
+        this IMessageHub hub,
+        IRequest<TResponse> request,
+        Func<PostOptions, PostOptions>? options = null)
+        => hub.Observe((object)request, options ?? (o => o))
+            .Select(d => d is IMessageDelivery<TResponse> typed
+                ? typed
+                : throw new InvalidOperationException(
+                    $"Observe<{typeof(TResponse).Name}>: unexpected response type {d.Message?.GetType().Name ?? "null"}"));
 
     public static MessageHubConfiguration WithRoutes(this MessageHubConfiguration config,
         Func<RouteConfiguration, RouteConfiguration> lambda)
@@ -82,57 +114,6 @@ public static class MessageHubExtensions
         return address;
     }
 
-    /// <summary>
-    /// Sends a request deserialized from JSON and awaits the response.
-    /// This is useful when working with JSON-based messaging without direct type references.
-    /// </summary>
-    /// <param name="hub">The message hub</param>
-    /// <param name="request">The request object (deserialized from JSON)</param>
-    /// <param name="options">Post options</param>
-    /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>The response message</returns>
-    public static async Task<object?> AwaitResponse(
-        this IMessageHub hub,
-        object request,
-        Func<PostOptions, PostOptions> options,
-        CancellationToken cancellationToken = default)
-    {
-        // If the request is a JsonElement, we need to deserialize it to the concrete type first
-        if (request is JsonElement jsonElement)
-        {
-            //  Get the type discriminator from the JSON
-            if (!jsonElement.TryGetProperty("$type", out var typeElement))
-                throw new InvalidOperationException("JSON request must have a '$type' property");
-
-            var typeName = typeElement.GetString();
-            if (string.IsNullOrEmpty(typeName))
-                throw new InvalidOperationException("'$type' property cannot be empty");
-
-            // Find the type in the type registry
-            var concreteType = hub.GetTypeRegistry().GetType(typeName);
-            if (concreteType == null)
-                concreteType = typeof(JsonElement);
-
-            // Deserialize to the concrete type
-            request = JsonSerializer.Deserialize(jsonElement.GetRawText(), concreteType, hub.JsonSerializerOptions)!;
-        }
-
-        // Find the IRequest<TResponse> interface to get the response type
-        var requestType = request.GetType();
-        var requestInterface = requestType.GetInterfaces()
-            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
-
-
-
-        // Create the result selector lambda: (IMessageDelivery<TResponse> d) => d.Message
-        var deliveryParam = System.Linq.Expressions.Expression.Parameter(typeof(IMessageDelivery), "d");
-        var messageProperty = System.Linq.Expressions.Expression.Property(deliveryParam, "Message");
-        var lambda = System.Linq.Expressions.Expression.Lambda<Func<IMessageDelivery, object?>>(messageProperty, deliveryParam);
-        var resultSelector = lambda.Compile();
-
-        var resultProperty = await hub.AwaitResponse(request, options, resultSelector, cancellationToken);
-        return resultProperty;
-    }
 
     /// <summary>
     /// Starts a long-running operation scope that keeps the Orleans grain alive.
@@ -164,15 +145,15 @@ public static class MessageHubExtensions
             {
                 var delivery = hub.Post(new HeartBeatEvent());
                 if (delivery == null) return;
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    if (d.Message is DeliveryFailure)
+                // Subscribe to the heartbeat response. DeliveryFailure flows via OnError —
+                // when there's no handler on the target, kill the heartbeat.
+                hub.Observe(delivery).Subscribe(
+                    _ => { },
+                    _ =>
                     {
                         sub?.Dispose();
                         cts.Cancel();
-                    }
-                    return Task.FromResult(d);
-                }, cts.Token);
+                    });
             });
         return new CompositeDisposable(sub, Disposable.Create(() => cts.Cancel()));
     }

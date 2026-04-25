@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Text.Json;
 using Json.Patch;
@@ -118,8 +119,9 @@ public static class MeshDataSourceExtensions
             try
             {
                 var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
-                var subResponse = await subHub.RegisterCallback(schemaDelivery, (d, _) => Task.FromResult(d), ct);
-                var schemaResponse = ((IMessageDelivery<GetDataResponse>)subResponse).Message;
+                var subResponse = await subHub.Observe(schemaDelivery).FirstAsync().ToTask(ct);
+                if (subResponse.Message is not GetDataResponse schemaResponse)
+                    return request; // Unexpected response shape — let default handler process it
 
                 hub.Post(schemaResponse, o => o.ResponseFor(request));
                 return request.Processed();

@@ -819,12 +819,10 @@ public static class MeshNodeLayoutAreas
                 .Select(c => (IReadOnlyList<MeshNode>)c.Items)
                 .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>()));
 
-            // Own NodeType definition by path (known-path lookup): GetMeshNodeStream — no QueryAsync.
+            // Own NodeType definition by path (known-path lookup): one-shot GetDataRequest
+            // — true request/response, no SubscribeRequest+immediate-unsubscribe.
             var ownTypeStream = node != null && !string.IsNullOrEmpty(node.NodeType)
-                ? host.Workspace.GetMeshNodeStream(node.NodeType)
-                    .Take(1)
-                    .Select(n => (MeshNode?)n)
-                    .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                ? host.Hub.GetMeshNode(node.NodeType)
                 : Observable.Return<MeshNode?>(null);
 
             return children.CombineLatest(ownTypeStream, (nodeTypeChildren, ownType) =>

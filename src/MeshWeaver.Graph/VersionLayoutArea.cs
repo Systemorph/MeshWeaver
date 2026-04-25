@@ -153,18 +153,15 @@ public static class VersionLayoutArea
                 Controls.Html("<p>Invalid version parameter. Use <code>?version=X</code> or <code>?from=X&to=Y</code>.</p>"));
         }
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        // Take the first emission that actually contains the node — avoid re-creating
-        // the Monaco diff editor on every subsequent stream tick.
-        return nodeStream
-            .Where(nodes => nodes.Any(n => n.Path == hubPath))
-            .Take(1)
-            .SelectMany(async nodes =>
+        // One-shot read of the current node via GetDataRequest — true request/response,
+        // no live workspace subscription. Render once with the snapshot; diff editor
+        // doesn't need to re-render on subsequent stream ticks.
+        return host.Hub.GetMeshNode(hubPath)
+            .SelectMany(async currentNode =>
             {
-                var currentNode = nodes.First(n => n.Path == hubPath);
+                if (currentNode == null)
+                    return (UiControl?)Controls.Html($"<p>Node {hubPath} not found.</p>");
+
                 var historicalNode = await versionQuery.GetVersionAsync(hubPath, targetVersion, options);
 
                 if (historicalNode == null)
@@ -295,13 +292,11 @@ public static class VersionLayoutArea
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var activityNodePath = $"{hubPath}/_activity/{msg.ActivityLogId}";
 
-        // Read the activity-log node via the per-node MeshNodeReference reducer
-        // (single-node-by-path content reads MUST NOT use ObserveQuery — read-side index lags;
-        // see Doc/Architecture/AsynchronousCalls.md "Never use QueryAsync to obtain a MeshNode").
-        hub.GetWorkspace().GetMeshNodeStream(activityNodePath)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
+        // Read the activity-log node via one-shot GetDataRequest — true request/response,
+        // no SubscribeRequest+immediate-unsubscribe. Single-node-by-path content reads
+        // MUST NOT use ObserveQuery (read-side index lags); see
+        // Doc/Architecture/AsynchronousCalls.md "Never use QueryAsync to obtain a MeshNode".
+        hub.GetMeshNode(activityNodePath, TimeSpan.FromSeconds(15))
             .SelectMany(activityNode =>
             {
                 if (activityNode?.Content is not ActivityLog activityLog)

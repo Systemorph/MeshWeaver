@@ -13,6 +13,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -34,16 +35,14 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     private async Task<MeshNode> CreateTestNodeAsync(string id, string? ns = null)
     {
         var node = new MeshNode(id, ns) { Name = $"Test {id}", NodeType = "Markdown" };
-        var response = await Mesh.AwaitResponse(
-            new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address), Ct);
+        var response = await Mesh.Observe(new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(Ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!;
     }
 
     private async Task DeleteTestNodeAsync(string path)
     {
-        var response = await Mesh.AwaitResponse(
-            new DeleteNodeRequest(path), o => o.WithTarget(Mesh.Address), Ct);
+        var response = await Mesh.Observe(new DeleteNodeRequest(path), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(Ct);
         response.Message.Error.Should().BeNullOrEmpty();
     }
 
@@ -89,12 +88,12 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task CreateNode_PathResolverFindsIt()
     {
-        // Resolve before create — should not find it
+        // Resolve before create â€” should not find it
         var before = await PathResolver.ResolvePathAsync("feed-resolve-1");
 
         await CreateTestNodeAsync("feed-resolve-1");
 
-        // After create — cache was invalidated/pre-warmed by change event
+        // After create â€” cache was invalidated/pre-warmed by change event
         var after = await PathResolver.ResolvePathAsync("feed-resolve-1");
         after.Should().NotBeNull();
         after!.Prefix.Should().Contain("feed-resolve-1");
@@ -112,7 +111,7 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await DeleteTestNodeAsync(created.Path);
 
-        // After delete — cache evicted, resolver should not find it at that exact path
+        // After delete â€” cache evicted, resolver should not find it at that exact path
         var gone = await PathResolver.ResolvePathAsync(created.Path);
         (gone == null || gone.Prefix != created.Path).Should().BeTrue(
             "deleted node should not resolve to its exact path");
@@ -124,7 +123,7 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Create parent
         var parent = await CreateTestNodeAsync("nest-parent-1");
 
-        // Resolve nested path — caches partial match (parent with remainder)
+        // Resolve nested path â€” caches partial match (parent with remainder)
         var partial = await PathResolver.ResolvePathAsync($"{parent.Path}/nest-child-1");
 
         // Create child

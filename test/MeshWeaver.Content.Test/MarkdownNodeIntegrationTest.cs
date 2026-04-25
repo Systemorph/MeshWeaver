@@ -31,6 +31,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -522,9 +523,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         // First verify we can ping the hub
         Output.WriteLine("Pinging CollaborativeEditing hub...");
-        var pingResponse = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        var pingResponse = await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         Output.WriteLine($"Ping response: {pingResponse.Message}");
         pingResponse.Message.Should().NotBeNull("Hub should respond to ping");
@@ -1063,7 +1062,7 @@ DateTime.Now.ToString()
         roundTripped.CodeSubmissions![0].Code.Should().Be(content.CodeSubmissions[0].Code);
     }
 
-    // RepairMarkdownContent_* tests removed — the MarkdownNodeType.RepairMarkdownContent hook
+    // RepairMarkdownContent_* tests removed â€” the MarkdownNodeType.RepairMarkdownContent hook
     // and MeshDataSource.WithNodeConverter pipeline they covered no longer exist in the codebase.
 
     #endregion

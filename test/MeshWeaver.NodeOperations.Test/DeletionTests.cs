@@ -32,14 +32,14 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     [Fact]
     public async Task Delete_LeafNode_Succeeds()
     {
-        // Arrange — create a single leaf node under TestData
+        // Arrange â€” create a single leaf node under TestData
         await NodeFactory.CreateNode(
             new MeshNode("delleaf", TestPartition) { Name = "Leaf", NodeType = "Markdown" });
 
         // Act
         await NodeFactory.DeleteNode($"{TestPartition}/delleaf");
 
-        // Assert — node should be gone
+        // Assert â€” node should be gone
         var result = await ReadNodeAsync($"{TestPartition}/delleaf", TestTimeout);
         result.Should().BeNull("leaf node should be deleted");
     }
@@ -47,7 +47,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     [Fact]
     public async Task Delete_ParentWithChildren_DeletesAll()
     {
-        // Arrange — create a parent with two children under TestData partition
+        // Arrange â€” create a parent with two children under TestData partition
         await NodeFactory.CreateNode(
             new MeshNode("del2parent", TestPartition) { Name = "Parent", NodeType = "Group" });
         await NodeFactory.CreateNode(
@@ -55,14 +55,14 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.CreateNode(
             new MeshNode("child2", $"{TestPartition}/del2parent") { Name = "Child 2", NodeType = "Markdown" });
 
-        // Act — delete parent (should recursively delete children first)
+        // Act â€” delete parent (should recursively delete children first)
         await NodeFactory.DeleteNode($"{TestPartition}/del2parent");
 
-        // Assert — parent and both children should be gone
+        // Assert â€” parent and both children should be gone
         var parent = await ReadNodeAsync($"{TestPartition}/del2parent", TestTimeout);
         parent.Should().BeNull("parent should be deleted");
 
-        // Listing children: queries are correct here — set existence, not single-node content.
+        // Listing children: queries are correct here â€” set existence, not single-node content.
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/del2parent")
             .ToListAsync(TestTimeout);
         children.Should().BeEmpty("all children should be deleted");
@@ -71,7 +71,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     [Fact]
     public async Task Delete_DeeplyNested_DeletesBottomToTop()
     {
-        // Arrange — create a 3-level deep hierarchy under TestData
+        // Arrange â€” create a 3-level deep hierarchy under TestData
         await NodeFactory.CreateNode(
             new MeshNode("del3root", TestPartition) { Name = "Root", NodeType = "Group" });
         await NodeFactory.CreateNode(
@@ -79,10 +79,10 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.CreateNode(
             new MeshNode("deep", $"{TestPartition}/del3root/mid") { Name = "Deep", NodeType = "Markdown" });
 
-        // Act — delete root
+        // Act â€” delete root
         await NodeFactory.DeleteNode($"{TestPartition}/del3root");
 
-        // Assert — all 3 levels should be gone
+        // Assert â€” all 3 levels should be gone
         var all = await MeshQuery.QueryAsync<MeshNode>($"path:{TestPartition}/del3root scope:subtree")
             .ToListAsync(TestTimeout);
         all.Should().BeEmpty("entire subtree should be deleted");
@@ -91,7 +91,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     [Fact]
     public async Task Delete_NonExistentNode_Throws()
     {
-        // Act & Assert — deleting a non-existent node should throw
+        // Act & Assert â€” deleting a non-existent node should throw
         var act = () => NodeFactory.DeleteNode("nonexistent/path/that/does/not/exist").ToTask();
         await act.Should().ThrowAsync<System.Exception>();
     }
@@ -99,7 +99,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     [Fact]
     public async Task Delete_NodeWithSiblings_OnlyDeletesTargetSubtree()
     {
-        // Arrange — create two sibling subtrees under TestData partition
+        // Arrange â€” create two sibling subtrees under TestData partition
         await NodeFactory.CreateNode(
             new MeshNode("del4parent", TestPartition) { Name = "Parent", NodeType = "Group" });
         await NodeFactory.CreateNode(
@@ -109,10 +109,10 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.CreateNode(
             new MeshNode("child", $"{TestPartition}/del4parent/delete") { Name = "Child", NodeType = "Markdown" });
 
-        // Act — only delete one subtree
+        // Act â€” only delete one subtree
         await NodeFactory.DeleteNode($"{TestPartition}/del4parent/delete");
 
-        // Assert — the kept sibling should still exist
+        // Assert â€” the kept sibling should still exist
         var kept = await ReadNodeAsync($"{TestPartition}/del4parent/keep", TestTimeout);
         kept.Should().NotBeNull("sibling node should not be affected");
 
@@ -125,16 +125,14 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     [Fact(Skip = "Delete via message routing needs proper node hub target")]
     public async Task Delete_ViaClient_WithDeleteNodeRequest()
     {
-        // Arrange — create a node and use the client messaging pattern
+        // Arrange â€” create a node and use the client messaging pattern
         await NodeFactory.CreateNode(
             MeshNode.FromPath("del5/target") with { Name = "Target", NodeType = "Markdown" });
 
         var client = GetClient();
 
-        // Act — send DeleteNodeRequest via client hub (target the parent namespace hub)
-        var response = await client.AwaitResponse(
-            new DeleteNodeRequest("del5/target") { DeletedBy = "test-user" },
-            o => o.WithTarget(new Address("del5")));
+        // Act â€” send DeleteNodeRequest via client hub (target the parent namespace hub)
+        var response = await client.Observe(new DeleteNodeRequest("del5/target") { DeletedBy = "test-user" }, o => o.WithTarget(new Address("del5"))).FirstAsync().ToTask();
 
         // Assert
         response.Message.Success.Should().BeTrue("deletion via client should succeed");
@@ -153,7 +151,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     [Fact]
     public async Task Delete_FromNodeHub_Succeeds()
     {
-        // Arrange — create a node and get its hub via the routing service
+        // Arrange â€” create a node and get its hub via the routing service
         var nodePath = $"{TestPartition}/del6target";
         await NodeFactory.CreateNode(
             new MeshNode("del6target", TestPartition) { Name = "Target", NodeType = "Markdown" });
@@ -174,10 +172,10 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Resolve IMeshService from the NODE's hub (reproducing DeleteLayoutArea pattern)
         var nodeService = nodeHub!.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Act — delete from the node's hub (same as DeleteLayoutArea does)
+        // Act â€” delete from the node's hub (same as DeleteLayoutArea does)
         await nodeService.DeleteNode(nodePath);
 
-        // Assert — node should be deleted
+        // Assert â€” node should be deleted
         var result = await ReadNodeAsync(nodePath, TestTimeout);
         result.Should().BeNull("deletion from node hub should work");
     }

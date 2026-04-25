@@ -46,6 +46,22 @@ public interface ISynchronizationStream<TStream>
         IObservable<ChangeItem<TStream>>,
         IObserver<ChangeItem<TStream>>
 {
+    /// <summary>
+    /// Snapshot of the most recent ChangeItem this stream has observed.
+    /// <para>
+    /// <b>Anti-pattern for application code.</b> Sync reads on cold workspaces / remote
+    /// streams that have not completed <c>SubscribeRequest</c> return <c>null</c> and
+    /// silently ship wrong answers. Subscribe to the stream reactively or use
+    /// <c>workspace.GetMeshNodeStream(...)</c> / <c>workspace.GetRemoteStream(...)</c>.
+    /// See <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </para>
+    /// <para>
+    /// TODO: target = internal once Blazor sync-render callsites (DataGridView columns,
+    /// editor views, MeshNodePickerView) and <c>LayoutAreaHost.GetControl</c> have been
+    /// migrated to maintain their own cached snapshot via long-lived subscription
+    /// (the <c>CollaborativeMarkdownView</c> pattern).
+    /// </para>
+    /// </summary>
     ChangeItem<TStream>? Current { get; }
     void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback);
     void Update(Func<TStream?, ChangeItem<TStream>?> update) => Update(update, _ => Task.CompletedTask);

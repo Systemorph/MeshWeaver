@@ -196,23 +196,25 @@ public static class DeleteLayoutArea
                     new DeleteNodeRequest(nodePath) { Recursive = true },
                     o => o.WithTarget(new Address(nodePath)))!;
 
-                host.Hub.RegisterCallback(delivery, response =>
-                {
-                    if (response is IMessageDelivery<DeleteNodeResponse> r && r.Message.Success)
-                    {
-                        ctx.Host.UpdateData(progressId, DeleteStatus.Done);
-                        // Navigate back — the node we were looking at no longer exists.
-                        ctx.Host.UpdateArea(ctx.Area, new RedirectControl(backHref));
-                    }
-                    else
-                    {
-                        var err = response is IMessageDelivery<DeleteNodeResponse> rr
-                            ? rr.Message.Error
-                            : "Delete response not received.";
-                        ctx.Host.UpdateData(progressId, DeleteStatus.Failed(err));
-                    }
-                    return response;
-                });
+                host.Hub.Observe(delivery)
+                    .Subscribe(
+                        response =>
+                        {
+                            if (response.Message is DeleteNodeResponse { Success: true })
+                            {
+                                ctx.Host.UpdateData(progressId, DeleteStatus.Done);
+                                // Navigate back — the node we were looking at no longer exists.
+                                ctx.Host.UpdateArea(ctx.Area, new RedirectControl(backHref));
+                            }
+                            else
+                            {
+                                var err = response.Message is DeleteNodeResponse rr
+                                    ? rr.Error
+                                    : "Delete response not received.";
+                                ctx.Host.UpdateData(progressId, DeleteStatus.Failed(err));
+                            }
+                        },
+                        ex => ctx.Host.UpdateData(progressId, DeleteStatus.Failed(ex.Message)));
             });
 
         return Task.CompletedTask;

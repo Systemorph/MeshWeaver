@@ -45,9 +45,7 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, target={targetAddress}");
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(node),
-            o => o.WithTarget(new Address(targetAddress)), ct);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, path={response.Message.Node?.Path ?? "(null)"}");
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
@@ -84,15 +82,13 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
         Output.WriteLine($"Child: {childPath}");
 
         // Verify: child is reachable via message routing (GetDataRequest via MeshNodeReference reducer).
-        var getResponse = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(childPath)), ct);
+        var getResponse = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(childPath))).FirstAsync().ToTask(ct);
         var data = getResponse.Message.Data as MeshNode;
         if (data == null && getResponse.Message.Data is JsonElement je)
             data = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
         data.Should().NotBeNull("child node should be reachable via routing");
         data!.Path.Should().Be(childPath);
-        Output.WriteLine("PASSED — CreateNode immediately routable");
+        Output.WriteLine("PASSED â€” CreateNode immediately routable");
     }
 
     /// <summary>
@@ -124,15 +120,13 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
             .FirstAsync()
             .ToTask(ct);
 
-        var submitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test routing",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
         var msgIds = await twoMessages;
@@ -154,20 +148,18 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
         var subThreadPath = await CreateNodeAsync(client, subThreadNode, threadPath, ct);
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
-        // NOW submit to the sub-thread — this is where routing failed before
+        // NOW submit to the sub-thread â€” this is where routing failed before
         // (stale cache sent the request to the parent message grain)
-        var subSubmitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var subSubmitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = subThreadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello sub-thread",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(subThreadPath)), ct);
+            }, o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
 
         subSubmitResponse.Message.Success.Should().BeTrue(
             $"Sub-thread AppendUserMessage should succeed but got: {subSubmitResponse.Message.Error}");
-        Output.WriteLine("PASSED — sub-thread AppendUserMessage routed correctly");
+        Output.WriteLine("PASSED â€” sub-thread AppendUserMessage routed correctly");
     }
 }

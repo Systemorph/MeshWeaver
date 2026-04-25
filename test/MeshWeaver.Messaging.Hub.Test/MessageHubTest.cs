@@ -5,6 +5,8 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Messaging.Hub.Test;
 
 public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
@@ -28,11 +30,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task HelloWorld()
     {
         var host = GetHost();
-        var response = await host.AwaitResponse(
-            new SayHelloRequest(),
-            o => o.WithTarget(CreateHostAddress())
-            , new CancellationTokenSource(10.Seconds()).Token
-        );
+        var response = await host.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
@@ -40,14 +38,10 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task HelloWorldFromClient()
     {
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new SayHelloRequest(),
-            o => o.WithTarget(CreateHostAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(5.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 
@@ -56,11 +50,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
 
-        var response = await client.AwaitResponse(
-            new SayHelloRequest(),
-            o => o.WithTarget(CreateHostAddress()),
-            TestContext.Current.CancellationToken
-        );
+        var response = await client.Observe(new SayHelloRequest(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 

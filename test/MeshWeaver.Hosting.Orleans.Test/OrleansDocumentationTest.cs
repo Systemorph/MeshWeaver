@@ -23,6 +23,7 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 // TODO: needs custom shared fixture — uses DocSiloConfigurator with AddDocumentation(),
@@ -111,10 +112,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
         var address = new Address("Doc/Architecture/BusinessRules");
 
         Output.WriteLine("Pinging Doc/Architecture/BusinessRules...");
-        var response = await portal.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            new CancellationTokenSource(30.Seconds()).Token);
+        var response = await portal.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(new CancellationTokenSource(30.Seconds()).Token);
         Output.WriteLine($"Ping: {response.Message.GetType().Name}");
 
         var workspace = portal.GetWorkspace();

@@ -23,6 +23,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -87,7 +88,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Loads the CollaborativeEditing.md document's Overview area.
     /// This triggers the full rendering pipeline including comments sidebar
-    /// where comment c1 has a reply — the scenario that caused OperationCanceledException.
+    /// where comment c1 has a reply â€” the scenario that caused OperationCanceledException.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditingDocument_Overview_ShouldRender()
@@ -96,9 +97,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var docAddress = new Address(DocPath);
 
         Output.WriteLine("Initializing hub for CollaborativeEditing.md...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -127,9 +126,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var docAddress = new Address(DocPath);
 
         Output.WriteLine("Initializing hub for document...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -157,9 +154,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var commentAddress = new Address(CommentC1Path);
 
         Output.WriteLine("Initializing hub for comment c1 (has reply)...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(commentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -188,9 +183,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var replyAddress = new Address(ReplyPath);
 
         Output.WriteLine("Initializing hub for reply node directly...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(replyAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(replyAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -209,7 +202,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
 
     /// <summary>
     /// Renders the Overview area for a comment (c2) that has NO replies.
-    /// Baseline test — should always work.
+    /// Baseline test â€” should always work.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CommentWithoutReplies_Overview_ShouldRender()
@@ -218,9 +211,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         var commentAddress = new Address(DocPath + "/c2");
 
         Output.WriteLine("Initializing hub for comment c2 (no replies)...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(commentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -244,10 +235,10 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 30000)]
     public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
-        // No hub initialization needed — RoutingMeshQueryProvider discovers
+        // No hub initialization needed â€” RoutingMeshQueryProvider discovers
         // partitions via DiscoverNewProvidersAsync during the query.
 
-        // Static node read — no write before, catalog read is correct (no CQRS lag).
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
         var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path}").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
@@ -257,7 +248,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         parentComment.Should().NotBeNull();
         Output.WriteLine($"Parent: Id={parentNode.Id}, Path={parentNode.Path}, Author={parentComment!.Author}");
 
-        // Static node read — no write before, catalog read is correct (no CQRS lag).
+        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
         // (Per-node hub routing for nested replies returns the parent c1, not reply1.)
         var replyNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ReplyPath}").FirstOrDefaultAsync();
         replyNode.Should().NotBeNull("Reply node should exist");

@@ -37,11 +37,8 @@ public class MeshExportService : IMeshExportService
         string rootPath,
         string outputDirectory,
         IReadOnlySet<string>? excludedNodeTypes = null) =>
-        _hub.GetWorkspace().GetMeshNodeStream(rootPath)
-            .Select(n => (MeshNode?)n)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+        // One-shot read of the export root via GetDataRequest — no lingering subscription.
+        _hub.GetMeshNode(rootPath, TimeSpan.FromSeconds(15))
             .SelectMany(rootNode =>
             {
                 if (rootNode == null)

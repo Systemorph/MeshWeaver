@@ -20,46 +20,31 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     Address Address { get; }
     IServiceProvider ServiceProvider { get; }
 
-    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
-        AwaitResponse(request, new CancellationTokenSource(Configuration.RequestTimeout).Token);
+    // === Request/response primitives ===
+    //
+    // Application code uses the `hub.Observe(...)` extension (in MessageHubExtensions)
+    // which returns IObservable<IMessageDelivery<TResponse>>. Tests use
+    // `MonolithMeshTestBase.AwaitResponseAsync(request, options?, hub?, ct?)`.
+    //
+    // No Task-returning request/response API on the interface anymore — the framework
+    // primitives below are sync factories that return IObservable<IMessageDelivery>
+    // backed by an AsyncSubject. There's no callback registration, no
+    // TaskCompletionSource, and no Task.
 
-    async Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken)
-        => (IMessageDelivery<TResponse>)(await AwaitResponse(request, o => o, o => o, cancellationToken))!;
+    /// <summary>
+    /// Sync factory: returns the response observable for an already-posted delivery.
+    /// AsyncSubject backed, framework-timeout applied. Application code calls
+    /// <c>hub.Observe(delivery)</c> (extension in MessageHubExtensions, same assembly).
+    /// </summary>
+    internal IObservable<IMessageDelivery> Observe(IMessageDelivery delivery);
 
-    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request,
-        CancellationToken cancellationToken)
-        => AwaitResponse(request, x => x, x => x, cancellationToken)!;
-
-    async Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request,
-        Func<PostOptions, PostOptions> options, CancellationToken cancellationToken = default)
-        => (await AwaitResponse(request, options, o => o, cancellationToken))!;
-    Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
-        Func<IMessageDelivery<TResponse>, TResult> selector)
-        => AwaitResponse(request, x => x, selector);
-
-    Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
-        Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken)
-        => AwaitResponse(request, x => x, selector, cancellationToken);
-
-    async Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options,
-        Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default)
-        => (TResult?)await AwaitResponse((object)request, options, o => selector((IMessageDelivery<TResponse>)o), cancellationToken);
-
-
-    Task<object?> AwaitResponse(object request, Func<PostOptions, PostOptions> options, Func<IMessageDelivery, object?> selector, CancellationToken cancellationToken = default);
-    Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request,
-        AsyncDelivery<TResponse> callback, CancellationToken cancellationToken = default)
-        => RegisterCallback((IMessageDelivery)request, (r, c) => callback((IMessageDelivery<TResponse>)r, c),
-            cancellationToken);
-    Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, SyncDelivery<TResponse> callback)
-        => RegisterCallback((IMessageDelivery)request, (r, _) => Task.FromResult(callback((IMessageDelivery<TResponse>)r)), default);
-    Task<IMessageDelivery> RegisterCallback(IMessageDelivery request, SyncDelivery callback)
-        => RegisterCallback(request, (r, _) => Task.FromResult(callback(r)), default);
-    Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> delivery, SyncDelivery<TResponse> callback, CancellationToken cancellationToken)
-        => RegisterCallback(delivery, (d, _) => Task.FromResult(callback(d)), cancellationToken);
-
-    // ReSharper disable once UnusedMethodReturnValue.Local
-    Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken);
+    /// <summary>
+    /// Sync factory: posts <paramref name="request"/> and returns the response observable.
+    /// Pre-registers the subject before posting (via <see cref="PostOptions.WithMessageId"/>)
+    /// so a synchronously-handled response can't slip through before the subscription is
+    /// in place. Application code calls <c>hub.Observe(request, options?)</c>.
+    /// </summary>
+    internal IObservable<IMessageDelivery> Observe(object request, Func<PostOptions, PostOptions> options);
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback);
 
     public void InvokeAsync(Action action)

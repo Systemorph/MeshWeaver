@@ -30,7 +30,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture — uses ChatSiloConfigurator with AddFileSystemPersistence(SamplesGraphData),
+// TODO: needs custom shared fixture â€” uses ChatSiloConfigurator with AddFileSystemPersistence(SamplesGraphData),
 // which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end chat test on Orleans infrastructure with FileSystem persistence.
@@ -77,9 +77,7 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)),
-            o => o.WithTarget(new Address(ContextPath)), ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -101,9 +99,7 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
         // Canonical CQRS-correct read: target the per-node hub's MeshNodeReference
         // reducer, not an EntityCollection lookup. The owning hub is the source of
         // truth for MeshNode content; this avoids any catalog / index lag.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
@@ -133,15 +129,13 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
 
         // 3. Submit message via AppendUserMessageRequest
         Output.WriteLine("Submitting message...");
-        var submitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello from Orleans",
                 ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("Message submitted");
 
@@ -164,7 +158,7 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
         userContent.Text.Should().Be("Hello from Orleans");
         Output.WriteLine($"User message verified: '{userContent.Text}'");
 
-        // 7. Verify response message — poll until streaming completes
+        // 7. Verify response message â€” poll until streaming completes
         ThreadMessage? responseContent = null;
         var prevLen = 0;
         var stable = 0;

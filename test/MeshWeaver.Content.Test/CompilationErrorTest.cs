@@ -108,9 +108,7 @@ public record BrokenType
         var address = new Address("test/broken-instance");
 
         Output.WriteLine("Initializing hub for test/broken-instance...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         // 4. Request the Overview layout area

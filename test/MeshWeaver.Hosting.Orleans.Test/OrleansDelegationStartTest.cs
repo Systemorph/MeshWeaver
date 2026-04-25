@@ -21,6 +21,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
@@ -29,7 +31,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 1. Create user cell
 /// 2. Create response cell
 /// 3. Create thread with Messages + IsExecuting=true + PendingUserMessage
-/// 4. WatchForExecution triggers → starts streaming → response cell gets text
+/// 4. WatchForExecution triggers â†’ starts streaming â†’ response cell gets text
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
 public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
@@ -40,9 +42,7 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
         // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
@@ -68,20 +68,18 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
 
             // Create a parent thread first (delegations live under a response message)
             var parentNode = ThreadNodeType.BuildThreadNode("User/Roland", "Parent for delegation test", "Roland");
-            var parentResp = await client.AwaitResponse(
-                new CreateNodeRequest(parentNode),
-                o => o.WithTarget(new Address("User/Roland")), ct);
+            var parentResp = await client.Observe(new CreateNodeRequest(parentNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
             parentResp.Message.Success.Should().BeTrue(parentResp.Message.Error);
             var parentPath = parentResp.Message.Node!.Path!;
             Output.WriteLine($"Parent thread: {parentPath}");
 
             // Simulate a response message on the parent (delegation lives under it)
             var parentResponseId = Guid.NewGuid().ToString("N")[..8];
-            await client.AwaitResponse(new CreateNodeRequest(new MeshNode(parentResponseId, parentPath)
+            await client.Observe(new CreateNodeRequest(new MeshNode(parentResponseId, parentPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                 Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-            }), o => o.WithTarget(new Address(parentPath)), ct);
+            }), o => o.WithTarget(new Address(parentPath))).FirstAsync().ToTask(ct);
             var parentMsgPath = $"{parentPath}/{parentResponseId}";
 
             // Now simulate delegation: create cells, then thread (exact ChatClientAgentFactory flow)
@@ -93,7 +91,7 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
             Output.WriteLine($"Sub-thread: {subThreadPath}, user={userMsgId}, response={responseMsgId}");
 
             // Step 1: Create user cell
-            var userCellResp = await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, subThreadPath)
+            var userCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, subThreadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                 Content = new ThreadMessage
@@ -101,11 +99,11 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
                     Role = "user", Text = "Delegation task: do something", Timestamp = DateTime.UtcNow,
                     Type = ThreadMessageType.ExecutedInput, CreatedBy = "Roland"
                 }
-            }), o => o.WithTarget(new Address(subThreadPath)), ct);
+            }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
             Output.WriteLine($"User cell created: success={userCellResp.Message.Success}");
 
             // Step 2: Create response cell
-            var responseCellResp = await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, subThreadPath)
+            var responseCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, subThreadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                 Content = new ThreadMessage
@@ -113,15 +111,13 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
                     Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
                     Type = ThreadMessageType.AgentResponse, AgentName = "Worker"
                 }
-            }), o => o.WithTarget(new Address(subThreadPath)), ct);
+            }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
             Output.WriteLine($"Response cell created: success={responseCellResp.Message.Success}");
 
             // Step 3: Create thread with IsExecuting=true (triggers WatchForExecution)
-            var threadResp = await client.AwaitResponse(
-                new CreateNodeRequest(subThreadNode),
-                o => o.WithTarget(new Address(parentMsgPath)), ct);
+            var threadResp = await client.Observe(new CreateNodeRequest(subThreadNode), o => o.WithTarget(new Address(parentMsgPath))).FirstAsync().ToTask(ct);
             threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error);
-            Output.WriteLine("Sub-thread created — WatchForExecution should trigger");
+            Output.WriteLine("Sub-thread created â€” WatchForExecution should trigger");
 
             // Step 4: Poll for execution to complete
             for (var i = 0; i < 60; i++)

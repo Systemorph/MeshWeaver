@@ -20,6 +20,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
@@ -96,10 +97,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         Output.WriteLine($"Testing default area loading for {nodePath}");
 
         // Initialize the hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         Output.WriteLine($"Hub initialized for {nodePath}");
 
         var workspace = client.GetWorkspace();
@@ -130,10 +128,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         Output.WriteLine($"Testing {areaName} area loading for {nodePath}");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         Output.WriteLine($"Hub initialized for {nodePath}");
 
         var workspace = client.GetWorkspace();
@@ -277,10 +272,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
                 try
                 {
                     var address = new Address(path);
-                    await client.AwaitResponse(
-                        new PingRequest(),
-                        o => o.WithTarget(address),
-                        TestContext.Current.CancellationToken);
+                    await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
                     var workspace = client.GetWorkspace();
                     var reference = new LayoutAreaReference(string.Empty);

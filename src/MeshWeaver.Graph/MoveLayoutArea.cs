@@ -147,39 +147,46 @@ public static class MoveLayoutArea
                                 new MoveNodeRequest(currentPath, targetPath),
                                 o => o.WithTarget(host.Hub.Address));
 
-                            host.Hub.RegisterCallback((IMessageDelivery)delivery!, response =>
-                            {
-                                if (response is IMessageDelivery<MoveNodeResponse> mr)
-                                {
-                                    if (!mr.Message.Success)
+                            host.Hub.Observe((IMessageDelivery)delivery!)
+                                .Subscribe(
+                                    response =>
                                     {
-                                        ShowDialog(ctx, "Move Failed", mr.Message.Error ?? "Unknown error.");
-                                    }
-                                    else
-                                    {
-                                        logger?.LogInformation("Move complete: {Source} -> {Target}", currentPath, targetPath);
-
-                                        var overviewUrl = MeshNodeLayoutAreas.BuildUrl(targetPath, MeshNodeLayoutAreas.OverviewArea);
-
-                                        var successDialog = Controls.Dialog(
-                                            Controls.Markdown($"**Move Complete**\n\nMoved to `{targetPath}`."),
-                                            "Move Complete"
-                                        ).WithSize("M").WithClosable(true).WithCloseAction(_ =>
+                                        if (response.Message is MoveNodeResponse mr)
                                         {
-                                            ctx.NavigateTo(overviewUrl);
-                                            return Task.CompletedTask;
-                                        });
-                                        ctx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
-                                    }
-                                }
-                                else if (response is IMessageDelivery<DeliveryFailure> df)
-                                {
-                                    logger?.LogError("Move failed for {Source} -> {Target}: {Error}",
-                                        currentPath, targetPath, df.Message.Message);
-                                    ShowDialog(ctx, "Move Failed", $"Move failed: {df.Message.Message}");
-                                }
-                                return response;
-                            });
+                                            if (!mr.Success)
+                                            {
+                                                ShowDialog(ctx, "Move Failed", mr.Error ?? "Unknown error.");
+                                            }
+                                            else
+                                            {
+                                                logger?.LogInformation("Move complete: {Source} -> {Target}", currentPath, targetPath);
+
+                                                var overviewUrl = MeshNodeLayoutAreas.BuildUrl(targetPath, MeshNodeLayoutAreas.OverviewArea);
+
+                                                var successDialog = Controls.Dialog(
+                                                    Controls.Markdown($"**Move Complete**\n\nMoved to `{targetPath}`."),
+                                                    "Move Complete"
+                                                ).WithSize("M").WithClosable(true).WithCloseAction(_ =>
+                                                {
+                                                    ctx.NavigateTo(overviewUrl);
+                                                    return Task.CompletedTask;
+                                                });
+                                                ctx.Host.UpdateArea(DialogControl.DialogArea, successDialog);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            logger?.LogWarning("Move: unexpected response {Type} for {Source} -> {Target}",
+                                                response.Message?.GetType().Name, currentPath, targetPath);
+                                            ShowDialog(ctx, "Move Failed", $"Unexpected response: {response.Message?.GetType().Name}");
+                                        }
+                                    },
+                                    ex =>
+                                    {
+                                        logger?.LogError(ex, "Move failed for {Source} -> {Target}",
+                                            currentPath, targetPath);
+                                        ShowDialog(ctx, "Move Failed", $"Move failed: {ex.Message}");
+                                    });
                         });
                     return Task.CompletedTask;
                 })));

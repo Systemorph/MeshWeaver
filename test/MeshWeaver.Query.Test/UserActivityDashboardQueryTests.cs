@@ -34,7 +34,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         return base.ConfigureClient(configuration);
     }
 
-    // ── Query 1: Activity Feed ──────────────────────────────────────────────
+    // â”€â”€ Query 1: Activity Feed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task ActivityFeed_ReturnsMainNodesWithActivitySatellites()
@@ -99,7 +99,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         results.Should().BeEmpty();
     }
 
-    // ── Query 2: Recently Viewed ────────────────────────────────────────────
+    // â”€â”€ Query 2: Recently Viewed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task RecentlyViewed_InMemory_ReturnsMainNodes_ExcludesSatellites()
@@ -137,7 +137,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         // The PostgreSQL provider correctly filters by UserActivity records.
     }
 
-    // ── Query 3: Latest Threads ─────────────────────────────────────────────
+    // â”€â”€ Query 3: Latest Threads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task LatestThreads_ByNodeType_WithDescendantsScope()
@@ -150,20 +150,18 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
             new MeshNode(contextPath) { Name = "Thread Context", NodeType = "Markdown" });
 
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Help me with my project")),
-            o => o.WithTarget(new Address(contextPath)), ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Help me with my project")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread created at: {threadPath}");
 
-        // Act 1: nodeType:Thread with scope:descendants — should find threads
+        // Act 1: nodeType:Thread with scope:descendants â€” should find threads
         var byType = await MeshQuery
             .QueryAsync<MeshNode>("nodeType:Thread scope:descendants sort:LastModified-desc")
             .ToListAsync();
         Output.WriteLine($"nodeType:Thread scope:descendants => {byType.Count} results");
 
-        // Act 2: namespace query — direct _Thread namespace query
+        // Act 2: namespace query â€” direct _Thread namespace query
         var byNamespace = await MeshQuery
             .QueryAsync<MeshNode>($"namespace:{contextPath}/_Thread nodeType:Thread")
             .ToListAsync();
@@ -182,13 +180,13 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         // namespace query should also find it
         byNamespace.Should().NotBeEmpty($"namespace:{contextPath}/_Thread should find threads");
 
-        // Dashboard query (no path) — InMemory: 0 results (Children scope + empty basePath)
+        // Dashboard query (no path) â€” InMemory: 0 results (Children scope + empty basePath)
         // PostgreSQL via RoutingMeshQueryProvider: should work (adds scope:descendants per partition)
         Output.WriteLine($"Dashboard query found {dashboardQuery.Count} threads " +
             "(0 expected in InMemory without routing; >0 expected in PostgreSQL with routing)");
     }
 
-    // ── Query 4: My Items ───────────────────────────────────────────────────
+    // â”€â”€ Query 4: My Items â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task MyItems_ReturnsOnlyMainContentNodes()
@@ -220,9 +218,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
 
         // Thread satellite via CreateNodeRequest
         var client = GetClient();
-        var threadResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, "Thread in my items")),
-            o => o.WithTarget(new Address(ns)), ct);
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, "Thread in my items")), o => o.WithTarget(new Address(ns))).FirstAsync().ToTask(ct);
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
 
         // Act: exact dashboard query

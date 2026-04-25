@@ -86,13 +86,11 @@ public static class ApiTokenNodeType
             return request.Processed();
         }
 
-        // Read own MeshNode via the workspace stream — replaces persistence.GetNodeAsync(hubPath).
-        var workspace = hub.GetWorkspace();
-        workspace.GetMeshNodeStream()
-            .Select(n => (MeshNode?)n)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+        // Read own MeshNode via one-shot GetDataRequest — true request/response, no
+        // lingering subscription. Posts to self (hub.Address); the handler's Subscribe
+        // runs on the event loop after this returns, so no deadlock.
+        var hubAddress = hub.Address.ToString();
+        hub.GetMeshNode(hubAddress, TimeSpan.FromSeconds(10))
             .SelectMany(node =>
             {
                 if (node == null)
@@ -112,12 +110,9 @@ public static class ApiTokenNodeType
                         return Observable.Empty<Unit>();
                     }
 
-                    // Cross-hub read for the actual token node — workspace dispatches local vs. remote.
-                    tokenNodeObs = workspace.GetMeshNodeStream(index.TokenPath)
-                        .Select(n => (MeshNode?)n)
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(10))
-                        .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+                    // Cross-hub one-shot read for the actual token node — GetDataRequest
+                    // routes to the owning per-node hub via the mesh.
+                    tokenNodeObs = hub.GetMeshNode(index.TokenPath, TimeSpan.FromSeconds(10));
                 }
                 else
                 {

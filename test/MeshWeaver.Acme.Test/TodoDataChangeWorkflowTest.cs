@@ -224,9 +224,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var projectAddress = new Address("ACME/ProductLaunch");
 
         // Verify the hub is accessible
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(projectAddress));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(projectAddress)).FirstAsync().ToTask();
 
         response.Should().NotBeNull("Project hub should respond to ping");
         Output.WriteLine($"Project hub is accessible at {projectAddress}");
@@ -242,9 +240,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         // Verify the hub is accessible
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(todoAddress));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).FirstAsync().ToTask();
 
         response.Should().NotBeNull("Todo hub should respond to ping");
         Output.WriteLine($"Todo hub is accessible at {todoAddress}");
@@ -269,9 +265,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         {
             var todoAddress = new Address(addressPath);
 
-            var response = await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(todoAddress));
+            var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).FirstAsync().ToTask();
 
             response.Should().NotBeNull($"Todo hub at {addressPath} should respond");
             Output.WriteLine($"Successfully accessed: {addressPath}");
@@ -493,7 +487,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var deletedNode = originalNode with { State = MeshNodeState.Deleted };
         await NodeFactory.UpdateNode(deletedNode);
 
-        // Verify the state changed (stream read — no catalog lag)
+        // Verify the state changed (stream read â€” no catalog lag)
         var updatedNode = await ReadNodeAsync(todoPath);
         updatedNode.Should().NotBeNull("Node should still exist after soft delete");
         updatedNode!.State.Should().Be(MeshNodeState.Deleted, "State should be Deleted after soft delete");
@@ -512,7 +506,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
 
         // Capture the initial active set + the original todo from the same
-        // ObserveQuery subscription — initial emission is the full snapshot.
+        // ObserveQuery subscription â€” initial emission is the full snapshot.
         var initialItems = await MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -527,7 +521,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
         await NodeFactory.UpdateNode(deletedNode);
 
-        // Wait for the catalog to reflect the state change — ObserveQuery emits a
+        // Wait for the catalog to reflect the state change â€” ObserveQuery emits a
         // Removed/Updated delta when DefinePersona stops matching state:Active.
         var paths = await WaitForQueryPathSetAsync(
             activeQuery,
@@ -551,7 +545,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
         var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
 
-        // Capture original from the live active set (set query — ObserveQuery is correct).
+        // Capture original from the live active set (set query â€” ObserveQuery is correct).
         var initialActive = await MeshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)

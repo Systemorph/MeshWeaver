@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using DocumentFormat.OpenXml;
@@ -194,16 +196,15 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // Arrange — the unified path content:content/sample.docx should auto-convert
         var hub = GetClient();
-        var request = new GetDataRequest(new UnifiedReference("content:content/sample.docx"));
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address))!;
 
         // Act
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var response = await hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
+        var response = await hub.Observe(
+            new GetDataRequest(new UnifiedReference("content:content/sample.docx")),
+            o => o.WithTarget(hub.Address)).FirstAsync().ToTask(cts.Token);
 
         // Assert
-        response.Should().BeAssignableTo<IMessageDelivery<GetDataResponse>>();
-        var dataResponse = ((IMessageDelivery<GetDataResponse>)response).Message;
+        var dataResponse = response.Message;
         Output.WriteLine($"Response data: {dataResponse.Data}");
         dataResponse.Error.Should().BeNull();
         dataResponse.Data.Should().NotBeNull();

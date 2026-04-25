@@ -141,14 +141,12 @@ internal class MeshNodeCompilationService(
 
             string? resolvedCode = null;
 
-            // Single-node-by-path content read — use the per-node MeshNodeReference
-            // reducer (NOT QueryAsync; see Doc/Architecture/AsynchronousCalls.md).
+            // Single-node-by-path content read — one-shot GetDataRequest (NOT
+            // QueryAsync, NOT GetMeshNodeStream(...).Take(1) which pays for an
+            // unused subscription; see Doc/Architecture/AsynchronousCalls.md).
             try
             {
-                var referencedNode = await hub.GetWorkspace().GetMeshNodeStream(path)
-                    .Take(1).Timeout(TimeSpan.FromSeconds(15))
-                    .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
-                    .ToTask(ct);
+                var referencedNode = await hub.GetMeshNode(path, TimeSpan.FromSeconds(15)).ToTask(ct);
                 if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
                 {
                     resolvedCode = cf.Code;
@@ -252,14 +250,12 @@ internal class MeshNodeCompilationService(
         else
         {
             selfPath = node.NodeType;
-            // Single-node-by-path content read — use the per-node MeshNodeReference
-            // reducer (NOT QueryAsync; see Doc/Architecture/AsynchronousCalls.md).
+            // Single-node-by-path content read — one-shot GetDataRequest (NOT
+            // QueryAsync, NOT GetMeshNodeStream(...).Take(1); see
+            // Doc/Architecture/AsynchronousCalls.md).
             try
             {
-                var nodeTypeNode = await hub.GetWorkspace().GetMeshNodeStream(node.NodeType)
-                    .Take(1).Timeout(TimeSpan.FromSeconds(15))
-                    .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
-                    .ToTask(ct);
+                var nodeTypeNode = await hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15)).ToTask(ct);
                 if (nodeTypeNode?.Content is NodeTypeDefinition fetched)
                     ntDef = fetched;
             }

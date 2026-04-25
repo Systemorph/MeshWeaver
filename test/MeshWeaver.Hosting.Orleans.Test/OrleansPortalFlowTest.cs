@@ -20,14 +20,16 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration: exact portal flow.
 /// 1. Create thread (BuildThreadNode)
-/// 2. Create user cell → verify
-/// 3. Create response cell → verify
-/// 4. SubmitMessageRequest (state update only) → verify
+/// 2. Create user cell â†’ verify
+/// 3. Create response cell â†’ verify
+/// 4. SubmitMessageRequest (state update only) â†’ verify
 /// 5. WatchForExecution triggers execution
 /// 6. Response cell gets agent text
 ///
@@ -36,7 +38,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// posts SubmitMessageRequest with both UserMessageId + ResponseMessageId" flow.
 /// The new AppendUserMessageRequest path makes the server own cell creation
 /// (via PendingUserMessages + the watcher), so the explicit pre-created cell ids
-/// have no equivalent. Production code (thread hub → _Exec) still routes through
+/// have no equivalent. Production code (thread hub â†’ _Exec) still routes through
 /// SubmitMessageRequest with explicit ResponseMessageId, so this Orleans-level
 /// flow check remains meaningful until the legacy code is removed.
 /// </summary>
@@ -49,9 +51,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
         // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
@@ -62,9 +62,9 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
     }
 
     /// <summary>
-    /// Exact portal flow: create thread → create cells (verified) → submit → execution → response.
+    /// Exact portal flow: create thread â†’ create cells (verified) â†’ submit â†’ execution â†’ response.
     /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest — see class-level comment.
+    // TODO(append-migration): kept on SubmitMessageRequest â€” see class-level comment.
     [Fact]
     public async Task PortalFlow_CreateThread_CreateCells_Submit_ExecutionCompletes()
     {
@@ -76,19 +76,16 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
 
             // Step 1: Create thread
             var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Portal flow Orleans test", "Roland");
-            var createResp = await client.AwaitResponse(
-                new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/Roland")), ct);
+            var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
             createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
             var threadPath = createResp.Message.Node!.Path!;
             Output.WriteLine($"Thread: {threadPath}");
 
-            // Step 2: Create user cell → verify
+            // Step 2: Create user cell â†’ verify
             var userMsgId = Guid.NewGuid().ToString("N")[..8];
             var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-            var userCellResp = await client.AwaitResponse(
-                new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+            var userCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
                 {
                     NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                     Content = new ThreadMessage
@@ -96,13 +93,12 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
                         Role = "user", Text = "Portal flow Orleans test", Timestamp = DateTime.UtcNow,
                         Type = ThreadMessageType.ExecutedInput, CreatedBy = "Roland"
                     }
-                }), o => o.WithTarget(new Address(threadPath)), ct);
+                }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             userCellResp.Message.Success.Should().BeTrue("user cell creation must succeed");
             Output.WriteLine($"User cell created: {userMsgId}");
 
-            // Step 3: Create response cell → verify
-            var responseCellResp = await client.AwaitResponse(
-                new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+            // Step 3: Create response cell â†’ verify
+            var responseCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
                 {
                     NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                     Content = new ThreadMessage
@@ -110,13 +106,12 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
                         Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
                         Type = ThreadMessageType.AgentResponse, AgentName = "Orchestrator"
                     }
-                }), o => o.WithTarget(new Address(threadPath)), ct);
+                }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             responseCellResp.Message.Success.Should().BeTrue("response cell creation must succeed");
             Output.WriteLine($"Response cell created: {responseMsgId}");
 
-            // Step 4: Submit — updates state, WatchForExecution triggers execution
-            var submitResp = await client.AwaitResponse(
-                new SubmitMessageRequest
+            // Step 4: Submit â€” updates state, WatchForExecution triggers execution
+            var submitResp = await client.Observe(new SubmitMessageRequest
                 {
                     ThreadPath = threadPath,
                     UserMessageText = "Portal flow Orleans test",
@@ -124,9 +119,9 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
                     ResponseMessageId = responseMsgId,
                     AgentName = "Orchestrator",
                     ContextPath = "User/Roland"
-                }, o => o.WithTarget(new Address(threadPath)), ct);
+                }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             submitResp.Message.Success.Should().BeTrue("submit must succeed");
-            Output.WriteLine("Submitted — WatchForExecution should trigger");
+            Output.WriteLine("Submitted â€” WatchForExecution should trigger");
 
             // Step 5: Poll for execution to complete
             var responsePath = $"{threadPath}/{responseMsgId}";
@@ -164,7 +159,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
     /// Existing thread: second message on a thread that already has messages.
     /// Verifies WatchForExecution triggers for new ActiveMessageId.
     /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest — see class-level comment.
+    // TODO(append-migration): kept on SubmitMessageRequest â€” see class-level comment.
     [Fact]
     public async Task ExistingThread_SecondMessage_ExecutionCompletes()
     {
@@ -176,28 +171,26 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
 
             // Create thread + first message pair
             var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Multi-message test", "Roland");
-            var createResp = await client.AwaitResponse(
-                new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/Roland")), ct);
+            var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
             var threadPath = createResp.Message.Node!.Path!;
 
             var u1 = Guid.NewGuid().ToString("N")[..8];
             var r1 = Guid.NewGuid().ToString("N")[..8];
-            await client.AwaitResponse(new CreateNodeRequest(new MeshNode(u1, threadPath)
+            await client.Observe(new CreateNodeRequest(new MeshNode(u1, threadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                 Content = new ThreadMessage { Role = "user", Text = "First question", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-            }), o => o.WithTarget(new Address(threadPath)), ct);
-            await client.AwaitResponse(new CreateNodeRequest(new MeshNode(r1, threadPath)
+            }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
+            await client.Observe(new CreateNodeRequest(new MeshNode(r1, threadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                 Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-            }), o => o.WithTarget(new Address(threadPath)), ct);
-            await client.AwaitResponse(new SubmitMessageRequest
+            }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
+            await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath, UserMessageText = "First question",
                 UserMessageId = u1, ResponseMessageId = r1, ContextPath = "User/Roland"
-            }, o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
             // Wait for first execution to complete
             for (var i = 0; i < 60; i++)
@@ -208,24 +201,24 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             }
             Output.WriteLine("First message complete");
 
-            // Second message — same thread, new cells
+            // Second message â€” same thread, new cells
             var u2 = Guid.NewGuid().ToString("N")[..8];
             var r2 = Guid.NewGuid().ToString("N")[..8];
-            await client.AwaitResponse(new CreateNodeRequest(new MeshNode(u2, threadPath)
+            await client.Observe(new CreateNodeRequest(new MeshNode(u2, threadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                 Content = new ThreadMessage { Role = "user", Text = "Second question", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-            }), o => o.WithTarget(new Address(threadPath)), ct);
-            await client.AwaitResponse(new CreateNodeRequest(new MeshNode(r2, threadPath)
+            }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
+            await client.Observe(new CreateNodeRequest(new MeshNode(r2, threadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
                 Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-            }), o => o.WithTarget(new Address(threadPath)), ct);
-            await client.AwaitResponse(new SubmitMessageRequest
+            }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
+            await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath, UserMessageText = "Second question",
                 UserMessageId = u2, ResponseMessageId = r2, ContextPath = "User/Roland"
-            }, o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
             // Wait for second execution
             for (var i = 0; i < 60; i++)

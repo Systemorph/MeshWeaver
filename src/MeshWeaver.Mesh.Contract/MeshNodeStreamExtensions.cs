@@ -1,4 +1,6 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -119,4 +121,98 @@ public static class MeshNodeStreamExtensions
             return Task.CompletedTask;
         });
     }
+
+    /// <summary>
+    /// One-shot read of the <see cref="MeshNode"/> at <paramref name="path"/> via
+    /// the owning per-node hub's <see cref="MeshNodeReference"/> reducer. Posts a
+    /// <see cref="GetDataRequest"/> + registers a callback — true request/response,
+    /// no <c>SubscribeRequest</c>, no lingering subscription. Use this instead of
+    /// <c>workspace.GetMeshNodeStream(path).Take(1)</c> for handlers / helpers /
+    /// click actions that just need the current value once.
+    ///
+    /// <para>
+    /// Emits <c>null</c> on timeout, on routing failure (the node does not exist
+    /// and the cold per-node hub never activated), or when the response carries
+    /// no data. Failures during deserialisation also fall through as <c>null</c>;
+    /// turn on debug-level logging on this type to see the underlying exception.
+    /// </para>
+    ///
+    /// <para>
+    /// For a <b>live</b> single-node subscription that re-emits on every change,
+    /// use <see cref="GetMeshNodeStream(IWorkspace, string)"/> instead — and stay
+    /// subscribed (no <c>.Take(1)</c>). See <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </para>
+    /// </summary>
+    public static IObservable<MeshNode?> GetMeshNode(this IMessageHub hub, string path,
+        TimeSpan? timeout = null)
+        => Observable.Create<MeshNode?>(observer =>
+        {
+            var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(10));
+            var emitted = 0;
+
+            void EmitOnce(MeshNode? node)
+            {
+                if (Interlocked.Exchange(ref emitted, 1) != 0) return;
+                observer.OnNext(node);
+                observer.OnCompleted();
+            }
+
+            cts.Token.Register(() => EmitOnce(null));
+
+            try
+            {
+                var delivery = hub.Post(
+                    new GetDataRequest(new MeshNodeReference()),
+                    o => o.WithTarget(new Address(path)));
+                if (delivery == null)
+                {
+                    EmitOnce(null);
+                    return Disposable.Create(() => cts.Dispose());
+                }
+
+                hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            try
+                            {
+                                if (d.Message is GetDataResponse resp)
+                                {
+                                    MeshNode? node = resp.Data as MeshNode;
+                                    if (node == null && resp.Data is JsonElement je)
+                                        node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
+                                    EmitOnce(node);
+                                }
+                                else
+                                {
+                                    // Unexpected response — node not found / no handler.
+                                    EmitOnce(null);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                                    ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
+                                logger?.LogDebug(ex, "GetMeshNode callback failed for {Path}", path);
+                                EmitOnce(null);
+                            }
+                        },
+                        ex =>
+                        {
+                            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                                ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
+                            logger?.LogDebug(ex, "GetMeshNode delivery failed for {Path}", path);
+                            EmitOnce(null);
+                        });
+            }
+            catch (Exception ex)
+            {
+                var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
+                logger?.LogDebug(ex, "GetMeshNode post failed for {Path}", path);
+                EmitOnce(null);
+            }
+
+            return Disposable.Create(() => cts.Dispose());
+        });
 }

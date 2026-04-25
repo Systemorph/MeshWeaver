@@ -45,9 +45,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, ns={node.Namespace}, path={node.Path}, target={targetAddress}");
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(node),
-            o => o.WithTarget(new Address(targetAddress)), ct);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}");
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
@@ -70,9 +68,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
         // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
@@ -113,15 +109,13 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
             .FirstAsync()
             .ToTask(ct);
 
-        var submitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test message for sub-thread routing",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("First AppendUserMessageRequest succeeded");
 
@@ -157,7 +151,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
         Output.WriteLine($"Sub-thread created: {createdSubThreadPath}");
         createdSubThreadPath.Should().Be(subThreadPath);
 
-        // 4. Submit message to the sub-thread — this is the critical routing test!
+        // 4. Submit message to the sub-thread â€” this is the critical routing test!
         // The sub-thread is 6 segments deep. The RoutingGrain must resolve this
         // to the correct grain key and propagate access context.
         var subTwoMessages = ObserveThreadMessages(client, subThreadPath)
@@ -166,15 +160,13 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
             .ToTask(ct);
 
         Output.WriteLine($"Posting AppendUserMessageRequest to sub-thread: {subThreadPath}");
-        var subSubmitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var subSubmitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = subThreadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello from sub-thread!",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(subThreadPath)), ct);
+            }, o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
 
         subSubmitResponse.Message.Success.Should().BeTrue(
             $"Sub-thread AppendUserMessage should succeed but got: {subSubmitResponse.Message.Error}");
@@ -211,7 +203,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
 
     /// <summary>
     /// Verifies that access context propagates correctly when creating and accessing
-    /// nodes at deeply nested paths. Uses the real submission flow (SubmitMessage → cells)
+    /// nodes at deeply nested paths. Uses the real submission flow (SubmitMessage â†’ cells)
     /// to create intermediate nodes, then creates a sub-thread under them.
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -231,15 +223,13 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
             .FirstAsync()
             .ToTask(ct);
 
-        var submitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Access context test msg",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
         var msgIds = await twoMessages;

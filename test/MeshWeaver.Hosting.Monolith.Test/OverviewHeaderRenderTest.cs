@@ -13,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -38,7 +39,7 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(nodePath);
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -63,7 +64,7 @@ public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
         var address = new Address(nodePath);
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(

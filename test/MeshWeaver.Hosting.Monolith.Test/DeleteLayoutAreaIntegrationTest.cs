@@ -61,9 +61,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         // Route a message to create the node hub on demand
         var client = GetClient();
         var nodeAddress = new Address(nodePath);
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var nodeHub = Mesh.GetHostedHub(nodeAddress, HostedHubCreation.Never);
         nodeHub.Should().NotBeNull("node hub should exist after ping");
@@ -71,7 +69,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
         // Resolve IMeshService from the NODE's hub (same as DeleteLayoutArea does)
         var nodeService = nodeHub!.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Delete from node hub — this is the production pattern
+        // Delete from node hub â€” this is the production pattern
         await nodeService.DeleteNode(nodePath);
 
         var paths = await WaitForQueryPathSetAsync(subtreeQuery, set => !set.Contains(nodePath), ct);
@@ -111,7 +109,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Replicates the exact production pattern the Delete click handler must use:
     /// <c>hub.Post(new DeleteNodeRequest(...)) + hub.RegisterCallback(...)</c>.
-    /// No <c>await</c> on the delete path — the callback drives a <see cref="TaskCompletionSource{T}"/>
+    /// No <c>await</c> on the delete path â€” the callback drives a <see cref="TaskCompletionSource{T}"/>
     /// which the test awaits at the xunit boundary only. A blocked hub cannot produce a callback,
     /// so the 10 s WaitAsync guard fails the test instead of hanging forever.
     /// </summary>
@@ -128,22 +126,16 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
 
         var client = GetClient();
         var nodeAddress = new Address(nodePath);
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var nodeHub = Mesh.GetHostedHub(nodeAddress, HostedHubCreation.Never)!;
 
-        // Production pattern: Post + RegisterCallback. No await on the hub-bound path.
-        var tcs = new TaskCompletionSource<DeleteNodeResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var delivery = nodeHub.Post(new DeleteNodeRequest(nodePath) { Recursive = true })!;
-        _ = nodeHub.RegisterCallback(delivery, (d, _) =>
-        {
-            tcs.TrySetResult(((IMessageDelivery<DeleteNodeResponse>)d).Message);
-            return Task.FromResult<IMessageDelivery>(d);
-        });
-
-        var response = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        // Production pattern: hub.Observe + Subscribe. No await on the hub-bound path.
+        var responseDelivery = await AwaitResponseAsync(
+            new DeleteNodeRequest(nodePath) { Recursive = true },
+            hub: nodeHub,
+            ct: ct);
+        var response = responseDelivery.Message;
         response.Success.Should().BeTrue($"delete should succeed (error: {response.Error})");
 
         var paths = await WaitForQueryPathSetAsync(subtreeQuery, set => !set.Contains(nodePath), ct);
@@ -172,19 +164,15 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
             set => set.Contains(parentPath) && set.Contains($"{parentPath}/c1") && set.Contains($"{parentPath}/c2"), ct);
 
         var client = GetClient();
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(new Address(parentPath)));
+        await client.Observe(new PingRequest(), o => o.WithTarget(new Address(parentPath))).FirstAsync().ToTask();
 
         var parentHub = Mesh.GetHostedHub(new Address(parentPath), HostedHubCreation.Never)!;
 
-        var tcs = new TaskCompletionSource<DeleteNodeResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var delivery = parentHub.Post(new DeleteNodeRequest(parentPath) { Recursive = true })!;
-        _ = parentHub.RegisterCallback(delivery, (d, _) =>
-        {
-            tcs.TrySetResult(((IMessageDelivery<DeleteNodeResponse>)d).Message);
-            return Task.FromResult<IMessageDelivery>(d);
-        });
-
-        var response = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        var responseDelivery = await AwaitResponseAsync(
+            new DeleteNodeRequest(parentPath) { Recursive = true },
+            hub: parentHub,
+            ct: ct);
+        var response = responseDelivery.Message;
         response.Success.Should().BeTrue($"recursive delete should succeed (error: {response.Error})");
 
         var paths = await WaitForQueryPathSetAsync(subtreeQuery,

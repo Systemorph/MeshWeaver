@@ -22,6 +22,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -59,9 +60,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address(NodePath);
 
         // Initialize the hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -91,9 +90,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var client = GetClient();
         var nodeAddress = new Address(NodePath);
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);
@@ -141,9 +138,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         var nestedPath = $"{TestPartition}/ACME/Documentation";
         var nodeAddress = new Address(nestedPath);
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.AccessControlArea);

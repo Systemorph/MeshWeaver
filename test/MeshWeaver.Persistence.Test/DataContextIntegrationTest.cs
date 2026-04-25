@@ -16,6 +16,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
@@ -183,10 +185,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         var graphAddress = new Address("graph");
 
         // Initialize graph hub via ping
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(graphAddress)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Verify graph node exists in persistence with correct NodeType
         // (Name comes from persistence, NodeType references type/graph definition)
@@ -223,10 +222,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         var graphAddress = new Address("graph");
 
         // Initialize graph hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(graphAddress),
-            TestContext.Current.CancellationToken);
+        await client.Observe(new PingRequest(), o => o.WithTarget(graphAddress)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Act - get children via IMeshService
         var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph", null, TestContext.Current.CancellationToken)

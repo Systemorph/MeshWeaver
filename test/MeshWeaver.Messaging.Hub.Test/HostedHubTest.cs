@@ -5,6 +5,8 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Messaging.Hub.Test;
 
 public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
@@ -36,9 +38,7 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
                 conf => conf.WithTypes(typeof(Ping), typeof(Pong))
                 );
         var response = await subHub
-            .AwaitResponse(new Ping(), o => o.WithTarget(CreateHostAddress())
-                , new CancellationTokenSource(5.Seconds()).Token
-                );
+            .Observe(new Ping(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(5.Seconds()).Token);
         response.Message.Should().BeOfType<Pong>();
     }
 

@@ -20,6 +20,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -101,9 +102,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
 
         // Get the workspace
         var hub = Mesh.GetHostedHub(address);
@@ -148,9 +147,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
 
         // Get the type registry
         var hub = Mesh.GetHostedHub(address);
@@ -197,9 +194,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         var address = new Address(addressParts);
 
         // Initialize the node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
 
         // Get the workspace and data
         var hub = Mesh.GetHostedHub(address);

@@ -152,20 +152,28 @@ public static class JsonSynchronizationStream
                         var delivery = hub.Post(e, o => o.WithTarget(reduced.Owner));
                         if (delivery != null)
                         {
-                            _ = hub.RegisterCallback(delivery, (response, _) =>
-                            {
-                                if (response is IMessageDelivery<DataChangeResponse> { Message.Status: DataChangeStatus.Failed } failed)
-                                {
-                                    logger.LogError("Stream {streamId} DataChangeRequest failed: {Error}",
-                                        reduced.StreamId, failed.Message.Log?.Messages
-                                            .Where(m => m.LogLevel >= LogLevel.Error)
-                                            .Select(m => m.Message)
-                                            .FirstOrDefault() ?? "Unknown error");
-                                    reduced.OnError(new InvalidOperationException(
-                                        $"DataChangeRequest failed for stream {reduced.StreamId}"));
-                                }
-                                return Task.FromResult(response);
-                            }, CancellationToken.None);
+                            hub.Observe(delivery)
+                                .Subscribe(
+                                    response =>
+                                    {
+                                        if (response.Message is DataChangeResponse { Status: DataChangeStatus.Failed } failed)
+                                        {
+                                            logger.LogError("Stream {streamId} DataChangeRequest failed: {Error}",
+                                                reduced.StreamId, failed.Log?.Messages
+                                                    .Where(m => m.LogLevel >= LogLevel.Error)
+                                                    .Select(m => m.Message)
+                                                    .FirstOrDefault() ?? "Unknown error");
+                                            reduced.OnError(new InvalidOperationException(
+                                                $"DataChangeRequest failed for stream {reduced.StreamId}"));
+                                        }
+                                    },
+                                    ex =>
+                                    {
+                                        logger.LogError(ex, "Stream {streamId} DataChangeRequest failed",
+                                            reduced.StreamId);
+                                        reduced.OnError(new InvalidOperationException(
+                                            $"DataChangeRequest failed for stream {reduced.StreamId}", ex));
+                                    });
                         }
                     },
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
@@ -183,20 +191,28 @@ public static class JsonSynchronizationStream
         // the parent drops it (no matching callback), and the stream hangs forever.
         if (subscribeDelivery != null)
         {
-            hub.RegisterCallback(subscribeDelivery,
-                (delivery, _) =>
-                {
-                    if (delivery.Message is DeliveryFailure failure)
+            hub.Observe(subscribeDelivery)
+                .Subscribe(
+                    delivery =>
                     {
-                        logger.LogWarning("SubscribeRequest for stream {StreamId} failed: {Message}",
-                            reduced.StreamId, failure.Message);
-                        reduced.OnError(new DeliveryFailureException(failure));
-                        return Task.FromResult(delivery.Processed());
-                    }
-                    // Non-failure responses: forward to stream hub
-                    reduced.Hub.DeliverMessage(delivery);
-                    return Task.FromResult(delivery.Processed());
-                }, default);
+                        // Non-failure responses: forward to stream hub
+                        reduced.Hub.DeliverMessage(delivery);
+                    },
+                    ex =>
+                    {
+                        if (ex is DeliveryFailureException dfe)
+                        {
+                            logger.LogWarning("SubscribeRequest for stream {StreamId} failed: {Message}",
+                                reduced.StreamId, dfe.Message);
+                            reduced.OnError(dfe);
+                        }
+                        else
+                        {
+                            logger.LogWarning(ex, "SubscribeRequest for stream {StreamId} failed",
+                                reduced.StreamId);
+                            reduced.OnError(ex);
+                        }
+                    });
         }
 
         reduced.RegisterForDisposal(
@@ -249,25 +265,24 @@ public static class JsonSynchronizationStream
 
                 if (resub != null)
                 {
-                    hub.RegisterCallback(resub, (rd, _) =>
-                    {
-                        if (rd.Message is DeliveryFailure rdFail)
-                        {
-                            logger.LogWarning(
-                                "Stream {StreamId}: resubscribe failed: {Message}. Stopping heartbeat.",
-                                reduced.StreamId, rdFail.Message);
-                            sub?.Dispose();
-                            cts.Cancel();
-                        }
-                        else
-                        {
-                            // New Initial snapshot from the re-activated owner —
-                            // forward to the stream hub so cached state is replaced.
-                            reduced.Hub.DeliverMessage(rd);
-                        }
-                        Interlocked.Exchange(ref resubscribing, 0);
-                        return Task.FromResult(rd);
-                    }, default);
+                    hub.Observe(resub)
+                        .Subscribe(
+                            rd =>
+                            {
+                                // New Initial snapshot from the re-activated owner —
+                                // forward to the stream hub so cached state is replaced.
+                                reduced.Hub.DeliverMessage(rd);
+                                Interlocked.Exchange(ref resubscribing, 0);
+                            },
+                            ex =>
+                            {
+                                logger.LogWarning(ex,
+                                    "Stream {StreamId}: resubscribe failed. Stopping heartbeat.",
+                                    reduced.StreamId);
+                                sub?.Dispose();
+                                cts.Cancel();
+                                Interlocked.Exchange(ref resubscribing, 0);
+                            });
                 }
                 else
                 {
@@ -284,12 +299,10 @@ public static class JsonSynchronizationStream
                     if (hub.RunLevel > MessageHubRunLevel.Started) return;
                     var delivery = hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
                     if (delivery == null) return;
-                    hub.RegisterCallback(delivery, (d, _) =>
-                    {
-                        if (d.Message is DeliveryFailure)
-                            Resubscribe("heartbeat failed");
-                        return Task.FromResult(d);
-                    }, cts.Token);
+                    hub.Observe(delivery)
+                        .Subscribe(
+                            _ => { /* heartbeat ack */ },
+                            _ => Resubscribe("heartbeat failed"));
                 });
             reduced.RegisterForDisposal(sub);
             reduced.RegisterForDisposal(new AnonymousDisposable(() => cts.Cancel()));

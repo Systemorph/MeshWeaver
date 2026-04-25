@@ -50,6 +50,12 @@ Topics: Message-based communication, Actor model, UI streaming, AI agents, Data 
 
 The handler is almost certainly registered. The message just arrived deserialized as a different CLR type (or `JsonElement`) because one side's `ITypeRegistry` is missing `WithType(typeof(X), nameof(X))`. Check sender + receiver registry parity first; for Orleans, that includes both silo hub config and any client/portal hub posting the request.
 
+### Request/response: `hub.Observe(...)` — NOT `RegisterCallback` / `AwaitResponse`
+
+The Task-returning `IMessageHub.RegisterCallback(...)` and `IMessageHub.AwaitResponse(...)` overloads are `[Obsolete]`. Production code uses `hub.Observe(request, options?)` (returns `IObservable<IMessageDelivery<TResponse>>`) — DeliveryFailure flows via `OnError`; no Task-await deadlock; no silently-skipped callback. Tests use `MonolithMeshTestBase.AwaitResponseAsync(request, ...)` which is a thin Task wrapper for ergonomic test code only.
+
+**NEVER** `Observable.FromAsync(() => hub.RegisterCallback(...))` — bridges the Task back into Rx and the continuation captures sync-context → deadlock. `hub.Observe(...)` uses `task.ToObservable()` which is a different operator (no func re-invocation, no scheduler capture).
+
 ### DataMesh
 
 The documentation on the data mesh is accessible via src/MeshWeaver.Documentation/Data/DataMesh/
@@ -229,7 +235,7 @@ Full treatment: `Doc/Architecture/CqrsAndContentAccess.md`.
 
 ### The three building blocks
 
-1. **`IMeshService.CreateNode / UpdateNode / DeleteNode` return `IObservable<T>`** (NOT `Task<T>`). They internally `hub.Post` + `hub.RegisterCallback`. Subscribe to drive them — never call `.ToTask()` / `.FirstAsync()` / `await` on them from a click action or hub handler.
+1. **`IMeshService.CreateNode / UpdateNode / DeleteNode` return `IObservable<T>`** (NOT `Task<T>`). They internally `hub.Post` + `hub.Observe`. Subscribe to drive them — never call `.ToTask()` / `.FirstAsync()` / `await` on them from a click action or hub handler.
 2. **Click actions must be synchronous**: `WithClickAction(ctx => { ...; return Task.CompletedTask; })`. Never `async ctx => await ...`.
 3. **Read form data via `Subscribe(...)` with `Take(1)`**, not `await FirstAsync()`. The data stream emits its current value synchronously on subscribe.
 
@@ -404,8 +410,8 @@ The codebase is distributed (Orleans, reactive streams). Mutable collections cau
 
 ### Architectural Patterns
 
-**Request-Response**: Use `hub.AwaitResponse<TResponse>(request, o => o.WithTarget(address))` for operations requiring results.
-The response is submitted as `hub.Post(responseMessage, o => o.ResponseFor(request))`.
+**Request-Response**: Use `hub.Observe<TResponse>(request, o => o.WithTarget(address)).Subscribe(resp => …, ex => …)` for operations requiring results.
+The response is submitted as `hub.Post(responseMessage, o => o.ResponseFor(request))`. In tests, `await MonolithMeshTestBase.AwaitResponseAsync(request, ...)` is the sanctioned Task wrapper.
 
 **Fire-and-Forget**: Use `hub.Post(message, o => o.WithTarget(address))` for notifications and events.
 
@@ -437,7 +443,8 @@ await factory.DeleteNodeAsync(path, recursive: true, ct);
 ### Updates/Moves — Use message requests
 ```csharp
 hub.Post(new UpdateNodeRequest(updatedNode));
-await hub.AwaitResponse(new MoveNodeRequest(sourcePath, targetPath), ct);
+hub.Observe(new MoveNodeRequest(sourcePath, targetPath))
+    .Subscribe(resp => /* handle resp.Message */, ex => /* DeliveryFailureException etc */);
 hub.Post(new DataChangeRequest { Updates = [entity] });
 ```
 
@@ -541,13 +548,16 @@ public static class NorthwindHubConfiguration
 public class MyPlugin(IMessageHub hub, IAgentChat chat)
 {
     [Description("Description on how to use")]
-    public async Task<string> DoSomething([Description("Description for input")]string input)
+    public Task<string> DoSomething([Description("Description for input")]string input)
     {
         var request = new MyRequest(input); // Create a request object
         var address = GetAddress(request); // Get the address for the plugin, e.g., "app/northwind"
-        // Use the message hub to send a request and receive a response
-        var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(address));
-        return JsonSerializer.Serialize(response.Message, hub.JsonSerializationOptions);
+        // MCP tool surface requires Task<string>; bridge once at the boundary via .ToTask().
+        // The hub round-trip stays observable end-to-end (no `await` inside hub-reachable code).
+        return hub.Observe<MyResponse>(request, o => o.WithTarget(address))
+            .Select(resp => JsonSerializer.Serialize(resp.Message, hub.JsonSerializationOptions))
+            .FirstAsync()
+            .ToTask();
     }
 
     public Address GetAddress(MyRequest request)
@@ -700,11 +710,16 @@ public class MyTest : HubTestBase, IAsyncLifetime
     public async Task MyTestMethod()
     {
         var hub = GetClient();
-        var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(new HostAddress()));
+        // Test code: bridge to Task once via .FirstAsync().ToTask(ct).
+        // Production code MUST stay reactive — `hub.Observe(...).Subscribe(onNext, onError)`.
+        var response = await hub.Observe<MyResponse>(request, o => o.WithTarget(new HostAddress()))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
         response.Should().NotBeNull();
     }
 }
 ```
+
+For tests deriving from `MonolithMeshTestBase`, the helper `await AwaitResponseAsync(request, options?, hub?, ct?)` already wraps `hub.Observe(...)` with the test context's cancellation token.
 
 ## Project Structure Guidelines
 

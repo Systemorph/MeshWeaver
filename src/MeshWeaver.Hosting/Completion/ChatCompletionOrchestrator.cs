@@ -527,14 +527,16 @@ internal sealed class ChatCompletionOrchestrator(
 
             if (delivery != null)
             {
-                _ = hub.RegisterCallback((IMessageDelivery)delivery, (d, _) =>
-                {
-                    if (d is IMessageDelivery<AutocompleteResponse> resp)
-                        tcs.TrySetResult(resp.Message);
-                    else
-                        tcs.TrySetResult(null);
-                    return Task.FromResult(d);
-                }, timeoutCts.Token);
+                hub.Observe((IMessageDelivery)delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            if (d.Message is AutocompleteResponse resp)
+                                tcs.TrySetResult(resp);
+                            else
+                                tcs.TrySetResult(null);
+                        },
+                        _ => tcs.TrySetResult(null));
             }
             else
             {

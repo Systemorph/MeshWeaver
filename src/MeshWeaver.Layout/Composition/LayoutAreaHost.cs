@@ -515,7 +515,9 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void UpdateProgress(string area, ProgressControl progress)
-        => Stream.ApplyChanges(new(Stream.Current?.Value ?? new EntityStore(), [new(LayoutAreaReference.Areas, area, progress)], Stream.StreamId));
+        => Stream.Update(state => Stream.ApplyChanges(
+            new(state ?? new EntityStore(), [new(LayoutAreaReference.Areas, area, progress)], Stream.StreamId)),
+            ex => { logger.LogWarning(ex, "Cannot update progress for {Area}", area); return Task.CompletedTask; });
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {

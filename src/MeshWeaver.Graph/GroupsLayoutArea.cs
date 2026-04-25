@@ -266,11 +266,9 @@ public static class GroupsLayoutArea
                             var path = $"{nodePath}/{nodeId}";
                             var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-                            // Existence check via MeshNodeReference stream — no QueryAsync.
-                            saveCtx.Hub.GetWorkspace().GetMeshNodeStream(path)
-                                .Take(1)
-                                .Timeout(TimeSpan.FromSeconds(5))
-                                .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
+                            // Existence check via one-shot GetDataRequest — true
+                            // request/response, no SubscribeRequest+immediate-unsubscribe.
+                            saveCtx.Hub.GetMeshNode(path, TimeSpan.FromSeconds(5))
                                 .Subscribe(existing =>
                                 {
                                     saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
@@ -281,11 +279,8 @@ public static class GroupsLayoutArea
                                         return;
                                     }
 
-                                    // Look up member icon via MeshNodeReference stream (best-effort).
-                                    saveCtx.Hub.GetWorkspace().GetMeshNodeStream(selectedMember)
-                                        .Take(1)
-                                        .Timeout(TimeSpan.FromSeconds(2))
-                                        .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
+                                    // Look up member icon via one-shot GetDataRequest (best-effort).
+                                    saveCtx.Hub.GetMeshNode(selectedMember, TimeSpan.FromSeconds(2))
                                         .Subscribe(memberNode =>
                                         {
                                             var newNode = new MeshNode(nodeId, nodePath)
