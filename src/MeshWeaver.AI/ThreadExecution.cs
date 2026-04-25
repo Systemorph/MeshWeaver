@@ -339,11 +339,13 @@ public static class ThreadExecution
             threadPath, responseMsgId, clientProvidedCells);
 
         var userCtx = delivery.AccessContext;
-        // MainNode for child cells = the thread's own MainNode (content node, e.g. "PartnerRe/AIConsulting").
-        // Fall back to request.ContextPath, then threadPath. Read from the workspace to get the
-        // thread node's actual MainNode — this is authoritative, not the client's ContextPath.
-        var threadNode = hub.GetWorkspace().GetStream(new MeshNodeReference())?.Current?.Value;
-        var mainEntity = threadNode?.MainNode ?? request.ContextPath ?? threadPath;
+        // MainNode for child cells = the thread's own MainNode (content node).
+        // We can't read the live workspace value synchronously here (.Current?.Value is null
+        // on cold hubs — see Doc/Architecture/AsynchronousCalls.md "never read .Current").
+        // The thread node's MainNode is set at creation time by ThreadNodeType.BuildThreadNode
+        // to equal the contextPath, so request.ContextPath is the authoritative value. Fall
+        // back to threadPath as a last resort (legacy threads with no ContextPath supplied).
+        var mainEntity = request.ContextPath ?? threadPath;
 
         void RespondAndStartExecution()
         {
