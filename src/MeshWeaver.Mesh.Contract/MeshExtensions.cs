@@ -1217,39 +1217,39 @@ public static class MeshExtensions
             .Subscribe(
                 savedNode =>
                 {
-                    // Post change to own hub; chain Ok response to caller off the
-                    // DataChangeResponse callback (persistence-complete signal). Sync
-                    // overload — no Task return.
-                    var dcr = hub.Post(DataChangeRequest.Update([savedNode]),
-                        o => o.WithTarget(new Address(savedNode.Path)))!;
-                    hub.RegisterCallback(dcr, d =>
+                    // Direct workspace write — the data source's MeshNode partition
+                    // stream is the source of truth for the per-node hub's
+                    // MeshNodeReference reducer. UpdateMeshNode posts UpdateStreamRequest
+                    // synchronously into THIS hub's queue; subsequent messages on this
+                    // hub (including a GetDataRequest the caller sends after our
+                    // UpdateNodeResponse.Ok) are processed AFTER the stream tick, so
+                    // read-after-write is consistent.
+                    workspace.UpdateMeshNode(_ => savedNode, nodePath: savedNode.Path);
+
+                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                        ?.Publish(MeshChangeEvent.Updated(savedNode));
+
+                    // Version history — fire-and-forget Subscribe; non-critical.
+                    if (meshConfig != null && !meshConfig.IsSatelliteNodeType(savedNode.NodeType))
                     {
-                        hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                            ?.Publish(MeshChangeEvent.Updated(savedNode));
-
-                        // Version history — fire-and-forget Subscribe; non-critical.
-                        if (meshConfig != null && !meshConfig.IsSatelliteNodeType(savedNode.NodeType))
+                        var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                        if (versionQuery != null)
                         {
-                            var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                            if (versionQuery != null)
-                            {
-                                Observable.FromAsync(token =>
-                                        versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, token))
-                                    .Subscribe(
-                                        _ => { },
-                                        ex => logger.LogWarning(ex,
-                                            "Version history write failed at {Path} (non-critical)",
-                                            savedNode.Path));
-                            }
+                            Observable.FromAsync(token =>
+                                    versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, token))
+                                .Subscribe(
+                                    _ => { },
+                                    ex => logger.LogWarning(ex,
+                                        "Version history write failed at {Path} (non-critical)",
+                                        savedNode.Path));
                         }
+                    }
 
-                        logger.LogInformation(
-                            "Node persisted at {Path} by {UpdatedBy}",
-                            savedNode.Path, capturedRequest.UpdatedBy ?? "system");
+                    logger.LogInformation(
+                        "Node persisted at {Path} by {UpdatedBy}",
+                        savedNode.Path, capturedRequest.UpdatedBy ?? "system");
 
-                        hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
-                        return d;
-                    });
+                    hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
                 },
                 ex =>
                 {

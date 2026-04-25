@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
@@ -215,25 +216,68 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// One-shot read of the MeshNode at <paramref name="resolvedPath"/>.
-    ///
-    /// KNOWN BUG: uses ObserveQuery (catalog read path) which lags behind writes,
-    /// so post-Patch / post-Update Get can return stale state. Tracked by the
-    /// PatchWorkspaceAck / McpReadYourWrites suites. The fix is to switch to
-    /// GetDataRequest(new MeshNodeReference()) via Post+RegisterCallback (which
-    /// activates cold per-node hubs and reads authoritative state) — see
-    /// OrleansReentrancyTest.GetHubContentAsync for the canonical shape.
-    /// GetMeshNodeStream(path) is NOT a drop-in replacement: subscribing to the
-    /// remote MeshNodeReference stream does not reliably activate a cold per-node
-    /// hub for a just-created node, so Patch returns "not found" before the hub
-    /// is ready.
+    /// One-shot read of the MeshNode at <paramref name="resolvedPath"/> via the
+    /// owning per-node hub's <c>MeshNodeReference</c> reducer — the authoritative
+    /// source of truth, no catalog lag. <c>GetDataRequest</c> activates the cold
+    /// per-node hub on receipt; the response carries the live MeshNode.
+    /// Returns <c>null</c> on timeout or routing failure (node does not exist /
+    /// hub couldn't be activated). See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
     /// </summary>
     private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10) =>
-        mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
-            .Select(change => change.Items.FirstOrDefault())
-            .Catch((Exception _) => Observable.Return<MeshNode?>(null));
+        Observable.Create<MeshNode?>(observer =>
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            var emitted = 0;
+
+            void EmitOnce(MeshNode? node)
+            {
+                if (Interlocked.Exchange(ref emitted, 1) != 0) return;
+                observer.OnNext(node);
+                observer.OnCompleted();
+            }
+
+            cts.Token.Register(() => EmitOnce(null));
+
+            try
+            {
+                var delivery = hub.Post(
+                    new GetDataRequest(new MeshNodeReference()),
+                    o => o.WithTarget(new Address(resolvedPath)));
+                if (delivery == null) { EmitOnce(null); return Disposable.Create(() => cts.Dispose()); }
+
+                hub.RegisterCallback(delivery, (d, _) =>
+                {
+                    try
+                    {
+                        if (d is IMessageDelivery<GetDataResponse> resp)
+                        {
+                            MeshNode? node = resp.Message.Data as MeshNode;
+                            if (node == null && resp.Message.Data is JsonElement je)
+                                node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
+                            EmitOnce(node);
+                        }
+                        else
+                        {
+                            // DeliveryFailure or unexpected response — node not found / no handler.
+                            EmitOnce(null);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "FetchNode callback failed for {Path}", resolvedPath);
+                        EmitOnce(null);
+                    }
+                    return Task.FromResult(d);
+                }, cts.Token);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "FetchNode post failed for {Path}", resolvedPath);
+                EmitOnce(null);
+            }
+
+            return Disposable.Create(() => cts.Dispose());
+        });
 
     /// <summary>
     /// Writes a full <see cref="MeshNode"/> to the node's own hub via
@@ -571,12 +615,6 @@ public class MeshOperations
 
                 var versionBefore = meshNode.Version;
                 var currentPath = meshNode.Path;
-                // Use mesh.UpdateNode (UpdateNodeRequest → HandleUpdateNodeRequest →
-                // persistence.SaveNode) — this path writes to persistence immediately
-                // so read-after-write tests (including the RLS Security suite) see
-                // the new state on the next query. DataChangeRequest would go through
-                // the data-source stream which debounces persistence at 200ms and
-                // makes immediate reads race.
                 perNode = perNode.Add(
                     mesh.UpdateNode(meshNode)
                         .Select(updated =>
@@ -689,9 +727,6 @@ public class MeshOperations
                 }
 
                 var versionBefore = existing.Version;
-                // Same rationale as Update — use mesh.UpdateNode for immediate
-                // persistence so post-Patch reads see the new state without
-                // waiting for the data-source debounce.
                 return mesh.UpdateNode(merged)
                     .Select(updated =>
                     {
