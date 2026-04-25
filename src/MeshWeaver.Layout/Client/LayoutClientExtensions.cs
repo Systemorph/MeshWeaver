@@ -366,19 +366,24 @@ public static class LayoutClientExtensions
     {
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var delivery = stream.Hub.Post(
                 new DataChangeRequest { Updates = [data.Submit()] },
                 o => o.WithTarget(stream.Owner))!;
-            var callbackResponse = await stream.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
-            var responseMsg = ((IMessageDelivery<DataChangeResponse>)callbackResponse).Message;
-            if (responseMsg.Status == DataChangeStatus.Committed)
+            // RegisterCallback's Task faults with DeliveryFailureException on routing failure
+            // (no route / no handler) — the surrounding try/catch maps it to a Failed ActivityLog.
+            var callbackResponse = await stream.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default);
+            if (callbackResponse is IMessageDelivery<DataChangeResponse> dcr)
             {
-                data.Confirm();
+                var responseMsg = dcr.Message;
+                if (responseMsg.Status == DataChangeStatus.Committed)
+                    data.Confirm();
                 return responseMsg.Log;
             }
-            else
-                return responseMsg.Log;
+            return new ActivityLog(ActivityCategory.DataUpdate)
+            {
+                End = DateTime.UtcNow,
+                Messages = [new($"SubmitModel: unexpected response type {callbackResponse.Message?.GetType().Name ?? "null"}", LogLevel.Error)]
+            };
         }
         catch (Exception e)
         {

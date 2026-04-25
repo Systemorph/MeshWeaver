@@ -189,30 +189,33 @@ public static class DeleteLayoutArea
 
                 ctx.Host.UpdateData(progressId, DeleteStatus.InFlight);
 
-                // Post the DeleteNodeRequest to the node's own hub. We register a non-awaiting
-                // callback that flips the progress stream to Done / Failed when the response
-                // arrives — no blocking on the hub scheduler anywhere.
+                // Post the DeleteNodeRequest to the node's own hub. Subscribe to the Task
+                // returned by RegisterCallback so DeliveryFailure surfaces via onError
+                // (RegisterCallback short-circuits the user callback for DeliveryFailure —
+                // without this, the failed delete would hang as InFlight forever).
                 var delivery = host.Hub.Post(
                     new DeleteNodeRequest(nodePath) { Recursive = true },
                     o => o.WithTarget(new Address(nodePath)))!;
 
-                host.Hub.RegisterCallback(delivery, response =>
-                {
-                    if (response is IMessageDelivery<DeleteNodeResponse> r && r.Message.Success)
-                    {
-                        ctx.Host.UpdateData(progressId, DeleteStatus.Done);
-                        // Navigate back — the node we were looking at no longer exists.
-                        ctx.Host.UpdateArea(ctx.Area, new RedirectControl(backHref));
-                    }
-                    else
-                    {
-                        var err = response is IMessageDelivery<DeleteNodeResponse> rr
-                            ? rr.Message.Error
-                            : "Delete response not received.";
-                        ctx.Host.UpdateData(progressId, DeleteStatus.Failed(err));
-                    }
-                    return response;
-                });
+                Observable.FromAsync(() =>
+                        host.Hub.RegisterCallback((IMessageDelivery)delivery, (d, _) => Task.FromResult(d), default))
+                    .Subscribe(
+                        response =>
+                        {
+                            if (response is IMessageDelivery<DeleteNodeResponse> r && r.Message.Success)
+                            {
+                                ctx.Host.UpdateData(progressId, DeleteStatus.Done);
+                                ctx.Host.UpdateArea(ctx.Area, new RedirectControl(backHref));
+                            }
+                            else
+                            {
+                                var err = response is IMessageDelivery<DeleteNodeResponse> rr
+                                    ? rr.Message.Error
+                                    : $"Unexpected response type {response.Message?.GetType().Name ?? "null"}";
+                                ctx.Host.UpdateData(progressId, DeleteStatus.Failed(err));
+                            }
+                        },
+                        ex => ctx.Host.UpdateData(progressId, DeleteStatus.Failed($"Delete failed: {ex.Message}")));
             });
 
         return Task.CompletedTask;
