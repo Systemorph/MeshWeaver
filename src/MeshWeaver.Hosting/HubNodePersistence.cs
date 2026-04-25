@@ -33,116 +33,180 @@ internal sealed class HubNodePersistence(
     }
 
     /// <summary>
-    /// Creates a node via CreateNodeRequest. Uses RegisterCallback to handle the response.
+    /// Creates a node via CreateNodeRequest. Subscribes to RegisterCallback's Task so
+    /// DeliveryFailureException surfaces via onError (the user callback short-circuits
+    /// for DeliveryFailure — without this Subscribe, a routing failure would hang forever).
     /// </summary>
     public IObservable<MeshNode> CreateNode(MeshNode node)
     {
         var captured = CaptureContext();
         return Observable.Create<MeshNode>(observer =>
         {
-            var cts = new CancellationTokenSource();
-            var delivery = hub.Post(new CreateNodeRequest(node),
-                o => ConfigureWithIdentity(o, captured))!;
-
-            hub.RegisterCallback(delivery, (d, _) =>
+            IMessageDelivery? delivery;
+            try
             {
-                var r = ((IMessageDelivery<CreateNodeResponse>)d).Message;
-                if (r.Success && r.Node != null)
-                {
-                    observer.OnNext(r.Node);
-                    observer.OnCompleted();
-                }
-                else
-                {
-                    observer.OnError(r.RejectionReason switch
+                delivery = hub.Post(new CreateNodeRequest(node),
+                    o => ConfigureWithIdentity(o, captured));
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+                return Disposable.Empty;
+            }
+            if (delivery == null)
+            {
+                observer.OnError(new InvalidOperationException("CreateNode: hub.Post returned null."));
+                return Disposable.Empty;
+            }
+            return Observable.FromAsync(() =>
+                    hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default))
+                .Subscribe(
+                    d =>
                     {
-                        NodeCreationRejectionReason.ValidationFailed =>
-                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                        NodeCreationRejectionReason.NodeAlreadyExists =>
-                            new InvalidOperationException($"Node already exists: {node.Path}"),
-                        _ => new InvalidOperationException(r.Error ?? "Node creation failed")
-                    });
-                }
-                return Task.FromResult(d);
-            }, cts.Token);
-
-            return Disposable.Create(() => cts.Cancel());
+                        if (d.Message is CreateNodeResponse r)
+                        {
+                            if (r.Success && r.Node != null)
+                            {
+                                observer.OnNext(r.Node);
+                                observer.OnCompleted();
+                            }
+                            else
+                            {
+                                observer.OnError(r.RejectionReason switch
+                                {
+                                    NodeCreationRejectionReason.ValidationFailed =>
+                                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                                    NodeCreationRejectionReason.NodeAlreadyExists =>
+                                        new InvalidOperationException($"Node already exists: {node.Path}"),
+                                    _ => new InvalidOperationException(r.Error ?? "Node creation failed")
+                                });
+                            }
+                        }
+                        else
+                        {
+                            observer.OnError(new InvalidOperationException(
+                                $"CreateNode: unexpected response type {d.Message?.GetType().Name ?? "null"}"));
+                        }
+                    },
+                    observer.OnError);
         });
     }
 
     /// <summary>
-    /// Updates a node via workspace remote stream Update.
+    /// Updates a node via UpdateNodeRequest. See <see cref="CreateNode"/> for the
+    /// DeliveryFailure-handling rationale.
     /// </summary>
     public IObservable<MeshNode> UpdateNode(MeshNode node)
     {
         var captured = CaptureContext();
         return Observable.Create<MeshNode>(observer =>
         {
-            var cts = new CancellationTokenSource();
-            var delivery = hub.Post(new UpdateNodeRequest(node),
-                o => ConfigureWithIdentity(o, captured))!;
-
-            hub.RegisterCallback(delivery, (d, _) =>
+            IMessageDelivery? delivery;
+            try
             {
-                var r = ((IMessageDelivery<UpdateNodeResponse>)d).Message;
-                if (r.Success && r.Node != null)
-                {
-                    observer.OnNext(r.Node);
-                    observer.OnCompleted();
-                }
-                else
-                {
-                    observer.OnError(r.RejectionReason switch
+                delivery = hub.Post(new UpdateNodeRequest(node),
+                    o => ConfigureWithIdentity(o, captured));
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+                return Disposable.Empty;
+            }
+            if (delivery == null)
+            {
+                observer.OnError(new InvalidOperationException("UpdateNode: hub.Post returned null."));
+                return Disposable.Empty;
+            }
+            return Observable.FromAsync(() =>
+                    hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default))
+                .Subscribe(
+                    d =>
                     {
-                        NodeUpdateRejectionReason.ValidationFailed =>
-                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                        NodeUpdateRejectionReason.NodeNotFound =>
-                            new InvalidOperationException($"Node not found: {node.Path}"),
-                        _ => new InvalidOperationException(r.Error ?? "Node update failed")
-                    });
-                }
-                return Task.FromResult(d);
-            }, cts.Token);
-
-            return Disposable.Create(() => cts.Cancel());
+                        if (d.Message is UpdateNodeResponse r)
+                        {
+                            if (r.Success && r.Node != null)
+                            {
+                                observer.OnNext(r.Node);
+                                observer.OnCompleted();
+                            }
+                            else
+                            {
+                                observer.OnError(r.RejectionReason switch
+                                {
+                                    NodeUpdateRejectionReason.ValidationFailed =>
+                                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                                    NodeUpdateRejectionReason.NodeNotFound =>
+                                        new InvalidOperationException($"Node not found: {node.Path}"),
+                                    _ => new InvalidOperationException(r.Error ?? "Node update failed")
+                                });
+                            }
+                        }
+                        else
+                        {
+                            observer.OnError(new InvalidOperationException(
+                                $"UpdateNode: unexpected response type {d.Message?.GetType().Name ?? "null"}"));
+                        }
+                    },
+                    observer.OnError);
         });
     }
 
     /// <summary>
-    /// Deletes a node via DeleteNodeRequest with callback.
+    /// Deletes a node via DeleteNodeRequest. See <see cref="CreateNode"/> for the
+    /// DeliveryFailure-handling rationale.
     /// </summary>
     public IObservable<bool> DeleteNode(string path)
     {
         var captured = CaptureContext();
         return Observable.Create<bool>(observer =>
         {
-            var cts = new CancellationTokenSource();
-            var delivery = hub.Post(new DeleteNodeRequest(path) { Recursive = true },
-                o => ConfigureWithIdentity(o, captured))!;
-
-            hub.RegisterCallback(delivery, (d, _) =>
+            IMessageDelivery? delivery;
+            try
             {
-                var r = ((IMessageDelivery<DeleteNodeResponse>)d).Message;
-                if (r.Success)
-                {
-                    observer.OnNext(true);
-                    observer.OnCompleted();
-                }
-                else
-                {
-                    observer.OnError(r.RejectionReason switch
+                delivery = hub.Post(new DeleteNodeRequest(path) { Recursive = true },
+                    o => ConfigureWithIdentity(o, captured));
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+                return Disposable.Empty;
+            }
+            if (delivery == null)
+            {
+                observer.OnError(new InvalidOperationException("DeleteNode: hub.Post returned null."));
+                return Disposable.Empty;
+            }
+            return Observable.FromAsync(() =>
+                    hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default))
+                .Subscribe(
+                    d =>
                     {
-                        NodeDeletionRejectionReason.ValidationFailed =>
-                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                        NodeDeletionRejectionReason.NodeNotFound =>
-                            new InvalidOperationException($"Node not found: {path}"),
-                        _ => new InvalidOperationException(r.Error ?? "Node deletion failed")
-                    });
-                }
-                return Task.FromResult(d);
-            }, cts.Token);
-
-            return Disposable.Create(() => cts.Cancel());
+                        if (d.Message is DeleteNodeResponse r)
+                        {
+                            if (r.Success)
+                            {
+                                observer.OnNext(true);
+                                observer.OnCompleted();
+                            }
+                            else
+                            {
+                                observer.OnError(r.RejectionReason switch
+                                {
+                                    NodeDeletionRejectionReason.ValidationFailed =>
+                                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                                    NodeDeletionRejectionReason.NodeNotFound =>
+                                        new InvalidOperationException($"Node not found: {path}"),
+                                    _ => new InvalidOperationException(r.Error ?? "Node deletion failed")
+                                });
+                            }
+                        }
+                        else
+                        {
+                            observer.OnError(new InvalidOperationException(
+                                $"DeleteNode: unexpected response type {d.Message?.GetType().Name ?? "null"}"));
+                        }
+                    },
+                    observer.OnError);
         });
     }
 

@@ -1104,12 +1104,33 @@ public static class MeshExtensions
                 hub.Address, hub.Address.Path, updatedNode.Path);
             var forwarded = hub.Post(capturedRequest,
                 o => o.WithTarget(new Address(updatedNode.Path)))!;
-            hub.RegisterCallback(forwarded, d =>
-            {
-                hub.Post(((IMessageDelivery<UpdateNodeResponse>)d).Message,
-                    o => o.ResponseFor(request));
-                return d;
-            });
+            // Subscribe to the Task so DeliveryFailure (no route / no handler at the
+            // target) surfaces as UpdateNodeResponse.Fail back to the caller — without
+            // this, a DeliveryFailure is short-circuited inside RegisterCallback's
+            // ResolveCallback (callback never fires) and the original request never
+            // gets a response, hanging the producer.
+            Observable.FromAsync(() =>
+                    hub.RegisterCallback(forwarded, (d, _) => Task.FromResult(d), default))
+                .Subscribe(
+                    d =>
+                    {
+                        if (d.Message is UpdateNodeResponse resp)
+                            hub.Post(resp, o => o.ResponseFor(request));
+                        else
+                            hub.Post(UpdateNodeResponse.Fail(
+                                $"Forwarded UpdateNode: unexpected response {d.Message?.GetType().Name ?? "null"}",
+                                NodeUpdateRejectionReason.Unknown),
+                                o => o.ResponseFor(request));
+                    },
+                    ex =>
+                    {
+                        var msg = ex is DeliveryFailureException
+                            ? $"Forwarded UpdateNode failed: {ex.Message}"
+                            : $"Forwarded UpdateNode error: {ex.Message}";
+                        hub.Post(
+                            UpdateNodeResponse.Fail(msg, NodeUpdateRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                    });
             return request.Processed();
         }
 
