@@ -226,12 +226,6 @@ public class MeshOperations
     private IObservable<MeshNode?> FetchNode(string resolvedPath, int timeoutSeconds = 10) =>
         Observable.Create<MeshNode?>(observer =>
         {
-            // ct is the only timeout source; everything (post, callback, response
-            // routing) honors it. RegisterCallback's Task either resolves with the
-            // response delivery (callback path) or faults with DeliveryFailureException
-            // when routing posts DeliveryFailure (the framework short-circuits the user
-            // callback there). Either case ends up in this Subscribe — exception path
-            // logs + emits null, success path emits the parsed MeshNode.
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             var emitted = 0;
 
@@ -242,66 +236,47 @@ public class MeshOperations
                 observer.OnCompleted();
             }
 
-            cts.Token.Register(() =>
-            {
-                logger.LogDebug("FetchNode timeout ({Timeout}s) for {Path}", timeoutSeconds, resolvedPath);
-                EmitOnce(null);
-            });
+            cts.Token.Register(() => EmitOnce(null));
 
-            IMessageDelivery? delivery;
             try
             {
-                delivery = hub.Post(
+                var delivery = hub.Post(
                     new GetDataRequest(new MeshNodeReference()),
                     o => o.WithTarget(new Address(resolvedPath)));
+                if (delivery == null) { EmitOnce(null); return Disposable.Create(() => cts.Dispose()); }
+
+                hub.RegisterCallback(delivery, (d, _) =>
+                {
+                    try
+                    {
+                        if (d is IMessageDelivery<GetDataResponse> resp)
+                        {
+                            MeshNode? node = resp.Message.Data as MeshNode;
+                            if (node == null && resp.Message.Data is JsonElement je)
+                                node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
+                            EmitOnce(node);
+                        }
+                        else
+                        {
+                            // DeliveryFailure or unexpected response — node not found / no handler.
+                            EmitOnce(null);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "FetchNode callback failed for {Path}", resolvedPath);
+                        EmitOnce(null);
+                    }
+                    return Task.FromResult(d);
+                }, cts.Token);
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "FetchNode post failed for {Path}", resolvedPath);
                 EmitOnce(null);
-                return Disposable.Create(() => cts.Dispose());
             }
 
-            if (delivery == null)
-            {
-                EmitOnce(null);
-                return Disposable.Create(() => cts.Dispose());
-            }
-
-            var sub = Observable.FromAsync(() =>
-                    hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token))
-                .Subscribe(
-                    d =>
-                    {
-                        try
-                        {
-                            var node = d?.Message switch
-                            {
-                                GetDataResponse { Data: MeshNode mn } => mn,
-                                GetDataResponse { Data: JsonElement je } => je.Deserialize<MeshNode>(hub.JsonSerializerOptions),
-                                _ => null
-                            };
-                            EmitOnce(node);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogWarning(ex, "FetchNode response parse failed for {Path}", resolvedPath);
-                            EmitOnce(null);
-                        }
-                    },
-                    ex =>
-                    {
-                        // DeliveryFailureException for "no route found" / "no handler" is the
-                        // expected channel for absent paths — Debug, not Warning. Other failures
-                        // (TimeoutException, unexpected) get Warning.
-                        if (ex is DeliveryFailureException)
-                            logger.LogDebug("FetchNode no route/handler for {Path}: {Error}", resolvedPath, ex.Message);
-                        else
-                            logger.LogWarning(ex, "FetchNode failed for {Path}", resolvedPath);
-                        EmitOnce(null);
-                    });
-
-            return Disposable.Create(() => { sub.Dispose(); cts.Dispose(); });
+            return Disposable.Create(() => cts.Dispose());
         });
 
     /// <summary>
