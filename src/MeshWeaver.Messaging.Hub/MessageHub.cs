@@ -533,15 +533,12 @@ public sealed class MessageHub : IMessageHub
                 }
                 disposalCts.Dispose();
                 combinedCts.Dispose();
+                if (d.Message is DeliveryFailure failure)
+                {
+                    tcs.TrySetException(new DeliveryFailureException(failure));
+                    return d.Failed(failure.Message ?? "Delivery failed");
+                }
 
-                // DeliveryFailure flows through the user callback like any other delivery —
-                // callers see "the response is a DeliveryFailure" and decide how to react.
-                // Previously this was short-circuited with TrySetException, which meant
-                // every Post + RegisterCallback caller had to subscribe to the returned
-                // Task and catch DeliveryFailureException — a hidden contract that caused
-                // hangs whenever a callsite relied only on the callback. Now both paths
-                // fire the callback and the Task completes with the delivery (success or
-                // failure) for callers that prefer the Task-await shape.
                 combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken);
                 var ret = await callback(d, combinedCts.Token);
                 tcs.TrySetResult(ret);
