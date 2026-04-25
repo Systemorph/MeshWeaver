@@ -63,82 +63,58 @@ We already use this pattern: `RoutingGrain` is `[StatelessWorker(1)]`. The persi
 
 In monolith there's no Orleans, but the same contract applies — the coordinator is registered as a singleton hub on the mesh and gets the same address. Production code doesn't notice the difference.
 
-## Wire-level shape — fire-and-forget enqueue
-
-The producer's only responsibility is to **put the request on the queue**. No waiting for completion, no per-callsite CancellationToken. The coordinator drains the queue asynchronously; producers that care about "did it commit?" subscribe to the change feed.
+## Wire-level shape
 
 ```csharp
 // Address — same in monolith and Orleans cluster, resolves to the local-silo activation
 public static readonly Address PersistenceCoordinatorAddress = new("_persistence");
 
-// Producer side — fire-and-forget enqueue. No CancellationToken because there's nothing
-// to cancel: the call is synchronous (puts the request on the queue and returns).
-public void UpdateNode(MeshNode node) =>
-    hub.Post(
+// Producer side — every IMeshService write becomes one Post
+public IObservable<MeshNode> UpdateNode(MeshNode node) =>
+    hub.Request<WriteAcknowledgement>(
         new WriteRequest { Op = WriteOp.Update, Node = node, RequestedBy = CaptureContext() },
-        o => o.WithTarget(PersistenceCoordinatorAddress));
+        PersistenceCoordinatorAddress)
+       .Select(ack => ack.Success
+           ? ack.Node!
+           : throw new InvalidOperationException(ack.Error));
 
-// Coordinator side — one always-on hub, one serial queue, one place to watch.
+// Coordinator side — one handler, one queue, one place to watch
 [StatelessWorker(1)]
 internal class PersistenceCoordinatorGrain(IStorageAdapter storage, IMeshChangeFeed feed, ILogger<PersistenceCoordinatorGrain> logger)
     : Grain, IPersistenceCoordinatorGrain
 {
-    public Task ProcessWrite(WriteRequest req) => /* async per-op handling */;
+    public Task<WriteAcknowledgement> ProcessWrite(WriteRequest req) => /* async per-op handling */;
 }
 ```
 
-The producer hands off and walks away. **No timeouts at the producer side** — the queue accepts everything synchronously. If a producer needs to know "did this actually commit?", it subscribes:
-
-```csharp
-// Caller wants to react to commit (e.g., test waiting for read-after-write):
-meshChangeFeed.Updated
-    .Where(e => e.Node.Path == nodePath)
-    .Take(1)
-    .Subscribe(e => /* persisted */);
-
-meshService.UpdateNode(updatedNode);   // fire-and-forget; commit notification arrives via feed
-```
-
-This is the actor-model "tell, don't ask" pattern. The producer tells the coordinator. The coordinator does the work. Anyone interested subscribes to the result stream.
+The grain hub registers itself at `PersistenceCoordinatorAddress` on silo start. Producers post `WriteRequest` to that address; routing always finds an activation. The coordinator processes serially, applies the storage call wrapped in a Polly retry pipeline, publishes `WriteAcknowledgement` back to the requester.
 
 ## The retry policy
 
-Built on Polly's resilience pipeline. **All knobs come from `PersistenceCoordinatorOptions`** (bound from `appsettings.json` / `IOptions<PersistenceCoordinatorOptions>`) — no hardcoded constants in the coordinator.
+Built on Polly's resilience pipeline:
 
 ```csharp
-public record PersistenceCoordinatorOptions
-{
-    public int MaxRetryAttempts { get; init; }      // default in defaults class, not here
-    public TimeSpan InitialBackoff { get; init; }
-    public TimeSpan PerAttemptTimeout { get; init; }
-    public DelayBackoffType BackoffType { get; init; } = DelayBackoffType.Exponential;
-    public bool UseJitter { get; init; } = true;
-}
-
-// Coordinator builds the pipeline from options
-private ResiliencePipeline<WriteAcknowledgement> BuildPipeline(PersistenceCoordinatorOptions opts) =>
+private static readonly ResiliencePipeline<WriteAcknowledgement> WritePipeline =
     new ResiliencePipelineBuilder<WriteAcknowledgement>()
         .AddRetry(new RetryStrategyOptions<WriteAcknowledgement>
         {
             ShouldHandle = new PredicateBuilder<WriteAcknowledgement>()
-                .Handle<NpgsqlException>(IsTransient)
+                .Handle<NpgsqlException>(ex => IsTransient(ex))
                 .Handle<TimeoutException>()
                 .Handle<DbUpdateConcurrencyException>(),   // ETag mismatch — re-read + retry
-            MaxRetryAttempts = opts.MaxRetryAttempts,
-            BackoffType = opts.BackoffType,
-            Delay = opts.InitialBackoff,
-            UseJitter = opts.UseJitter
+            MaxRetryAttempts = 3,
+            BackoffType = DelayBackoffType.Exponential,
+            Delay = TimeSpan.FromMilliseconds(100),
+            UseJitter = true
         })
-        .AddTimeout(opts.PerAttemptTimeout)
+        .AddTimeout(TimeSpan.FromSeconds(10))
         .Build();
 ```
 
-- **Transient Postgres errors** retry per options config.
+- **Transient Postgres errors** retry up to 3× with exponential backoff + jitter.
 - **ETag concurrency mismatch** triggers a re-read + reapply (the version check inside `WriteRequest` is part of the retry loop).
 - **Permanent failures** (constraint violation, missing FK, validation rejection) propagate after the first attempt — no point retrying.
-- **Non-handled exceptions** bubble to the change feed as a `PersistenceFailed` event so dashboards see them.
-
-Defaults live in one well-known place (`PersistenceCoordinatorDefaults`) — every other layer reads from `IOptions<PersistenceCoordinatorOptions>` and never knows the actual numbers.
+- **Non-handled exceptions** bubble straight to the producer's `OnError`.
 
 ## Monitoring — one stream, one dashboard
 
