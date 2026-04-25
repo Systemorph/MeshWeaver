@@ -15,6 +15,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -223,21 +225,17 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         var client = GetClient();
         // Create parent
         var parent = new MeshNode("ImportTestParent", "lifecycle") { Name = "Parent" };
-        var createParent = await client.AwaitResponse(
-            new CreateNodeRequest(parent),
-            o => o.WithTarget(Mesh.Address));
+        var createParent = await client.Observe(new CreateNodeRequest(parent), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createParent.Message.Success.Should().BeTrue();
 
         // Create children
         var child1 = new MeshNode("Child1", "lifecycle/ImportTestParent") { Name = "Child 1" };
         var child2 = new MeshNode("Child2", "lifecycle/ImportTestParent") { Name = "Child 2" };
-        await client.AwaitResponse(new CreateNodeRequest(child1), o => o.WithTarget(Mesh.Address), TestTimeout);
-        await client.AwaitResponse(new CreateNodeRequest(child2), o => o.WithTarget(Mesh.Address), TestTimeout);
+        await client.Observe(new CreateNodeRequest(child1), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(TestTimeout);
+        await client.Observe(new CreateNodeRequest(child2), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(TestTimeout);
 
         // Act - delete parent recursively
-        var deleteResponse = await client.AwaitResponse(
-            new DeleteNodeRequest("lifecycle/ImportTestParent") { Recursive = true },
-            o => o.WithTarget(Mesh.Address));
+        var deleteResponse = await client.Observe(new DeleteNodeRequest("lifecycle/ImportTestParent") { Recursive = true }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
 
         // Assert
         deleteResponse.Message.Success.Should().BeTrue();

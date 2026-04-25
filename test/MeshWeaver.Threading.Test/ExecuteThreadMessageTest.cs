@@ -54,7 +54,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "Roland");
         var delivery = client.Post(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address))!;
-        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
+        var response = await client.Observe(delivery).FirstAsync().ToTask(ct);
         var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
         createResponse.Success.Should().BeTrue(createResponse.Error);
         return createResponse.Node!.Path!;
@@ -82,9 +82,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     {
         // MeshNode key is Id (last segment), not full path
         var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
@@ -108,21 +106,19 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Hello agent", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Hello agent", UserMessageId = userMsgId, ResponseMessageId = responseMsgId },
-            o => o.WithTarget(new Address(threadPath)), ct);
+        var submitResponse = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Hello agent", UserMessageId = userMsgId, ResponseMessageId = responseMsgId }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
         // 2. Wait for message IDs to appear
@@ -163,22 +159,20 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var userMsgId1 = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId1 = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId1, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId1, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "First", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId1, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId1, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var twoMessages = messagesStream.Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
-        var r1 = await client.AwaitResponse(
-            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "First", UserMessageId = userMsgId1, ResponseMessageId = responseMsgId1 },
-            o => o.WithTarget(new Address(threadPath)), ct);
+        var r1 = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "First", UserMessageId = userMsgId1, ResponseMessageId = responseMsgId1 }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         r1.Message.Success.Should().BeTrue(r1.Message.Error);
         var firstIds = await twoMessages;
         Output.WriteLine($"First batch: [{string.Join(", ", firstIds)}]");
@@ -187,22 +181,20 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var userMsgId2 = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId2 = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId2, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId2, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Second", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId2, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId2, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var fourMessages = messagesStream.Where(ids => ids.Count >= 4).FirstAsync().ToTask(ct);
-        var r2 = await client.AwaitResponse(
-            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Second", UserMessageId = userMsgId2, ResponseMessageId = responseMsgId2 },
-            o => o.WithTarget(new Address(threadPath)), ct);
+        var r2 = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Second", UserMessageId = userMsgId2, ResponseMessageId = responseMsgId2 }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         r2.Message.Success.Should().BeTrue(r2.Message.Error);
         var allIds = await fourMessages;
         Output.WriteLine($"All IDs: [{string.Join(", ", allIds)}]");
@@ -235,21 +227,19 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Tell me something", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        var response = await client.AwaitResponse(
-            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Tell me something", UserMessageId = userMsgId, ResponseMessageId = responseMsgId },
-            o => o.WithTarget(new Address(threadPath)), ct);
+        var response = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Tell me something", UserMessageId = userMsgId, ResponseMessageId = responseMsgId }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
 
         var msgIds = await twoMessages;
@@ -304,21 +294,19 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Quick test", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        var response = await client.AwaitResponse(
-            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Quick test", UserMessageId = userMsgId, ResponseMessageId = responseMsgId },
-            o => o.WithTarget(new Address(threadPath)), ct);
+        var response = await client.Observe(new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Quick test", UserMessageId = userMsgId, ResponseMessageId = responseMsgId }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         response.Message.Success.Should().BeTrue("SubmitMessageResponse should arrive without deadlock");
     }
@@ -426,28 +414,26 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Hello from end-to-end test", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+        var submitResponse = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Hello from end-to-end test",
                 ContextPath = ContextPath,
                 UserMessageId = userMsgId,
                 ResponseMessageId = responseMsgId
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("Message submitted successfully");
 
@@ -662,7 +648,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         var delivery = client.Post(new CreateNodeRequest(nodeWithEmptyId),
             o => o.WithTarget(Mesh.Address))!;
-        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
+        var response = await client.Observe(delivery).FirstAsync().ToTask(ct);
         var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
 
         createResponse.Success.Should().BeFalse("creating a node with empty Id should fail");
@@ -687,7 +673,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         var delivery = client.Post(new CreateNodeRequest(nodeWithNullId),
             o => o.WithTarget(Mesh.Address))!;
-        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
+        var response = await client.Observe(delivery).FirstAsync().ToTask(ct);
         var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
 
         createResponse.Success.Should().BeFalse("creating a node with null Id should fail");

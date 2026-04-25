@@ -440,18 +440,19 @@ public static class CommentsView
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {
-                    // Read text, then read the comment via GetMeshNodeStream() — no QueryAsync,
-                    // no FirstOrDefault-by-path; the MeshNodeReference stream IS the own-node read.
+                    // Read text from the form data stream (canonical click-handler pattern),
+                    // then read the comment node via one-shot GetDataRequest — true
+                    // request/response, no SubscribeRequest+immediate-unsubscribe.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(textDataId)
                         .Take(1)
                         .Subscribe(data =>
                         {
                             var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                            host.Workspace.GetMeshNodeStream()
-                                .Take(1)
+                            host.Hub.GetMeshNode(host.Hub.Address.ToString())
                                 .Subscribe(node =>
                                 {
+                                    if (node == null) return;
                                     var comment = node.Content as Comment ?? new Comment();
                                     var activeNode = node with
                                     {

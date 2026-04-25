@@ -5,6 +5,8 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Messaging.Hub.Test;
 
 /// <summary>
@@ -13,7 +15,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// <see cref="TaskScheduler.Default"/> so they're independent of whatever
 /// scheduler created them. Hubs that explicitly call
 /// <see cref="MessageHubConfiguration.WithTaskScheduler"/> use the chosen
-/// scheduler — that's how Orleans glue couples the root grain hub to the
+/// scheduler â€” that's how Orleans glue couples the root grain hub to the
 /// grain's scheduler. See <c>Doc/Architecture/OrleansTaskScheduler.md</c>.
 /// </summary>
 public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(output)
@@ -24,7 +26,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
 
     /// <summary>
     /// Default hub configuration (no <c>WithTaskScheduler</c>) dispatches on
-    /// <see cref="TaskScheduler.Default"/> — the thread pool. Verifies that
+    /// <see cref="TaskScheduler.Default"/> â€” the thread pool. Verifies that
     /// hosted hubs created from any context end up independent.
     /// </summary>
     [Fact]
@@ -40,13 +42,10 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
                 return request.Processed();
             }));
 
-        var response = await hub.AwaitResponse(
-            new WhereAmIRequest(),
-            o => o.WithTarget(hub.Address),
-            new CancellationTokenSource(10.Seconds()).Token);
+        var response = await hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
 
         response.Message.TaskSchedulerId.Should().Be(TaskScheduler.Default.Id,
-            because: "hosted hubs must default to TaskScheduler.Default — they are independent actors");
+            because: "hosted hubs must default to TaskScheduler.Default â€” they are independent actors");
     }
 
     /// <summary>
@@ -59,7 +58,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
     public async Task ConfiguredHub_DispatchesOnTheConfiguredScheduler()
     {
         // ConcurrentExclusiveSchedulerPair.ExclusiveScheduler is a known scheduler
-        // distinct from TaskScheduler.Default — easy to identify by Id.
+        // distinct from TaskScheduler.Default â€” easy to identify by Id.
         var pair = new ConcurrentExclusiveSchedulerPair();
         var customScheduler = pair.ExclusiveScheduler;
 
@@ -74,10 +73,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
                     return request.Processed();
                 }));
 
-        var response = await hub.AwaitResponse(
-            new WhereAmIRequest(),
-            o => o.WithTarget(hub.Address),
-            new CancellationTokenSource(10.Seconds()).Token);
+        var response = await hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
 
         response.Message.TaskSchedulerId.Should().Be(customScheduler.Id,
             because: "WithTaskScheduler must couple the hub's ActionBlock to the supplied scheduler");
@@ -85,7 +81,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
 
     /// <summary>
     /// A hosted sub-hub created from inside a hub configured with a custom
-    /// scheduler MUST default to <see cref="TaskScheduler.Default"/> — it does
+    /// scheduler MUST default to <see cref="TaskScheduler.Default"/> â€” it does
     /// NOT inherit the parent's scheduler. This is the core actor-model
     /// invariant: each hub is an independent actor.
     /// </summary>
@@ -104,7 +100,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
             cfg => cfg.WithTaskScheduler(parentScheduler)
                 .WithHandler<WhereAmIRequest>((h, request) =>
                 {
-                    // Create a hosted sub-hub from inside the parent's handler — TaskScheduler.Current
+                    // Create a hosted sub-hub from inside the parent's handler â€” TaskScheduler.Current
                     // is parentScheduler at this point. The sub-hub MUST NOT inherit it.
                     var subHub = h.GetHostedHub(
                         subAddress,
@@ -124,11 +120,8 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
                     return request.Processed();
                 }));
 
-        // Trigger parent → which creates sub-hub + posts to it.
-        await parent.AwaitResponse(
-            new WhereAmIRequest(),
-            o => o.WithTarget(parent.Address),
-            new CancellationTokenSource(10.Seconds()).Token);
+        // Trigger parent â†’ which creates sub-hub + posts to it.
+        await parent.Observe(new WhereAmIRequest(), o => o.WithTarget(parent.Address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
 
         var observed = await subDone.Task.WaitAsync(10.Seconds());
 

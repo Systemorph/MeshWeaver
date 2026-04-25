@@ -32,7 +32,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture — uses ReentrancyTestSiloConfigurator with a custom
+// TODO: needs custom shared fixture â€” uses ReentrancyTestSiloConfigurator with a custom
 // ReentrancyTestChatClientFactory whose tool-calling behavior is essential to the test.
 // Migration would require swapping the chat factory per-test (violates structural-only rule).
 /// <summary>
@@ -90,9 +90,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
         // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
@@ -116,8 +114,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
 
         // Create thread
         var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Reentrancy test", "Roland");
-        var createResp = await client.AwaitResponse(
-            new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland")), ct);
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -134,17 +131,15 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync()
             .ToTask(ct);
 
-        // Submit message — the ToolCallingReentrancyClient will call a tool
+        // Submit message â€” the ToolCallingReentrancyClient will call a tool
         Output.WriteLine("Submitting message...");
-        var submitResp = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResp = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Call a tool please",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
         Output.WriteLine("Submitted");
 
@@ -172,7 +167,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         response.ToolCalls.Should().NotBeEmpty("tool calls should be tracked");
         response.ToolCalls.First().Result.Should().NotBeNull("tool call should have completed with a result");
 
-        Output.WriteLine($"PASSED — text='{response.Text[..Math.Min(50, response.Text.Length)]}', toolCalls={response.ToolCalls.Count}");
+        Output.WriteLine($"PASSED â€” text='{response.Text[..Math.Min(50, response.Text.Length)]}', toolCalls={response.ToolCalls.Count}");
     }
 }
 
@@ -194,7 +189,7 @@ internal class ToolCallingReentrancyClient : IChatClient
             return Task.FromResult(new ChatResponse(
                 new ChatMessage(ChatRole.Assistant, "Tool call completed successfully. Reentrancy works.")));
 
-        // Call Get tool — requires round-trip through the hub
+        // Call Get tool â€” requires round-trip through the hub
         if (options?.Tools?.Any(t => t.Name == "Get") == true)
         {
             var call = new FunctionCallContent("test-get", "Get",

@@ -12,6 +12,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubTestBase(output)
@@ -53,11 +54,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         };
 
         // act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(CreateHostAddress())
-            , new CancellationTokenSource(10.Seconds()).Token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);

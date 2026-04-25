@@ -51,14 +51,12 @@ public class ContentUploadTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var client = GetClient();
         try
         {
-            var response = await client.AwaitResponse(
-                new SaveContentRequest
+            var response = await client.Observe(new SaveContentRequest
                 {
                     CollectionName = "content",
                     FilePath = "test-diagram.svg",
                     TextContent = svgContent
-                },
-                o => o.WithTarget(new Address(contextPath)));
+                }, o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
 
             // Note: may fail if node doesn't have content collections configured
             // That's expected in monolith test without file system collections

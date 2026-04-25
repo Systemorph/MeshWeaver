@@ -261,19 +261,13 @@ public class KernelContainer(IServiceProvider serviceProvider)
     {
         var areasStream = GetAreaStream(hub.ServiceProvider);
         areasStream.Update(x =>
-            (
-                    areasStream.Current
-                    ?? new ChangeItem<ImmutableDictionary<string, object>>(
-                        ImmutableDictionary<string, object>.Empty,
-                        hub.Address,
-                        areasStream.StreamId,
-                        ChangeType.Full,
-                        0,
-                        []))
-                with
-            {
-                Value = (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view)
-            }
+            new ChangeItem<ImmutableDictionary<string, object>>(
+                (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view),
+                hub.Address,
+                areasStream.StreamId,
+                ChangeType.Patch,
+                hub.Version,
+                [])
         , _ => Task.CompletedTask);
     }
 

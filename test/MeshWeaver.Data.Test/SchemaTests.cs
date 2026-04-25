@@ -10,6 +10,8 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Data.Test;
 
 /// <summary>
@@ -120,11 +122,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -258,11 +256,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var unknownTypeName = "UnknownType.That.Does.Not.Exist";
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(unknownTypeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(unknownTypeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -281,11 +275,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -309,11 +299,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -341,11 +327,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var typeName = typeof(TestSchemaData).FullName;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName!)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName!)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -388,11 +370,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -421,11 +399,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -451,11 +425,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -511,11 +481,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -546,11 +512,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -589,11 +551,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         var typeName = nameof(TestSchemaData);
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();

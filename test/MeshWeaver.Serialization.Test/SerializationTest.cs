@@ -12,6 +12,8 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Serialization.Test;
 
 public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
@@ -77,11 +79,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
 
-        var response = await client.AwaitResponse(
-            new Boomerang(new MyEvent("Hello")),
-            o => o.WithTarget(CreateHostAddress())
-            , new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
-        );
+        var response = await client.Observe(new Boomerang(new MyEvent("Hello")), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
 
         response.Message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
         response.Message.Type.Should().Be(nameof(JsonElement));
@@ -315,11 +313,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
 
         // AwaitResponse should now throw DeliveryFailureException due to no handler being found
         var exception = await Assert.ThrowsAsync<AggregateException>(() =>
-            client.AwaitResponse(
-                unknownRequest,
-                o => o.WithTarget(CreateHostAddress()),
-                new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
-            )
+            client.Observe(unknownRequest, o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token)
         );
 
         // Verify the exception contains useful information about the failure

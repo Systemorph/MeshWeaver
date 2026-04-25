@@ -70,19 +70,10 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
 
         // Dispatch via ExecuteScriptRequest; capture the ActivityLog path from the
         // response. That path points at the activity node the Code hub just created.
-        var execTcs = new TaskCompletionSource<ExecuteScriptResponse>();
-        var delivery = Mesh.Post(
+        var execResponse = await AwaitResponseAsync(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(path)))!;
-        _ = Mesh.RegisterCallback(delivery, (d, _) =>
-        {
-            if (d is IMessageDelivery<ExecuteScriptResponse> r) execTcs.TrySetResult(r.Message);
-            else execTcs.TrySetException(new InvalidOperationException(
-                $"Unexpected response: {d.Message?.GetType().Name}"));
-            return Task.FromResult(d);
-        }, default);
-
-        var exec = await execTcs.Task;
+            o => o.WithTarget(new Address(path)));
+        var exec = execResponse.Message;
         exec.Success.Should().BeTrue(exec.Error ?? "exec failed");
         exec.ActivityLog.Should().NotBeNullOrEmpty(
             "ExecuteScript must return the ActivityLog path for subscribers");
@@ -127,17 +118,10 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
             }
         });
 
-        var execTcs = new TaskCompletionSource<ExecuteScriptResponse>();
-        var delivery = Mesh.Post(
+        var execResponse = await AwaitResponseAsync(
             new ExecuteScriptRequest(),
-            o => o.WithTarget(new Address(path)))!;
-        _ = Mesh.RegisterCallback(delivery, (d, _) =>
-        {
-            if (d is IMessageDelivery<ExecuteScriptResponse> r) execTcs.TrySetResult(r.Message);
-            return Task.FromResult(d);
-        }, default);
-
-        var exec = await execTcs.Task;
+            o => o.WithTarget(new Address(path)));
+        var exec = execResponse.Message;
         exec.ActivityLog.Should().NotBeNullOrEmpty();
 
         // Stream the log until Status flips out of Running. Before-throw must be

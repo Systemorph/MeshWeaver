@@ -137,9 +137,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         MeshThread? serverContent = null;
         for (var i = 0; i < 20; i++)
         {
-            var response = await client.AwaitResponse(
-                new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-                o => o.WithTarget(new Address(threadPath)), ct);
+            var response = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             var serverNode = response.Message.Data as MeshNode;
             if (serverNode == null && response.Message.Data is System.Text.Json.JsonElement je)
                 serverNode = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
@@ -263,9 +261,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" });
 
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Parent thread for catalog test")),
-            o => o.WithTarget(new Address(contextPath)));
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Parent thread for catalog test")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
 
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path;
@@ -283,9 +279,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         Output.WriteLine("ThreadsCatalog layout rendered");
 
         // 3. Create a sub-thread (delegation) via CreateNodeRequest — same flow as the "Create Thread" button
-        var subResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(threadPath, "Delegation sub-thread")),
-            o => o.WithTarget(new Address(threadPath)));
+        var subResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(threadPath, "Delegation sub-thread")), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask();
 
         subResponse.Message.Success.Should().BeTrue(subResponse.Message.Error);
         var subThreadPath = subResponse.Message.Node!.Path;

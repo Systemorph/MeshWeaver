@@ -164,24 +164,11 @@ public static class ThreadMessageLayoutAreas
         var msgLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.MsgLayout");
 
-        // Editing-prompt branch still needs the current message snapshot so the editor
-        // pre-populates with the user's text. Build it lazily off the first emission.
-        // Regular bubble branch ships the path-bound control immediately.
-        var currentMsg = syncStream!.Current?.Value?.Content as ThreadMessage;
-        if (currentMsg is { Type: ThreadMessageType.EditingPrompt })
-        {
-            msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_SYNC_EDIT: hub={Hub}", hubPath);
-            return Observable.Return((UiControl?)BuildEditingOverview(host, currentMsg, threadPath, messageId));
-        }
-
-        if (currentMsg != null)
-        {
-            msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_SYNC: hub={Hub}, role={Role}", hubPath, currentMsg.Role);
-            return Observable.Return((UiControl?)BuildMessageOverview(host, currentMsg, threadPath, messageId, nodePath));
-        }
-
+        // Always wait for the first stream emission — never read the snapshot synchronously.
+        // On cold workspaces / un-initialized remote streams it's null and we'd ship an
+        // empty overview to the user.
         msgLogger?.LogInformation("[MsgLayout] CONTROL_EMIT_ASYNC: hub={Hub}, waiting for first emission", hubPath);
-        return syncStream
+        return syncStream!
             .Select(change => change.Value?.Content as ThreadMessage)
             .Where(m => m != null)
             .Take(1)

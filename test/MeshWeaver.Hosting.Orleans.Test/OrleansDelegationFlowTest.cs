@@ -32,7 +32,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture — uses DelegationSiloConfigurator with a custom
+// TODO: needs custom shared fixture â€” uses DelegationSiloConfigurator with a custom
 // DelegationToolFakeChatClientFactory whose tool-calling behavior is essential to the test.
 // Migration would require either swapping the chat factory per-test (violates structural-only
 // rule) or a dedicated shared fixture variant.
@@ -92,9 +92,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(node),
-            o => o.WithTarget(new Address(targetAddress)), ct);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -129,17 +127,15 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
             .FirstAsync()
             .ToTask(ct);
 
-        // Submit message — this triggers the DelegationToolFakeChatClient which calls delegate_to_agent
+        // Submit message â€” this triggers the DelegationToolFakeChatClient which calls delegate_to_agent
         Output.WriteLine("Posting AppendUserMessageRequest (should trigger delegation)...");
-        var submitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Please delegate this task",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("AppendUserMessageRequest succeeded");
 
@@ -154,9 +150,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
         {
             var nodeId = msgIds[1];
             // Canonical CQRS read via per-node MeshNodeReference reducer.
-            var resp = await client.AwaitResponse(
-                new GetDataRequest(new MeshNodeReference()),
-                o => o.WithTarget(new Address($"{threadPath}/{nodeId}")), ct);
+            var resp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address($"{threadPath}/{nodeId}"))).FirstAsync().ToTask(ct);
             var node = resp.Message.Data as MeshNode;
             if (node == null && resp.Message.Data is JsonElement je)
                 node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
@@ -173,7 +167,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
         responseMsg.Should().NotBeNull("response message should exist");
         Output.WriteLine($"Response: text='{responseMsg!.Text?[..Math.Min(100, responseMsg.Text?.Length ?? 0)]}', toolCalls={responseMsg.ToolCalls?.Count ?? 0}");
 
-        // The DelegationToolFakeChatClient triggers a delegation — verify it completed
+        // The DelegationToolFakeChatClient triggers a delegation â€” verify it completed
         // (either the tool call log has an entry, or the text mentions it)
         var hasDelegation = responseMsg.ToolCalls?.Any(tc => tc.Name?.Contains("delegate") == true) == true
             || responseMsg.Text?.Contains("delegat", StringComparison.OrdinalIgnoreCase) == true;

@@ -10,6 +10,7 @@ using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -179,14 +180,13 @@ public class AgentChatClient : IAgentChat
         try
         {
             var factory = GetFactoryForModel(currentModelName);
-            var workspace = hub.ServiceProvider.GetRequiredService<Data.IWorkspace>();
-            // Single-op write to a remote MeshNode — read current via the workspace
-            // stream, apply the transform, post DataChangeRequest to the owning hub.
-            workspace.GetMeshNodeStream(threadNodePath)
-                .Take(1).Timeout(TimeSpan.FromSeconds(10))
+            // Single-op write to a remote MeshNode — read current via GetDataRequest
+            // (one-shot, no lingering subscription), apply the transform, post
+            // DataChangeRequest to the owning hub.
+            hub.GetMeshNode(threadNodePath, TimeSpan.FromSeconds(10))
                 .Subscribe(node =>
                 {
-                    if (node.Content is not Thread threadContent) return;
+                    if (node?.Content is not Thread threadContent) return;
                     if (!string.IsNullOrEmpty(threadContent.PersistentThreadId)) return;
                     var newNode = node with
                     {
@@ -1002,14 +1002,13 @@ public class AgentChatClient : IAgentChat
         // 1. Get NodeType of current node — single-node-by-path content read MUST go through
         // the per-node MeshNodeReference reducer, NOT QueryAsync (which lags through the
         // read-side index; see Doc/Architecture/AsynchronousCalls.md).
+        // One-shot read — GetDataRequest, not a subscription.
         string? nodeTypePath = null;
         if (!string.IsNullOrEmpty(contextPath))
         {
             try
             {
-                var contextNode = await hub.GetWorkspace().GetMeshNodeStream(contextPath)
-                    .Take(1).Timeout(TimeSpan.FromSeconds(15))
-                    .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!))
+                var contextNode = await hub.GetMeshNode(contextPath, TimeSpan.FromSeconds(15))
                     .ToTask();
                 if (!string.IsNullOrEmpty(contextNode?.NodeType)
                     && contextNode.NodeType != "Agent" && contextNode.NodeType != "Markdown")

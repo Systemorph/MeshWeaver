@@ -20,6 +20,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
@@ -172,9 +173,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
                     Output.WriteLine($"[Host AutoSave] Change detected! Sending DataChangeRequest for Title={content.Title}");
                     initialJson = currentJson;
 
-                    await host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(content),
-                        o => o.WithTarget(host.Hub.Address));
+                    await host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(content), o => o.WithTarget(host.Hub.Address)).FirstAsync().ToTask();
                 }));
     }
 

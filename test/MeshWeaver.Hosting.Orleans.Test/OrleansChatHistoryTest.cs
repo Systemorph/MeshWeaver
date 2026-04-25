@@ -53,7 +53,7 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
             Output.WriteLine("Thread pre-seeded with 4 messages via AddMeshNodes");
 
             // Submit via AppendUserMessageRequest, then wait for the response cell to settle.
-            // The new API returns Success/Error only — the agent's response text lives on the
+            // The new API returns Success/Error only â€” the agent's response text lives on the
             // response satellite cell. Read it via the workspace stream once execution completes.
             Output.WriteLine("Posting AppendUserMessageRequest...");
             var workspace = client.GetWorkspace();
@@ -70,13 +70,13 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
                 .FirstAsync()
                 .ToTask(ct);
 
-            var submitResp = await client.AwaitResponse(new AppendUserMessageRequest
+            var submitResp = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = ThreadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
-                UserText = "Third question — can you see history?",
+                UserText = "Third question â€” can you see history?",
                 ContextPath = "User/Roland"
-            }, o => o.WithTarget(new Address(ThreadPath)), ct);
+            }, o => o.WithTarget(new Address(ThreadPath))).FirstAsync().ToTask(ct);
             submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
             Output.WriteLine($"Append accepted: success={submitResp.Message.Success}");
 
@@ -90,9 +90,7 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
             ThreadMessage? responseMsg = null;
             for (var i = 0; i < 100; i++)
             {
-                var resp = await client.AwaitResponse(
-                    new GetDataRequest(new MeshNodeReference()),
-                    o => o.WithTarget(new Address(responsePath)), ct);
+                var resp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(responsePath))).FirstAsync().ToTask(ct);
                 var node = resp.Message.Data as MeshNode;
                 if (node == null && resp.Message.Data is JsonElement je)
                     node = je.Deserialize<MeshNode>(client.JsonSerializerOptions);

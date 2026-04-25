@@ -49,9 +49,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             new MeshNode(contextPath) { Name = "Delegation Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var threadResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test delegation")),
-            o => o.WithTarget(new Address(contextPath)));
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test delegation")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
         var threadPath = threadResponse.Message.Node!.Path;
 
@@ -114,9 +112,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             new MeshNode(contextPath) { Name = "Hierarchy Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var threadResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test hierarchy")),
-            o => o.WithTarget(new Address(contextPath)));
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test hierarchy")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
         var threadPath = threadResponse.Message.Node!.Path;
 
         var responseMsgId = "resp002";
@@ -195,7 +191,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             }
         });
 
-        // Navigate the hierarchy: thread → message → sub-thread → sub-messages
+        // Navigate the hierarchy: thread â†’ message â†’ sub-thread â†’ sub-messages
 
         // 1. Find sub-threads under the response message
         var subThreads = await MeshQuery
@@ -309,9 +305,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             new MeshNode(contextPath) { Name = "Coexist Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var threadResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test plan and delegations")),
-            o => o.WithTarget(new Address(contextPath)));
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test plan and delegations")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
         var threadPath = threadResponse.Message.Node!.Path;
 
         // Store a plan under the thread

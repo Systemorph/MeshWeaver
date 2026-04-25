@@ -245,30 +245,37 @@ public class MeshOperations
                     o => o.WithTarget(new Address(resolvedPath)));
                 if (delivery == null) { EmitOnce(null); return Disposable.Create(() => cts.Dispose()); }
 
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    try
-                    {
-                        if (d is IMessageDelivery<GetDataResponse> resp)
+                hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
                         {
-                            MeshNode? node = resp.Message.Data as MeshNode;
-                            if (node == null && resp.Message.Data is JsonElement je)
-                                node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
-                            EmitOnce(node);
-                        }
-                        else
+                            try
+                            {
+                                if (d.Message is GetDataResponse resp)
+                                {
+                                    MeshNode? node = resp.Data as MeshNode;
+                                    if (node == null && resp.Data is JsonElement je)
+                                        node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
+                                    EmitOnce(node);
+                                }
+                                else
+                                {
+                                    // Unexpected response — node not found / no handler.
+                                    EmitOnce(null);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "FetchNode callback failed for {Path}", resolvedPath);
+                                EmitOnce(null);
+                            }
+                        },
+                        ex =>
                         {
-                            // DeliveryFailure or unexpected response — node not found / no handler.
+                            // DeliveryFailure or other error — node not found / no handler.
+                            logger.LogDebug(ex, "FetchNode delivery failed for {Path}", resolvedPath);
                             EmitOnce(null);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "FetchNode callback failed for {Path}", resolvedPath);
-                        EmitOnce(null);
-                    }
-                    return Task.FromResult(d);
-                }, cts.Token);
+                        });
             }
             catch (Exception ex)
             {
@@ -311,28 +318,26 @@ public class MeshOperations
                     DataChangeRequest.Update([node]),
                     o => o.WithTarget(new Address(node.Path)))!;
 
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    if (d is IMessageDelivery<DataChangeResponse> resp)
-                    {
-                        if (resp.Message.Status == DataChangeStatus.Committed)
-                            Emit(node with { Version = resp.Message.Version });
-                        else
-                            Fail(new InvalidOperationException(
-                                $"DataChangeRequest rejected for {node.Path}: {resp.Message.Log?.Status}"));
-                    }
-                    else if (d is IMessageDelivery<DeliveryFailure> failure)
-                    {
-                        Fail(new InvalidOperationException(
-                            failure.Message.Message ?? $"Delivery failed to {node.Path}"));
-                    }
-                    else
-                    {
-                        Fail(new InvalidOperationException(
-                            $"Unexpected response {d.Message?.GetType().Name} for DataChangeRequest at {node.Path}"));
-                    }
-                    return Task.FromResult(d);
-                }, cts.Token);
+                hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            if (d.Message is DataChangeResponse resp)
+                            {
+                                if (resp.Status == DataChangeStatus.Committed)
+                                    Emit(node with { Version = resp.Version });
+                                else
+                                    Fail(new InvalidOperationException(
+                                        $"DataChangeRequest rejected for {node.Path}: {resp.Log?.Status}"));
+                            }
+                            else
+                            {
+                                Fail(new InvalidOperationException(
+                                    $"Unexpected response {d.Message?.GetType().Name} for DataChangeRequest at {node.Path}"));
+                            }
+                        },
+                        ex => Fail(new InvalidOperationException(
+                            ex.Message ?? $"Delivery failed to {node.Path}", ex)));
 
                 cts.Token.Register(() => Fail(new TimeoutException(
                     $"DataChangeRequest for {node.Path} did not complete within {timeoutSeconds}s.")));
@@ -415,32 +420,35 @@ public class MeshOperations
                     new GetDataRequest(reference),
                     o => o.WithTarget(address))!;
 
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    try
-                    {
-                        if (d is IMessageDelivery<DeliveryFailure> failure)
-                            observer.OnNext($"Error: {failure.Message.Message ?? "Delivery failed to " + addressPart}");
-                        else if (d is IMessageDelivery<GetDataResponse> dataResponse)
+                hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
                         {
-                            var responseMsg = dataResponse.Message;
-                            if (responseMsg.Error != null)
-                                observer.OnNext($"Error: {responseMsg.Error}");
-                            else
-                                observer.OnNext(JsonSerializer.Serialize(responseMsg.Data, hub.JsonSerializerOptions));
-                        }
-                        else
+                            try
+                            {
+                                if (d.Message is GetDataResponse responseMsg)
+                                {
+                                    if (responseMsg.Error != null)
+                                        observer.OnNext($"Error: {responseMsg.Error}");
+                                    else
+                                        observer.OnNext(JsonSerializer.Serialize(responseMsg.Data, hub.JsonSerializerOptions));
+                                }
+                                else
+                                {
+                                    observer.OnNext($"Error: Unexpected response type {d.Message?.GetType().Name} for {remainder} at {addressPart}");
+                                }
+                                observer.OnCompleted();
+                            }
+                            catch (Exception ex)
+                            {
+                                observer.OnError(ex);
+                            }
+                        },
+                        ex =>
                         {
-                            observer.OnNext($"Error: Unexpected response type {d.Message?.GetType().Name} for {remainder} at {addressPart}");
-                        }
-                        observer.OnCompleted();
-                    }
-                    catch (Exception ex)
-                    {
-                        observer.OnError(ex);
-                    }
-                    return Task.FromResult(d);
-                }, cts.Token);
+                            observer.OnNext($"Error: {ex.Message ?? "Delivery failed to " + addressPart}");
+                            observer.OnCompleted();
+                        });
             }
             catch (Exception ex)
             {
@@ -786,22 +794,22 @@ public class MeshOperations
                     new PatchDataRequest(new MeshNodeReference(), new RawJson(rawPatch)),
                     o => o.WithTarget(new Address(resolvedPath)))!;
 
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    if (d is IMessageDelivery<PatchDataResponse> resp)
-                    {
-                        if (resp.Message.Success)
-                            Emit(resp.Message.Version);
-                        else
-                            Fail(new InvalidOperationException(resp.Message.Error ?? "Patch rejected"));
-                    }
-                    else if (d is IMessageDelivery<DeliveryFailure> failure)
-                        Fail(new InvalidOperationException(failure.Message.Message ?? "Delivery failed"));
-                    else
-                        Fail(new InvalidOperationException(
-                            $"Unexpected response {d.Message?.GetType().Name} for PatchDataRequest at {resolvedPath}"));
-                    return Task.FromResult(d);
-                }, cts.Token);
+                hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            if (d.Message is PatchDataResponse resp)
+                            {
+                                if (resp.Success)
+                                    Emit(resp.Version);
+                                else
+                                    Fail(new InvalidOperationException(resp.Error ?? "Patch rejected"));
+                            }
+                            else
+                                Fail(new InvalidOperationException(
+                                    $"Unexpected response {d.Message?.GetType().Name} for PatchDataRequest at {resolvedPath}"));
+                        },
+                        ex => Fail(new InvalidOperationException(ex.Message ?? "Delivery failed", ex)));
 
                 cts.Token.Register(() => Fail(new TimeoutException(
                     $"PatchDataRequest for {resolvedPath} did not complete within {timeoutSeconds}s.")));
@@ -1093,40 +1101,41 @@ public class MeshOperations
                     new MoveNodeRequest(resolvedSource, resolvedTarget),
                     o => o.WithTarget(new Address(resolvedSource)))!;
 
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    try
-                    {
-                        if (d is IMessageDelivery<DeliveryFailure> failure)
+                hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
+                        {
+                            try
+                            {
+                                if (d.Message is MoveNodeResponse msg)
+                                {
+                                    if (msg.Success)
+                                        observer.OnNext($"Moved: {resolvedSource} -> {resolvedTarget}");
+                                    else
+                                        observer.OnNext(
+                                            $"Error moving {resolvedSource} -> {resolvedTarget}: {msg.Error ?? "unknown error"}"
+                                            + (msg.RejectionReason is { } r ? $" ({r})" : ""));
+                                }
+                                else
+                                {
+                                    observer.OnNext(
+                                        $"Error moving {resolvedSource} -> {resolvedTarget}: unexpected response {d.Message?.GetType().Name}");
+                                }
+                                observer.OnCompleted();
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "Error moving {Source} -> {Target}", resolvedSource, resolvedTarget);
+                                observer.OnNext($"Error: {ex.Message}");
+                                observer.OnCompleted();
+                            }
+                        },
+                        ex =>
                         {
                             observer.OnNext(
-                                $"Error moving {resolvedSource} -> {resolvedTarget}: {failure.Message.Message ?? "delivery failed"}");
-                        }
-                        else if (d is IMessageDelivery<MoveNodeResponse> resp)
-                        {
-                            var msg = resp.Message;
-                            if (msg.Success)
-                                observer.OnNext($"Moved: {resolvedSource} -> {resolvedTarget}");
-                            else
-                                observer.OnNext(
-                                    $"Error moving {resolvedSource} -> {resolvedTarget}: {msg.Error ?? "unknown error"}"
-                                    + (msg.RejectionReason is { } r ? $" ({r})" : ""));
-                        }
-                        else
-                        {
-                            observer.OnNext(
-                                $"Error moving {resolvedSource} -> {resolvedTarget}: unexpected response {d.Message?.GetType().Name}");
-                        }
-                        observer.OnCompleted();
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Error moving {Source} -> {Target}", resolvedSource, resolvedTarget);
-                        observer.OnNext($"Error: {ex.Message}");
-                        observer.OnCompleted();
-                    }
-                    return Task.FromResult(d);
-                }, cts.Token);
+                                $"Error moving {resolvedSource} -> {resolvedTarget}: {ex.Message ?? "delivery failed"}");
+                            observer.OnCompleted();
+                        });
             }
             catch (Exception ex)
             {
@@ -1377,43 +1386,40 @@ public class MeshOperations
                     new ExecuteScriptRequest(),
                     o => o.WithTarget(new Address(resolvedPath)))!;
 
-                hub.RegisterCallback(delivery, (d, _) =>
-                {
-                    if (d is IMessageDelivery<ExecuteScriptResponse> resp)
-                    {
-                        var r = resp.Message;
-                        EmitOnce(new
+                hub.Observe(delivery)
+                    .Subscribe(
+                        d =>
                         {
-                            status = r.Success ? "Dispatched" : "Error",
-                            path = resolvedPath,
-                            submissionId = r.SubmissionId,
-                            outputUrl = r.Success ? $"{resolvedPath}/area/{r.OutputAreaReference}" : null,
-                            error = r.Error,
-                            message = r.Success
-                                ? "Script dispatched. Subscribe to the output area for live progress."
-                                : $"Dispatch failed: {r.Error}"
-                        });
-                    }
-                    else if (d is IMessageDelivery<DeliveryFailure> failure)
-                    {
-                        EmitOnce(new
+                            if (d.Message is ExecuteScriptResponse r)
+                            {
+                                EmitOnce(new
+                                {
+                                    status = r.Success ? "Dispatched" : "Error",
+                                    path = resolvedPath,
+                                    submissionId = r.SubmissionId,
+                                    outputUrl = r.Success ? $"{resolvedPath}/area/{r.OutputAreaReference}" : null,
+                                    error = r.Error,
+                                    message = r.Success
+                                        ? "Script dispatched. Subscribe to the output area for live progress."
+                                        : $"Dispatch failed: {r.Error}"
+                                });
+                            }
+                            else
+                            {
+                                EmitOnce(new
+                                {
+                                    status = "Error",
+                                    path = resolvedPath,
+                                    message = $"Unexpected response {d.Message?.GetType().Name}"
+                                });
+                            }
+                        },
+                        ex => EmitOnce(new
                         {
                             status = "Error",
                             path = resolvedPath,
-                            message = $"Delivery failed: {failure.Message.Message ?? "unknown"}"
-                        });
-                    }
-                    else
-                    {
-                        EmitOnce(new
-                        {
-                            status = "Error",
-                            path = resolvedPath,
-                            message = $"Unexpected response {d.Message?.GetType().Name}"
-                        });
-                    }
-                    return Task.FromResult(d);
-                }, cts.Token);
+                            message = $"Delivery failed: {ex.Message ?? "unknown"}"
+                        }));
 
                 cts.Token.Register(() => EmitOnce(new
                 {

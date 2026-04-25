@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -442,24 +443,36 @@ public static class AgentView
                     Instructions = string.IsNullOrWhiteSpace(newInstructions) ? null : newInstructions
                 };
 
-                using var cts = new CancellationTokenSource(10.Seconds());
                 var delivery = actx.Host.Hub.Post(
                     new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedAgent),
                     o => o.WithTarget(hubAddress))!;
-                var callbackResponse = await actx.Host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
-
-                // Handle routing failures (e.g., agent hub unreachable) and unexpected
-                // response shapes before touching the DataChangeResponse fields.
-                if (callbackResponse is IMessageDelivery<DeliveryFailure> deliveryFailure)
+                IMessageDelivery callbackResponse;
+                try
+                {
+                    callbackResponse = await actx.Host.Hub.Observe(delivery).FirstAsync().ToTask();
+                }
+                catch (Exception ex)
                 {
                     var dialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{deliveryFailure.Message.Message ?? "Delivery failed"}"),
+                        Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
                         "Save Failed"
                     ).WithSize("M");
                     actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
                     return;
                 }
-                if (callbackResponse is not IMessageDelivery<DataChangeResponse> dataChange)
+
+                // Handle routing failures (e.g., agent hub unreachable) and unexpected
+                // response shapes before touching the DataChangeResponse fields.
+                if (callbackResponse.Message is DeliveryFailure deliveryFailure)
+                {
+                    var dialog = Controls.Dialog(
+                        Controls.Markdown($"**Error saving:**\n\n{deliveryFailure.Message ?? "Delivery failed"}"),
+                        "Save Failed"
+                    ).WithSize("M");
+                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                    return;
+                }
+                if (callbackResponse.Message is not DataChangeResponse responseMsg)
                 {
                     var dialog = Controls.Dialog(
                         Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
@@ -468,7 +481,6 @@ public static class AgentView
                     actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
                     return;
                 }
-                var responseMsg = dataChange.Message;
 
                 if (responseMsg.Log.Status != ActivityStatus.Succeeded)
                 {

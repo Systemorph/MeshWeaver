@@ -104,6 +104,30 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         => NodeFactory.CreateNode(node).ToTask(ct);
 
     /// <summary>
+    /// Test-only Task wrapper around <see cref="MessageHubExtensions.Observe{TResponse}"/>:
+    /// posts <paramref name="request"/> via <paramref name="hub"/> (defaults to <see cref="Mesh"/>)
+    /// and awaits the typed response, propagating <see cref="DeliveryFailureException"/> /
+    /// <see cref="TimeoutException"/> as the awaited Task's exception.
+    /// <para>
+    /// Use ONLY in test code — production hub handlers / click actions / services MUST stay
+    /// on the observable form (<c>hub.Observe(request).Subscribe(...)</c>). The Task return
+    /// is a deliberate test-ergonomics affordance, not a sanctioned production pattern.
+    /// </para>
+    /// <para>
+    /// Default cancellation = <see cref="TestContext.Current"/>'s
+    /// <see cref="ITestContext.CancellationToken"/> — never pass <c>default</c>.
+    /// </para>
+    /// </summary>
+    protected Task<IMessageDelivery<TResponse>> AwaitResponseAsync<TResponse>(
+        IRequest<TResponse> request,
+        Func<PostOptions, PostOptions>? options = null,
+        IMessageHub? hub = null,
+        CancellationToken? ct = null)
+        => (hub ?? Mesh).Observe(request, options)
+            .FirstAsync()
+            .ToTask(ct ?? TestContext.Current.CancellationToken);
+
+    /// <summary>
     /// Canonical CQRS-correct read primitive for tests: the per-node hub's
     /// <see cref="MeshNodeReference"/> reducer, surfaced as
     /// <see cref="IObservable{MeshNode}"/> via
@@ -153,13 +177,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected async Task<MeshNode?> ReadNodeAsync(string path, CancellationToken ct)
     {
         var reader = Mesh.GetHostedHub(ReadHubAddress, c => c);
-        // Wall-clock-bound the wait via Task.WhenAny — does NOT rely on the inner
-        // AwaitResponse honouring cancellation, because routing failures on a path
-        // with no per-node hub don't always cancel cleanly.
-        var requestTask = reader.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)),
-            ct);
+        // Wall-clock-bound the wait via Task.WhenAny — routing failures on a path
+        // with no per-node hub don't always cancel cleanly through the inner observable.
+        var requestTask = reader.Observe(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address(path)))
+            .FirstAsync().ToTask(ct);
         var winner = await Task.WhenAny(requestTask, Task.Delay(ReadNodeTimeout, ct));
         if (winner != requestTask)
         {

@@ -120,8 +120,10 @@ public static class MeshCatalogView
     {
         var nodePath = host.Hub.Address.ToString();
 
-        // Reactive: own-node MeshNodeReference stream, no QueryAsync, no FromAsync.
-        return host.Workspace.GetMeshNodeStream().Take(1).Select(node =>
+        // One-shot read of the node's current state via GetDataRequest — true
+        // request/response, no SubscribeRequest+immediate-unsubscribe. The
+        // MeshNodeEditorControl below binds reactively to NodePath for live updates.
+        return host.Hub.GetMeshNode(nodePath).Select(node =>
         {
             var stack = Controls.Stack.WithWidth("100%");
 

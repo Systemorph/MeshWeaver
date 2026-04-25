@@ -50,9 +50,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         // 2. Create a thread under the context
         var client = GetClient();
-        var threadResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Plan a project setup")),
-            o => o.WithTarget(new Address(contextPath)));
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Plan a project setup")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
 
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
         var threadPath = threadResponse.Message.Node!.Path;
@@ -62,9 +60,9 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var planContent = @"## Plan: Set up project structure
 
 ### Steps
-1. Create Engineering department — `Create` — node under PlanTestOrg
-2. Create Marketing department — `Create` — node under PlanTestOrg
-3. Create README pages — `Create` — one per department
+1. Create Engineering department â€” `Create` â€” node under PlanTestOrg
+2. Create Marketing department â€” `Create` â€” node under PlanTestOrg
+3. Create README pages â€” `Create` â€” one per department
 
 ### Notes
 - All nodes use Markdown type
@@ -106,9 +104,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             new MeshNode(contextPath) { Name = "Partition Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var threadResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test partition storage")),
-            o => o.WithTarget(new Address(contextPath)));
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Test partition storage")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
         var threadPath = threadResponse.Message.Node!.Path;
 
@@ -145,9 +141,7 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             new MeshNode(contextPath) { Name = "Update Plan Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var threadResponse = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Update plan test")),
-            o => o.WithTarget(new Address(contextPath)));
+        var threadResponse = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Update plan test")), o => o.WithTarget(new Address(contextPath))).FirstAsync().ToTask();
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
         var threadPath = threadResponse.Message.Node!.Path;
 

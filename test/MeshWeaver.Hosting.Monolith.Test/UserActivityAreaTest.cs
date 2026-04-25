@@ -93,7 +93,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         var cachedConfig = nodeTypeService.GetCachedHubConfiguration("User");
         cachedConfig.Should().NotBeNull(
-            "User node type should be registered via AddGraph() → AddUserType() with HubConfiguration");
+            "User node type should be registered via AddGraph() â†’ AddUserType() with HubConfiguration");
     }
 
     /// <summary>
@@ -121,7 +121,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         node.Should().NotBeNull("Oliver user node should exist in samples/Graph/Data/User/TestUser.json");
         node!.NodeType.Should().Be("User");
 
-        // Enrich with node type — this should attach HubConfiguration
+        // Enrich with node type â€” this should attach HubConfiguration
         var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(node);
         enriched.HubConfiguration.Should().NotBeNull(
             "After enrichment, User node should have HubConfiguration from UserNodeType");
@@ -137,9 +137,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var rolandAddress = new Address("User/TestUser");
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(rolandAddress));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).FirstAsync().ToTask();
 
         response.Should().NotBeNull("User/TestUser hub should be created and respond to ping");
     }
@@ -156,9 +154,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var rolandAddress = new Address("User/TestUser");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(rolandAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -170,18 +166,18 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
 
         value.Should().NotBe(default(JsonElement),
-            "Activity area should render for User/TestUser — AddUserActivityViews() must be invoked");
+            "Activity area should render for User/TestUser â€” AddUserActivityViews() must be invoked");
     }
 
     /// <summary>
     /// Simulates the production onboarding flow: creates a User node at runtime
     /// (not pre-registered via AddMeshNodes), then verifies the Activity area resolves.
-    /// This tests the path: persistence → MeshCatalog.ResolvePathAsync → routing → hub creation.
+    /// This tests the path: persistence â†’ MeshCatalog.ResolvePathAsync â†’ routing â†’ hub creation.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task ActivityArea_WorksForRuntimeCreatedUser()
     {
-        // Arrange — create a user node at runtime (simulating onboarding)
+        // Arrange â€” create a user node at runtime (simulating onboarding)
         var username = $"RuntimeUser_{Guid.NewGuid():N}"[..20];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -197,14 +193,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
             });
         }
 
-        // Act — request the Activity area (same as Index.razor does)
+        // Act â€” request the Activity area (same as Index.razor does)
         var client = GetClient();
         var userAddress = new Address("User", username);
 
         // First, verify the hub can be created
-        var pingResponse = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(userAddress));
+        var pingResponse = await client.Observe(new PingRequest(), o => o.WithTarget(userAddress)).FirstAsync().ToTask();
         pingResponse.Should().NotBeNull($"User/{username} hub should be created and respond to ping");
 
         // Now request the Activity layout area
@@ -217,12 +211,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Assert
         value.Should().NotBe(default(JsonElement),
-            "Activity area should render for a runtime-created User node — " +
-            "this simulates the production onboarding → Index.razor flow");
+            "Activity area should render for a runtime-created User node â€” " +
+            "this simulates the production onboarding â†’ Index.razor flow");
     }
 
     /// <summary>
-    /// Also verify the Overview area works (baseline — this uses AddDefaultLayoutAreas).
+    /// Also verify the Overview area works (baseline â€” this uses AddDefaultLayoutAreas).
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task OverviewArea_CanBeResolved_ForUserRoland()
@@ -230,9 +224,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var rolandAddress = new Address("User/TestUser");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(rolandAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(rolandAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
@@ -244,6 +236,6 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
 
         value.Should().NotBe(default(JsonElement),
-            "Overview area should render for User/TestUser — AddDefaultLayoutAreas() must be invoked");
+            "Overview area should render for User/TestUser â€” AddDefaultLayoutAreas() must be invoked");
     }
 }

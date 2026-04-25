@@ -20,6 +20,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Acme.Test;
 
 /// <summary>
@@ -83,9 +84,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(acmeAddress));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(acmeAddress)).FirstAsync().ToTask();
 
         response.Should().NotBeNull();
     }
@@ -100,9 +99,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(projectTypeAddress));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(projectTypeAddress)).FirstAsync().ToTask();
 
         response.Should().NotBeNull();
     }
@@ -117,9 +114,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(todoTypeAddress));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(todoTypeAddress)).FirstAsync().ToTask();
 
         response.Should().NotBeNull();
     }
@@ -134,9 +129,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(productLaunchAddress));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(productLaunchAddress)).FirstAsync().ToTask();
 
         response.Should().NotBeNull();
     }
@@ -151,9 +144,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         var client = GetClient(c => c.AddData(data => data));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(taskAddress));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(taskAddress)).FirstAsync().ToTask();
 
         response.Should().NotBeNull();
     }

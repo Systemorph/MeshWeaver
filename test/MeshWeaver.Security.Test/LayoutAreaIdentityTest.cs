@@ -18,6 +18,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -63,8 +64,7 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         var client = GetClientWithUser("Viewer1");
         var nodeAddress = new Address(NodePath);
 
-        await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -80,8 +80,7 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         var client = GetClientWithUser("NoAccess");
         var nodeAddress = new Address(NodePath);
 
-        await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -108,8 +107,7 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
         // When the client creates a remote stream, the SubscribeRequest
         // should have Identity = "Viewer1" (stamped from CircuitContext)
         var nodeAddress = new Address(NodePath);
-        await client.AwaitResponse(
-            new PingRequest(), o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(

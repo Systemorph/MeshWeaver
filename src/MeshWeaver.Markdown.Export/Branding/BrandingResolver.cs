@@ -32,11 +32,8 @@ public class BrandingResolver(IMessageHub hub, ExportTemplateResolver templateRe
                 .Select(logo => BrandingOptions.Default with { Logo = logo });
         }
 
-        return hub.GetWorkspace().GetMeshNodeStream(brandNodePath)
-            .Select(n => (MeshNode?)n)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+        // One-shot read — GetDataRequest, no SubscribeRequest round-trip.
+        return hub.GetMeshNode(brandNodePath, TimeSpan.FromSeconds(10))
             .SelectMany(node =>
             {
                 if (node is null)

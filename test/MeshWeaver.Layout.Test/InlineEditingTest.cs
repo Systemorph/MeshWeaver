@@ -17,6 +17,7 @@ using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Layout.Test;
 
 /// <summary>
@@ -381,7 +382,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
 
 /// <summary>
 /// Tests for inline editing with actual data persistence via DataChangeRequest.
-/// Verifies the complete flow: UpdatePointer → auto-save → DataChangeRequest → GetDataRequest returns changed value.
+/// Verifies the complete flow: UpdatePointer â†’ auto-save â†’ DataChangeRequest â†’ GetDataRequest returns changed value.
 /// </summary>
 [Collection("InlineEditingPersistenceTests")]
 public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
@@ -467,9 +468,7 @@ public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBas
                     initialJson = currentJson;
 
                     // Issue DataChangeRequest to persist the change
-                    var response = await host.Hub.AwaitResponse<DataChangeResponse>(
-                        new DataChangeRequest().WithUpdates(updatedContent),
-                        o => o.WithTarget(host.Hub.Address));
+                    var response = await host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(updatedContent), o => o.WithTarget(host.Hub.Address)).FirstAsync().ToTask();
 
                     Output.WriteLine($"Auto-save: DataChangeResponse status = {response.Message.Status}");
                 }));
@@ -746,9 +745,7 @@ public class ObjectTypeAutoSaveTest(ITestOutputHelper output) : HubTestBase(outp
 
                     if (typedContent != null)
                     {
-                        var response = await host.Hub.AwaitResponse<DataChangeResponse>(
-                            new DataChangeRequest().WithUpdates(typedContent),
-                            o => o.WithTarget(host.Hub.Address));
+                        var response = await host.Hub.Observe<DataChangeResponse>(new DataChangeRequest().WithUpdates(typedContent), o => o.WithTarget(host.Hub.Address)).FirstAsync().ToTask();
                         Output.WriteLine($"Auto-save (object): DataChangeResponse status = {response.Message.Status}");
                     }
                 }));

@@ -83,9 +83,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var testDataAddress = new Address(TestPartition);
 
         // Initialize TestData hub via ping
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(testDataAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).FirstAsync().ToTask();
 
         // Verify IMeshService finds the pre-seeded data
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}", null, TestContext.Current.CancellationToken)
@@ -103,14 +101,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var orgAddress = new Address($"{TestPartition}/org1");
 
         // Initialize TestData hub first (required for routing to child hubs)
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(testDataAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).FirstAsync().ToTask();
 
         // Initialize org hub via ping
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(orgAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).FirstAsync().ToTask();
 
         // Verify IMeshService finds the pre-seeded projects
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/org1", null, TestContext.Current.CancellationToken)
@@ -128,14 +122,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var projAddress = new Address($"{TestPartition}/org1/proj1");
 
         // Initialize TestData hub first (required for routing to child hubs)
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(testDataAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(testDataAddress)).FirstAsync().ToTask();
 
         // Initialize project hub via ping
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(projAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(projAddress)).FirstAsync().ToTask();
 
         // Verify IMeshService finds the pre-seeded items
         var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{TestPartition}/org1/proj1", null, TestContext.Current.CancellationToken)
@@ -314,7 +304,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await WaitForQueryPathSetAsync(subtreeQuery, set => set.Contains(src), ct);
 
         // Act
-        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o, ct);
+        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).FirstAsync().ToTask(ct);
         var moved = response.Message.Node;
 
         // Assert
@@ -322,7 +312,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         moved!.Path.Should().Be(dst);
         moved.Name.Should().Be("Move Test");
 
-        // Catalog-bound wait — ReadNodeAsync(src) would falsely succeed via the
+        // Catalog-bound wait â€” ReadNodeAsync(src) would falsely succeed via the
         // TestPartition ancestor's MeshNodeReference reducer.
         var paths = await WaitForQueryPathSetAsync(subtreeQuery,
             set => !set.Contains(src) && set.Contains(dst), ct);
@@ -357,7 +347,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
                 && set.Contains($"{parent}/child1/grandchild"), ct);
 
         // Act
-        await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(parent, newParentPath), o => o, ct);
+        await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(parent, newParentPath), o => o).FirstAsync().ToTask(ct);
 
         // Assert - old paths should not exist, new paths should exist (catalog-bound).
         // ReadNodeAsync on the old paths would falsely succeed via the TestPartition
@@ -411,14 +401,14 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await WaitForQueryPathSetAsync(subtreeQuery, set => set.Contains(src), ct);
 
         // Act - move via MoveNodeRequest
-        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o, ct);
+        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).FirstAsync().ToTask(ct);
 
         // Assert - node should be at new path
         response.Message.Success.Should().BeTrue("Move should succeed");
         response.Message.Node.Should().NotBeNull();
         response.Message.Node!.Path.Should().Be(dst);
 
-        // Catalog-bound check — ReadNodeAsync on src would falsely succeed via
+        // Catalog-bound check â€” ReadNodeAsync on src would falsely succeed via
         // the TestPartition ancestor.
         var paths = await WaitForQueryPathSetAsync(subtreeQuery,
             set => !set.Contains(src) && set.Contains(dst), ct);
@@ -436,7 +426,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task MoveNodeAsync_ThrowsWhenSourceNotFound()
     {
         // Act - move via MoveNodeRequest (unique names to avoid filesystem collisions)
-        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest($"{TestPartition}/nonexistent-{_uid}", $"{TestPartition}/newpath-{_uid}"), o => o, TestContext.Current.CancellationToken);
+        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest($"{TestPartition}/nonexistent-{_uid}", $"{TestPartition}/newpath-{_uid}"), o => o).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert - should fail with source not found
         response.Message.Success.Should().BeFalse("Move should fail when source doesn't exist");
@@ -456,7 +446,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await NodeFactory.CreateNode(MeshNode.FromPath(dst) with { Name = "Target", NodeType = "Markdown" });
 
         // Act - move via MoveNodeRequest
-        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o, TestContext.Current.CancellationToken);
+        var response = await Mesh.Observe<MoveNodeResponse>(new MoveNodeRequest(src, dst), o => o).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert - should fail because target already exists
         response.Message.Success.Should().BeFalse("Move should fail when target already exists");
@@ -481,9 +471,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
 
         // Initialize org hub - this should also set up default views
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(orgAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).FirstAsync().ToTask();
 
         // Act: Request the default layout area (Overview) using stream
         // This should not hang if default views are properly configured
@@ -512,9 +500,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
 
         // Initialize org hub - this should also set up default views
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(orgAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(orgAddress)).FirstAsync().ToTask();
 
         // Act: Request empty area - should return default view (Details)
         var workspace = client.GetWorkspace();
@@ -544,9 +530,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
 
         // Initialize Organization hub - this is a NodeType node
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(typeOrgAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(typeOrgAddress)).FirstAsync().ToTask();
 
         // Act: Request Search area directly (the default view for NodeType)
         var workspace = client.GetWorkspace();
@@ -653,7 +637,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         foreach (var node in nodes)
             Output.WriteLine($"Found with namespace: {node.Path}");
 
-        // Assert: namespace: only checks 1 level deep — Code nodes are at depth 2 (ACME/Project/Source/id)
+        // Assert: namespace: only checks 1 level deep â€” Code nodes are at depth 2 (ACME/Project/Source/id)
         nodes.Should().BeEmpty("namespace: only finds immediate children; Code nodes are 2 levels deep");
     }
 
@@ -1013,9 +997,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public async Task Project_PingRequest_ShouldNotDeadlock()
     {
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(new Address(ProjectNodeTypePath)));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(new Address(ProjectNodeTypePath))).FirstAsync().ToTask();
         response.Should().NotBeNull();
     }
 

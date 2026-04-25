@@ -42,7 +42,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         return base.ConfigureClient(configuration);
     }
 
-    // ── Thread fan-out ──────────────────────────────────────────────────
+    // â”€â”€ Thread fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeTypeThread_FansOutAcrossAllPartitions()
@@ -55,21 +55,17 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
 
         var client = GetClient();
 
-        var resp1 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionA", "Thread in A", AdminUserId)),
-            o => o.WithTarget(new Address("PartitionA")), TestTimeout);
+        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionA", "Thread in A", AdminUserId)), o => o.WithTarget(new Address("PartitionA"))).FirstAsync().ToTask(TestTimeout);
         resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
         var threadA = resp1.Message.Node!.Path!;
         Output.WriteLine($"Thread A: {threadA}");
 
-        var resp2 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionB", "Thread in B", AdminUserId)),
-            o => o.WithTarget(new Address("PartitionB")), TestTimeout);
+        var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartitionB", "Thread in B", AdminUserId)), o => o.WithTarget(new Address("PartitionB"))).FirstAsync().ToTask(TestTimeout);
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
         var threadB = resp2.Message.Node!.Path!;
         Output.WriteLine($"Thread B: {threadB}");
 
-        // Act: query nodeType:Thread without namespace — should fan out to all _Thread tables
+        // Act: query nodeType:Thread without namespace â€” should fan out to all _Thread tables
         var results = await MeshQuery
             .QueryAsync<MeshNode>("nodeType:Thread sort:LastModified-desc")
             .ToListAsync();
@@ -93,17 +89,13 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
 
         var client = GetClient();
 
-        var resp1 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsX", "X thread", AdminUserId)),
-            o => o.WithTarget(new Address("NsX")), TestTimeout);
+        var resp1 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsX", "X thread", AdminUserId)), o => o.WithTarget(new Address("NsX"))).FirstAsync().ToTask(TestTimeout);
         resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
 
-        var resp2 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsY", "Y thread", AdminUserId)),
-            o => o.WithTarget(new Address("NsY")), TestTimeout);
+        var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsY", "Y thread", AdminUserId)), o => o.WithTarget(new Address("NsY"))).FirstAsync().ToTask(TestTimeout);
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
 
-        // Act: query with explicit namespace — should only return threads from NsX
+        // Act: query with explicit namespace â€” should only return threads from NsX
         var results = await MeshQuery
             .QueryAsync<MeshNode>("namespace:NsX nodeType:Thread sort:LastModified-desc")
             .ToListAsync();
@@ -115,7 +107,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
             "namespace-scoped query should only return threads from that namespace");
     }
 
-    // ── Comment fan-out ─────────────────────────────────────────────────
+    // â”€â”€ Comment fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 30000)]
     public async Task NodeTypeComment_FansOutAcrossAllPartitions()

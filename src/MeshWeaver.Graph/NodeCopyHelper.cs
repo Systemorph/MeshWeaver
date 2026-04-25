@@ -26,14 +26,12 @@ public static class NodeCopyHelper
         bool force,
         ILogger? logger = null)
     {
-        // Source node: authoritative read via the per-node MeshNodeReference reducer
-        // (NEVER ObserveQuery/QueryAsync for a single node's content — see
-        // Doc/Architecture/AsynchronousCalls.md "Never use QueryAsync to obtain a MeshNode").
-        // Bound with Timeout so a missing path / cold hub doesn't hang forever.
-        var source = hub.GetWorkspace().GetMeshNodeStream(sourcePath)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
+        // Source node: authoritative one-shot read via GetDataRequest on the per-node
+        // MeshNodeReference reducer (NEVER ObserveQuery/QueryAsync for a single node's
+        // content, and NEVER GetMeshNodeStream(...).Take(1) which pays for a stream
+        // subscription it immediately unsubscribes; see Doc/Architecture/AsynchronousCalls.md).
+        // Returns null if the cold hub never activates (path doesn't exist).
+        var source = hub.GetMeshNode(sourcePath, TimeSpan.FromSeconds(15));
 
         // Descendants is a listing — ObserveQuery is the correct primitive for
         // namespace/predicate sets.
@@ -78,18 +76,15 @@ public static class NodeCopyHelper
                     if (force)
                         return create;
 
-                    // Existence-check via the per-node MeshNodeReference reducer — direct,
-                    // authoritative, no read-side index lag. Bound with Timeout so a
-                    // never-existed path (cold hub never activates) returns "doesn't exist"
-                    // promptly instead of hanging.
-                    return hub.GetWorkspace().GetMeshNodeStream(newPath)
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(5))
-                        .Select(_ => true)
-                        .Catch<bool, Exception>(_ => Observable.Return(false))
-                        .SelectMany(exists =>
+                    // Existence-check via one-shot GetDataRequest on the per-node
+                    // MeshNodeReference reducer — true request/response, no lingering
+                    // subscription. The cold hub never activates for a non-existent
+                    // path, so the helper returns null after Timeout — that's our
+                    // "doesn't exist" signal.
+                    return hub.GetMeshNode(newPath, TimeSpan.FromSeconds(5))
+                        .SelectMany(existing =>
                         {
-                            if (exists)
+                            if (existing != null)
                             {
                                 logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
                                 return Observable.Return(0);

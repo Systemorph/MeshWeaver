@@ -21,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
@@ -46,9 +47,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address), ct);
+        var response = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -59,23 +58,23 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = text, Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new SubmitMessageRequest
+        await client.Observe(new SubmitMessageRequest
         {
             ThreadPath = threadPath, UserMessageText = text, ContextPath = ContextPath,
             UserMessageId = userMsgId, ResponseMessageId = responseMsgId
-        }, o => o.WithTarget(new Address(threadPath)), ct);
+        }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         // Wait for execution to complete (Messages count reaches expected)
         for (var i = 0; i < 60; i++)
@@ -142,7 +141,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             "second call: system + 2 history (user+assistant) + 1 new user = 4 total");
     }
 
-    #region Echo LLM — responds with message count to verify history is passed
+    #region Echo LLM â€” responds with message count to verify history is passed
 
     private class EchoChatClient : IChatClient
     {

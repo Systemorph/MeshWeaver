@@ -12,6 +12,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
@@ -155,7 +156,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         // Wait for debounce and processing
         await Task.Delay(300);
 
-        // Assert — at least one Updated notification for the node
+        // Assert â€” at least one Updated notification for the node
         receivedChanges.Should().HaveCountGreaterThanOrEqualTo(2);
         var updateChange = receivedChanges.Last(c => c.ChangeType == QueryChangeType.Updated);
         updateChange.Items.Should().HaveCount(1);
@@ -284,7 +285,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
     [Fact]
     public async Task ObserveQuery_ScopeExact_OnlyNotifiesExactPath()
     {
-        // Arrange — use unique path to avoid collision with base-class setup
+        // Arrange â€” use unique path to avoid collision with base-class setup
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("TestOrg") with { Name = "TestOrg", NodeType = "Group" });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
@@ -397,7 +398,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Move the node via MoveNodeRequest
-        await Mesh.AwaitResponse(new MoveNodeRequest("ACME/Project1", "ACME/Project1Moved"), o => o);
+        await Mesh.Observe(new MoveNodeRequest("ACME/Project1", "ACME/Project1Moved"), o => o).FirstAsync().ToTask();
         await Task.Delay(300);
 
         // Assert - Should have both Removed (old path) and Added (new path) notifications

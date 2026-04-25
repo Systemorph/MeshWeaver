@@ -11,6 +11,8 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
@@ -24,7 +26,7 @@ namespace MeshWeaver.AI.Test;
 /// truly-async Post + RegisterCallback + TCS pattern (see
 /// <c>Doc/Architecture/AsynchronousCalls</c>). Routing failures propagate back through
 /// the callback as a <c>DeliveryFailure</c> and the plugin returns a user-actionable
-/// error string — never <c>hub.AwaitResponse</c>, which would deadlock the hub.
+/// error string â€” never <c>hub.AwaitResponse</c>, which would deadlock the hub.
 /// </summary>
 public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -33,7 +35,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     /// <summary>
     /// Foundational contract: posting a <see cref="CreateSuggestedEditRequest"/> to an
     /// address with no registered hub must raise <see cref="DeliveryFailureException"/>
-    /// when using <c>AwaitResponse</c> — this test uses the test-only await style that
+    /// when using <c>AwaitResponse</c> â€” this test uses the test-only await style that
     /// CLAUDE.md permits in test code. Production plugin code must NOT use
     /// <c>AwaitResponse</c>; it uses Post + RegisterCallback + TCS instead (exercised
     /// by the plugin-level tests below). This test locks the routing contract that
@@ -45,15 +47,13 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
         var nonExistent = new Address("NonExistent", "Document/definitely-not-here");
 
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await Mesh.AwaitResponse(
-                new CreateSuggestedEditRequest
+            await Mesh.Observe(new CreateSuggestedEditRequest
                 {
                     DocumentId = "NonExistent/Document/definitely-not-here",
                     Position = 0,
                     InsertedText = "test",
                     Author = "test"
-                },
-                o => o.WithTarget(nonExistent)));
+                }, o => o.WithTarget(nonExistent)).FirstAsync().ToTask());
 
         ex.Should().NotBeOfType<OperationCanceledException>(
             "the routing layer should fail fast, not time out");
@@ -70,15 +70,13 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
         var nonExistent = new Address("NonExistent", "Document/definitely-not-here");
 
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await Mesh.AwaitResponse(
-                new CreateCommentRequest
+            await Mesh.Observe(new CreateCommentRequest
                 {
                     DocumentId = "NonExistent/Document/definitely-not-here",
                     SelectedText = "foo",
                     CommentText = "bar",
                     Author = "test"
-                },
-                o => o.WithTarget(nonExistent)));
+                }, o => o.WithTarget(nonExistent)).FirstAsync().ToTask());
 
         ex.Should().NotBeOfType<OperationCanceledException>();
         ex.Should().NotBeOfType<TaskCanceledException>();
@@ -108,7 +106,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     }
 
     /// <summary>
-    /// Plugin-level coverage for <c>AddComment</c> — same early-exit contract as
+    /// Plugin-level coverage for <c>AddComment</c> â€” same early-exit contract as
     /// <see cref="SuggestEdit_NonResolvablePath_ReturnsDocumentNotFound"/>.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -127,7 +125,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     }
 
     /// <summary>
-    /// Minimal <see cref="IAgentChat"/> stub — <c>CollaborationPlugin</c> only reads
+    /// Minimal <see cref="IAgentChat"/> stub â€” <c>CollaborationPlugin</c> only reads
     /// <c>Context</c> (possibly null) and <c>Context.Path</c> for the author field.
     /// All other members throw.
     /// </summary>

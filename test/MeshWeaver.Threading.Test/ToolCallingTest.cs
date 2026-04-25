@@ -75,9 +75,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         // MeshNode key is Id (last segment), not full path
         var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
@@ -114,17 +112,17 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Search for test documents", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         // 4. Subscribe to Messages
         var twoMessages = ObserveMessages(client, threadPath)
@@ -134,16 +132,14 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         //    a) Return a Search tool call on first invocation
         //    b) The ChatClientAgent framework will execute the Search tool
         //    c) On second invocation (with tool result), return a text response
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+        var submitResponse = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Search for test documents",
                 ContextPath = ContextPath,
                 UserMessageId = userMsgId,
                 ResponseMessageId = responseMsgId
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
         // 5. Wait for message IDs

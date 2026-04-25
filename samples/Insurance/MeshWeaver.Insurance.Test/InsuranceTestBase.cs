@@ -24,10 +24,9 @@ public abstract class InsuranceTestBase(ITestOutputHelper output) : MonolithMesh
     protected async Task<IReadOnlyCollection<PropertyRisk>> GetPropertyRisksAsync(Address address)
     {
         var hub = Mesh;
-        var risksResp = await hub.AwaitResponse(
+        var risksResp = await AwaitResponseAsync(
             new GetDataRequest(new CollectionReference(nameof(PropertyRisk))),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
+            o => o.WithTarget(address));
 
         return (risksResp?.Message?.Data as IEnumerable<object>)?
             .Select(x => x as PropertyRisk ?? (x as JsonObject)?.Deserialize<PropertyRisk>(hub.JsonSerializerOptions))
@@ -40,10 +39,10 @@ public abstract class InsuranceTestBase(ITestOutputHelper output) : MonolithMesh
     protected async Task<IReadOnlyCollection<Pricing>> GetPricingsAsync()
     {
         var hub = Mesh;
-        var pricingsResp = await hub.AwaitResponse(
+        var pricingsResp = await AwaitResponseAsync(
             new GetDataRequest(new CollectionReference(nameof(Pricing))),
             o => o.WithTarget(InsuranceApplicationAttribute.Address),
-            new CancellationTokenSource(10.Seconds()).Token);
+            ct: new CancellationTokenSource(10.Seconds()).Token);
 
         return (pricingsResp.Message.Data as InstanceCollection)?
                .Instances.Values

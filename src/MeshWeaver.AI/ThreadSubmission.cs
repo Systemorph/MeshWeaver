@@ -109,12 +109,14 @@ public static class ThreadSubmission
             return;
         }
 
-        ctx.Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-        {
-            if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
-                ctx.OnError?.Invoke($"Submit failed: {fail.Message.Error ?? "unknown"}");
-            return response;
-        });
+        ctx.Hub.Observe((IMessageDelivery)delivery)
+            .Subscribe(
+                response =>
+                {
+                    if (response.Message is AppendUserMessageResponse { Success: false } fail)
+                        ctx.OnError?.Invoke($"Submit failed: {fail.Error ?? "unknown"}");
+                },
+                ex => ctx.OnError?.Invoke($"Submit failed: {ex.Message}"));
     }
 
     /// <summary>
@@ -143,44 +145,47 @@ public static class ThreadSubmission
             return;
         }
 
-        ctx.Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-        {
-            if (response is not IMessageDelivery<CreateNodeResponse> { Message.Success: true } cnr)
-            {
-                var err = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "unknown";
-                ctx.OnError?.Invoke($"Thread creation failed: {err}");
-                return response;
-            }
-
-            var createdNode = cnr.Message.Node ?? threadNode;
-            var createdPath = createdNode.Path ?? fallbackPath;
-            ctx.OnThreadCreated?.Invoke(createdNode);
-
-            var append = ctx.Hub.Post(
-                new AppendUserMessageRequest
+        ctx.Hub.Observe((IMessageDelivery)delivery)
+            .Subscribe(
+                response =>
                 {
-                    ThreadPath = createdPath,
-                    UserMessageId = Guid.NewGuid().ToString("N")[..8],
-                    UserText = ctx.UserText,
-                    AgentName = ctx.AgentName,
-                    ModelName = ctx.ModelName,
-                    ContextPath = ctx.ContextPath,
-                    Attachments = ctx.Attachments
+                    if (response.Message is not CreateNodeResponse { Success: true } cnr)
+                    {
+                        var err = (response.Message as CreateNodeResponse)?.Error ?? "unknown";
+                        ctx.OnError?.Invoke($"Thread creation failed: {err}");
+                        return;
+                    }
+
+                    var createdNode = cnr.Node ?? threadNode;
+                    var createdPath = createdNode.Path ?? fallbackPath;
+                    ctx.OnThreadCreated?.Invoke(createdNode);
+
+                    var append = ctx.Hub.Post(
+                        new AppendUserMessageRequest
+                        {
+                            ThreadPath = createdPath,
+                            UserMessageId = Guid.NewGuid().ToString("N")[..8],
+                            UserText = ctx.UserText,
+                            AgentName = ctx.AgentName,
+                            ModelName = ctx.ModelName,
+                            ContextPath = ctx.ContextPath,
+                            Attachments = ctx.Attachments
+                        },
+                        o => o.WithTarget(new Address(createdPath)));
+
+                    if (append != null)
+                    {
+                        ctx.Hub.Observe((IMessageDelivery)append)
+                            .Subscribe(
+                                appendResp =>
+                                {
+                                    if (appendResp.Message is AppendUserMessageResponse { Success: false } fail)
+                                        ctx.OnError?.Invoke($"Append after thread create failed: {fail.Error ?? "unknown"}");
+                                },
+                                ex => ctx.OnError?.Invoke($"Append after thread create failed: {ex.Message}"));
+                    }
                 },
-                o => o.WithTarget(new Address(createdPath)));
-
-            if (append != null)
-            {
-                ctx.Hub.RegisterCallback((IMessageDelivery)append, appendResp =>
-                {
-                    if (appendResp is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
-                        ctx.OnError?.Invoke($"Append after thread create failed: {fail.Message.Error ?? "unknown"}");
-                    return appendResp;
-                });
-            }
-
-            return response;
-        });
+                ex => ctx.OnError?.Invoke($"Thread creation failed: {ex.Message}"));
     }
 
     /// <summary>
@@ -213,12 +218,14 @@ public static class ThreadSubmission
             return;
         }
 
-        ctx.Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-        {
-            if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } fail)
-                ctx.OnError?.Invoke($"Resubmit failed: {fail.Message.Error ?? "unknown"}");
-            return response;
-        });
+        ctx.Hub.Observe((IMessageDelivery)delivery)
+            .Subscribe(
+                response =>
+                {
+                    if (response.Message is AppendUserMessageResponse { Success: false } fail)
+                        ctx.OnError?.Invoke($"Resubmit failed: {fail.Error ?? "unknown"}");
+                },
+                ex => ctx.OnError?.Invoke($"Resubmit failed: {ex.Message}"));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -636,96 +643,101 @@ internal static class ThreadSubmissionServer
                 return;
             }
 
-            hub.RegisterCallback((IMessageDelivery)createDelivery, response =>
-            {
-                if (response is not IMessageDelivery<CreateNodeResponse> { Message.Success: true })
-                {
-                    var err = (response as IMessageDelivery<CreateNodeResponse>)?.Message.Error ?? "unknown";
-                    logger?.LogWarning("[ThreadSubmission] Response cell creation failed for {ResponseMsgId} on {ThreadPath}: {Error}",
-                        responseMsgId, threadPath, err);
-                    onFailure?.Invoke();
-                    return response;
-                }
-
-                // Step 2: commit the round to the thread state (one atomic UpdateMeshNode).
-                // Both the user satellite cells (created above in the materialization step)
-                // and the response satellite cell (just confirmed in the CreateNodeRequest
-                // callback above) exist on the hub now. Only NOW do we add their ids into
-                // Messages — the GUI iterates Messages to render LayoutAreaControls, so
-                // every id it sees has a backing satellite.
-                //
-                // The IsExecuting check is the idempotency guard — every other watcher
-                // emission in this round skips, so this body runs exactly once per round.
-                hub.GetWorkspace().UpdateMeshNode(node =>
-                {
-                    var t = node.Content as MeshThread ?? new MeshThread();
-                    if (t.IsExecuting) return node;
-
-                    // User ids in dispatch order, then the response id last.
-                    // Contains check covers the resubmit case where u1 was already in
-                    // Messages from a prior round — ApplyResubmit removed u1 from
-                    // IngestedMessageIds (so the watcher re-dispatches it) but kept it
-                    // in Messages, so a blind AddRange would duplicate it.
-                    var msgs = t.Messages;
-                    foreach (var uid in dispatch.UserMessageIds)
-                        if (!msgs.Contains(uid)) msgs = msgs.Add(uid);
-                    msgs = msgs.Add(responseMsgId);
-
-                    var ingested = t.IngestedMessageIds.AddRange(
-                        dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
-
-                    // Drop consumed PendingUserMessages entries — their satellites now exist
-                    // and their ids are now in Messages.
-                    var pending = t.PendingUserMessages;
-                    foreach (var (uid, _) in pendingForRound)
-                        pending = pending.Remove(uid);
-
-                    return node with
+            hub.Observe((IMessageDelivery)createDelivery)
+                .Subscribe(
+                    response =>
                     {
-                        Content = t with
+                        if (response.Message is not CreateNodeResponse { Success: true })
                         {
-                            Messages = msgs,
-                            IngestedMessageIds = ingested,
-                            IsExecuting = true,
-                            ActiveMessageId = responseMsgId,
-                            ExecutionStartedAt = DateTime.UtcNow,
-                            TokensUsed = 0,
-                            ExecutionStatus = null,
-                            PendingUserMessage = null,
-                            PendingUserMessages = pending,
-                            PendingContextPath = dispatch.ContextPath,
-                            PendingAttachments = dispatch.Attachments?.ToImmutableList()
+                            var err = (response.Message as CreateNodeResponse)?.Error ?? "unknown";
+                            logger?.LogWarning("[ThreadSubmission] Response cell creation failed for {ResponseMsgId} on {ThreadPath}: {Error}",
+                                responseMsgId, threadPath, err);
+                            onFailure?.Invoke();
+                            return;
                         }
-                    };
-                });
 
-                hub.Post(
-                    new UpdateThreadMessageContent { Text = "Allocating agent..." },
-                    o => o.WithTarget(new Address(responsePath)));
+                        // Step 2: commit the round to the thread state (one atomic UpdateMeshNode).
+                        // Both the user satellite cells (created above in the materialization step)
+                        // and the response satellite cell (just confirmed in the CreateNodeRequest
+                        // callback above) exist on the hub now. Only NOW do we add their ids into
+                        // Messages — the GUI iterates Messages to render LayoutAreaControls, so
+                        // every id it sees has a backing satellite.
+                        //
+                        // The IsExecuting check is the idempotency guard — every other watcher
+                        // emission in this round skips, so this body runs exactly once per round.
+                        hub.GetWorkspace().UpdateMeshNode(node =>
+                        {
+                            var t = node.Content as MeshThread ?? new MeshThread();
+                            if (t.IsExecuting) return node;
 
-                // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
-                var executionHub = hub.GetHostedHub(
-                    new Address($"{hub.Address}/_Exec"),
-                    config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
-                    HostedHubCreation.Always);
+                            // User ids in dispatch order, then the response id last.
+                            // Contains check covers the resubmit case where u1 was already in
+                            // Messages from a prior round — ApplyResubmit removed u1 from
+                            // IngestedMessageIds (so the watcher re-dispatches it) but kept it
+                            // in Messages, so a blind AddRange would duplicate it.
+                            var msgs = t.Messages;
+                            foreach (var uid in dispatch.UserMessageIds)
+                                if (!msgs.Contains(uid)) msgs = msgs.Add(uid);
+                            msgs = msgs.Add(responseMsgId);
 
-                executionHub!.Post(
-                    new SubmitMessageRequest
-                    {
-                        ThreadPath = threadPath,
-                        UserMessageText = combinedUserText,
-                        UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
-                        ResponseMessageId = responseMsgId,
-                        ResponsePath = responsePath,
-                        AgentName = dispatch.AgentName,
-                        ModelName = dispatch.ModelName,
-                        ContextPath = dispatch.ContextPath,
-                        Attachments = dispatch.Attachments
+                            var ingested = t.IngestedMessageIds.AddRange(
+                                dispatch.UserMessageIds.Where(uid => !t.IngestedMessageIds.Contains(uid)));
+
+                            // Drop consumed PendingUserMessages entries — their satellites now exist
+                            // and their ids are now in Messages.
+                            var pending = t.PendingUserMessages;
+                            foreach (var (uid, _) in pendingForRound)
+                                pending = pending.Remove(uid);
+
+                            return node with
+                            {
+                                Content = t with
+                                {
+                                    Messages = msgs,
+                                    IngestedMessageIds = ingested,
+                                    IsExecuting = true,
+                                    ActiveMessageId = responseMsgId,
+                                    ExecutionStartedAt = DateTime.UtcNow,
+                                    TokensUsed = 0,
+                                    ExecutionStatus = null,
+                                    PendingUserMessage = null,
+                                    PendingUserMessages = pending,
+                                    PendingContextPath = dispatch.ContextPath,
+                                    PendingAttachments = dispatch.Attachments?.ToImmutableList()
+                                }
+                            };
+                        });
+
+                        hub.Post(
+                            new UpdateThreadMessageContent { Text = "Allocating agent..." },
+                            o => o.WithTarget(new Address(responsePath)));
+
+                        // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
+                        var executionHub = hub.GetHostedHub(
+                            new Address($"{hub.Address}/_Exec"),
+                            config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
+                            HostedHubCreation.Always);
+
+                        executionHub!.Post(
+                            new SubmitMessageRequest
+                            {
+                                ThreadPath = threadPath,
+                                UserMessageText = combinedUserText,
+                                UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
+                                ResponseMessageId = responseMsgId,
+                                ResponsePath = responsePath,
+                                AgentName = dispatch.AgentName,
+                                ModelName = dispatch.ModelName,
+                                ContextPath = dispatch.ContextPath,
+                                Attachments = dispatch.Attachments
+                            },
+                            o => userCtx != null ? o.WithAccessContext(userCtx) : o);
                     },
-                    o => userCtx != null ? o.WithAccessContext(userCtx) : o);
-
-                return response;
-            });
+                    ex =>
+                    {
+                        logger?.LogWarning(ex, "[ThreadSubmission] Response cell creation failed for {ResponseMsgId} on {ThreadPath}", responseMsgId, threadPath);
+                        onFailure?.Invoke();
+                    });
         }
 
         if (pendingForRound.Count == 0)

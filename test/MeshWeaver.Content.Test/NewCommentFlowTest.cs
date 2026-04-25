@@ -112,7 +112,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             PrimaryNodePath = docPath,
             MarkerId = markerId,
             Author = "TestAuthor",
-            Text = "",  // Empty initially — user edits after creation
+            Text = "",  // Empty initially â€” user edits after creation
             Status = CommentStatus.Active
         };
         var commentNode = new MeshNode(commentId, docPath)
@@ -126,15 +126,15 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         commentNode.Path.Should().Be($"{docPath}/{commentId}",
             "MeshNode(commentId, docPath) should produce Path = docPath/commentId");
 
-        // Act — create the node (same as meshCatalog.CreateNodeAsync in BuildNewCommentForm)
+        // Act â€” create the node (same as meshCatalog.CreateNodeAsync in BuildNewCommentForm)
         var createdNode = await NodeFactory.CreateNode(commentNode);
 
-        // Assert — node should be retrievable
+        // Assert â€” node should be retrievable
         createdNode.Should().NotBeNull("CreateNodeAsync should return the created node");
         createdNode.Path.Should().Be($"{docPath}/{commentId}");
         Output.WriteLine($"Created node path: {createdNode.Path}");
 
-        // Assert — node should be retrievable via per-node stream
+        // Assert â€” node should be retrievable via per-node stream
         var retrieved = await ReadNodeAsync(createdNode.Path!);
         retrieved.Should().NotBeNull("Comment should be retrievable after creation");
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
@@ -142,7 +142,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         retrievedComment.Text.Should().BeEmpty("Comment was created with empty text");
         Output.WriteLine($"Retrieved comment: Author={retrievedComment.Author}, Text='{retrievedComment.Text}'");
 
-        // Assert — node should appear in namespace: query (this is how ReadView finds comments)
+        // Assert â€” node should appear in namespace: query (this is how ReadView finds comments)
         var children = await MeshQuery.QueryAsync<MeshNode>(
             $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
         ).ToListAsync();
@@ -222,9 +222,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
 
         // Create comment
         var commentId = Guid.NewGuid().AsString();
@@ -251,11 +249,9 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var updatedNode = createdNode with { Content = updatedComment };
 
         Output.WriteLine($"Sending DataChangeRequest to WRONG address: {docAddress}");
-        await client.AwaitResponse(
-            new DataChangeRequest().WithUpdates(updatedNode),
-            o => o.WithTarget(docAddress)); // BUG: targeting parent instead of comment
+        await client.Observe(new DataChangeRequest().WithUpdates(updatedNode), o => o.WithTarget(docAddress)).FirstAsync().ToTask(); // BUG: targeting parent instead of comment
 
-        // Verify comment text did NOT change (still empty) — via per-node stream
+        // Verify comment text did NOT change (still empty) â€” via per-node stream
         var retrieved = await ReadNodeAsync(createdNode.Path!);
         retrieved.Should().NotBeNull();
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
@@ -280,9 +276,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var docAddress = new Address(docPath);
 
         // Initialize and wait for Read view
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
@@ -335,7 +329,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Full end-to-end test: Create comment → Edit text → Reload (re-query) → Verify persistence.
+    /// Full end-to-end test: Create comment â†’ Edit text â†’ Reload (re-query) â†’ Verify persistence.
     /// This simulates the complete user flow.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -347,9 +341,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // 1. Initialize hub
         Output.WriteLine("1. Initializing document hub...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
 
         // 2. Create empty comment (simulating "Comment" button)
         var commentId = Guid.NewGuid().AsString();
@@ -387,10 +379,10 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("3. Updating comment text via NodeFactory.UpdateNodeAsync...");
         await NodeFactory.UpdateNode(editedNode);
 
-        // 4. "Reload" — read content via the per-node MeshNodeReference stream.
+        // 4. "Reload" â€” read content via the per-node MeshNodeReference stream.
         // QueryAsync would race the eventually-consistent catalog and return stale.
         var ct = TestContext.Current.CancellationToken;
-        Output.WriteLine("4. Simulating reload — reading content via per-node stream...");
+        Output.WriteLine("4. Simulating reload â€” reading content via per-node stream...");
         var reloaded = await ReadNodeAsync(created.Path!, ct);
         reloaded.Should().NotBeNull("Comment must survive reload");
         var reloadedComment = reloaded!.Content.Should().BeOfType<Comment>().Subject;
@@ -400,7 +392,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         reloadedComment.MarkerId.Should().Be(markerId);
         Output.WriteLine($"   Reloaded comment: Text='{reloadedComment.Text}', Author={reloadedComment.Author}");
 
-        // 5. Also verify via namespace: query (how ReadView finds comments) — wait
+        // 5. Also verify via namespace: query (how ReadView finds comments) â€” wait
         // for the catalog to surface the comment under the doc namespace.
         Output.WriteLine("5. Verifying via namespace: query...");
         var nsQuery = $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}";
@@ -433,9 +425,9 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var docAddress = new Address(docPath);
 
         // Initialize the document hub
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(docAddress), TestTimeout);
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask(TestTimeout);
 
-        // 0) Subscribe to markdown stream BEFORE sending request — wait for markers
+        // 0) Subscribe to markdown stream BEFORE sending request â€” wait for markers
         var workspace = client.GetWorkspace();
         string? capturedMarkerId = null;
         var markersAppeared = workspace.GetRemoteStream<MeshNode>(docAddress)!
@@ -446,9 +438,8 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             .FirstAsync()
             .ToTask(TestTimeout);
 
-        // 1) Send CreateCommentRequest via Post + RegisterCallback (never await)
-        var tcs = new TaskCompletionSource<CreateCommentResponse>();
-        var delivery = client.Post(
+        // 1) Send CreateCommentRequest — observable, no Task-await on hub thread.
+        var commentResponseDelivery = await client.Observe(
             new CreateCommentRequest
             {
                 DocumentId = docPath,
@@ -456,16 +447,10 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 CommentText = "This is a test comment via CreateCommentRequest",
                 Author = "TestAuthor"
             },
-            o => o.WithTarget(docAddress));
+            o => o.WithTarget(docAddress)).FirstAsync().ToTask(TestTimeout);
 
-        await client.RegisterCallback<CreateCommentResponse>(delivery!, response =>
-        {
-            tcs.TrySetResult(response.Message);
-            return response;
-        });
-
-        // 2) Wait for response
-        var commentResponse = await tcs.Task;
+        // 2) Read response
+        var commentResponse = commentResponseDelivery.Message;
         commentResponse.Success.Should().BeTrue("CreateCommentRequest should succeed");
         commentResponse.MarkerId.Should().NotBeNullOrEmpty();
         capturedMarkerId = commentResponse.MarkerId;
@@ -479,9 +464,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // 4) Verify comment node via GetDataRequest
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{capturedMarkerId}";
-        var commentNodeResponse = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), capturedMarkerId)),
-            o => o.WithTarget(new Address(commentPath)), TestTimeout);
+        var commentNodeResponse = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), capturedMarkerId)), o => o.WithTarget(new Address(commentPath))).FirstAsync().ToTask(TestTimeout);
         var commentNode = commentNodeResponse.Message.Data as MeshNode;
         commentNode.Should().NotBeNull($"Comment MeshNode should exist at {commentPath}");
         var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;
@@ -507,11 +490,10 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var docAddress = new Address(docPath);
 
         // Initialize the document hub
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(docAddress), TestTimeout);
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask(TestTimeout);
 
-        // Send via Post + RegisterCallback (no await)
-        var tcs = new TaskCompletionSource<CreateCommentResponse>();
-        var delivery = client.Post(
+        // Send via hub.Observe (observable, no Task-await on hub thread).
+        var commentResponseDelivery = await client.Observe(
             new CreateCommentRequest
             {
                 DocumentId = docPath,
@@ -519,23 +501,15 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 CommentText = "A page-level comment",
                 Author = "TestAuthor"
             },
-            o => o.WithTarget(docAddress));
+            o => o.WithTarget(docAddress)).FirstAsync().ToTask(TestTimeout);
 
-        await client.RegisterCallback<CreateCommentResponse>(delivery!, response =>
-        {
-            tcs.TrySetResult(response.Message);
-            return response;
-        });
-
-        var commentResponse = await tcs.Task;
+        var commentResponse = commentResponseDelivery.Message;
         commentResponse.Success.Should().BeTrue();
         Output.WriteLine($"Page-level comment created: MarkerId={commentResponse.MarkerId}");
 
         // Verify comment node via GetDataRequest
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{commentResponse.MarkerId}";
-        var commentNodeResponse = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), commentResponse.MarkerId!)),
-            o => o.WithTarget(new Address(commentPath)), TestTimeout);
+        var commentNodeResponse = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), commentResponse.MarkerId!)), o => o.WithTarget(new Address(commentPath))).FirstAsync().ToTask(TestTimeout);
         var commentNode = commentNodeResponse.Message.Data as MeshNode;
 
         commentNode.Should().NotBeNull();

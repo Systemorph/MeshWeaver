@@ -36,10 +36,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Delegation tests using the PRODUCTION ChatClientAgentFactory pipeline.
 /// The test factory extends ChatClientAgentFactory so delegation tools,
 /// MeshPlugin, and function calling middleware are all registered automatically.
-/// This tests the real delegation flow: agent calls delegate_to_agent →
-/// sub-thread created → sub-agent executes → result propagates back.
+/// This tests the real delegation flow: agent calls delegate_to_agent â†’
+/// sub-thread created â†’ sub-agent executes â†’ result propagates back.
 /// </summary>
-// TODO: needs custom shared fixture — uses DelegationProductionSiloConfigurator with
+// TODO: needs custom shared fixture â€” uses DelegationProductionSiloConfigurator with
 // DelegationTestAgentFactory which extends ChatClientAgentFactory. Per the existing comment,
 // the SwappableChatClientFactory pattern doesn't work for ChatClientAgentFactory subclasses.
 /// <summary>
@@ -92,9 +92,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(node),
-            o => o.WithTarget(new Address(targetAddress)), ct);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -102,9 +100,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
         // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
@@ -146,16 +142,14 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .FirstAsync()
             .ToTask(ct);
 
-        // 3. Submit message via AppendUserMessageRequest — triggers delegation via production ChatClientAgentFactory
-        var submitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        // 3. Submit message via AppendUserMessageRequest â€” triggers delegation via production ChatClientAgentFactory
+        var submitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Please delegate this research task",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("2. Message submitted");
 
@@ -164,7 +158,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         var responsePath = $"{threadPath}/{msgIds[1]}";
         Output.WriteLine($"3. Response message: {msgIds[1]}");
 
-        // 5. Subscribe to response message — wait for tool calls
+        // 5. Subscribe to response message â€” wait for tool calls
         Output.WriteLine("4. Waiting for tool calls on response...");
         var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
         ThreadMessage? finalResponse = null;
@@ -202,7 +196,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         subThread.Should().NotBeNull("sub-thread should exist");
         subThread!.Messages.Should().HaveCount(2, "sub-thread should have user + response");
         Output.WriteLine($"7. Sub-thread: {subThreadPath}, messages={subThread.Messages.Count}");
-        Output.WriteLine("8. PASSED — full delegation with DelegationPath");
+        Output.WriteLine("8. PASSED â€” full delegation with DelegationPath");
     }
 
     /// <summary>
@@ -226,15 +220,13 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
             .Where(ids => ids.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(
-            new AppendUserMessageRequest
+        await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Delegate something",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var msgIds = await twoMessages;
         Output.WriteLine($"1. Initial messages: [{string.Join(", ", msgIds)}]");
@@ -265,12 +257,12 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         Output.WriteLine($"3. After resubmit: [{string.Join(", ", newMsgIds)}]");
         newMsgIds[0].Should().Be(msgIds[0], "user message preserved");
         newMsgIds[1].Should().NotBe(msgIds[1], "new response cell");
-        Output.WriteLine("4. PASSED — resubmit after delegation, no deadlock");
+        Output.WriteLine("4. PASSED â€” resubmit after delegation, no deadlock");
     }
 }
 
 /// <summary>
-/// Test factory that extends ChatClientAgentFactory — gets delegation tools,
+/// Test factory that extends ChatClientAgentFactory â€” gets delegation tools,
 /// MeshPlugin, and middleware automatically from the production pipeline.
 /// Only overrides CreateChatClient to return a fake.
 /// </summary>

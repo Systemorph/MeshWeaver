@@ -93,9 +93,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var parentAddress = new Address("ACME/ProductLaunch");
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -138,9 +136,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var parentAddress = new Address("ACME/ProductLaunch");
 
         Output.WriteLine("Initializing hub...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -201,9 +197,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
             // Initialize the node's hub
             var nodeAddress = new Address(nodePath);
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress));
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
             Output.WriteLine("Node hub initialized.");
 
             // Transient nodes are auto-confirmed and redirected to Edit.
@@ -272,10 +266,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
             var nodeAddress = new Address(nodePath);
             using var pingCts = new CancellationTokenSource(3.Seconds());
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                pingCts.Token);
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(pingCts.Token);
             Output.WriteLine("Ping succeeded");
 
             var workspace = client.GetWorkspace();
@@ -308,7 +299,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             }
             else
             {
-                Output.WriteLine($"Create area returned {anyControl.GetType().Name} instead of StackControl — acceptable for custom NodeTypes");
+                Output.WriteLine($"Create area returned {anyControl.GetType().Name} instead of StackControl â€” acceptable for custom NodeTypes");
             }
         }
         finally
@@ -357,9 +348,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
             // Step 2: Initialize the node's hub (required for sending CreateNodeRequest)
             var nodeAddress = new Address(nodePath);
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress));
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Send CreateNodeRequest with State=Active (simulates Create button click)
@@ -541,9 +530,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
             // Step 2: Initialize the node's hub (this triggers MeshDataSource initialization)
             var nodeAddress = new Address(nodePath);
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress));
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Get the node from workspace to see what content was created
@@ -672,9 +659,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
             // Step 2: Initialize the node's hub
             var nodeAddress = new Address(nodePath);
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress));
+            await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Confirm the node (make it Active)
@@ -793,9 +778,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);

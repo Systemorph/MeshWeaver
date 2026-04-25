@@ -23,9 +23,10 @@ using Orleans.TestingHost;
 using Orleans.TestingHost.InProcess;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture — uses GraphDataSiloConfigurator with
+// TODO: needs custom shared fixture â€” uses GraphDataSiloConfigurator with
 // AddFileSystemPersistence(SamplesGraphData), which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Integration tests that verify Orleans routing works end-to-end
@@ -83,9 +84,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // First ping to ensure Organization grain is activated and compiled
         var pingResponse = await portal
-            .AwaitResponse(new PingRequest(),
-                o => o.WithTarget(organizationAddress),
-                new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
         Output.WriteLine($"Ping response: {pingResponse.Message.GetType().Name}");
 
         var workspace = portal.GetWorkspace();
@@ -107,9 +106,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         var organizationAddress = AddressExtensions.CreateAppAddress("Kernel");
 
         var pingResponse = await portal
-            .AwaitResponse(new PingRequest(),
-                o => o.WithTarget(organizationAddress),
-                new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
         Output.WriteLine($"Ping response: {pingResponse.Message.GetType().Name}");
 
         var workspace = portal.GetWorkspace();
@@ -150,9 +147,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         Output.WriteLine("Sending PingRequest to Organization via Orleans routing...");
         var response = await portal
-            .AwaitResponse(new PingRequest(),
-                o => o.WithTarget(organizationAddress),
-                new CancellationTokenSource(45.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(organizationAddress)).FirstAsync().ToTask(new CancellationTokenSource(45.Seconds()).Token);
 
         Output.WriteLine($"Received response: {response.Message.GetType().Name}");
         response.Should().NotBeNull();

@@ -22,6 +22,8 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
@@ -37,9 +39,9 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// specifically validates the dual-response (CellsCreated + ExecutionCompleted)
 /// semantic of the legacy submit pipeline. The new AppendUserMessageRequest API
 /// returns a single Success/Error response and the agent's response text lives
-/// only on the response satellite cell — there's no equivalent of the second
+/// only on the response satellite cell â€” there's no equivalent of the second
 /// completion response for this test to assert against. Internal production code
-/// (thread hub → _Exec sub-hub) still uses SubmitMessageRequest with this dual
+/// (thread hub â†’ _Exec sub-hub) still uses SubmitMessageRequest with this dual
 /// response semantic, so the underlying behaviour is still worth exercising
 /// while the legacy contract is in place.
 /// </summary>
@@ -57,7 +59,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
     /// The test uses RegisterCallback (same pattern as delegation tool)
     /// and collects all responses until ExecutionCompleted arrives.
     /// </summary>
-    // TODO(append-migration): kept on SubmitMessageRequest — see class-level comment.
+    // TODO(append-migration): kept on SubmitMessageRequest â€” see class-level comment.
     [Fact(Timeout = 60000)]
     public async Task SubmitMessage_ReceivesBothCellsCreated_AndExecutionCompleted()
     {
@@ -65,9 +67,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
         var client = await GetClientAsync();
 
         // Create thread
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("User/Roland", "Completion test", "Roland")),
-            o => o.WithTarget(new Address("User/Roland")), ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("User/Roland", "Completion test", "Roland")), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -86,31 +86,37 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
             o => o.WithTarget(new Address(threadPath)));
         delivery.Should().NotBeNull("Post should return delivery");
 
-        // RegisterCallback removes after first invocation — re-register for second response
-        void RegisterForResponse(IMessageDelivery del)
+        // hub.Observe completes after the first emission. Re-subscribe after CellsCreated
+        // to catch the second response (ExecutionCompleted) — same shape as the legacy
+        // RegisterCallback re-register pattern.
+        void SubscribeForResponse(IMessageDelivery del)
         {
-            _ = client.RegisterCallback(del, cb =>
-            {
-                if (cb is IMessageDelivery<SubmitMessageResponse> sr)
+            client.Observe(del).Subscribe(
+                cb =>
                 {
-                    var msg = sr.Message;
-                    Output.WriteLine($"Response: Status={msg.Status}, Success={msg.Success}, Error={msg.Error}, TextLen={msg.ResponseText?.Length ?? 0}");
-                    responses.Add((msg.Status, msg.Success, msg.ResponseText));
+                    if (cb.Message is SubmitMessageResponse msg)
+                    {
+                        Output.WriteLine($"Response: Status={msg.Status}, Success={msg.Success}, Error={msg.Error}, TextLen={msg.ResponseText?.Length ?? 0}");
+                        responses.Add((msg.Status, msg.Success, msg.ResponseText));
 
-                    if (msg.Status == SubmitMessageStatus.CellsCreated)
-                        RegisterForResponse(del); // Re-register for completion
+                        if (msg.Status == SubmitMessageStatus.CellsCreated)
+                            SubscribeForResponse(del); // Re-subscribe for completion
+                        else
+                            completionTcs.TrySetResult(msg.Success);
+                    }
                     else
-                        completionTcs.TrySetResult(msg.Success);
-                }
-                else if (cb is IMessageDelivery<DeliveryFailure> df)
+                    {
+                        Output.WriteLine($"Unexpected response: {cb.Message?.GetType().Name}");
+                        completionTcs.TrySetResult(false);
+                    }
+                },
+                ex =>
                 {
-                    Output.WriteLine($"DeliveryFailure: {df.Message.Message}");
+                    Output.WriteLine($"DeliveryFailure: {ex.Message}");
                     completionTcs.TrySetResult(false);
-                }
-                return cb;
-            });
+                });
         }
-        RegisterForResponse((IMessageDelivery)delivery!);
+        SubscribeForResponse((IMessageDelivery)delivery!);
 
         // Wait for execution to complete (with timeout)
         var timeoutTask = Task.Delay(45_000, ct);
@@ -120,7 +126,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
             Output.WriteLine($"TIMEOUT! Received {responses.Count} response(s): [{string.Join(", ", responses.Select(r => r.Status))}]");
         }
         completed.Should().Be(completionTcs.Task,
-            "should receive ExecutionCompleted before timeout — parent thread would hang otherwise");
+            "should receive ExecutionCompleted before timeout â€” parent thread would hang otherwise");
 
         // Verify we got both responses
         responses.Should().HaveCountGreaterThanOrEqualTo(2,

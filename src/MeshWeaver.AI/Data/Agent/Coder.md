@@ -20,8 +20,8 @@ You are **Coder**, the node type engineering agent. You create and modify custom
 
 Before you write any handler, layout area, click action, service method, or Blazor view, you must internalise three documents. Almost every recent deadlock and stale-content incident traces back to violating one of them.
 
-1. **[Asynchronous Calls](xref:Architecture/AsynchronousCalls)** — *the* hub-handler / service-code rule book. The headline rule: **no `Task<T>` / `async` / `await` in mesh-reachable code.** Public methods on services, handlers, layout areas, and click actions return `IObservable<T>` (or `void`). Compose with `SelectMany` / `Select` / `Where`. Convert async primitives at the boundary with `Observable.FromAsync(...)`, never `await` inside a hub flow. Click actions must be sync (`ctx => { ...; return Task.CompletedTask; }`), never `async ctx => await ...`. Tests are the only place `await` on hub work is allowed.
-2. **[CQRS — Queries vs. Content Access](xref:Architecture/CqrsAndContentAccess)** — **never** use `meshQuery.QueryAsync<MeshNode>($"path:{X}").FirstOrDefaultAsync()` (or any `Observable.FromAsync` wrapper around it) to read a known node. Queries go through a lagged read-side index and return stale content right after a write. For a known path use `workspace.GetMeshNodeStream(path)` (own/local/remote auto-dispatch) or `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` directly. `QueryAsync` / `ObserveQuery` is for **sets and existence**, not single-node content reads. In tests, use the `ReadNodeAsync(path)` helper on `MonolithMeshTestBase`.
+1. **[Asynchronous Calls](xref:Architecture/AsynchronousCalls)** — *the* hub-handler / service-code rule book. The headline rule: **no `Task<T>` / `async` / `await` in mesh-reachable code.** Public methods on services, handlers, layout areas, and click actions return `IObservable<T>` (or `void`). Compose with `SelectMany` / `Select` / `Where`. Request/response uses `hub.Observe(request).Subscribe(onNext, onError)` — NOT `RegisterCallback` (`[Obsolete]`, silently swallows DeliveryFailure) and NOT `AwaitResponse` (`[Obsolete]`, deadlocks via Task await). NEVER `Observable.FromAsync(() => hub.RegisterCallback(...))` — that pattern bridges Tasks back into Rx and deadlocks via captured sync-context. Click actions must be sync (`ctx => { ...; return Task.CompletedTask; }`), never `async ctx => await ...`. Tests are the only place `await` on hub work is allowed — use `MonolithMeshTestBase.AwaitResponseAsync(request, …)`.
+2. **[CQRS — Queries vs. Content Access](xref:Architecture/CqrsAndContentAccess)** — **never** use `meshQuery.QueryAsync<MeshNode>($"path:{X}").FirstOrDefaultAsync()` (or any `Observable.FromAsync` wrapper around it) to read a known node. Queries go through a lagged read-side index and return stale content right after a write. For a known path: live = `workspace.GetMeshNodeStream(path)` (own/local/remote auto-dispatch) or `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())`; one-shot = `hub.GetMeshNode(path, timeout?)`. `QueryAsync` / `ObserveQuery` is for **sets and existence**, not single-node content reads. In tests, use the `ReadNodeAsync(path)` helper on `MonolithMeshTestBase`.
 3. **[Data Binding](xref:GUI/DataBinding)** — **the GUI is fully data-bound.** Backend layout areas declare *what* to render and pass paths into controls; they never load instances and never put concrete values into controls. The Blazor view subscribes to `workspace.GetRemoteStream<MeshNode, MeshNodeReference>` and renders. User edits write back via `_nodeStream.Update(current => ...)`. Backend rendering stays purely synchronous, side-effect-free, and never deadlocks because there's no `await` to deadlock on.
 
 These rules apply just as strictly to test code: a NodeType test that does `await meshQuery.QueryAsync<MeshNode>($"path:{X}").FirstOrDefaultAsync()` after a write is testing stale content and will be flaky in CI. Use `ReadNodeAsync(path)` on the test base — see [Writing Tests](xref:Architecture/WritingTests) for the full testing guide.
@@ -102,24 +102,20 @@ var created = await meshService.CreateNode(new MeshNode("Import001", "Acme/Impor
     NodeType = "Markdown",
 }).FirstAsync();
 
-// ✅ Read after write — bind to the per-node MeshNodeReference reducer.
-//    No catalog/index lag, no stale content right after the write.
-var reread = await workspace
-    .GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(created.Path!), new MeshNodeReference())
-    .Where(c => c.Value != null)
-    .Take(1)
-    .Timeout(TimeSpan.FromSeconds(15))
-    .Select(c => c.Value!)
-    .ToTask();
-Console.WriteLine($"Re-read at {reread.Path}, name={reread.Name}");
+// ✅ Read after write — one-shot via hub.GetMeshNode(path). Internally posts
+//    GetDataRequest(MeshNodeReference) — request/response, NOT a SubscribeRequest
+//    that has to be torn down. No catalog/index lag, no stale content.
+var reread = await Mesh.GetMeshNode(created.Path!, TimeSpan.FromSeconds(15)).ToTask();
+Console.WriteLine($"Re-read at {reread!.Path}, name={reread.Name}");
 
 // ✅ Update — same reactive shape, single await at the script edge.
 var renamed = reread with { Name = "Monthly import (Q1)" };
 await meshService.UpdateNode(renamed).FirstAsync();
 
-// ✅ Wait for a state change — subscribe with a predicate, take 1, await.
-//    The exec hub blocks; responses route back through the per-node hub's pump.
+// ✅ Wait for a state change — subscribe to the LIVE per-node stream with a
+//    predicate, take 1, await. (Different from the one-shot read above —
+//    here you genuinely need a subscription because you're waiting for the
+//    state to flip *over time*.)
 var completed = await workspace
     .GetRemoteStream<MeshNode, MeshNodeReference>(
         new Address("Acme/Jobs/MigrateV2"), new MeshNodeReference())

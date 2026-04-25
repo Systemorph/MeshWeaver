@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -368,11 +369,10 @@ public static class MeshNodePropertyEditor
 
                 try
                 {
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                     var delivery = ctx.Host.Hub.Post(
                         new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
                         o => o.WithTarget(targetAddress))!;
-                    await ctx.Host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
+                    await ctx.Host.Hub.Observe(delivery).FirstAsync().ToTask();
                 }
                 catch { }
 

@@ -587,15 +587,21 @@ public static class ThreadLayoutAreas
             }
             else
             {
-                hub.RegisterCallback((IMessageDelivery)del, resp =>
-                {
-                    var msg = resp is IMessageDelivery<GetDataResponse> gdr
-                        ? (gdr.Message.Data as MeshNode)?.Content as ThreadMessage
-                        : null;
-                    subject.OnNext(msg?.UpdatedNodes ?? ImmutableList<NodeChangeEntry>.Empty);
-                    subject.OnCompleted();
-                    return resp;
-                });
+                hub.Observe((IMessageDelivery)del)
+                    .Subscribe(
+                        resp =>
+                        {
+                            var msg = resp.Message is GetDataResponse gdr
+                                ? (gdr.Data as MeshNode)?.Content as ThreadMessage
+                                : null;
+                            subject.OnNext(msg?.UpdatedNodes ?? ImmutableList<NodeChangeEntry>.Empty);
+                            subject.OnCompleted();
+                        },
+                        _ =>
+                        {
+                            subject.OnNext(ImmutableList<NodeChangeEntry>.Empty);
+                            subject.OnCompleted();
+                        });
             }
             return subject.AsObservable();
         }).ToList();

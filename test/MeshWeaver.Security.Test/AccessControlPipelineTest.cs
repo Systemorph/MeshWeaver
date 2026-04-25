@@ -18,6 +18,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -66,11 +67,9 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         var nodeAddress = new Address(NodePath);
 
         // Ensure hub is started
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
-        // Try to subscribe — should be denied by AccessControlPipeline
+        // Try to subscribe â€” should be denied by AccessControlPipeline
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
@@ -108,9 +107,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         // GetDataRequest also has [RequiresPermission(Permission.Read)]
         // AwaitResponse wraps DeliveryFailureException in AggregateException
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await client.AwaitResponse(
-                new GetDataRequest(new UnifiedReference("data:")),
-                o => o.WithTarget(nodeAddress)));
+            await client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask());
 
         ex.InnerException.Should().BeOfType<DeliveryFailureException>();
         ex.InnerException!.Message.Should().Contain("Access denied");
@@ -120,7 +117,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
 
 /// <summary>
 /// Tests the HubPermissionRuleSet integration with AccessControlPipeline.
-/// Uses Organization hub which has WithPublicRead() — this registers
+/// Uses Organization hub which has WithPublicRead() â€” this registers
 /// a HubPermissionRuleSet that grants Read to all authenticated users.
 /// </summary>
 public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -133,18 +130,16 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 10000)]
     public async Task WithPublicRead_AllowsAuthenticatedUserRead()
     {
-        // Organization hub has WithPublicRead() → HubPermissionRuleSet grants Read.
+        // Organization hub has WithPublicRead() â†’ HubPermissionRuleSet grants Read.
         // A user with no ISecurityService permissions should still pass Read check.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         // Clear claim-based roles to simulate Orleans grain
         accessService.SetCircuitContext(new AccessContext { ObjectId = "SomeUser", Name = "SomeUser" });
 
-        var response = await Mesh.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("data:")),
-            o => o.WithTarget(new Address("Organization")));
+        var response = await Mesh.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("Organization"))).FirstAsync().ToTask();
 
-        // Not blocked by pipeline — may have no data but no access denied
+        // Not blocked by pipeline â€” may have no data but no access denied
         response.Message.Error.Should().NotContain("Access denied");
     }
 
@@ -181,7 +176,7 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
         // In Orleans, claim-based roles from AccessContext aren't available.
         // Admin gets permissions from PublicAdminAccess at root, which should
         // inherit to Organization path. Additionally, Organization hub has
-        // WithPublicRead → HubPermissionRuleSet.
+        // WithPublicRead â†’ HubPermissionRuleSet.
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -250,7 +245,7 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
             Output.WriteLine($"Admin permissions on 'Organization' (no claims): {permissions}");
 
             permissions.Should().HaveFlag(Permission.Read,
-                "Admin should have Read on Organization even without claim-based roles — " +
+                "Admin should have Read on Organization even without claim-based roles â€” " +
                 "PublicAdminAccess at root should inherit to Organization path");
         }
         finally

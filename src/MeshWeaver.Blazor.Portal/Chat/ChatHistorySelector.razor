@@ -1,3 +1,5 @@
+@using System.Reactive.Linq
+@using System.Reactive.Threading.Tasks
 @using MeshWeaver.AI
 @using MeshWeaver.Data
 @using MeshWeaver.Graph.Configuration
@@ -329,7 +331,7 @@
         {
             // Delete via DeleteNodeRequest
             var request = new DeleteNodeRequest(chatPath);
-            await Hub.AwaitResponse(request, o => o.WithTarget(new Address(chatPath)));
+            await Hub.Observe(request, o => o.WithTarget(new Address(chatPath))).FirstAsync().ToTask();
 
             // Remove from local list
             Chats = Chats.Where(c => c.Path != chatPath).ToList();

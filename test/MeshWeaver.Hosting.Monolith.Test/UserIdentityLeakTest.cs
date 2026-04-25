@@ -15,6 +15,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -115,9 +116,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var aliceAddress = new Address("User/Alice");
 
         // Ensure the hub is ready
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -146,9 +145,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
@@ -177,9 +174,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(aliceAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(aliceAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);

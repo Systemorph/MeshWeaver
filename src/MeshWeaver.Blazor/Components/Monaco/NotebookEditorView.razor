@@ -7,6 +7,7 @@
 @using System.Collections.Immutable
 @using System.Text.Json
 @using System.Reactive.Linq
+@using System.Reactive.Threading.Tasks
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @using FluentOrientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inject IJSRuntime JSRuntime
@@ -392,7 +393,7 @@
         {
             var request = new SubmitCodeRequest(code);
             // Post request and wait for response
-            var response = await Hub.AwaitResponse(request, o => o.WithTarget(BoundKernelAddress));
+            var response = await Hub.Observe(request, o => o.WithTarget(BoundKernelAddress)).FirstAsync().ToTask();
 
             if (response is NotebookCellOutput output)
             {

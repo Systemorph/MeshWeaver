@@ -108,20 +108,27 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
                 observer.OnError(new InvalidOperationException("Move: hub.Post returned null."));
                 return Disposable.Empty;
             }
-            hub.RegisterCallback(delivery, response =>
-            {
-                if (response.Message is MoveNodeResponse moveResp)
-                {
-                    if (moveResp.Success)
+            hub.Observe(delivery)
+                .Subscribe(
+                    response =>
                     {
-                        CurrentPath = targetPath;
-                        SubscribeToCurrentPath();
-                    }
-                    observer.OnNext(moveResp);
-                    observer.OnCompleted();
-                }
-                return response;
-            });
+                        if (response.Message is MoveNodeResponse moveResp)
+                        {
+                            if (moveResp.Success)
+                            {
+                                CurrentPath = targetPath;
+                                SubscribeToCurrentPath();
+                            }
+                            observer.OnNext(moveResp);
+                            observer.OnCompleted();
+                        }
+                        else
+                        {
+                            observer.OnError(new InvalidOperationException(
+                                $"Move: unexpected response {response.Message?.GetType().Name}"));
+                        }
+                    },
+                    observer.OnError);
             return Disposable.Empty;
         });
     }

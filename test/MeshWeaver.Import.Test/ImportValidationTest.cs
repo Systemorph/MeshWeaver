@@ -12,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output)
@@ -89,14 +90,10 @@ SystemName,FoundationYear,ContractType
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
             .Message.Log.Messages
@@ -123,14 +120,10 @@ FR,France";
 
         var client = GetClient();
         var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(1000.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
@@ -153,14 +146,10 @@ DoubleValue,Country
 
         var client = GetClient();
         var importRequest = new ImportRequest(content);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
             .Message.Log.Messages
@@ -187,14 +176,10 @@ A,B";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
@@ -220,14 +205,10 @@ Blue,FR";
 
         var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = "Test2" };
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse

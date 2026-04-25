@@ -57,27 +57,25 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
             },
             o => o.WithTarget(address))!;
 
-        hub.RegisterCallback(delivery, callback =>
-        {
-            switch (callback)
-            {
-                case IMessageDelivery<SaveContentResponse> typed:
-                    tcs.TrySetResult(typed.Message.Success
-                        ? $"Uploaded `{filePath}` to @{resolvedPath}/{collectionName}/{filePath}"
-                        : $"Error: {typed.Message.Error}");
-                    break;
-                case IMessageDelivery<DeliveryFailure> failure:
-                    tcs.TrySetResult(
-                        $"Error uploading to {resolvedPath}: {failure.Message.Message ?? "delivery failed"}. " +
-                        $"Check that '{nodePath}' resolves to an existing node — pass the MeshNode's " +
-                        "`path` property, not its `name`.");
-                    break;
-                default:
-                    tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} uploading to {resolvedPath}.");
-                    break;
-            }
-            return callback;
-        });
+        hub.Observe(delivery)
+            .Subscribe(
+                callback =>
+                {
+                    if (callback.Message is SaveContentResponse typed)
+                    {
+                        tcs.TrySetResult(typed.Success
+                            ? $"Uploaded `{filePath}` to @{resolvedPath}/{collectionName}/{filePath}"
+                            : $"Error: {typed.Error}");
+                    }
+                    else
+                    {
+                        tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} uploading to {resolvedPath}.");
+                    }
+                },
+                ex => tcs.TrySetResult(
+                    $"Error uploading to {resolvedPath}: {ex.Message ?? "delivery failed"}. " +
+                    $"Check that '{nodePath}' resolves to an existing node — pass the MeshNode's " +
+                    "`path` property, not its `name`."));
 
         return tcs.Task;
     }

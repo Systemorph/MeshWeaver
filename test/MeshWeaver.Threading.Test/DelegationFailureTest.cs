@@ -39,7 +39,7 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         return base.ConfigureMesh(builder)
             .ConfigureServices(services =>
             {
-                // Use a slow agent that delegates — the delegation target won't exist
+                // Use a slow agent that delegates â€” the delegation target won't exist
                 services.AddSingleton<IChatClientFactory>(new DelegatingFakeChatClientFactory());
                 return services;
             })
@@ -59,7 +59,7 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "Roland");
         var delivery = client.Post(new CreateNodeRequest(threadNode),
             o => o.WithTarget(Mesh.Address))!;
-        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
+        var response = await client.Observe(delivery).FirstAsync().ToTask(ct);
         var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
         createResponse.Success.Should().BeTrue(createResponse.Error);
         return createResponse.Node!.Path!;
@@ -79,26 +79,24 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Do something that delegates", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        // Submit a message — the fake agent will try to delegate
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+        // Submit a message â€” the fake agent will try to delegate
+        var submitResponse = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath, UserMessageText = "Do something that delegates",
                 UserMessageId = userMsgId, ResponseMessageId = responseMsgId
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
         // Wait a bit for delegation to start
@@ -108,7 +106,7 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
         client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
             o => o.WithTarget(new Address(threadPath)));
 
-        // Wait for execution to stop — should not hang
+        // Wait for execution to stop â€” should not hang
         var workspace = client.GetWorkspace();
         var messagesStream = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes =>

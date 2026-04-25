@@ -11,6 +11,8 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Connection.Orleans;
 using Orleans;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 [Collection(nameof(OrleansClusterCollection))]
@@ -24,9 +26,7 @@ public class OrleansMeshTests(SharedOrleansFixture fixture, ITestOutputHelper ou
     {
         var client = await GetClientAsync();
         var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)
-                , new CancellationTokenSource(20.Seconds()).Token
-            );
+            .Observe(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)).FirstAsync().ToTask(new CancellationTokenSource(20.Seconds()).Token);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }
@@ -40,9 +40,7 @@ public class OrleansMeshTests(SharedOrleansFixture fixture, ITestOutputHelper ou
         var address = AddressExtensions.CreateAppAddress(id);
 
         var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
-                , new CancellationTokenSource(20.Seconds()).Token
-            );
+            .Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(new CancellationTokenSource(20.Seconds()).Token);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
 
@@ -50,9 +48,7 @@ public class OrleansMeshTests(SharedOrleansFixture fixture, ITestOutputHelper ou
         await Task.Delay(500, TestContext.Current.CancellationToken);
 
         response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
-                , new CancellationTokenSource(20.Seconds()).Token
-            );
+            .Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(new CancellationTokenSource(20.Seconds()).Token);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }

@@ -14,12 +14,14 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration test for API token creation and validation.
-/// Uses standard CreateNodeRequest with nodeType=ApiToken — same satellite pattern
-/// as Thread/Comment. The RLS validator maps ApiToken → Permission.Api.
+/// Uses standard CreateNodeRequest with nodeType=ApiToken â€” same satellite pattern
+/// as Thread/Comment. The RLS validator maps ApiToken â†’ Permission.Api.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
 public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
@@ -45,7 +47,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
         var hash = ValidateTokenRequest.HashToken(rawToken);
         var hashPrefix = hash[..12];
 
-        // Create token as satellite of User node — same pattern as Thread
+        // Create token as satellite of User node â€” same pattern as Thread
         var userId = "Roland";
         var tokenNode = new MeshNode(hashPrefix, $"User/{userId}/_Api")
         {
@@ -63,10 +65,8 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
             }
         };
 
-        // Act — standard CreateNodeRequest (same as Thread creation)
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(tokenNode),
-            o => o.WithTarget(meshAddress), ct);
+        // Act â€” standard CreateNodeRequest (same as Thread creation)
+        var response = await client.Observe(new CreateNodeRequest(tokenNode), o => o.WithTarget(meshAddress)).FirstAsync().ToTask(ct);
 
         response.Message.Success.Should().BeTrue(response.Message.Error);
         response.Message.Node.Should().NotBeNull();
@@ -87,9 +87,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
 
         try
         {
-            var response = await client.AwaitResponse(
-                new ValidateTokenRequest(fakeToken),
-                o => o.WithTarget(new Address("ApiToken", hashPrefix)), ct);
+            var response = await client.Observe(new ValidateTokenRequest(fakeToken), o => o.WithTarget(new Address("ApiToken", hashPrefix))).FirstAsync().ToTask(ct);
 
             // Either the response says failure, or the grain couldn't activate (token not found)
             if (response.Message != null)
@@ -97,7 +95,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
         }
         catch (Exception)
         {
-            // Expected — grain activation fails because node doesn't exist
+            // Expected â€” grain activation fails because node doesn't exist
         }
     }
 }

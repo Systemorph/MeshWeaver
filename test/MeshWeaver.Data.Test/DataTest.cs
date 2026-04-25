@@ -15,6 +15,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Data.Test;
 
 /// <summary>
@@ -111,14 +112,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         data.Should().HaveCount(2);
 
         // act
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var updateResponse = await client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(3.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // asserts
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
@@ -171,14 +168,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var toBeDeleted = data.Take(1).ToArray();
         var expectedItems = data.Skip(1).ToArray();
         // act
-        var deleteResponse = await client.AwaitResponse(
-            DataChangeRequest.Delete(toBeDeleted, "TestUser"),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var deleteResponse = await client.Observe(DataChangeRequest.Delete(toBeDeleted, "TestUser"), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         deleteResponse.Message.Status.Should().Be(DataChangeStatus.Committed);
 
         // asserts — verify through host workspace (client filters out own changes via echo prevention)
@@ -221,14 +214,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Text = TextChange
         };
-        await client.AwaitResponse(
-            DataChangeRequest.Update([myInstance]),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        await client.Observe(DataChangeRequest.Update([myInstance]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         var hostWorkspace = GetHost().GetWorkspace();
 
@@ -282,14 +271,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItems = new object[] { new MyData("5", null!) };
 
         // act
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var updateResponse = await client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(3.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // asserts
         var response = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -404,14 +389,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var typeName = typeof(MyData).FullName!;
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(typeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -442,14 +423,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var unknownTypeName = "UnknownType";
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(unknownTypeName)),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(unknownTypeName)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         response.Message.Should().BeOfType<GetDataResponse>();
@@ -468,14 +445,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
@@ -498,14 +471,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDomainTypesRequest(),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
         var types = typesResponse.Types.ToArray();
@@ -530,14 +499,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         };
 
         // act
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(invalidItems),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var updateResponse = await client.Observe(DataChangeRequest.Update(invalidItems), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         var response = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -565,14 +530,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         initialData.Should().NotContain(x => x.Id == "999");
 
         // act
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { newItem }),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var updateResponse = await client.Observe(DataChangeRequest.Update(new object[] { newItem }), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         updateResponse.Message.Should().BeOfType<DataChangeResponse>();
@@ -599,30 +560,18 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act - send multiple updates simultaneously
         var tasks = new[]
         {
-            client.AwaitResponse(
-                DataChangeRequest.Update(updates1),
-                o => o.WithTarget(CreateClientAddress()),
-                CancellationTokenSource.CreateLinkedTokenSource(
+            client.Observe(DataChangeRequest.Update(updates1), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
-                ).Token
-            ),
-            client.AwaitResponse(
-                DataChangeRequest.Update(updates2),
-                o => o.WithTarget(CreateClientAddress()),
-                CancellationTokenSource.CreateLinkedTokenSource(
+                ).Token),
+            client.Observe(DataChangeRequest.Update(updates2), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
-                ).Token
-            ),
-            client.AwaitResponse(
-                DataChangeRequest.Update(updates3),
-                o => o.WithTarget(CreateClientAddress()),
-                CancellationTokenSource.CreateLinkedTokenSource(
+                ).Token),
+            client.Observe(DataChangeRequest.Update(updates3), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
-                ).Token
-            )
+                ).Token)
         };
 
         var responses = await Task.WhenAll(tasks);
@@ -652,28 +601,20 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
 
         // act & assert for null - with new implementation, null type returns the first registered type's schema
-        var responseNull = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference(null)),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var responseNull = await client.Observe(new GetDataRequest(new SchemaReference(null)), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         responseNull.Message.Should().BeOfType<GetDataResponse>();
         var schemaInfoNull = responseNull.Message.Data.Should().BeOfType<SchemaInfo>().Which;
         schemaInfoNull.Schema.Should().NotBeNullOrEmpty();
 
         // act & assert for empty string
-        var responseEmpty = await client.AwaitResponse(
-            new GetDataRequest(new SchemaReference("")),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var responseEmpty = await client.Observe(new GetDataRequest(new SchemaReference("")), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         responseEmpty.Message.Should().BeOfType<GetDataResponse>();
         var schemaInfoEmpty = responseEmpty.Message.Data.Should().BeOfType<SchemaInfo>().Which;
@@ -707,14 +648,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         initialClientData.Should().BeEquivalentTo(initialHostData);
 
         // act - update from client
-        await client.AwaitResponse(
-            DataChangeRequest.Update([updateItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        await client.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert - both client and host should have the same updated data
         var updatedClientData = await client
@@ -766,14 +703,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var collectionRef = new CollectionReference(nameof(MyData));
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(collectionRef),
-            o => o.WithTarget(CreateHostAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(new GetDataRequest(collectionRef), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
@@ -794,14 +727,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var entityRef = new EntityReference(nameof(MyData), "1");
 
         // act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(entityRef),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
@@ -822,14 +751,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act & assert - this might throw or return null/empty, depending on implementation
         // The exact behavior should be consistent with the stream-based approach
-        var response = await client.AwaitResponse(
-            new GetDataRequest(entityRef),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
         dataResponse.Should().NotBeNull();

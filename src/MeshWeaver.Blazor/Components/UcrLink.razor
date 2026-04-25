@@ -35,10 +35,8 @@
             var resolution = await PathResolver.ResolvePathAsync(Path);
             if (resolution != null)
             {
-                var node = await Hub.GetWorkspace().GetMeshNodeStream(resolution.Prefix)
-                    .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(5))
-                    .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+                // One-shot tooltip read — GetDataRequest, no lingering subscription.
+                var node = await Hub.GetMeshNode(resolution.Prefix, TimeSpan.FromSeconds(5))
                     .FirstOrDefaultAsync();
                 if (node != null)
                 {

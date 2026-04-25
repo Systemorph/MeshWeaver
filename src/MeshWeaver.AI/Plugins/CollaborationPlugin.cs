@@ -218,30 +218,32 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         Func<TResponse, string> formatSuccess)
     {
         var delivery = hub.Post(request, o => o.WithTarget(target))!;
-        hub.RegisterCallback(delivery, callback =>
-        {
-            switch (callback)
-            {
-                case IMessageDelivery<TResponse> typed:
-                    try { tcs.TrySetResult(formatSuccess(typed.Message)); }
-                    catch (Exception ex) { tcs.TrySetResult($"Error formatting response: {ex.Message}"); }
-                    break;
-                case IMessageDelivery<DeliveryFailure> failure:
+        hub.Observe(delivery)
+            .Subscribe(
+                callback =>
+                {
+                    if (callback.Message is TResponse typed)
+                    {
+                        try { tcs.TrySetResult(formatSuccess(typed)); }
+                        catch (Exception ex) { tcs.TrySetResult($"Error formatting response: {ex.Message}"); }
+                    }
+                    else
+                    {
+                        tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} for {originalInput}.");
+                    }
+                },
+                ex =>
+                {
                     logger.LogWarning(
-                        "Delivery to {Target} failed for {RequestType}: {Reason}. Original input: {OriginalInput}",
-                        target, request.GetType().Name, failure.Message.Message, originalInput);
+                        ex,
+                        "Delivery to {Target} failed for {RequestType}. Original input: {OriginalInput}",
+                        target, request.GetType().Name, originalInput);
                     tcs.TrySetResult(
-                        $"Error: {failure.Message.Message ?? "delivery failed"}. " +
+                        $"Error: {ex.Message ?? "delivery failed"}. " +
                         $"Check that '{originalInput}' resolves to an existing node — pass the MeshNode's " +
                         "`path` property, not its `name`. If you only know the display name, call " +
                         "Search('name:\"...\"') and use the `path` field of the match.");
-                    break;
-                default:
-                    tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} for {originalInput}.");
-                    break;
-            }
-            return callback;
-        });
+                });
     }
 
     private static string? ExtractContent(string rawJson)

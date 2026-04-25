@@ -12,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 public record TestItem(string Id, string Name);
@@ -34,13 +35,11 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     private async Task EnsureHubStarted(Address address)
     {
         var client = GetClient();
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
     }
 
     /// <summary>
-    /// Link 1: HubDataSource with denied access → workspace stream errors.
+    /// Link 1: HubDataSource with denied access â†’ workspace stream errors.
     /// Verifies: data source stream's OnError propagates through workspace stream to subscriber.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -66,7 +65,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// Link 2: PartitionedHubDataSource → combined stream errors.
+    /// Link 2: PartitionedHubDataSource â†’ combined stream errors.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task PartitionedHubDataSource_WithoutAccess_ShouldErrorStream()
@@ -162,7 +161,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// Link 5: DataContext failure state — when initialization fails, DataContext stores the error.
+    /// Link 5: DataContext failure state â€” when initialization fails, DataContext stores the error.
     /// Subsequent SubscribeRequests get immediate DeliveryFailure with a meaningful message.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -186,7 +185,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         Output.WriteLine($"Internal stream errored: {internalEx.GetType().Name}: {internalEx.Message}");
         internalEx.Should().NotBeOfType<TimeoutException>();
 
-        // Now a second client subscribes — should get immediate error, not timeout.
+        // Now a second client subscribes â€” should get immediate error, not timeout.
         // This also gives time for DataContext.OpenInitializationGate's ContinueWith to run.
         var client2 = GetClient(c => c.AddData(d => d));
         var remoteStream2 = client2.GetWorkspace().GetRemoteStream<EntityStore>(
@@ -230,9 +229,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         // GetDataRequest should throw, not timeout
         var client = GetClient();
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await client.AwaitResponse(
-                new GetDataRequest(new CollectionsReference(typeof(TestItem).FullName!)),
-                o => o.WithTarget(groupAddress)));
+            await client.Observe(new GetDataRequest(new CollectionsReference(typeof(TestItem).FullName!)), o => o.WithTarget(groupAddress)).FirstAsync().ToTask());
 
         Output.WriteLine($"GetDataRequest error: {ex.GetType().Name}: {ex.Message}");
         ex.Should().NotBeOfType<TimeoutException>("should get error, not timeout");
@@ -263,9 +260,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         // DataChangeRequest should throw, not timeout
         var client = GetClient();
         var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await client.AwaitResponse(
-                new DataChangeRequest { Updates = [new TestItem("1", "Test")] },
-                o => o.WithTarget(groupAddress)));
+            await client.Observe(new DataChangeRequest { Updates = [new TestItem("1", "Test")] }, o => o.WithTarget(groupAddress)).FirstAsync().ToTask());
 
         Output.WriteLine($"DataChangeRequest error: {ex.GetType().Name}: {ex.Message}");
         ex.Should().NotBeOfType<TimeoutException>("should get error, not timeout");

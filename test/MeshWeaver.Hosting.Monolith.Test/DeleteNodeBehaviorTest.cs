@@ -21,17 +21,17 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <summary>
 /// Comprehensive coverage for the four-phase <see cref="DeleteNodeRequest"/> orchestrator:
 /// <list type="number">
-/// <item><description><b>Collect</b> — root + (recursive) descendants.</description></item>
-/// <item><description><b>Permission</b> — every node must have <see cref="Permission.Delete"/>.</description></item>
-/// <item><description><b>Validate</b> — per-node <see cref="INodeValidator"/> chain;
+/// <item><description><b>Collect</b> â€” root + (recursive) descendants.</description></item>
+/// <item><description><b>Permission</b> â€” every node must have <see cref="Permission.Delete"/>.</description></item>
+/// <item><description><b>Validate</b> â€” per-node <see cref="INodeValidator"/> chain;
 /// errors block; warnings block without <see cref="DeleteNodeRequest.ConfirmWarnings"/>.</description></item>
-/// <item><description><b>Commit</b> — bulk delete via storage adapter; all-or-nothing.</description></item>
+/// <item><description><b>Commit</b> â€” bulk delete via storage adapter; all-or-nothing.</description></item>
 /// </list>
 ///
 /// Negative paths each assert (a) the correct <see cref="NodeDeletionRejectionReason"/>
 /// and (b) that the <see cref="DeleteNodeResponse.Log"/> <see cref="ActivityLog"/>
 /// lists every offending path so the UI can show the full picture. Positive paths
-/// additionally verify that the deletion was atomic — nothing is written to storage
+/// additionally verify that the deletion was atomic â€” nothing is written to storage
 /// on a blocked delete, and on success every path really is gone.
 /// </summary>
 public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -41,7 +41,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
 
     private const string Root = TestPartition + "/delparent";
 
-    // ─── Helpers ───────────────────────────────────────────────────────────
+    // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private async Task SeedTreeAsync(CancellationToken ct)
     {
@@ -58,14 +58,11 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     private async Task<DeleteNodeResponse> DeleteAsync(
         DeleteNodeRequest req, TimeSpan timeout, CancellationToken ct)
     {
-        var tcs = new TaskCompletionSource<DeleteNodeResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var delivery = Client.Post(req, o => o.WithTarget(new Address(req.Path)))!;
-        _ = Client.RegisterCallback(delivery, (d, _) =>
-        {
-            tcs.TrySetResult(((IMessageDelivery<DeleteNodeResponse>)d).Message);
-            return Task.FromResult<IMessageDelivery>(d);
-        });
-        return await tcs.Task.WaitAsync(timeout, ct);
+        var resp = await AwaitResponseAsync(req,
+            o => o.WithTarget(new Address(req.Path)),
+            hub: Client,
+            ct: ct);
+        return resp.Message;
     }
 
     private async Task<bool> NodeExistsAsync(string path, CancellationToken ct)
@@ -88,7 +85,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     private static bool LogMentions(DeleteNodeResponse r, string path) =>
         r.Log?.Messages.Any(m => m.Message.Contains(path, StringComparison.Ordinal)) == true;
 
-    // ─── Phase 1: collection + basic reasons ──────────────────────────────
+    // â”€â”€â”€ Phase 1: collection + basic reasons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
     public async Task Leaf_Delete_SucceedsAndRemovesNode()
@@ -105,7 +102,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         response.Log!.Status.Should().Be(ActivityStatus.Succeeded);
         response.Log.AffectedPaths.Should().ContainSingle().Which.Should().Be($"{TestPartition}/leaf");
 
-        // Catalog-bound wait — ReadNodeAsync would falsely "find" the leaf via
+        // Catalog-bound wait â€” ReadNodeAsync would falsely "find" the leaf via
         // the TestPartition ancestor's MeshNodeReference reducer.
         await WaitForNodeAbsenceAsync($"{TestPartition}/leaf", ct);
     }
@@ -128,7 +125,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
             $"{Root}/c1/gc"
         });
 
-        // Wait once for the catalog to drop ALL four — single subscription, not four.
+        // Wait once for the catalog to drop ALL four â€” single subscription, not four.
         var paths = await WaitForQueryPathSetAsync(
             $"path:{TestPartition} scope:subtree",
             set => !set.Contains(Root)
@@ -173,7 +170,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         response.Log.Messages.Should().Contain(m => m.Message.Contains("not found"));
     }
 
-    // ─── Phase 2: permission checks ────────────────────────────────────────
+    // â”€â”€â”€ Phase 2: permission checks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
     public async Task NoDeletePermission_OnRoot_Fails_Unauthorized_AndLogsPath()
@@ -182,7 +179,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         await NodeFactory.CreateNode(
             new MeshNode("locked", TestPartition) { Name = "Locked", NodeType = "Markdown" });
 
-        // Dedicated client hub whose AccessService is scoped to nobody —
+        // Dedicated client hub whose AccessService is scoped to nobody â€”
         // the access context flows with the outbound message as Sender identity.
         var restrictedClient = GetClient();
         var clientAccess = restrictedClient.ServiceProvider.GetRequiredService<AccessService>();
@@ -197,17 +194,15 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         var path = $"{TestPartition}/locked";
 
         // The [RequiresPermission(Permission.Delete)] gate on DeleteNodeRequest runs at the
-        // envelope layer and denies without invoking the handler — AwaitResponse receives a
+        // envelope layer and denies without invoking the handler â€” AwaitResponse receives a
         // DeliveryFailure which is surfaced as DeliveryFailureException. Either that, or the
-        // in-handler Phase 2 check fires and we get a DeleteNodeResponse.Fail — the invariant
+        // in-handler Phase 2 check fires and we get a DeleteNodeResponse.Fail â€” the invariant
         // that matters for this test is: no matter which gate trips, the node is NOT deleted.
         Exception? caughtException = null;
         DeleteNodeResponse? failedResponse = null;
         try
         {
-            var responseDelivery = await restrictedClient.AwaitResponse(
-                new DeleteNodeRequest(path),
-                o => o.WithTarget(new Address(path)));
+            var responseDelivery = await restrictedClient.Observe(new DeleteNodeRequest(path), o => o.WithTarget(new Address(path))).FirstAsync().ToTask();
             failedResponse = responseDelivery?.Message;
         }
         catch (Exception ex)
@@ -228,7 +223,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
                 "denial must produce either a failed response or a DeliveryFailureException");
         }
 
-        // Restore admin context so the existence check can actually see the node —
+        // Restore admin context so the existence check can actually see the node â€”
         // the shared AccessService singleton was flipped to nodelete-user above and
         // MeshQuery applies RLS.
         clientAccess.SetCircuitContext(TestUsers.Admin);
@@ -237,7 +232,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
             "node must not be deleted when caller lacks Delete permission");
     }
 
-    // ─── Phase 3: validator-based rejection ────────────────────────────────
+    // â”€â”€â”€ Phase 3: validator-based rejection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
     public async Task Validator_RejectsRoot_Fails_ValidationFailed_LogsNodePath()
@@ -304,7 +299,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         });
     }
 
-    // ─── Phase 3: warnings + ConfirmWarnings round-trip ────────────────────
+    // â”€â”€â”€ Phase 3: warnings + ConfirmWarnings round-trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
     public async Task Warnings_WithoutConfirm_Block_AndLogWarning()
@@ -355,7 +350,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         await WaitForNodeAbsenceAsync($"{TestPartition}/warny2", ct);
     }
 
-    // ─── Phase 4: bulk atomicity + ActivityLog ─────────────────────────────
+    // â”€â”€â”€ Phase 4: bulk atomicity + ActivityLog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact(Timeout = 20_000)]
     public async Task Recursive_Delete_Log_ListsAllAffectedPathsAndSucceeded()
@@ -372,7 +367,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         response.Log.Start.Should().BeBefore(response.Log.End!.Value);
     }
 
-    // ─── Custom test validators (wired in ConfigureMesh) ───────────────────
+    // â”€â”€â”€ Custom test validators (wired in ConfigureMesh) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public sealed class BlockingValidator : INodeValidator
     {
@@ -406,7 +401,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
-    /// Use <see cref="ConfigureMeshBase"/> (no root-level Public→Admin) so the
+    /// Use <see cref="ConfigureMeshBase"/> (no root-level Publicâ†’Admin) so the
     /// permission-denied test can actually observe a denial. The admin user gets
     /// explicit access via <see cref="SetupAccessRightsAsync"/>.
     /// </summary>

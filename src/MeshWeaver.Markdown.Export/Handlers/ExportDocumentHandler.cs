@@ -39,15 +39,11 @@ public static class ExportDocumentHandler
         var request = delivery.Message;
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var brandingResolver = hub.ServiceProvider.GetRequiredService<BrandingResolver>();
-        var workspace = hub.GetWorkspace();
 
         // Read root → resolve branding + collect descendants in parallel → build → respond.
         // Each step in the chain is a Subscribe callback; the handler returns synchronously.
-        workspace.GetMeshNodeStream(request.SourcePath)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .Select(n => (MeshNode?)n)
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+        // Root read is one-shot — GetDataRequest, not a SubscribeRequest+unsubscribe.
+        hub.GetMeshNode(request.SourcePath, TimeSpan.FromSeconds(15))
             .SelectMany(rootNode =>
             {
                 if (rootNode is null)

@@ -12,6 +12,8 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
@@ -129,9 +131,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
         var client = GetClient();
         var address = new Address(DocPartitionCommentPath.Split('/'));
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        var response = await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
 
         response.Should().NotBeNull(
             $"Hub at '{DocPartitionCommentPath}' should respond to PingRequest");

@@ -201,22 +201,29 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 return;
             }
 
-            Hub.RegisterCallback((IMessageDelivery)delivery, response =>
-            {
-                try
-                {
-                    if (response is IMessageDelivery<GetDataResponse> gdr && gdr.Message.Data is MeshNode node)
-                        onResult(node.Name ?? node.Id);
-                    else
+            Hub.Observe((IMessageDelivery)delivery)
+                .Subscribe(
+                    response =>
+                    {
+                        try
+                        {
+                            if (response.Message is GetDataResponse gdr && gdr.Data is MeshNode node)
+                                onResult(node.Name ?? node.Id);
+                            else
+                                onResult(null);
+                        }
+                        catch (Exception ex) when (!_isDisposed)
+                        {
+                            Logger.LogDebug(ex, "Error reading display name for {Path}", path);
+                            onResult(null);
+                        }
+                    },
+                    ex =>
+                    {
+                        if (!_isDisposed)
+                            Logger.LogDebug(ex, "Error reading display name for {Path}", path);
                         onResult(null);
-                }
-                catch (Exception ex) when (!_isDisposed)
-                {
-                    Logger.LogDebug(ex, "Error reading display name for {Path}", path);
-                    onResult(null);
-                }
-                return response;
-            });
+                    });
         }
         catch (Exception ex) when (!_isDisposed)
         {
@@ -515,12 +522,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         if (delivery != null)
         {
-            _ = Hub.RegisterCallback(delivery, (response, _) =>
-            {
-                isCancelling = false;
-                InvokeAsync(StateHasChanged);
-                return Task.FromResult(response);
-            }, CancellationToken.None);
+            Hub.Observe(delivery)
+                .Subscribe(
+                    _ =>
+                    {
+                        isCancelling = false;
+                        InvokeAsync(StateHasChanged);
+                    },
+                    _ =>
+                    {
+                        isCancelling = false;
+                        InvokeAsync(StateHasChanged);
+                    });
         }
         else
         {

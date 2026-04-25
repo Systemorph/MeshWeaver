@@ -1,3 +1,5 @@
+@using System.Reactive.Linq
+@using System.Reactive.Threading.Tasks
 @using MeshWeaver.Layout
 @using MeshWeaver.Markdown.Export.Configuration
 @using MeshWeaver.Markdown.Export.Messaging
@@ -171,9 +173,11 @@
                 FooterOverride = string.IsNullOrWhiteSpace(_footer) ? null : _footer
             };
 
-            var response = await Hub.AwaitResponse(
-                new ExportDocumentRequest(SourcePath, options),
-                o => o.WithTarget(new MeshWeaver.Messaging.Address(SourcePath)));
+            var response = await Hub.Observe(
+                    new ExportDocumentRequest(SourcePath, options),
+                    o => o.WithTarget(new MeshWeaver.Messaging.Address(SourcePath)))
+                .FirstAsync()
+                .ToTask();
 
             if (response?.Message is { } result && result.Content.Length > 0)
             {

@@ -52,9 +52,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
         Output.WriteLine($"CreateNodeRequest: id={node.Id}, path={node.Path}, target={targetAddress}");
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(node),
-            o => o.WithTarget(new Address(targetAddress)), ct);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(targetAddress))).FirstAsync().ToTask(ct);
         Output.WriteLine($"CreateNodeResponse: success={response.Message.Success}, error={response.Message.Error ?? "(none)"}, path={response.Message.Node?.Path ?? "(null)"}");
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
@@ -79,9 +77,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         // Canonical CQRS-correct read: target the per-node hub's MeshNodeReference
         // reducer, not an EntityCollection lookup. The owning hub is the source of
         // truth for MeshNode content; this avoids any catalog / index lag.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
@@ -103,7 +99,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
         var suffix = Guid.NewGuid().ToString("N")[..4];
-        // 1. Create Organization — target "User/Roland" (existing hub, routes to silo mesh)
+        // 1. Create Organization â€” target "User/Roland" (existing hub, routes to silo mesh)
         var orgPath = await CreateNodeAsync(client,
             new MeshNode($"TestOrg{suffix}") { Name = "Test Organization", NodeType = "Markdown" },
             "User/Roland", ct);
@@ -119,7 +115,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var threadNode = ThreadNodeType.BuildThreadNode(docPath, "Hello from test", "Roland");
         Output.WriteLine($"BuildThreadNode: id={threadNode.Id}, ns={threadNode.Namespace}, path={threadNode.Path}");
 
-        // Target the document address — same as the side panel does
+        // Target the document address â€” same as the side panel does
         var threadPath = await CreateNodeAsync(client, threadNode, docPath, ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
@@ -175,15 +171,13 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
 
         // 3. Submit message via AppendUserMessageRequest (like side panel SendMessageAsync)
         Output.WriteLine("Posting AppendUserMessageRequest...");
-        var submitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello from side panel test",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("AppendUserMessageRequest succeeded");
 
@@ -234,7 +228,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
     /// Simulates the Blazor GUI flow where UserContextMiddleware sets CircuitContext
     /// on the portal hub's AccessService, then the component posts AppendUserMessageRequest.
     /// Verifies that the user identity propagates through:
-    ///   PostPipeline → OrleansRoutingService → MessageHubGrain → AccessControlPipeline
+    ///   PostPipeline â†’ OrleansRoutingService â†’ MessageHubGrain â†’ AccessControlPipeline
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task SubmitChat_WithCircuitContext_IdentityPropagates()
@@ -244,7 +238,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         // 1. Create client hub simulating a portal circuit
         var client = await GetClientAsync();
 
-        // 2. Set CircuitContext on the client hub — exactly what UserContextMiddleware does
+        // 2. Set CircuitContext on the client hub â€” exactly what UserContextMiddleware does
         //    in Blazor after authentication. This is the persistent session identity.
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
@@ -266,7 +260,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             .FirstAsync()
             .ToTask(ct);
 
-        // 6. Submit message — this is the critical path that fails in production.
+        // 6. Submit message â€” this is the critical path that fails in production.
         //    AppendUserMessageRequest has [SubmitMessagePermission] which checks Thread on the parent partition.
         //    If identity is lost, AccessControlPipeline rejects with "(anonymous)".
         Output.WriteLine("Posting AppendUserMessageRequest with CircuitContext identity...");
@@ -281,22 +275,20 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             o => o.WithTarget(new Address(threadPath)));
         submitDelivery.Should().NotBeNull("Post should return delivery");
 
-        // Register callback (fire-and-forget, same pattern as ThreadChatView)
+        // Subscribe via hub.Observe — DeliveryFailure flows via OnError as DeliveryFailureException.
         var responseTcs = new TaskCompletionSource<string?>();
-        _ = client.RegisterCallback((IMessageDelivery)submitDelivery!, response =>
-        {
-            string? error = null;
-            if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: false } sr)
-                error = sr.Message.Error ?? "AppendUserMessageResponse.Success=false";
-            else if (response is IMessageDelivery<DeliveryFailure> df)
-                error = $"DeliveryFailure: {df.Message.Message}";
-            else if (response is IMessageDelivery<AppendUserMessageResponse> { Message.Success: true })
-                error = null;
-            else
-                error = $"Unexpected response type: {response.Message?.GetType().Name}";
-            responseTcs.TrySetResult(error);
-            return response;
-        });
+        client.Observe((IMessageDelivery)submitDelivery!).Subscribe(
+            response =>
+            {
+                string? error = response.Message switch
+                {
+                    AppendUserMessageResponse { Success: false } sr => sr.Error ?? "AppendUserMessageResponse.Success=false",
+                    AppendUserMessageResponse { Success: true } => null,
+                    _ => $"Unexpected response type: {response.Message?.GetType().Name}"
+                };
+                responseTcs.TrySetResult(error);
+            },
+            ex => responseTcs.TrySetResult($"DeliveryFailure: {ex.Message}"));
 
         var timeoutTask = Task.Delay(15_000, ct);
         var responseError = await Task.WhenAny(responseTcs.Task, timeoutTask) == responseTcs.Task
@@ -340,7 +332,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
 
     /// <summary>
     /// Verifies that when a user lacks Thread permission, AppendUserMessageRequest
-    /// returns a clear DeliveryFailure error — NOT a silent timeout/hang.
+    /// returns a clear DeliveryFailure error â€” NOT a silent timeout/hang.
     /// Uses Viewer role which has Read+Execute but NOT Thread.
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -358,7 +350,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         });
 
         // Create thread (Thread permission maps to Thread, Viewer doesn't have it)
-        // But first we need the thread to exist — create with a privileged context
+        // But first we need the thread to exist â€” create with a privileged context
         accessService.SetCircuitContext(new AccessContext
         {
             ObjectId = "Roland",
@@ -376,7 +368,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             Name = "Viewer Only"
         });
 
-        // Submit message — should fail with a clear error, not hang
+        // Submit message â€” should fail with a clear error, not hang
         var submitDelivery = client.Post(
             new AppendUserMessageRequest
             {
@@ -389,21 +381,22 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         submitDelivery.Should().NotBeNull();
 
         var responseTcs = new TaskCompletionSource<string?>();
-        _ = client.RegisterCallback((IMessageDelivery)submitDelivery!, response =>
-        {
-            if (response is IMessageDelivery<DeliveryFailure> df)
-                responseTcs.TrySetResult(df.Message.Message);
-            else if (response is IMessageDelivery<AppendUserMessageResponse> sr)
-                responseTcs.TrySetResult(sr.Message.Success ? null : sr.Message.Error);
-            else
-                responseTcs.TrySetResult($"Unexpected: {response.Message?.GetType().Name}");
-            return response;
-        });
+        client.Observe((IMessageDelivery)submitDelivery!).Subscribe(
+            response =>
+            {
+                string? msg = response.Message switch
+                {
+                    AppendUserMessageResponse sr => sr.Success ? null : sr.Error,
+                    _ => $"Unexpected: {response.Message?.GetType().Name}"
+                };
+                responseTcs.TrySetResult(msg);
+            },
+            ex => responseTcs.TrySetResult(ex.Message));
 
         var timeoutTask = Task.Delay(15_000, ct);
         var error = await Task.WhenAny(responseTcs.Task, timeoutTask) == responseTcs.Task
             ? await responseTcs.Task
-            : "TIMEOUT: No error response received — UI would hang silently!";
+            : "TIMEOUT: No error response received â€” UI would hang silently!";
 
         Output.WriteLine($"Error response: {error}");
         error.Should().NotBeNull("should receive an error, not succeed");
@@ -429,15 +422,13 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var twoMessages = ObserveThreadMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
-        var submitResponse = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResponse = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test child nodes",
                 ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
         var msgIds = await twoMessages;

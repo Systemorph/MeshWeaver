@@ -161,7 +161,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Full workflow: create comment → create reply → update reply text → verify via ObserveQuery.
+    /// Full workflow: create comment â†’ create reply â†’ update reply text â†’ verify via ObserveQuery.
     /// </summary>
     [Fact]
     public async Task FullWorkflow_Comment_Reply_Edit()
@@ -295,9 +295,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         var client = GetClient();
         var commentAddress = new Address(CommentC1Path);
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(commentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Thumbnail");
@@ -318,9 +316,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         var client = GetClient();
         var commentAddress = new Address(CommentC1Path);
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(commentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(CommentLayoutAreas.OverviewArea);
@@ -342,9 +338,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         var client = GetClient();
         var docAddress = new Address(DocPath);
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(docAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);

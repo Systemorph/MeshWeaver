@@ -1,6 +1,8 @@
 #nullable enable
 
 using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Messaging;
 
@@ -34,20 +36,19 @@ public class AutocompleteClient(
         {
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(DefaultTimeout);
-
                 var delivery = hub.Post(
                     new AutocompleteRequest(query, context?.Context),
                     o => o.WithTarget(address))!;
-                var callbackResponse = await hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), timeoutCts.Token);
+                var callbackResponse = await hub.Observe(delivery)
+                    .Timeout(DefaultTimeout)
+                    .FirstAsync()
+                    .ToTask(ct);
 
                 // Tolerate hub-level failures (target unreachable, timeout as DeliveryFailure)
                 // and any unexpected response type — skipping is the historical behaviour.
-                if (callbackResponse is IMessageDelivery<AutocompleteResponse> ok
-                    && ok.Message?.Items != null)
+                if (callbackResponse.Message is AutocompleteResponse { Items: not null } ar)
                 {
-                    allItems = allItems.AddRange(ok.Message.Items);
+                    allItems = allItems.AddRange(ar.Items);
                 }
             }
             catch

@@ -21,6 +21,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -79,9 +80,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var client = GetClient(c => c.AddData(data => data));
 
         // Initialize hub (triggers NodeType compilation)
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
 
         // Request default layout area
         var workspace = client.GetWorkspace();
@@ -106,9 +105,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         Output.WriteLine($"Hub address: {address}");
 
         Output.WriteLine($"Initializing hub for {address}...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
@@ -133,9 +130,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var address = new Address(MotorXLPath);
 
         Output.WriteLine($"Initializing hub for {MotorXLPath}...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();

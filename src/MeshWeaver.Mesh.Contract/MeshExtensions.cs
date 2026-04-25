@@ -1104,12 +1104,24 @@ public static class MeshExtensions
                 hub.Address, hub.Address.Path, updatedNode.Path);
             var forwarded = hub.Post(capturedRequest,
                 o => o.WithTarget(new Address(updatedNode.Path)))!;
-            hub.RegisterCallback(forwarded, d =>
-            {
-                hub.Post(((IMessageDelivery<UpdateNodeResponse>)d).Message,
-                    o => o.ResponseFor(request));
-                return d;
-            });
+            hub.Observe(forwarded)
+                .Subscribe(
+                    d =>
+                    {
+                        if (d.Message is UpdateNodeResponse resp)
+                            hub.Post(resp, o => o.ResponseFor(request));
+                        else
+                            hub.Post(
+                                UpdateNodeResponse.Fail(
+                                    $"Unexpected response {d.Message?.GetType().Name} forwarding UpdateNodeRequest",
+                                    NodeUpdateRejectionReason.Unknown),
+                                o => o.ResponseFor(request));
+                    },
+                    ex => hub.Post(
+                        UpdateNodeResponse.Fail(
+                            ex.Message ?? "Forwarded UpdateNodeRequest failed",
+                            NodeUpdateRejectionReason.Unknown),
+                        o => o.ResponseFor(request)));
             return request.Processed();
         }
 

@@ -127,7 +127,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests content:collectionName/filename.txt (with slash) — explicit collection name.
+    /// Tests content:collectionName/filename.txt (with slash) â€” explicit collection name.
     /// </summary>
     [Fact]
     public async Task Get_ContentReference_WithExplicitCollection_ReturnsFileContent()
@@ -165,10 +165,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
             new MeshNode(nodePath) { Name = "Direct Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("content:data.txt")),
-            o => o.WithTarget(new Address(nodePath)),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("content:data.txt")), o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         Output.WriteLine($"Response error: {response.Message.Error}");
         Output.WriteLine($"Response data: {response.Message.Data}");
@@ -193,10 +190,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
             new MeshNode(nodePath) { Name = "Collection Test", NodeType = "Markdown" });
 
         var client = GetClient();
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("collection:")),
-            o => o.WithTarget(new Address(nodePath)),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
+        var response = await client.Observe(new GetDataRequest(new UnifiedReference("collection:")), o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);
 
         Output.WriteLine($"Response error: {response.Message.Error}");
         Output.WriteLine($"Response data type: {response.Message.Data?.GetType().Name}");
@@ -240,8 +234,8 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Same as above but quotes wrap the WHOLE relative portion after content/ —
-    /// i.e. content/"name" vs "content/name" — both shapes appear in agent output.
+    /// Same as above but quotes wrap the WHOLE relative portion after content/ â€”
+    /// i.e. content/"name" vs "content/name" â€” both shapes appear in agent output.
     /// </summary>
     [Fact]
     public async Task Get_AbsolutePath_QuotesAroundContentSegment_ReturnsFileContent()
@@ -271,7 +265,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tolerance matrix — every shape we've actually observed an agent or autocomplete
+    /// Tolerance matrix â€” every shape we've actually observed an agent or autocomplete
     /// emit for the SAME spaced file. They must all return the file content. Keep this
     /// table extended with new shapes the agents come up with in the wild.
     /// {NODE} is replaced with the per-test node path so the parameterization stays
@@ -310,7 +304,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Yet another shape an agent (or model) sometimes emits: @"content/some path" — the
+    /// Yet another shape an agent (or model) sometimes emits: @"content/some path" â€” the
     /// quote sits right after @ and wraps everything that follows. Same fix applies
     /// (strip every quote), this just nails the regression.
     /// </summary>
@@ -344,7 +338,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     /// must return the spaced file "Input Markus Apr 15.txt", and the InsertText that
     /// the autocomplete suggests must round-trip through MeshPlugin.Get and return the
     /// file content. This exercises the full chat pipeline: case-insensitive fuzzy
-    /// match → quoted-reference InsertText → ResolvePath → file lookup.
+    /// match â†’ quoted-reference InsertText â†’ ResolvePath â†’ file lookup.
     /// </summary>
     [Fact]
     public async Task Autocomplete_RoundTrip_LowercaseQuery_QuotedInsertText_GetsContent()
@@ -361,13 +355,10 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
 
         var client = GetClient();
 
-        // Step 1 — autocomplete, lowercase, treats node as the chat context.
+        // Step 1 â€” autocomplete, lowercase, treats node as the chat context.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
-        var acResponse = await client.AwaitResponse(
-            new AutocompleteRequest("@markus", nodePath),
-            o => o.WithTarget(new Address(nodePath)),
-            cts.Token);
+        var acResponse = await client.Observe(new AutocompleteRequest("@markus", nodePath), o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(cts.Token);
 
         Output.WriteLine($"Autocomplete items: {acResponse.Message.Items.Count}");
         foreach (var item in acResponse.Message.Items)
@@ -381,7 +372,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         // The InsertText for a spaced filename is wrapped in quotes by FormatInsertText.
         match.InsertText.Should().Contain("\"", "spaced filenames are quoted in the InsertText");
 
-        // Step 2 — feed the InsertText (verbatim, including quotes) into MeshPlugin.Get,
+        // Step 2 â€” feed the InsertText (verbatim, including quotes) into MeshPlugin.Get,
         // pretending the agent received it via attachment. Strip trailing whitespace the
         // way the chat input would when treating it as an @reference.
         var insertedRef = match.InsertText.TrimEnd();

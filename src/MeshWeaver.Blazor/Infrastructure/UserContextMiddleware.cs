@@ -1,4 +1,6 @@
-﻿using System.Security.Claims;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Security.Claims;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -103,9 +105,11 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             var hashPrefix = hash[..12];
             var tokenAddress = new Address("ApiToken", hashPrefix);
 
-            var response = await hub.AwaitResponse(
-                new ValidateTokenRequest(rawToken),
-                o => o.WithTarget(tokenAddress));
+            var response = await hub.Observe(
+                    new ValidateTokenRequest(rawToken),
+                    o => o.WithTarget(tokenAddress))
+                .FirstAsync()
+                .ToTask();
             return response.Message;
         }
         catch

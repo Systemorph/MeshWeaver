@@ -322,23 +322,25 @@
                     observer.OnCompleted();
                     return Disposable.Empty;
                 }
-                Hub.RegisterCallback(delivery, response =>
-                {
-                    if (response.Message is AutocompleteResponse ar)
-                    {
-                        observer.OnNext(ar.Items
-                            .Select(item => new CompletionItem
+                Hub.Observe(delivery)
+                    .Subscribe(
+                        response =>
+                        {
+                            if (response.Message is AutocompleteResponse ar)
                             {
-                                Label = item.Label,
-                                InsertText = item.InsertText,
-                                Description = item.Description,
-                                Category = item.Category,
-                                Kind = MapKind(item.Kind)
-                            })
-                            .ToArray());
-                    }
-                    return response;
-                });
+                                observer.OnNext(ar.Items
+                                    .Select(item => new CompletionItem
+                                    {
+                                        Label = item.Label,
+                                        InsertText = item.InsertText,
+                                        Description = item.Description,
+                                        Category = item.Category,
+                                        Kind = MapKind(item.Kind)
+                                    })
+                                    .ToArray());
+                            }
+                        },
+                        ex => Logger.LogWarning(ex, "Autocomplete failed for query: {Query}", query));
             }
             catch (Exception ex)
             {

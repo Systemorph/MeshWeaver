@@ -302,10 +302,8 @@ internal class NavigationService : INavigationService
         try
         {
             var address = (Address)resolution.Prefix;
-            var node = await _hub.GetWorkspace().GetMeshNodeStream(resolution.Prefix)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+            // One-shot read — GetDataRequest, no SubscribeRequest round-trip.
+            var node = await _hub.GetMeshNode(resolution.Prefix, TimeSpan.FromSeconds(10))
                 .FirstOrDefaultAsync();
             if (node == null)
                 return null;

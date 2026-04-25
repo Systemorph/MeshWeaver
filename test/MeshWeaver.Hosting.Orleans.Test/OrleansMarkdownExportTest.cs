@@ -27,13 +27,14 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture — uses MarkdownExportSiloConfigurator with AddMarkdownExport(),
+// TODO: needs custom shared fixture â€” uses MarkdownExportSiloConfigurator with AddMarkdownExport(),
 // which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end Orleans tests for the markdown PDF / DOCX export pipeline. Exercises the full
-/// cross-hub serialization path: client hub → routing → node hub → handler → response back.
+/// cross-hub serialization path: client hub â†’ routing â†’ node hub â†’ handler â†’ response back.
 /// Regression guard for the InvalidCastException users hit when <c>$type</c> discriminators
 /// disagreed between hubs (full name on server, short name on mesh registry).
 /// </summary>
@@ -99,9 +100,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             NodeType = MarkdownNodeType.NodeType,
             Content = new MarkdownContent { Content = markdown }
         };
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(node),
-            o => o.WithTarget(new Address("User/" + TestUserId)), ct);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address("User/" + TestUserId))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -120,12 +119,11 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var request = new ExportDocumentRequest(nodePath,
             new DocumentExportOptions { Format = ExportFormat.Pdf, Title = "Test PDF" });
 
-        var delivery = await client.AwaitResponse(
-            request, o => o.WithTarget(new Address(nodePath)), cts.Token);
+        var delivery = await client.Observe(request, o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(cts.Token);
 
         // The cast that used to throw InvalidCastException:
         delivery.Should().BeOfType<MessageDelivery<ExportDocumentResponse>>(
-            "response must deserialize to the concrete type — JsonElement fallback means the $type " +
+            "response must deserialize to the concrete type â€” JsonElement fallback means the $type " +
             "discriminator didn't match any registered type on the client hub");
 
         var response = delivery.Message;
@@ -137,7 +135,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
 
     /// <summary>
     /// Reproduces the user-facing <c>NotSupportedException</c> from
-    /// <c>LayoutExtensions.GetStream&lt;UiControl&gt;</c> — the client hub must deserialize a
+    /// <c>LayoutExtensions.GetStream&lt;UiControl&gt;</c> â€” the client hub must deserialize a
     /// polymorphic <see cref="UiControl"/> JSON payload whose <c>$type</c> is
     /// <c>ExportDocumentControl</c>. If the client's type registry doesn't know that subtype,
     /// <c>PolymorphicTypeInfoResolver</c> can't build the JsonDerivedType mapping and
@@ -155,7 +153,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "# Hello\n\nFor layout-stream test.", cts.Token);
         Output.WriteLine($"Created Markdown node: {nodePath}");
 
-        // Subscribe to the ExportPdf layout area — this is what the portal does when the
+        // Subscribe to the ExportPdf layout area â€” this is what the portal does when the
         // user clicks "Export to PDF". The server renders an ExportDocumentControl; the
         // client must deserialize it as UiControl via PolymorphicTypeInfoResolver.
         var workspace = client.GetWorkspace();
@@ -163,7 +161,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(nodePath), reference);
 
-        // GetControlStream hits LayoutExtensions.GetStream<UiControl> — exactly the path
+        // GetControlStream hits LayoutExtensions.GetStream<UiControl> â€” exactly the path
         // that throws in the user's stack trace.
         var control = await stream.GetControlStream(string.Empty)
             .Timeout(30.Seconds())
@@ -171,7 +169,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
 
         control.Should().NotBeNull("the ExportPdf area must render a UiControl");
         control.Should().BeOfType<ExportDocumentControl>(
-            "the $type discriminator must resolve to ExportDocumentControl — if client " +
+            "the $type discriminator must resolve to ExportDocumentControl â€” if client " +
             "type-registry is missing the type, deserialization falls back to the base " +
             "UiControl and throws NotSupportedException");
 
@@ -226,7 +224,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     }
 
     /// <summary>
-    /// Negative counterpart: a sub-hub that does NOT register the export types — reproduces the
+    /// Negative counterpart: a sub-hub that does NOT register the export types â€” reproduces the
     /// prod condition before <c>PortalApplication.DefaultPortalConfig</c> was updated. The
     /// deserialize path used to throw <see cref="NotSupportedException"/> straight into the
     /// observable and crash the circuit. After the robustness fix in
@@ -246,7 +244,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "# Hello\n\nSub-hub without export types registered.", cts.Token);
         Output.WriteLine($"Created Markdown node: {nodePath}");
 
-        // Bare sub-hub — no AddMarkdownExportTypes. This is what the portal did before the fix.
+        // Bare sub-hub â€” no AddMarkdownExportTypes. This is what the portal did before the fix.
         var subHub = parent.GetHostedHub(new Address("portal", "subhub-bare"),
             c => c.AddLayoutClient())!;
 
@@ -254,7 +252,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             new Address(nodePath), new LayoutAreaReference(ExportDocumentLayoutArea.PdfArea));
         // Server renders the UiControl under the Area pointer (not empty string).
 
-        // Observe the control stream — should NOT throw. An entry arrives but deserialization
+        // Observe the control stream â€” should NOT throw. An entry arrives but deserialization
         // fails (caught + logged), yielding null.
         UiControl? control = null;
         using var subscription = stream.GetControlStream(ExportDocumentLayoutArea.PdfArea)
@@ -284,11 +282,10 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var request = new ExportDocumentRequest(nodePath,
             new DocumentExportOptions { Format = ExportFormat.Docx, Title = "Test DOCX" });
 
-        var delivery = await client.AwaitResponse(
-            request, o => o.WithTarget(new Address(nodePath)), cts.Token);
+        var delivery = await client.Observe(request, o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(cts.Token);
 
         delivery.Should().BeOfType<MessageDelivery<ExportDocumentResponse>>(
-            "response must deserialize to the concrete type — JsonElement fallback means the $type " +
+            "response must deserialize to the concrete type â€” JsonElement fallback means the $type " +
             "discriminator didn't match any registered type on the client hub");
 
         var response = delivery.Message;

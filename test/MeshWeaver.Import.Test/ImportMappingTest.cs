@@ -15,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
@@ -65,14 +66,10 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     private async Task<ActivityLog> DoImport(string content, string format = ImportFormat.Default)
     {
         var importRequest = new ImportRequest(content) { Format = format };
-        var importResponse = await GetClient().AwaitResponse(
-            importRequest,
-            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await GetClient().Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
             , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         return importResponse.Message.Log;
     }

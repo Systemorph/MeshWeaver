@@ -54,24 +54,23 @@ public static class ExportDocumentLayoutArea
             o => o.WithTarget(host.Hub.Address));
         if (delivery is null)
             return subject.AsObservable();
-        // RegisterCallback returns a Task<IMessageDelivery>. Hook a continuation instead of
-        // awaiting — awaiting blocks the hub's message pump and deadlocks.
-        host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), default)
-            .ContinueWith(t =>
-            {
-                if (t.Status != TaskStatus.RanToCompletion) return;
-                if (t.Result is IMessageDelivery<GetDataResponse> resp
-                    && resp.Message.Data is MeshNode node)
+        // Use Observe → Subscribe so DeliveryFailure flows through OnError without throwing.
+        host.Hub.Observe(delivery)
+            .Subscribe(
+                d =>
                 {
-                    subject.OnNext(new ExportDocumentControl
+                    if (d.Message is GetDataResponse resp && resp.Data is MeshNode node)
                     {
-                        SourcePath = hubPath,
-                        NodeName = node.Name,
-                        DefaultFormat = defaultFormat,
-                        HasDescendants = false
-                    });
-                }
-            }, TaskContinuationOptions.ExecuteSynchronously);
+                        subject.OnNext(new ExportDocumentControl
+                        {
+                            SourcePath = hubPath,
+                            NodeName = node.Name,
+                            DefaultFormat = defaultFormat,
+                            HasDescendants = false
+                        });
+                    }
+                },
+                _ => { /* leave seed control in place on failure */ });
 
         return subject.AsObservable();
     }

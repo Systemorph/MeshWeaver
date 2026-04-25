@@ -20,12 +20,13 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.MathDemo.Test;
 
 /// <summary>
 /// End-to-end test for the MathDemo/Matrix sample. Exercises dynamic node-type compilation
 /// with a <c>#r "nuget:MathNet.Numerics, ..."</c> directive and renders the compiled
-/// <c>Inverse</c> layout area against a real client — the same path the portal uses.
+/// <c>Inverse</c> layout area against a real client â€” the same path the portal uses.
 ///
 /// Requires network access to api.nuget.org on first run; the persistent NuGet cache makes
 /// subsequent runs instant.
@@ -82,22 +83,20 @@ public class MatrixViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var client = GetClient();
         var address = new Address("MathDemo/Matrix/Example");
 
-        // Initialize the hub first — required for routing to hit the per-node hub.
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address));
+        // Initialize the hub first â€” required for routing to hit the per-node hub.
+        await client.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Inverse");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
 
-        Output.WriteLine("Waiting for Inverse view to render (cold run resolves MathNet.Numerics from NuGet)…");
+        Output.WriteLine("Waiting for Inverse view to render (cold run resolves MathNet.Numerics from NuGet)â€¦");
         var value = await stream.Timeout(TimeSpan.FromSeconds(90)).FirstAsync();
 
         Output.WriteLine("Inverse view rendered.");
         value.Should().NotBe(default(JsonElement),
-            "Inverse layout area should render — proves #r \"nuget:MathNet.Numerics, ...\" is resolved " +
+            "Inverse layout area should render â€” proves #r \"nuget:MathNet.Numerics, ...\" is resolved " +
             "and MatrixLayoutAreas.Inverse executed against the sample instance.");
     }
 }

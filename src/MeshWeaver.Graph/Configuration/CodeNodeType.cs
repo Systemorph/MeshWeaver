@@ -74,18 +74,14 @@ public static class CodeNodeType
     private static IMessageDelivery HandleExecuteScript(
         IMessageHub hub, IMessageDelivery<ExecuteScriptRequest> request)
     {
-        // Compose a reactive chain on the hub's own workspace stream — .Select the
-        // MeshNode out of each change, .Where non-null, .Take(1) to wait for the
-        // first populated emission, then .Subscribe to fire the dispatch + response.
-        // Handler itself returns Processed() immediately; the callback fires once
-        // the workspace has loaded the node.
-        hub.GetWorkspace().GetStream(new MeshNodeReference())
-            ?.Select(change => change.Value)
-            .Where(node => node is not null)
-            .Take(1)
+        // One-shot read of this hub's own MeshNode via GetDataRequest (posted to self) —
+        // true request/response, no SubscribeRequest+immediate-unsubscribe. Handler
+        // itself returns Processed() immediately; the callback below fires when the
+        // response arrives.
+        hub.GetMeshNode(hub.Address.ToString())
             .Subscribe(node =>
             {
-                if (node!.Content is not CodeConfiguration code || !code.IsExecutable)
+                if (node?.Content is not CodeConfiguration code || !code.IsExecutable)
                 {
                     hub.Post(
                         new ExecuteScriptResponse

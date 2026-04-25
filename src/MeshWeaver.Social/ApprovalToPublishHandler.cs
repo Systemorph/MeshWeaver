@@ -82,14 +82,14 @@ public sealed class ApprovalToPublishHandler : IHostedService, IDisposable
     {
         try
         {
-            // Single-node-by-path content read — use the per-node MeshNodeReference reducer
-            // (NOT QueryAsync, which lags through the read-side index; see
+            // Single-node-by-path content read — one-shot GetDataRequest (NOT QueryAsync,
+            // which lags through the read-side index, and NOT GetMeshNodeStream(...).Take(1)
+            // which pays for a SubscribeRequest then immediately unsubscribes; see
             // Doc/Architecture/AsynchronousCalls.md).
             MeshNode? approvalNode;
             try
             {
-                approvalNode = await _hub.GetWorkspace().GetMeshNodeStream(approvalPath)
-                    .Take(1).Timeout(TimeSpan.FromSeconds(15))
+                approvalNode = await _hub.GetMeshNode(approvalPath, TimeSpan.FromSeconds(15))
                     .ToTask();
             }
             catch

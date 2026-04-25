@@ -267,10 +267,8 @@
     {
         try
         {
-            var node = await Hub.GetWorkspace().GetMeshNodeStream(path)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(5))
-                .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+            // One-shot pre-select read — GetDataRequest, no lingering subscription.
+            var node = await Hub.GetMeshNode(path, TimeSpan.FromSeconds(5))
                 .FirstOrDefaultAsync();
             if (node != null)
                 setter(new QuerySuggestion(node.Path, node.Name ?? node.Id, node.NodeType, 1.0, node.Icon));

@@ -21,6 +21,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
@@ -50,14 +52,12 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
         var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
-        // Step 1: Create thread (BuildThreadNode — no PendingUserMessage)
+        // Step 1: Create thread (BuildThreadNode â€” no PendingUserMessage)
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Hello portal flow!", "TestUser");
         var threadPath = threadNode.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        var createResponse = await client.AwaitResponse(
-            new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address), ct);
+        var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
         Output.WriteLine("Thread created");
 
@@ -87,8 +87,7 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Step 3: Submit with cell IDs
         Output.WriteLine("Submitting message...");
-        var submitResp = await client.AwaitResponse(
-            new SubmitMessageRequest
+        var submitResp = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Hello portal flow!",
@@ -96,17 +95,14 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
                 ResponseMessageId = responseMsgId,
                 AgentName = "Orchestrator",
                 ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
         Output.WriteLine($"Submit response: Messages=[{string.Join(",", submitResp.Message.Messages ?? [])}]");
 
         // Step 4: Wait for execution to complete
         for (var i = 0; i < 60; i++)
         {
-            var dataResp = await client.AwaitResponse(
-                new GetDataRequest(new MeshNodeReference()),
-                o => o.WithTarget(new Address(threadPath)), ct);
+            var dataResp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             var node = dataResp.Message.Data as MeshNode;
             if (node?.Content is JsonElement je)
                 node = node with { Content = je.Deserialize<MeshThread>(Mesh.JsonSerializerOptions) };
@@ -118,9 +114,7 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
 
                 // Verify response cell
                 var responsePath = $"{threadPath}/{responseMsgId}";
-                var responseResp = await client.AwaitResponse(
-                    new GetDataRequest(new MeshNodeReference()),
-                    o => o.WithTarget(new Address(responsePath)), ct);
+                var responseResp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(responsePath))).FirstAsync().ToTask(ct);
                 var rNode = responseResp.Message.Data as MeshNode;
                 if (rNode?.Content is JsonElement rje)
                     rNode = rNode with { Content = rje.Deserialize<ThreadMessage>(Mesh.JsonSerializerOptions) };
@@ -144,8 +138,7 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Test response update", "TestUser");
         var threadPath = threadNode.Path!;
 
-        await client.AwaitResponse(
-            new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address), ct);
+        await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
@@ -163,18 +156,15 @@ public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBas
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
         }), o => o.WithTarget(new Address(threadPath)));
 
-        await client.AwaitResponse(
-            new SubmitMessageRequest
+        await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath, UserMessageText = "Test response update",
                 UserMessageId = userMsgId, ResponseMessageId = responseMsgId, ContextPath = ContextPath
-            }, o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         for (var i = 0; i < 60; i++)
         {
-            var responseResp = await client.AwaitResponse(
-                new GetDataRequest(new MeshNodeReference()),
-                o => o.WithTarget(new Address(responsePath)), ct);
+            var responseResp = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(responsePath))).FirstAsync().ToTask(ct);
             var rNode = responseResp.Message.Data as MeshNode;
             if (rNode?.Content is JsonElement rje)
                 rNode = rNode with { Content = rje.Deserialize<ThreadMessage>(Mesh.JsonSerializerOptions) };

@@ -80,9 +80,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
         // Canonical CQRS-correct read via per-node MeshNodeReference reducer.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
@@ -103,9 +101,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         var client = await GetClientAsync();
 
         // Create thread
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Streaming text test")),
-            o => o.WithTarget(new Address(ContextPath)), ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Streaming text test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -122,15 +118,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
             .FirstAsync().ToTask(ct);
 
         // Submit via AppendUserMessageRequest
-        var submit = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submit = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Tell me something",
                 ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submit.Message.Success.Should().BeTrue(submit.Message.Error);
 
         var msgIds = await twoMessages;
@@ -164,9 +158,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         var client = await GetClientAsync();
 
         // Create thread
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")),
-            o => o.WithTarget(new Address(ContextPath)), ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"1. Thread created: {threadPath}");
@@ -200,15 +192,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
 
         // Submit message via AppendUserMessageRequest
         Output.WriteLine("2. Submitting message...");
-        var submit = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submit = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Use the test tool please",
                 ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submit.Message.Success.Should().BeTrue(submit.Message.Error);
         Output.WriteLine("3. Message submitted successfully");
 
@@ -283,23 +273,19 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         var workspace = client.GetWorkspace();
 
         // 1. Create thread
-        var createResp = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation live test")),
-            o => o.WithTarget(new Address(ContextPath)), ct);
+        var createResp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation live test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
         // 2. Submit message via AppendUserMessageRequest
-        var submitResp = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResp = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Use the test tool please",
                 ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
         Output.WriteLine("2. Message submitted");
 
@@ -368,21 +354,17 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         var workspace = client.GetWorkspace();
 
         // 1. Create thread + submit message
-        var createResp = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Layout stream test")),
-            o => o.WithTarget(new Address(ContextPath)), ct);
+        var createResp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Layout stream test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"1. Thread: {threadPath}");
 
-        var submitResp = await client.AwaitResponse(
-            new AppendUserMessageRequest
+        var submitResp = await client.Observe(new AppendUserMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test",
                 ContextPath = ContextPath
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResp.Message.Success.Should().BeTrue();
         Output.WriteLine("2. Submitted");
 

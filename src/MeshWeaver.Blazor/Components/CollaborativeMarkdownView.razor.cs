@@ -471,15 +471,21 @@ public partial class CollaborativeMarkdownView
 
         if (delivery != null)
         {
-            Hub.RegisterCallback<CreateCommentResponse>(delivery, response =>
-            {
-                if (!response.Message.Success)
-                {
-                    var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
-                    logger?.LogWarning("[SubmitComment] FAILED: {Error}", response.Message.Error);
-                }
-                return response;
-            });
+            Hub.Observe(delivery)
+                .Subscribe(
+                    response =>
+                    {
+                        if (response.Message is CreateCommentResponse { Success: false } resp)
+                        {
+                            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+                            logger?.LogWarning("[SubmitComment] FAILED: {Error}", resp.Error);
+                        }
+                    },
+                    ex =>
+                    {
+                        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+                        logger?.LogWarning(ex, "[SubmitComment] FAILED");
+                    });
         }
     }
 
@@ -517,15 +523,21 @@ public partial class CollaborativeMarkdownView
 
         if (delivery != null)
         {
-            Hub.RegisterCallback<CreateCommentResponse>(delivery, response =>
-            {
-                if (!response.Message.Success)
-                {
-                    var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
-                    logger?.LogWarning("[SubmitPageComment] FAILED: {Error}", response.Message.Error);
-                }
-                return response;
-            });
+            Hub.Observe(delivery)
+                .Subscribe(
+                    response =>
+                    {
+                        if (response.Message is CreateCommentResponse { Success: false } resp)
+                        {
+                            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+                            logger?.LogWarning("[SubmitPageComment] FAILED: {Error}", resp.Error);
+                        }
+                    },
+                    ex =>
+                    {
+                        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+                        logger?.LogWarning(ex, "[SubmitPageComment] FAILED");
+                    });
         }
     }
 
@@ -540,10 +552,9 @@ public partial class CollaborativeMarkdownView
     {
         if (!commentPaths.TryGetValue(markerId, out var path) || string.IsNullOrEmpty(BoundHubAddress))
             return;
-        var node = await Hub.GetWorkspace().GetMeshNodeStream(path)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+        // One-shot read — GetDataRequest, no lingering subscription. The Blazor view
+        // already owns the live `_nodeStream` for re-renders; this is a read-now-then-update.
+        var node = await Hub.GetMeshNode(path, TimeSpan.FromSeconds(10))
             .FirstOrDefaultAsync();
         if (node?.Content is Comment comment)
         {

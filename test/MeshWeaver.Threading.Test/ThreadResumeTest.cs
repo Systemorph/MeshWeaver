@@ -26,7 +26,7 @@ namespace MeshWeaver.Threading.Test;
 
 /// <summary>
 /// Tests that reopening/resuming a thread loads all previously persisted messages.
-/// Verifies the full round-trip: create thread → submit messages → reopen → messages are all there.
+/// Verifies the full round-trip: create thread â†’ submit messages â†’ reopen â†’ messages are all there.
 /// </summary>
 public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -55,9 +55,7 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address), ct);
+        var response = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -74,23 +72,23 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = text, Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new SubmitMessageRequest
+        await client.Observe(new SubmitMessageRequest
         {
             ThreadPath = threadPath, UserMessageText = text, ContextPath = ContextPath,
             UserMessageId = userMsgId, ResponseMessageId = responseMsgId
-        }, o => o.WithTarget(new Address(threadPath)), ct);
+        }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
     }
 
     private async Task WaitForMessageCompleteAsync(string messagePath, CancellationToken ct)
@@ -120,33 +118,31 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "First message for resume test", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var twoMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes => GetMessages(nodes, threadPath))
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+        var submitResponse = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "First message for resume test",
                 ContextPath = ContextPath,
                 UserMessageId = userMsgId,
                 ResponseMessageId = responseMsgId
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
         var msgIds = await twoMessages;
@@ -205,33 +201,31 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var userMsgId1 = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId1 = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId1, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId1, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "First question", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId1, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId1, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var twoMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes => GetMessages(nodes, threadPath))
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(
-            new SubmitMessageRequest
+        await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "First question",
                 ContextPath = ContextPath,
                 UserMessageId = userMsgId1,
                 ResponseMessageId = responseMsgId1
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var firstMsgIds = await twoMessages;
         await WaitForMessageCompleteAsync($"{threadPath}/{firstMsgIds[1]}", ct);
@@ -240,33 +234,31 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var userMsgId2 = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId2 = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId2, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId2, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Second question", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId2, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId2, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var fourMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes => GetMessages(nodes, threadPath))
             .Where(ids => ids.Count >= 4).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(
-            new SubmitMessageRequest
+        await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Second question",
                 ContextPath = ContextPath,
                 UserMessageId = userMsgId2,
                 ResponseMessageId = responseMsgId2
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var allMsgIds = await fourMessages;
         allMsgIds.Should().HaveCount(4, "should have 2 exchanges = 4 messages");

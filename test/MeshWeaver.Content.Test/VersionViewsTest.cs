@@ -101,9 +101,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.VersionsArea);
@@ -137,9 +135,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.VersionsArea);
@@ -174,9 +170,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         // Find the first version number via IVersionQuery
         var versionQuery = Mesh.ServiceProvider.GetService<IVersionQuery>();
@@ -227,9 +221,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var nodeAddress = new Address(nodePath);
         var client = GetClient();
 
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         // Menu is rendered as part of any layout area via the predicate-based renderer;
@@ -240,7 +232,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             nodeAddress, reference);
 
         // Act: read the $Menu:Node control from the layout stream. Built-in
-        // items (Edit, Versions, Delete, …) live in the "Node" context; the
+        // items (Edit, Versions, Delete, â€¦) live in the "Node" context; the
         // default unnamed $Menu area is reserved for app-specific additions.
         Output.WriteLine("Waiting for $Menu:Node to render...");
         var menuControl = await stream

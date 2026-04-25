@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.Infrastructure;
@@ -187,10 +189,11 @@ public static class BlazorHostingExtensions
                 // Get or fetch collection configuration from target hub
                 if (!collectionCache.TryGetValue(qualifiedCollectionName, out var collectionConfig))
                 {
-                    var collectionResponse = await mainHub.AwaitResponse(
-                        new GetDataRequest(new ContentCollectionReference([addressCollectionName])),
-                        o => o.WithTarget(targetAddress),
-                        context.RequestAborted);
+                    var collectionResponse = await mainHub.Observe(
+                            new GetDataRequest(new ContentCollectionReference([addressCollectionName])),
+                            o => o.WithTarget(targetAddress))
+                        .FirstAsync()
+                        .ToTask(context.RequestAborted);
 
                     IReadOnlyCollection<ContentCollectionConfig>? configs;
                     if (collectionResponse?.Message?.Data is JsonElement jsonElement)

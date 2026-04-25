@@ -62,9 +62,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string ns, string text, CancellationToken ct)
     {
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, text)),
-            o => o.WithTarget(new Address(ns)), ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, text)), o => o.WithTarget(new Address(ns))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -89,30 +87,30 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = contextPath,
             Content = new ThreadMessage { Role = "user", Text = text, Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = contextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new SubmitMessageRequest
+        await client.Observe(new SubmitMessageRequest
         {
             ThreadPath = threadPath, UserMessageText = text, ContextPath = contextPath,
             UserMessageId = userMsgId, ResponseMessageId = responseMsgId
-        }, o => o.WithTarget(new Address(threadPath)), ct);
+        }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         return (userMsgId, responseMsgId);
     }
 
     /// <summary>
     /// Verifies the full execution flow:
-    /// 1. Create context → create thread → submit message
+    /// 1. Create context â†’ create thread â†’ submit message
     /// 2. Thread and message nodes are created in persistence
     /// 3. Messages IDs appear in the workspace stream
     /// </summary>
@@ -139,7 +137,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         msgIds.Should().HaveCount(2);
         Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
-        // Verify nodes exist in persistence — cells are created in background,
+        // Verify nodes exist in persistence â€” cells are created in background,
         // so retry briefly until they appear.
         var userMsgPath = $"{threadPath}/{msgIds[0]}";
         MeshNode? userNode = null;
@@ -220,32 +218,30 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         await CreateContextNodeAsync(ContextPath, ct);
         var threadPath = await CreateThreadAsync(client, ContextPath, "Timeout test", ct);
 
-        // Create cells and submit — if routing is broken, this will timeout
+        // Create cells and submit â€” if routing is broken, this will timeout
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Test no timeout", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        var response = await client.AwaitResponse(
-            new SubmitMessageRequest
+        var response = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Test no timeout",
                 ContextPath = ContextPath,
                 UserMessageId = userMsgId,
                 ResponseMessageId = responseMsgId
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         response.Message.Success.Should().BeTrue("SubmitMessageResponse should arrive without timeout");
         Output.WriteLine("SubmitMessageRequest completed without timeout");

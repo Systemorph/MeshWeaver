@@ -8,6 +8,8 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -24,14 +26,14 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var ct = TestContext.Current.CancellationToken;
         var client = GetClient();
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(Mesh.Address), ct);
+        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
         var request = new CreateNodeRequest(
             new MeshNode("audit-create", TestPartition) { Name = "Audit Create", NodeType = "Markdown" })
         {
             CreatedBy = "alice@example.com"
         };
-        var response = await client.AwaitResponse(request, o => o.WithTarget(Mesh.Address), ct);
+        var response = await client.Observe(request, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
         response.Message.Success.Should().BeTrue();
         var saved = response.Message.Node!;
@@ -46,7 +48,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var ct = TestContext.Current.CancellationToken;
         var client = GetClient();
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(Mesh.Address), ct);
+        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
         // Create
         var create = new CreateNodeRequest(
@@ -54,7 +56,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         {
             CreatedBy = "alice@example.com"
         };
-        var createResp = await client.AwaitResponse(create, o => o.WithTarget(Mesh.Address), ct);
+        var createResp = await client.Observe(create, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue();
         var created = createResp.Message.Node!;
         var originalCreatedDate = created.CreatedDate;
@@ -67,14 +69,14 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         {
             UpdatedBy = "bob@example.com"
         };
-        var updateResp = await client.AwaitResponse(update, o => o.WithTarget(Mesh.Address), ct);
+        var updateResp = await client.Observe(update, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
         updateResp.Message.Success.Should().BeTrue();
         var updated = updateResp.Message.Node!;
 
         updated.CreatedDate.Should().Be(originalCreatedDate,
-            "CreatedDate is immutable — only LastModified should move");
+            "CreatedDate is immutable â€” only LastModified should move");
         updated.CreatedBy.Should().Be("alice@example.com",
-            "CreatedBy is immutable — reflects the original author");
+            "CreatedBy is immutable â€” reflects the original author");
         updated.LastModifiedBy.Should().Be("bob@example.com",
             "UpdatedBy in the request stamps LastModifiedBy on the node");
         updated.LastModified.Should().BeAfter(originalCreatedDate,
@@ -86,7 +88,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var ct = TestContext.Current.CancellationToken;
         var client = GetClient();
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(Mesh.Address), ct);
+        await client.Observe(new PingRequest(), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
         // Import flows (e.g. file-system seed) set CreatedDate explicitly; the handler
         // must not overwrite it with "now".
@@ -97,7 +99,7 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = "Markdown",
             CreatedDate = historicCreated
         });
-        var response = await client.AwaitResponse(request, o => o.WithTarget(Mesh.Address), ct);
+        var response = await client.Observe(request, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
 
         response.Message.Success.Should().BeTrue();
         response.Message.Node!.CreatedDate.Should().Be(historicCreated);

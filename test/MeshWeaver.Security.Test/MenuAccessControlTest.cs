@@ -20,6 +20,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
@@ -117,10 +118,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(pingCts.Token);
 
         var act = () => FetchAllMenuItemsAsync(client, nodeAddress);
         var ex = await Assert.ThrowsAsync<DeliveryFailureException>(act);
@@ -131,7 +129,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 30000)]
     public async Task Menu_ReadOnlyUser_ShowsOnlyUnrestrictedItems()
     {
-        // Viewer role: Read only → no Create, Update, or Delete
+        // Viewer role: Read only â†’ no Create, Update, or Delete
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await svc.AddUserRoleAsync(TestUserId, "Viewer", NodePath, "system");
 
@@ -140,10 +138,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(pingCts.Token);
 
         var items = await FetchAllMenuItemsAsync(client, nodeAddress);
 
@@ -153,13 +148,13 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
             ["Files", "Threads", "Versions", "Pin"],
-            "Viewer has only Read — no Create, Update, Delete, or Export items (Pin requires no permission; Settings is a dedicated header button)");
+            "Viewer has only Read â€” no Create, Update, Delete, or Export items (Pin requires no permission; Settings is a dedicated header button)");
     }
 
     [Fact(Timeout = 30000)]
     public async Task Menu_Editor_ShowsCreateItems()
     {
-        // Editor role: Read|Create|Update|Comment → has Create but not Delete
+        // Editor role: Read|Create|Update|Comment â†’ has Create but not Delete
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system");
 
@@ -168,10 +163,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(pingCts.Token);
 
         var items = await FetchAllMenuItemsAsync(client, nodeAddress);
 
@@ -182,7 +174,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         // Editor gets Edit, Create, Copy, Import, Export, Recycle (Update), Pin (None), plus always-visible items
         items.Select(i => i.Label).Should().BeEquivalentTo(
             ["Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions", "Pin", "Recycle"],
-            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export/Recycle plus always-visible items and Pin (Settings is a dedicated header button)");
+            "Editor has Read|Create|Update|Comment|Export â€” Edit/Create/Copy/Import/Export/Recycle plus always-visible items and Pin (Settings is a dedicated header button)");
     }
 
     [Fact(Timeout = 30000)]
@@ -197,10 +189,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(pingCts.Token);
 
         var items = await FetchAllMenuItemsAsync(client, nodeAddress);
 
@@ -225,12 +214,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(pingCts.Token);
 
-        // Each menu context is sorted independently by Order — verify both
+        // Each menu context is sorted independently by Order â€” verify both
         var nodeItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.NodeMenuContext);
         var meshItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext);
 
@@ -250,10 +236,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         pingCts.CancelAfter(15.Seconds());
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(nodeAddress),
-            pingCts.Token);
+        await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask(pingCts.Token);
 
         // Import lives in the Mesh menu
         var meshItems = await FetchMenuItemsAsync(client, nodeAddress, NodeMenuItemsExtensions.MeshMenuContext);

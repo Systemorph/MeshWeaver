@@ -20,6 +20,8 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Cosmos.Test;
 
 /// <summary>
@@ -90,9 +92,7 @@ public class OrganizationCompilationTest(ITestOutputHelper output) : TestBase(ou
         var orgAddress = new Address("Organization", "testorg");
 
         var act = async () => await client
-            .AwaitResponse(new PingRequest(),
-                o => o.WithTarget(orgAddress),
-                new CancellationTokenSource(30.Seconds()).Token);
+            .Observe(new PingRequest(), o => o.WithTarget(orgAddress)).FirstAsync().ToTask(new CancellationTokenSource(30.Seconds()).Token);
 
         // Assert: this should succeed if compilation works correctly.
         // If code files are not found, this will throw (the known issue).

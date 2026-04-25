@@ -16,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
@@ -58,14 +59,10 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         Logger.LogInformation("DistributedImportTest {TestId}: Sending import request with {Timeout}s timeout", testId, importRequest.Timeout?.TotalSeconds);
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         Logger.LogInformation("DistributedImportTest {TestId}: Import response received with status {Status}", testId, importResponse.Message.Log.Status);
 
         // assert
@@ -123,14 +120,10 @@ Id,Year,LoB,BusinessUnit,Value
     {
         var client = GetClient();
         var importRequest = new ImportRequest(VanillaCsv); // Add timeout for bulk test scenarios
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
             Mesh.GetHostedHub(ReferenceDataAddress.Create(), null!)
@@ -161,14 +154,10 @@ SystemName,DisplayName
         var client = GetClient();
         var importRequest = new ImportRequest(MultipleTypesCsv)
             .WithTimeout(15.Seconds()); // Add timeout for bulk test scenarios
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(15.Seconds()).Token
-            ).Token
-        );
+            ).Token);
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken,

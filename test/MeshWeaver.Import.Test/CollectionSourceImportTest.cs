@@ -14,6 +14,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Import.Test;
 
 public class CollectionSourceImportTest(ITestOutputHelper output) : HubTestBase(output)
@@ -47,11 +48,7 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "test-data.csv"));
 
         // Act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
@@ -83,11 +80,7 @@ SystemName,DisplayName
         // Act
         var token = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken,
             new CancellationTokenSource(5.Seconds()).Token).Token;
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            token
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(token);
 
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
@@ -112,11 +105,7 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "non-existent.csv"));
 
         // Act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
@@ -133,11 +122,7 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("NonExistentCollection", "test-data.csv"));
 
         // Act
-        var importResponse = await client.AwaitResponse(
-            importRequest,
-            o => o.WithTarget(ImportAddress.Create(2024)),
-            TestContext.Current.CancellationToken
-        );
+        var importResponse = await client.Observe(importRequest, o => o.WithTarget(ImportAddress.Create(2024))).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);

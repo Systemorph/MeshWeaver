@@ -69,34 +69,17 @@ public class PatchDataRequestTest : MonolithMeshTestBase
         // Post the PatchDataRequest with only { name: "Patched" } — the hub handler
         // applies this as a merge patch on its own MeshNode workspace stream.
         var patchJson = JsonSerializer.Serialize(new { name = "Patched" });
-        var patchTcs = new TaskCompletionSource<PatchDataResponse>();
-        var delivery = Mesh.Post(
+        var patchResponseDelivery = await AwaitResponseAsync(
             new PatchDataRequest(new MeshNodeReference(), new RawJson(patchJson)),
-            o => o.WithTarget(new Address(path)))!;
-        _ = Mesh.RegisterCallback(delivery, (d, _) =>
-        {
-            if (d is IMessageDelivery<PatchDataResponse> r) patchTcs.TrySetResult(r.Message);
-            else patchTcs.TrySetException(new InvalidOperationException(
-                $"Unexpected response: {d.Message?.GetType().Name}"));
-            return Task.FromResult(d);
-        }, default);
-
-        var patchResp = await patchTcs.Task;
+            o => o.WithTarget(new Address(path)));
+        var patchResp = patchResponseDelivery.Message;
         patchResp.Success.Should().BeTrue(patchResp.Error ?? "no error provided");
 
         // Round-trip: GetDataRequest on MeshNodeReference must see the merged state.
-        var getTcs = new TaskCompletionSource<MeshNode?>();
-        var getDelivery = Mesh.Post(
+        var getResponse = await AwaitResponseAsync(
             new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)))!;
-        _ = Mesh.RegisterCallback(getDelivery, (d, _) =>
-        {
-            if (d is IMessageDelivery<GetDataResponse> r) getTcs.TrySetResult(r.Message.Data as MeshNode);
-            else getTcs.TrySetResult(null);
-            return Task.FromResult(d);
-        }, default);
-
-        var node = await getTcs.Task;
+            o => o.WithTarget(new Address(path)));
+        var node = getResponse.Message.Data as MeshNode;
         node.Should().NotBeNull();
         node!.Name.Should().Be("Patched",
             because: "PatchDataRequest merged only the 'name' field");

@@ -23,6 +23,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Acme.Test;
 
 /// <summary>
@@ -87,9 +88,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         // Initialize the hub first - required for proper routing
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(todoAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -116,9 +115,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var todoAddress = new Address("ACME/ProductLaunch/Todo/LaunchEvent");
 
         // Initialize the hub first - required for proper routing
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(todoAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Thumbnail");
@@ -145,9 +142,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         // Initialize the hub first - required for proper routing
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(todoAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).FirstAsync().ToTask();
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Overview");
@@ -186,9 +181,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             Output.WriteLine($"Accessing Todo: {todoAddress}");
 
             // Initialize the hub first - required for proper routing
-            await client.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(todoAddress));
+            await client.Observe(new PingRequest(), o => o.WithTarget(todoAddress)).FirstAsync().ToTask();
 
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
                 todoAddress,
@@ -235,9 +228,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var parentAddress = new Address("ACME/ProductLaunch");
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         // Get the hosted hub directly
@@ -277,9 +268,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var parentAddress = new Address("ACME/ProductLaunch");
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -311,9 +300,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
         // Initialize the hub first
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();

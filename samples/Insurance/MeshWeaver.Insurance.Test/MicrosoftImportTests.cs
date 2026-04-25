@@ -100,10 +100,9 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await Mesh.AwaitResponse(
+        var importResponse = await AwaitResponseAsync(
             importRequest,
-            o => o.WithTarget(Mesh.Address),
-            TestContext.Current.CancellationToken
+            o => o.WithTarget(Mesh.Address)
         );
 
         // Assert
@@ -148,10 +147,9 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await Mesh.AwaitResponse(
+        var importResponse = await AwaitResponseAsync(
             importRequest,
-            o => o.WithTarget(Mesh.Address),
-            TestContext.Current.CancellationToken
+            o => o.WithTarget(Mesh.Address)
         );
 
         // Assert
@@ -203,10 +201,9 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
             Configuration = Config
         };
 
-        var importResponse = await Mesh.AwaitResponse(
+        var importResponse = await AwaitResponseAsync(
             importRequest,
-            o => o.WithTarget(Mesh.Address),
-            TestContext.Current.CancellationToken
+            o => o.WithTarget(Mesh.Address)
         );
 
         // Assert

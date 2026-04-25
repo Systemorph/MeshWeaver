@@ -110,14 +110,13 @@ public static class PinLayoutArea
             .WithClickAction(ctx =>
             {
                 // Remote write to a different hub's MeshNode (the User node lives at
-                // userAddress, not this host's hub). Single-op write → read current via
-                // GetMeshNodeStream(path), apply transform, post DataChangeRequest. The
+                // userAddress, not this host's hub). Single-op write → one-shot read
+                // via GetDataRequest, apply transform, post DataChangeRequest. The
                 // owning hub's data layer applies the patch and broadcasts to subscribers.
-                ctx.Host.Workspace.GetMeshNodeStream(userPath)
-                    .Take(1).Timeout(TimeSpan.FromSeconds(10))
+                ctx.Host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10))
                     .Subscribe(n =>
                     {
-                        if (n.Content is not User user) return;
+                        if (n?.Content is not User user) return;
                         var paths = user.PinnedPaths?.ToImmutableList() ?? ImmutableList<string>.Empty;
                         var updated = paths.RemoveAll(p =>
                             string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase));
@@ -149,14 +148,13 @@ public static class PinLayoutArea
         var userPath = $"User/{viewerId}";
         var userAddress = new Address(userPath);
 
-        // Single-op remote write: read current user via GetMeshNodeStream(path), apply
-        // the pin/unpin transform, post DataChangeRequest to the owning user hub. The
+        // Single-op remote write: one-shot read via GetDataRequest, apply the
+        // pin/unpin transform, post DataChangeRequest to the owning user hub. The
         // viewer's dashboard subscribes to that user node and re-renders on the echo.
-        host.Workspace.GetMeshNodeStream(userPath)
-            .Take(1).Timeout(TimeSpan.FromSeconds(10))
+        host.Hub.GetMeshNode(userPath, TimeSpan.FromSeconds(10))
             .Subscribe(node =>
             {
-                if (node.Content is not User user) return;
+                if (node?.Content is not User user) return;
                 var paths = user.PinnedPaths?.ToImmutableList() ?? ImmutableList<string>.Empty;
                 var updated = unpin
                     ? paths.RemoveAll(p => string.Equals(p, hubPath, StringComparison.OrdinalIgnoreCase))

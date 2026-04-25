@@ -8,11 +8,13 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshThread = MeshWeaver.AI.Thread;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
 /// Shared helper for thread tests. Implements the portal flow:
-/// create cells (verified) → submit → wait for execution.
+/// create cells (verified) â†’ submit â†’ wait for execution.
 /// </summary>
 public static class ThreadTestHelper
 {
@@ -27,8 +29,8 @@ public static class ThreadTestHelper
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        // Create user cell → verify
-        var userResp = await client.AwaitResponse(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
+        // Create user cell â†’ verify
+        var userResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = contextPath,
             Content = new ThreadMessage
@@ -36,12 +38,12 @@ public static class ThreadTestHelper
                 Role = "user", Text = text, Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.ExecutedInput
             }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         if (!userResp.Message.Success)
             throw new InvalidOperationException($"User cell creation failed: {userResp.Message.Error}");
 
-        // Create response cell → verify
-        var responseResp = await client.AwaitResponse(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
+        // Create response cell â†’ verify
+        var responseResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = contextPath,
             Content = new ThreadMessage
@@ -49,16 +51,16 @@ public static class ThreadTestHelper
                 Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse
             }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         if (!responseResp.Message.Success)
             throw new InvalidOperationException($"Response cell creation failed: {responseResp.Message.Error}");
 
-        // Submit (state update — WatchForExecution triggers execution)
-        await client.AwaitResponse(new SubmitMessageRequest
+        // Submit (state update â€” WatchForExecution triggers execution)
+        await client.Observe(new SubmitMessageRequest
         {
             ThreadPath = threadPath, UserMessageText = text, ContextPath = contextPath,
             UserMessageId = userMsgId, ResponseMessageId = responseMsgId
-        }, o => o.WithTarget(new Address(threadPath)), ct);
+        }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         // Wait for execution to complete
         return await WaitForExecutionAsync(client, threadPath, responseMsgId, expectedMsgCount, ct);
@@ -75,9 +77,7 @@ public static class ThreadTestHelper
         for (var i = 0; i < 60; i++)
         {
             var threadNodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
-            var dataResp = await client.AwaitResponse(
-                new GetDataRequest(new EntityReference(nameof(MeshNode), threadNodeId)),
-                o => o.WithTarget(new Address(threadPath)), ct);
+            var dataResp = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), threadNodeId)), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             var node = dataResp.Message.Data as MeshNode;
             var thread = node?.Content as MeshThread;
             if (thread == null && node?.Content is JsonElement je)
@@ -86,9 +86,7 @@ public static class ThreadTestHelper
             if (thread is { IsExecuting: false } && thread.Messages.Count >= expectedMsgCount)
             {
                 var msgId = responseMsgId ?? thread.Messages[^1];
-                var msgResp = await client.AwaitResponse(
-                    new GetDataRequest(new EntityReference(nameof(MeshNode), msgId)),
-                    o => o.WithTarget(new Address($"{threadPath}/{msgId}")), ct);
+                var msgResp = await client.Observe(new GetDataRequest(new EntityReference(nameof(MeshNode), msgId)), o => o.WithTarget(new Address($"{threadPath}/{msgId}"))).FirstAsync().ToTask(ct);
                 var msgNode = msgResp.Message.Data as MeshNode;
                 var tmsg = msgNode?.Content as ThreadMessage;
                 if (tmsg == null && msgNode?.Content is JsonElement mje)

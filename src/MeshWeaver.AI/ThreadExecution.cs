@@ -86,9 +86,11 @@ public static class ThreadExecution
     /// </summary>
     private static Task SetThreadHubIdentity(IMessageHub hub, CancellationToken ct)
     {
-        hub.GetWorkspace().GetStream(new MeshNodeReference())?.Take(1).Subscribe(node =>
+        // One-shot read of the OWN thread node via GetDataRequest (posted to self) —
+        // true request/response, no SubscribeRequest+immediate-unsubscribe.
+        hub.GetMeshNode(hub.Address.ToString()).Subscribe(node =>
         {
-            if (node.Value?.Content is MeshThread { CreatedBy: { Length: > 0 } createdBy })
+            if (node?.Content is MeshThread { CreatedBy: { Length: > 0 } createdBy })
             {
                 var accessService = hub.ServiceProvider.GetService<AccessService>();
                 accessService?.SetContext(new AccessContext { ObjectId = createdBy, Name = createdBy });
@@ -109,10 +111,10 @@ public static class ThreadExecution
         var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
 
-        // Read the thread node from the workspace stream (already loaded on hub init)
-        workspace.GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+        // Read the thread node via one-shot GetDataRequest (posted to self) — true
+        // request/response, no workspace-collection subscription that immediately unsubscribes.
+        hub.GetMeshNode(threadPath).Subscribe(threadNode =>
         {
-            var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
             if (threadNode?.Content is not Thread { IsExecuting: true } thread)
                 return;
 
@@ -196,13 +198,14 @@ public static class ThreadExecution
     private static Task WatchForExecution(IMessageHub hub, CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
 
-        // Only check on startup (Take(1)) — HandleSubmitMessage handles runtime execution.
-        workspace.GetStream(new MeshNodeReference())?.Take(1).Subscribe(node =>
+        // One-shot startup check via GetDataRequest (posted to self) — true
+        // request/response, no SubscribeRequest+immediate-unsubscribe.
+        // HandleSubmitMessage handles runtime execution after startup.
+        hub.GetMeshNode(hub.Address.ToString()).Subscribe(node =>
         {
-            if (node.Value?.Content is not MeshThread { PendingUserMessage: not null } thread)
+            if (node?.Content is not MeshThread { PendingUserMessage: not null } thread)
                 return;
 
             // Only auto-execute threads created with BuildThreadWithMessages
@@ -214,7 +217,7 @@ public static class ThreadExecution
             var activeIdx = thread.Messages.IndexOf(responseMsgId);
             var userMsgId = activeIdx > 0 ? thread.Messages[activeIdx - 1] : null;
             // MainNode for child cells = the thread's own MainNode (content node).
-            var mainEntity = node.Value?.MainNode ?? thread.PendingContextPath ?? threadPath;
+            var mainEntity = node?.MainNode ?? thread.PendingContextPath ?? threadPath;
 
             logger?.LogInformation("[ThreadExec] Auto-execute: {ThreadPath}, activeMsg={ActiveMsg}",
                 threadPath, responseMsgId);
@@ -558,18 +561,44 @@ public static class ThreadExecution
             {
                 logger.LogInformation("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
 
-                // Set context from remote stream
+                // Set context from remote stream — must subscribe (Current is null on cold streams).
+                // When ContextPath is empty we just set null; otherwise wait for the first emission
+                // (with a short timeout fallback so a missing/inaccessible node doesn't stall execution)
+                // before continuing with SetExecutionContext + history load.
+                IObservable<MeshNode?> contextNodeObs;
                 if (!string.IsNullOrEmpty(request.ContextPath))
                 {
                     var contextStream = workspace.GetRemoteStream<MeshNode>(
                         new Address(request.ContextPath), new MeshNodeReference());
-                    client.SetContext(new AgentContext
-                    {
-                        Address = new Address(request.ContextPath),
-                        Context = request.ContextPath,
-                        Node = contextStream.Current?.Value
-                    });
+                    contextNodeObs = contextStream
+                        .Select(c => c.Value)
+                        .Where(v => v != null)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Catch<MeshNode?, Exception>(ex =>
+                        {
+                            logger.LogWarning(ex,
+                                "[ThreadExec] Failed to load context node {ContextPath}; proceeding with null Node",
+                                request.ContextPath);
+                            return Observable.Return<MeshNode?>(null);
+                        });
                 }
+                else
+                {
+                    contextNodeObs = Observable.Return<MeshNode?>(null);
+                }
+
+                contextNodeObs.Subscribe(contextNode =>
+                {
+                    if (!string.IsNullOrEmpty(request.ContextPath))
+                    {
+                        client.SetContext(new AgentContext
+                        {
+                            Address = new Address(request.ContextPath),
+                            Context = request.ContextPath,
+                            Node = contextNode
+                        });
+                    }
 
                 if (!string.IsNullOrEmpty(request.AgentName))
                     client.SetSelectedAgent(request.AgentName);
@@ -615,17 +644,24 @@ public static class ThreadExecution
                         if (del != null)
                         {
                             logger.LogDebug("[ThreadExec] HISTORY_REQ: posted, delivery={Id} for {MsgId}", del.Id, msgId);
-                            parentHub.RegisterCallback((IMessageDelivery)del, resp =>
-                            {
-                                ThreadMessage? tmsg = null;
-                                if (resp is IMessageDelivery<GetDataResponse> gdr)
-                                    tmsg = (gdr.Message.Data as MeshNode)?.Content as ThreadMessage;
-                                logger.LogDebug("[ThreadExec] HISTORY_RESP: {MsgId} → role={Role}, textLen={Len}, respType={Type}",
-                                    msgId, tmsg?.Role ?? "(null)", tmsg?.Text?.Length ?? -1, resp.Message?.GetType().Name);
-                                subject.OnNext((msgId, tmsg));
-                                subject.OnCompleted();
-                                return resp;
-                            });
+                            parentHub.Observe((IMessageDelivery)del)
+                                .Subscribe(
+                                    resp =>
+                                    {
+                                        ThreadMessage? tmsg = null;
+                                        if (resp.Message is GetDataResponse gdr)
+                                            tmsg = (gdr.Data as MeshNode)?.Content as ThreadMessage;
+                                        logger.LogDebug("[ThreadExec] HISTORY_RESP: {MsgId} → role={Role}, textLen={Len}, respType={Type}",
+                                            msgId, tmsg?.Role ?? "(null)", tmsg?.Text?.Length ?? -1, resp.Message?.GetType().Name);
+                                        subject.OnNext((msgId, tmsg));
+                                        subject.OnCompleted();
+                                    },
+                                    ex =>
+                                    {
+                                        logger.LogDebug(ex, "[ThreadExec] HISTORY_REQ failed for {MsgId}", msgId);
+                                        subject.OnNext((msgId, null));
+                                        subject.OnCompleted();
+                                    });
                         }
                         else
                         {
@@ -959,6 +995,7 @@ public static class ThreadExecution
                 });
                     }); // end of historyObs.Subscribe
                 }); // end of threadStream.Subscribe (Messages)
+                }); // end of contextNodeObs.Subscribe
             }, // end of Initialize().Subscribe onNext
             ex => logger.LogError(ex, "[ThreadExec] Initialize failed for {ThreadPath}", threadPath));
 

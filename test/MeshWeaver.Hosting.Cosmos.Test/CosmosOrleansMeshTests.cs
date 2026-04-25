@@ -19,6 +19,8 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Cosmos.Test;
 
 /// <summary>
@@ -33,9 +35,7 @@ public class CosmosOrleansMeshTests(ITestOutputHelper output) : CosmosOrleansTes
     {
         var client = await GetClientAsync();
         var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(CosmosTestMeshNodeAttribute.Address)
-                , TestContext.Current.CancellationToken
-            );
+            .Observe(new PingRequest(), o => o.WithTarget(CosmosTestMeshNodeAttribute.Address)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }

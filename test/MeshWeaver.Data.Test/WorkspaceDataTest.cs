@@ -10,6 +10,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Data.Test;
 
 /// <summary>
@@ -173,14 +174,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var initialChangeCount = changeCount;
 
         // act
-        await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updatedItem }),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        await client.Observe(DataChangeRequest.Update(new object[] { updatedItem }), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // Wait a bit for the change to propagate
         await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
@@ -217,14 +214,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var itemToDelete = initialData.First(x => x.Id == "3");
 
         // act
-        await client.AwaitResponse(
-            DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        await client.Observe(DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         var updatedData = await workspace
@@ -246,14 +239,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItem = new WorkspaceTestData("1", "Logged Update", DateTime.UtcNow);
 
         // act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updateItem }),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client.Observe(DataChangeRequest.Update(new object[] { updateItem }), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         // assert
         var dataChangeResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -320,14 +309,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItem = new WorkspaceTestData("1", "Multi-Client Update", DateTime.UtcNow);
 
         // act - update from client1
-        var response = await client1.AwaitResponse(
-            DataChangeRequest.Update([updateItem]),
-            o => o.WithTarget(CreateClientAddress()),
-            CancellationTokenSource.CreateLinkedTokenSource(
+        var response = await client1.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
-            ).Token
-        );
+            ).Token);
 
         response.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         Logger.LogInformation("*** Data Change Finished");

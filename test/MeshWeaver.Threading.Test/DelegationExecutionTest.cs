@@ -57,9 +57,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "TestUser");
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(threadNode),
-            o => o.WithTarget(Mesh.Address), ct);
+        var response = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -78,33 +76,31 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         var parentUserMsgId = Guid.NewGuid().ToString("N")[..8];
         var parentResponseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(parentUserMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(parentUserMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Research reinsurance pricing", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(parentResponseMsgId, threadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(parentResponseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(threadPath)), ct);
+        }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var parentMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes => GetMessages(nodes, threadPath))
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+        var submitResponse = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Research reinsurance pricing",
                 ContextPath = ContextPath,
                 UserMessageId = parentUserMsgId,
                 ResponseMessageId = parentResponseMsgId
-            },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
         var msgIds = await parentMessages;
@@ -133,33 +129,31 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         var subUserMsgId = Guid.NewGuid().ToString("N")[..8];
         var subResponseMsgId = Guid.NewGuid().ToString("N")[..8];
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(subUserMsgId, subThreadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(subUserMsgId, subThreadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "user", Text = "Find documents about reinsurance pricing models", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
-        }), o => o.WithTarget(new Address(subThreadPath)), ct);
+        }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
 
-        await client.AwaitResponse(new CreateNodeRequest(new MeshNode(subResponseMsgId, subThreadPath)
+        await client.Observe(new CreateNodeRequest(new MeshNode(subResponseMsgId, subThreadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType, MainNode = ContextPath,
             Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
-        }), o => o.WithTarget(new Address(subThreadPath)), ct);
+        }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
 
         var subMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(subThreadPath))!
             .Select(nodes => GetMessages(nodes, subThreadPath))
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
-        var subSubmitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
+        var subSubmitResponse = await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = subThreadPath,
                 UserMessageText = "Find documents about reinsurance pricing models",
                 ContextPath = ContextPath,
                 UserMessageId = subUserMsgId,
                 ResponseMessageId = subResponseMsgId
-            },
-            o => o.WithTarget(new Address(subThreadPath)), ct);
+            }, o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
         subSubmitResponse.Message.Success.Should().BeTrue(subSubmitResponse.Message.Error);
         Output.WriteLine("Sub-thread message submitted");
 
@@ -174,7 +168,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
 
         // 8. Verify full hierarchy is navigable
 
-        // 8a. Parent thread has messages (via stream — no catalog lag)
+        // 8a. Parent thread has messages (via stream â€” no catalog lag)
         var parentThread = await ReadNodeAsync(threadPath, ct);
         parentThread.Should().NotBeNull();
         var parentContent = parentThread!.Content as MeshThread;
@@ -206,7 +200,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         subContent.IsExecuting.Should().BeFalse("execution should be complete");
 
         Output.WriteLine($"Sub-thread response: '{subRespContent.Text}'");
-        Output.WriteLine("Full hierarchy verified: parent → message → sub-thread → sub-messages");
+        Output.WriteLine("Full hierarchy verified: parent â†’ message â†’ sub-thread â†’ sub-messages");
     }
 
     private static ImmutableList<string> GetMessages(IEnumerable<MeshNode> nodes, string path)

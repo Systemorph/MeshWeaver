@@ -12,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Data.Test;
 
 /// <summary>
@@ -159,9 +160,7 @@ public class DataCreateValidatorTest(ITestOutputHelper output) : DataValidationT
         var newItem = new ValidatableData("4", "This is forbidden", "test");
 
         // Act
-        var response = await client.AwaitResponse(
-            new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -177,9 +176,7 @@ public class DataCreateValidatorTest(ITestOutputHelper output) : DataValidationT
         var newItem = new ValidatableData("4", "Allowed Name", "test");
 
         // Act
-        var response = await client.AwaitResponse(
-            new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -218,9 +215,7 @@ public class DataUpdateValidatorTest(ITestOutputHelper output) : DataValidationT
         var updatedItem = new ValidatableData("1", "First Item", "locked");
 
         // Act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -236,9 +231,7 @@ public class DataUpdateValidatorTest(ITestOutputHelper output) : DataValidationT
         var updatedItem = new ValidatableData("1", "First Item Updated", "general");
 
         // Act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -284,9 +277,7 @@ public class DataDeleteValidatorTest(ITestOutputHelper output) : DataValidationT
         var protectedItem = items.First(x => x.IsProtected);
 
         // Act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Delete([protectedItem], "TestUser"),
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(DataChangeRequest.Delete([protectedItem], "TestUser"), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -316,9 +307,7 @@ public class DataDeleteValidatorTest(ITestOutputHelper output) : DataValidationT
         var unprotectedItem = items.First(x => !x.IsProtected);
 
         // Act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Delete([unprotectedItem], "TestUser"),
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(DataChangeRequest.Delete([unprotectedItem], "TestUser"), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -356,9 +345,7 @@ public class DataReadValidatorTest(ITestOutputHelper output) : DataValidationTes
         var entityRef = new EntityReference(nameof(ValidatableData), "secret-item");
 
         // Act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(entityRef),
-            o => o.WithTarget(CreateHostAddress()));
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
@@ -374,9 +361,7 @@ public class DataReadValidatorTest(ITestOutputHelper output) : DataValidationTes
         var entityRef = new EntityReference(nameof(ValidatableData), "1");
 
         // Act
-        var response = await client.AwaitResponse(
-            new GetDataRequest(entityRef),
-            o => o.WithTarget(CreateHostAddress()));
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
@@ -412,9 +397,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         var newItem = new ValidatableData("5", "forbidden item", "general");
 
         // Act
-        var response = await client.AwaitResponse(
-            new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -429,9 +412,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         var updatedItem = new ValidatableData("1", "First Item", "locked");
 
         // Act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -452,9 +433,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
         var protectedItem = items.First(x => x.IsProtected);
 
         // Act
-        var response = await client.AwaitResponse(
-            DataChangeRequest.Delete([protectedItem], "TestUser"),
-            o => o.WithTarget(CreateClientAddress()));
+        var response = await client.Observe(DataChangeRequest.Delete([protectedItem], "TestUser"), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert
         var dataResponse = response.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -469,9 +448,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
 
         // Create with allowed name
         var newItem = new ValidatableData("6", "New Valid Item", "general");
-        var createResponse = await client.AwaitResponse(
-            new DataChangeRequest { Creations = [newItem] },
-            o => o.WithTarget(CreateClientAddress()));
+        var createResponse = await client.Observe(new DataChangeRequest { Creations = [newItem] }, o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert create succeeded
         var createDataResponse = createResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -479,9 +456,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
 
         // Update with allowed category
         var updatedItem = new ValidatableData("6", "Updated Valid Item", "general");
-        var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update([updatedItem]),
-            o => o.WithTarget(CreateClientAddress()));
+        var updateResponse = await client.Observe(DataChangeRequest.Update([updatedItem]), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert update succeeded
         var updateDataResponse = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
@@ -489,9 +464,7 @@ public class DataCombinedValidatorTest(ITestOutputHelper output) : DataValidatio
 
         // Delete unprotected item
         var itemToDelete = new ValidatableData("6", "Updated Valid Item", "general");
-        var deleteResponse = await client.AwaitResponse(
-            DataChangeRequest.Delete([itemToDelete], "TestUser"),
-            o => o.WithTarget(CreateClientAddress()));
+        var deleteResponse = await client.Observe(DataChangeRequest.Delete([itemToDelete], "TestUser"), o => o.WithTarget(CreateClientAddress())).FirstAsync().ToTask();
 
         // Assert delete succeeded
         var deleteDataResponse = deleteResponse.Message.Should().BeOfType<DataChangeResponse>().Which;

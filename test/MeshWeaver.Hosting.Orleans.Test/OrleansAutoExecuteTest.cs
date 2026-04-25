@@ -21,6 +21,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
@@ -46,9 +48,7 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
         // Canonical CQRS-correct read: target the per-node hub's MeshNodeReference
         // reducer, not an EntityCollection lookup. The owning hub is the source of
         // truth for MeshNode content; this avoids any catalog / index lag.
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new MeshNodeReference()),
-            o => o.WithTarget(new Address(path)), ct);
+        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
@@ -79,10 +79,8 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
             var threadPath = threadNode.Path!;
             Output.WriteLine($"Thread: {threadPath}, user={userMsgId}, response={responseMsgId}");
 
-            // Create the thread — AutoExecutePendingMessage should fire on grain activation
-            var createResponse = await client.AwaitResponse(
-                new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/Roland")), ct);
+            // Create the thread â€” AutoExecutePendingMessage should fire on grain activation
+            var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
             createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
             Output.WriteLine("Thread created, waiting for execution...");
 
@@ -141,9 +139,7 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
             var threadPath = threadNode.Path!;
             var responsePath = $"{threadPath}/{responseMsgId}";
 
-            await client.AwaitResponse(
-                new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/Roland")), ct);
+            await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
 
             // Poll for response cell to have final text (not empty, not "Allocating agent...")
             for (var i = 0; i < 60; i++)

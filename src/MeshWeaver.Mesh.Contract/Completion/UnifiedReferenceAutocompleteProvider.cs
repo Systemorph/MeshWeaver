@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Data.Completion;
@@ -486,7 +488,7 @@ internal class UnifiedReferenceAutocompleteProvider(
         {
             // Send AutocompleteRequest to the hub — the handler aggregates all local IAutocompleteProvider instances
             var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
-            var delivery = await hub.AwaitResponse<AutocompleteResponse>(request, o => o, ct);
+            var delivery = await hub.Observe(request).FirstAsync().ToTask(ct);
             response = delivery.Message;
         }
         catch

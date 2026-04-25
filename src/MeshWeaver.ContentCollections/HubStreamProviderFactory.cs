@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,8 +25,11 @@ public class HubStreamProviderFactory(IMessageHub hub) : IStreamProviderFactory
         var delivery = hub.Post(
             new GetDataRequest(new ContentCollectionReference([collectionName])),
             o => o.WithTarget(config.Address))!;
-        var callbackResponse = await hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cancellationToken);
-        var responseMsg = ((IMessageDelivery<GetDataResponse>)callbackResponse).Message;
+        var callbackResponse = await hub.Observe(delivery).FirstAsync().ToTask(cancellationToken);
+        if (callbackResponse.Message is not GetDataResponse responseMsg)
+            throw new InvalidOperationException(
+                $"Unexpected response shape '{callbackResponse.Message?.GetType().Name ?? "null"}' " +
+                $"when querying collection '{collectionName}' at address '{config.Address}'.");
 
         // Response data contains collection configurations
         var configs = responseMsg.Data as IReadOnlyCollection<ContentCollectionConfig>;

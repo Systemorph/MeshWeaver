@@ -16,6 +16,7 @@ using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Northwind.Model;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Northwind.Test;
 
 public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
@@ -257,11 +258,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var client = GetClient();
 
-        var response = await client.AwaitResponse(
-            new GetLayoutAreasRequest(),
-            o => o.WithTarget(CreateHostAddress()),
-            new CancellationTokenSource(Timeout).Token
-        );
+        var response = await client.Observe(new GetLayoutAreasRequest(), o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(Timeout).Token);
 
         var areas = response.Message.Areas.ToList();
         areas.Should().NotBeEmpty("Northwind should have layout areas defined");

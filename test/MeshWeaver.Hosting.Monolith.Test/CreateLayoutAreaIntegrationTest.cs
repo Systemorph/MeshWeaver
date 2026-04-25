@@ -20,6 +20,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -86,9 +87,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
 
         Output.WriteLine("Initializing hub...");
         // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -122,9 +121,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
 
         Output.WriteLine("Initializing hub...");
         // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
@@ -153,9 +150,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
 
         Output.WriteLine("Initializing hub...");
         // Initialize the hub first - this triggers dynamic compilation which can take time
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(parentAddress));
+        await client.Observe(new PingRequest(), o => o.WithTarget(parentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
