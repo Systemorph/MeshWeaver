@@ -483,12 +483,18 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        // Create a combined cancellation token that cancels when either the provided token
-        // or disposal begins
+        // Create a combined cancellation token that cancels when ANY of:
+        //   - the caller's token fires
+        //   - hub disposal begins
+        //   - the framework-level RequestTimeout elapses (Configuration.RequestTimeout)
+        // The framework owns the timeout so callsites don't pass per-call CancellationTokenSource(TimeSpan…).
+        // Routing always responds (DeliveryFailure for unknown target / no handler), so the timeout is a
+        // safety net for genuinely lost messages, not a per-callsite knob.
         var disposalCts = new CancellationTokenSource();
         var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             disposalCts.Token);
+        combinedCts.CancelAfter(Configuration.RequestTimeout);
 
         var tcs = new TaskCompletionSource<IMessageDelivery>(combinedCts.Token);
 
@@ -497,7 +503,7 @@ public sealed class MessageHub : IMessageHub
         var cancellationRegistration = combinedCts.Token.Register(() =>
         {
             tcs.TrySetException(new TimeoutException(
-                $"No response received for message {messageId} in hub {Address}. " +
+                $"No response received for message {messageId} in hub {Address} within {Configuration.RequestTimeout}. " +
                 $"The request may have been undeliverable or the target hub was not found."));
         });
 
