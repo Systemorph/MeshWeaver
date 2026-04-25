@@ -27,7 +27,7 @@
     background-color: var(--neutral-layer-2);
     flex-shrink: 0;
     position: relative;
-    z-index: 1000;
+    z-index: 10;
     min-height: 48px;
 }
 
