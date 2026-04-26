@@ -473,7 +473,7 @@ internal class MeshNodeCompilationService(
                                     matched++;
                                 }
                             }
-                            logger.LogInformation(
+                            logger.LogDebug(
                                 "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
                                 node.Path, q, matched);
                             return acc;
@@ -549,7 +549,7 @@ internal class MeshNodeCompilationService(
                         {
                             if (File.Exists(dllPath))
                             {
-                                logger.LogInformation(
+                                logger.LogDebug(
                                     "Compiled assembly for node {NodePath} at {DllPath}",
                                     node.Path, dllPath);
                                 finalPath = dllPath;
@@ -567,7 +567,7 @@ internal class MeshNodeCompilationService(
                         }
                         else
                         {
-                            logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
+                            logger.LogDebug("Compiled assembly for node {NodePath} (in-memory)", node.Path);
                             finalPath = $"memory://{nodeName}";
                             finalLog = AppendInfo(discoveryLog,
                                 $"Compiled assembly loaded in-memory ({finalPath}).");
