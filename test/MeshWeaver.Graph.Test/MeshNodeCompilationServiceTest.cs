@@ -932,7 +932,7 @@ public record SatelliteModel
         // Act: wire up the full service graph and ask NodeTypeService to enrich the
         // NodeType, which triggers CompileWithReleaseAsync → GatherInputsAsync.
         var nodeTypeService = CreateNodeTypeService(persistence);
-        var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(
+        var enriched = await ((INodeTypeService)nodeTypeService).EnrichWithNodeTypeAsync(
             MeshNode.FromPath($"inst/Alice") with
             {
                 NodeType = nodeTypePath,

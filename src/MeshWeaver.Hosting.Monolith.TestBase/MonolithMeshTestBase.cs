@@ -210,15 +210,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
         // Routing-fallback safety: when no per-node hub exists at the requested
         // path, monolith routing forwards the GetDataRequest to the closest
-        // ancestor's hub, and that hub's MeshNodeReference reducer happily returns
-        // ITS OWN MeshNode. Treat any path mismatch as "not found" so callers
-        // can use ReadNodeAsync(path).Should().BeNull() after a delete without
-        // false positives from the parent partition's node.
+        // ancestor's hub, and that hub's MeshNodeReference reducer returns ITS
+        // OWN MeshNode. Treat any path mismatch as "not found" so callers can
+        // use ReadNodeAsync(path).Should().BeNull() after a rejected-create or
+        // post-delete without false positives. Tests that read a leaf node
+        // legitimately served by an ancestor hub via UnifiedPath routing should
+        // use a different read primitive.
         if (node != null && !string.Equals(node.Path, path, StringComparison.OrdinalIgnoreCase))
-        {
-            Output?.WriteLine($"ReadNodeAsync('{path}'): routing returned ancestor '{node.Path}' — treating as not found");
             return null;
-        }
 
         return node;
     }
