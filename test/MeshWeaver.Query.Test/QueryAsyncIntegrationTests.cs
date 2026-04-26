@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Reactive.Threading.Tasks;
@@ -41,8 +41,8 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_FilterWithTextSearch_ReturnsFuzzyMatches()
     {
         var p = P();
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Gaming Laptop Pro" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/desktop") with { Name = "Desktop Computer" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Gaming Laptop Pro", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/desktop") with { Name = "Desktop Computer", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} laptop scope:descendants")).ToListAsync();
 
@@ -140,9 +140,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_EmptyQuery_ReturnsAllAtPath()
     {
         var p = P();
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop" });
-        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone" });
-        await NodeFactory.CreateNode(MeshNode.FromPath("other_empty/chair") with { Name = "Chair" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/laptop") with { Name = "Laptop", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("other_empty/chair") with { Name = "Chair", NodeType = "Markdown" });
 
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}")).ToListAsync();
 
@@ -396,3 +396,4 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
 
     #endregion
 }
+

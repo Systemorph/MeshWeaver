@@ -76,15 +76,28 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     /// </summary>
     private bool _navigationServiceInitialized;
 
+    private NavigationContext? _currentContext;
+    private IDisposable? _navContextSubscription;
+
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
 
-        // Subscribe to the status pipeline so the page header always reflects
-        // the latest phase. Every emission is guaranteed to have a non-empty
-        // Message by the NavigationStatus contract — this is the "no endless
-        // spinner" guarantee at the UI.
+        // Subscribe to the navigation-context stream — replaces the legacy
+        // OnNavigationContextChanged event. ReplaySubject(1) on the service side
+        // emits the current value on subscribe, so this also picks up state set
+        // before the page initialised.
+        _navContextSubscription = NavigationService.NavigationContext.Subscribe(context =>
+        {
+            _currentContext = context;
+            InvokeAsync(() =>
+            {
+                IsLoading = NavigationService.IsResolving;
+                UpdateFromContext();
+                StateHasChanged();
+            });
+        });
+
         _statusSubscription = NavigationService.Status.Subscribe(status =>
         {
             Status = status;
@@ -137,19 +150,9 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         // to avoid showing stale content from a previous path
     }
 
-    private void OnNavigationContextChanged(NavigationContext? context)
-    {
-        InvokeAsync(() =>
-        {
-            IsLoading = NavigationService.IsResolving;
-            UpdateFromContext();
-            StateHasChanged();
-        });
-    }
-
     private void UpdateFromContext()
     {
-        var context = NavigationService.Context;
+        var context = _currentContext;
 
         if (context is null)
         {
@@ -205,7 +208,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     public void Dispose()
     {
-        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
+        _navContextSubscription?.Dispose();
         _statusSubscription?.Dispose();
     }
 }

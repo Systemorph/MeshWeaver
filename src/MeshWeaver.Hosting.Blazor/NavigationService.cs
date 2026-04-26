@@ -35,7 +35,9 @@ internal class NavigationService : INavigationService
     // ctor overload with short delays so the full retry-exhaustion path runs fast.
     private static readonly int[] DefaultRetryDelays = [500, 1000, 2000, 3000, 5000];
 
-    private NavigationContext? _context;
+    // ReplaySubject(1) — emits the last value to new subscribers; no initial value
+    // required. NavigationContext starts unobserved until ProcessLocationChange fires.
+    private readonly ReplaySubject<NavigationContext?> _navigationContext = new(bufferSize: 1);
     private readonly BehaviorSubject<CreatableTypesSnapshot> _creatableTypes = new(CreatableTypesSnapshot.Empty);
     private readonly BehaviorSubject<NavigationStatus> _status = new(NavigationStatus.Idle());
     private string? _lastLoadedNodePath;
@@ -88,16 +90,16 @@ internal class NavigationService : INavigationService
     public string? CurrentNamespace { get; private set; }
 
     /// <inheritdoc />
-    public NavigationContext? Context => _context;
+    public IObservable<NavigationContext?> NavigationContext => _navigationContext;
+
+    /// <inheritdoc />
+    public NavigationContext? Context { get; private set; }
 
     /// <inheritdoc />
     public bool IsResolving { get; private set; } = true;
 
     /// <inheritdoc />
     public IObservable<NavigationStatus> Status => _status;
-
-    /// <inheritdoc />
-    public event Action<NavigationContext?>? OnNavigationContextChanged;
 
     /// <inheritdoc />
     public IObservable<CreatableTypesSnapshot> CreatableTypes => _creatableTypes;
@@ -121,8 +123,10 @@ internal class NavigationService : INavigationService
         _isInitialized = true;
         _navigationManager.LocationChanged += OnLocationChanged;
 
-        // Process the current location reactively (no await — chain Subscribes
-        // through ProcessLocationChange).
+        // Reactive — kicks off the resolution chain via Subscribe; never awaits it.
+        // Callers that need to observe the resulting NavigationContext should
+        // subscribe to OnNavigationContextChanged. Tests bridge that event at
+        // their edge (TaskCompletionSource sanctioned per AsynchronousCalls.md).
         ProcessLocationChange(CurrentPath ?? "");
         return Task.CompletedTask;
     }
@@ -229,13 +233,13 @@ internal class NavigationService : INavigationService
                 Node = node
             };
 
-            _context = context;
+            Context = context;
             CurrentNamespace = context.PrimaryPath;
 
             if (node != null)
                 TrackNavigationActivity(node);
 
-            OnNavigationContextChanged?.Invoke(context);
+            _navigationContext.OnNext(context);
             _status.OnNext(NavigationStatus.Ready(resolution.Prefix));
 
             var currentNodePath = context.PrimaryPath ?? "";
@@ -261,10 +265,10 @@ internal class NavigationService : INavigationService
         {
             // All retries exhausted — flip to "Page Not Found".
             IsResolving = false;
-            _context = null;
+            Context = null;
             CurrentNamespace = null;
             _status.OnNext(NavigationStatus.NotFound(path));
-            OnNavigationContextChanged?.Invoke(null);
+            _navigationContext.OnNext(null);
             return;
         }
 
@@ -427,6 +431,7 @@ internal class NavigationService : INavigationService
         _disposed = true;
         _loadingCts?.Cancel();
         _loadingCts?.Dispose();
+        _navigationContext.Dispose();
         _creatableTypes.Dispose();
         _status.Dispose();
 

@@ -29,6 +29,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
 
     private bool _isDisposed;
+    private IDisposable? _navContextSubscription;
+    private NavigationContext? _currentNavContext;
     private IDisposable? agentSubscription;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
 
@@ -133,8 +135,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Subscribe to side panel menu actions
         SidePanelState.OnActionRequested += OnSidePanelAction;
 
-        // Track navigation changes via NavigationService — no query, no await.
-        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
+        // Track navigation changes — subscribe to the reactive NavigationContext stream.
+        _navContextSubscription = NavigationService.NavigationContext
+            .Subscribe(ctx => { _currentNavContext = ctx; OnNavigationContextChanged(ctx); });
 
         // Set initial title
         UpdateSidePanelTitle();
@@ -142,7 +145,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Seed initial context attachment from NavigationService (already resolved, no query).
         if (string.IsNullOrEmpty(initialContext))
         {
-            var ctx = NavigationService.Context;
+            var ctx = _currentNavContext;
             if (ctx is not null && !string.IsNullOrEmpty(ctx.PrimaryPath) && ctx.Path != "chat")
             {
                 initialContext = ctx.PrimaryPath;
@@ -927,7 +930,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
-            NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
+            _navContextSubscription?.Dispose();
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
             SidePanelState.OnActionRequested -= OnSidePanelAction;

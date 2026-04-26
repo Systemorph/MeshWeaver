@@ -47,6 +47,34 @@ public class NavigationServiceTest
     private NavigationService CreateService() =>
         new(_navigationManager, _pathResolver, _meshQuery, _hub);
 
+    /// <summary>
+    /// Capture the latest <see cref="NavigationContext"/> emitted by the reactive
+    /// stream. NavigationService.NavigationContext is a ReplaySubject(1) — emits
+    /// the current value on subscribe and on every change. Tests subscribe to
+    /// capture into a local field for assertions.
+    /// </summary>
+    private sealed class ContextCapture : IDisposable
+    {
+        private readonly IDisposable _sub;
+        public NavigationContext? Latest { get; private set; }
+        public int EmissionCount { get; private set; }
+        public ContextCapture(NavigationService service)
+        {
+            _sub = service.NavigationContext.Subscribe(ctx =>
+            {
+                Latest = ctx;
+                EmissionCount++;
+            });
+        }
+        public void Dispose() => _sub.Dispose();
+    }
+
+    /// <summary>
+    /// Reactive bridge for tests — wait for the next NavigationContext emission.
+    /// </summary>
+    private static Task<NavigationContext?> NextContext(NavigationService service)
+        => service.NavigationContext.Skip(0).FirstAsync().ToTask();
+
     #region InitializeAsync Tests
 
     [Fact]
@@ -62,7 +90,7 @@ public class NavigationServiceTest
 
         // Assert - verify by simulating location change
         NavigationContext? receivedContext = null;
-        service.OnNavigationContextChanged += ctx => receivedContext = ctx;
+        service.NavigationContext.Subscribe(ctx => receivedContext = ctx);
 
         _pathResolver.ResolvePath("ACME/Project/Overview")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Overview")));
@@ -90,7 +118,7 @@ public class NavigationServiceTest
 
         // Assert - verify only one subscription by checking only one event fires
         var eventCount = 0;
-        service.OnNavigationContextChanged += _ => eventCount++;
+        service.NavigationContext.Subscribe(_ => eventCount++);
 
         _navigationManager.SimulateLocationChanged("http://localhost/ACME");
 
@@ -152,7 +180,7 @@ public class NavigationServiceTest
         await service.InitializeAsync();
 
         NavigationContext? receivedContext = null;
-        service.OnNavigationContextChanged += ctx => receivedContext = ctx;
+        service.NavigationContext.Subscribe(ctx => receivedContext = ctx);
 
         _pathResolver.ResolvePath("ACME/Project")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
@@ -187,10 +215,10 @@ public class NavigationServiceTest
         previousContext.Should().NotBeNull();
 
         var nullContextInvocations = 0;
-        service.OnNavigationContextChanged += ctx =>
+        service.NavigationContext.Subscribe(ctx =>
         {
             if (ctx is null) nullContextInvocations++;
-        };
+        });
 
         _pathResolver.ResolvePath("unknown/path")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
@@ -479,7 +507,7 @@ public class NavigationServiceTest
         await service.InitializeAsync();
 
         var eventFired = false;
-        service.OnNavigationContextChanged += _ => eventFired = true;
+        service.NavigationContext.Subscribe(_ => eventFired = true);
 
         // Act
         service.Dispose();
@@ -647,6 +675,8 @@ public class NavigationServiceTest
 
     #endregion
 }
+
+
 
 
 

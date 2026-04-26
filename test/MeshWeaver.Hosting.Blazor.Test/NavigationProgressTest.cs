@@ -223,7 +223,7 @@ public class NavigationProgressTest
         var service = CreateService(retryDelays: [500, 500, 500]);
         var emissions = CaptureStatus(service);
         var contextEvents = new List<NavigationContext?>();
-        service.OnNavigationContextChanged += ctx => contextEvents.Add(ctx);
+        service.NavigationContext.Subscribe(ctx => contextEvents.Add(ctx));
 
         _ = service.InitializeAsync();
         await Task.Delay(200, TestContext.Current.CancellationToken); // < first retry
@@ -274,7 +274,7 @@ public class NavigationProgressTest
 
         var nullContextCount = 0;
         var service = CreateService(retryDelays: [500, 500, 500]);
-        service.OnNavigationContextChanged += ctx => { if (ctx is null) nullContextCount++; };
+        service.NavigationContext.Subscribe(ctx => { if (ctx is null) nullContextCount++; });
 
         _ = service.InitializeAsync();
         await Task.Delay(200, TestContext.Current.CancellationToken); // < first retry
@@ -294,7 +294,7 @@ public class NavigationProgressTest
 
         var nullContextCount = 0;
         var service = CreateService(retryDelays: [5, 5, 5]);
-        service.OnNavigationContextChanged += ctx => { if (ctx is null) nullContextCount++; };
+        service.NavigationContext.Subscribe(ctx => { if (ctx is null) nullContextCount++; });
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
@@ -356,6 +356,8 @@ public class NavigationProgressTest
         }
     }
 }
+
+
 
 
 

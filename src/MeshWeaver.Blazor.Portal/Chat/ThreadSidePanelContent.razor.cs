@@ -27,17 +27,18 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     private string? selectedThreadName;
 
     private string? lastPrimaryPath;
+    private IDisposable? _navContextSubscription;
+    private NavigationContext? _currentNavContext;
 
     protected override void OnInitialized()
     {
         base.OnInitialized();
         selectedThreadPath = SidePanelState.ContentPath;
-        lastPrimaryPath = NavigationService.Context?.PrimaryPath;
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
-        // React to navigation changes: when the user browses to a thread or another node,
-        // the side panel's new-chat context (MainNode / PrimaryPath) changes and the
-        // ThreadChatControl must be rebuilt with the new context attachment.
-        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
+        // Subscribe to navigation-context stream — emits current value on subscribe
+        // (ReplaySubject(1)) so we don't need a separate snapshot read.
+        _navContextSubscription = NavigationService.NavigationContext
+            .Subscribe(ctx => { _currentNavContext = ctx; OnNavigationContextChanged(ctx); });
     }
 
     private void OnSidePanelStateChanged()
@@ -64,7 +65,7 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
-        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
+        _navContextSubscription?.Dispose();
     }
 
     /// <summary>
@@ -79,7 +80,7 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     /// </summary>
     private ThreadChatControl GetNewChatControl()
     {
-        var context = NavigationService.Context;
+        var context = _currentNavContext;
         return new ThreadChatControl()
             .WithInitialContext(context?.PrimaryPath ?? string.Empty)
             .WithInitialContextDisplayName(context?.Node?.Name ?? context?.Node?.Id ?? string.Empty);

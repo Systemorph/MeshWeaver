@@ -72,12 +72,15 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private IJSObjectReference? jsModule;
     private DotNetObjectReference<PortalLayoutBase>? dotNetRef;
 
+    private IDisposable? _navContextSubscription;
+
     protected override void OnInitialized()
     {
         base.OnInitialized();
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested += OnSidePanelNavigation;
-        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
+        _navContextSubscription = NavigationService.NavigationContext
+            .Subscribe(OnNavigationContextChanged);
         _nodeMenuSubscription = MenuItemsProvider.GetMenu(NodeMenuContext).Subscribe(items =>
         {
             _nodeMenuItems = items;
@@ -107,7 +110,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         get
         {
-            var node = NavigationService.Context?.Node;
+            var node = _currentNavContext?.Node;
             return node?.Name ?? node?.Id;
         }
     }
@@ -314,10 +317,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         });
     }
 
-    private void OnNavigationContextChanged(NavigationContext? _)
+    private NavigationContext? _currentNavContext;
+
+    private void OnNavigationContextChanged(NavigationContext? ctx)
     {
-        // Context changed (user navigated) — invalidate cached side panel control
-        // so next render picks up the new context path
+        _currentNavContext = ctx;
         InvokeAsync(StateHasChanged);
     }
 
@@ -350,7 +354,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     public async Task ToggleSidePanel()
     {
-        var context = NavigationService.Context;
+        var context = _currentNavContext;
 
         // Check if viewing a thread full-screen by checking the node's NodeType
         if (context?.Node != null && ThreadNodeType.IsThreadNodeType(context.Node.NodeType))
@@ -398,7 +402,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     // OnInitialized, re-seeding the context attachment chip) when navigation moves
     // to a different node. Without this, the ThreadChatView stays stuck on the
     // InitialContext it was first rendered with.
-    private string sidePanelContentKey => $"newchat-{NavigationService.Context?.PrimaryPath ?? string.Empty}";
+    private string sidePanelContentKey => $"newchat-{_currentNavContext?.PrimaryPath ?? string.Empty}";
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
     private string? _cachedContextPath;
@@ -467,7 +471,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private ThreadChatControl GetSidePanelControl()
     {
-        var context = NavigationService.Context;
+        var context = _currentNavContext;
         var contextPath = context?.PrimaryPath;
         var contentPath = SidePanelState.ContentPath ?? string.Empty;
 
@@ -491,7 +495,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested -= OnSidePanelNavigation;
-        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
+        _navContextSubscription?.Dispose();
         _nodeMenuSubscription?.Dispose();
         _meshMenuSubscription?.Dispose();
         dotNetRef?.Dispose();
@@ -517,4 +521,5 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return true;
     }
 }
+
 

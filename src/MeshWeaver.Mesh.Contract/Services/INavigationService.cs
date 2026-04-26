@@ -43,14 +43,25 @@ public interface INavigationService : IDisposable
     string? CurrentNamespace { get; }
 
     /// <summary>
-    /// Gets the current navigation context containing resolved path information.
-    /// Null if the path could not be resolved.
+    /// Reactive: the navigation context stream — ReplaySubject(1) semantics.
+    /// Emits the latest value on subscribe and on every change. Emits
+    /// <c>null</c> for not-found / cleared state. Replaces the prior
+    /// <c>OnNavigationContextChanged</c> event — Blazor views subscribe and call
+    /// <c>StateHasChanged</c> on emit. See <c>Doc/Architecture/BlazorDataBinding.md</c>.
+    /// </summary>
+    IObservable<NavigationContext?> NavigationContext { get; }
+
+    /// <summary>
+    /// Snapshot of the latest <see cref="NavigationContext"/> — for sync read sites
+    /// (Razor markup conditions, helper methods that need a single check).
+    /// Reactive consumers should subscribe to <see cref="NavigationContext"/> instead.
     /// </summary>
     NavigationContext? Context { get; }
 
     /// <summary>
-    /// True while the service is resolving the current path.
-    /// When true, <see cref="Context"/> being null means "still loading", not "not found".
+    /// True while the service is resolving the current path. When true, the
+    /// current value of <see cref="NavigationContext"/> being <c>null</c> means
+    /// "still loading", not "not found".
     /// </summary>
     bool IsResolving { get; }
 
@@ -61,11 +72,6 @@ public interface INavigationService : IDisposable
     /// human-readable string — this is the "no endless spinner" contract.
     /// </summary>
     IObservable<NavigationStatus> Status { get; }
-
-    /// <summary>
-    /// Event raised when the navigation context changes due to location change.
-    /// </summary>
-    event Action<NavigationContext?>? OnNavigationContextChanged;
 
     /// <summary>
     /// Observable that emits the current creatable types snapshot for the current node path.
