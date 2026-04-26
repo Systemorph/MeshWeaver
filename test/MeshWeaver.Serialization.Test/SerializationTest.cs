@@ -311,17 +311,17 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
 
         Output.WriteLine("Sending UnknownRequest to host (no handler exists for this type)...");
 
-        // AwaitResponse should now throw DeliveryFailureException due to no handler being found
-        var exception = await Assert.ThrowsAsync<AggregateException>(() =>
+        // hub.Observe(...) surfaces routing failures directly via OnError as
+        // DeliveryFailureException — no AggregateException wrapping (the legacy
+        // RegisterCallback path used to wrap; hub.Observe doesn't).
+        var exception = await Assert.ThrowsAsync<DeliveryFailureException>(() =>
             client.Observe(unknownRequest, o => o.WithTarget(CreateHostAddress())).FirstAsync().ToTask(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token)
         );
 
-        // Verify the exception contains useful information about the failure
         exception.Should().NotBeNull();
         exception.Message.Should().NotBeEmpty();
         Output.WriteLine($"Exception message: {exception.Message}");
 
-        // The message should indicate no handler was found
         var message = exception.Message.ToLowerInvariant();
         message.Should().Contain("no handler found");
     }
