@@ -419,8 +419,8 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_MeshNode_WorksWithNodes()
     {
         // Arrange
-        await NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
-        await NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
+        await NodeFactory.CreateNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd", NodeType = "Markdown" });
 
         // Act - query for MeshNode type
         var results = await MeshQuery.QueryAsync<MeshNode>(
