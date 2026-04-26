@@ -179,7 +179,10 @@ internal sealed class MeshCatalog(
             .FirstOrDefault();
 
         if (configMatch.Node != null)
+        {
+            logger?.LogDebug("[RESOLVE-DIAG] {Path} → CONFIG match {NodePath}", path, configMatch.Node.Path);
             return ResolveFromConfigNode(configMatch.Node, segments);
+        }
 
         // 2. Persistence walk — observable chain.
         return FindBestPersistenceMatch(segments)
@@ -187,13 +190,15 @@ internal sealed class MeshCatalog(
             {
                 if (match.Node == null)
                 {
-                    logger?.LogDebug("ResolvePath: no match found for path={Path}", path);
+                    logger?.LogDebug("[RESOLVE-DIAG] {Path} → NO MATCH", path);
                     return (AddressResolution?)null;
                 }
                 var matchedPath = match.Node.Path;
                 var remainder = match.MatchedSegments < segments.Length
                     ? string.Join("/", segments.Skip(match.MatchedSegments))
                     : null;
+                logger?.LogDebug("[RESOLVE-DIAG] {Path} → PERSISTENCE match prefix={Prefix} remainder={Remainder}",
+                    path, matchedPath, remainder ?? "(null)");
                 return new AddressResolution(matchedPath, remainder);
             });
     }
@@ -208,7 +213,7 @@ internal sealed class MeshCatalog(
             {
                 if (prefix.Item1 != null)
                 {
-                    logger?.LogDebug("FindBestPersistenceMatch: prefix match {Path}", prefix.Item1.Path);
+                    logger?.LogDebug("[BRANCH] {Path} → STEP1 prefix match {NodePath} segments={Seg}", fullPath, prefix.Item1.Path, prefix.Item2);
                     return Observable.Return<(MeshNode?, int)>((prefix.Item1, prefix.Item2));
                 }
 
@@ -219,7 +224,7 @@ internal sealed class MeshCatalog(
                     {
                         if (found.Node != null)
                         {
-                            logger?.LogDebug("FindBestPersistenceMatch: node {Path}", found.Node.Path);
+                            logger?.LogDebug("[BRANCH] {Path} → STEP2 node match {NodePath} depth={Depth}", fullPath, found.Node.Path, found.Depth);
                             return Observable.Return<(MeshNode?, int)>((found.Node, found.Depth));
                         }
 
@@ -228,7 +233,10 @@ internal sealed class MeshCatalog(
                             .SelectMany(virt =>
                             {
                                 if (virt.Node != null)
+                                {
+                                    logger?.LogDebug("[BRANCH] {Path} → STEP3 virtual match {NodePath} depth={Depth}", fullPath, virt.Node.Path, virt.Depth);
                                     return Observable.Return<(MeshNode?, int)>((virt.Node, virt.Depth));
+                                }
 
                                 // Step 4: static node provider fallback (in-memory).
                                 var staticNodes = staticNodeProviders
@@ -240,8 +248,12 @@ internal sealed class MeshCatalog(
                                     var staticNode = staticNodes.FirstOrDefault(n =>
                                         string.Equals(n.Path, testPath, StringComparison.OrdinalIgnoreCase));
                                     if (staticNode != null)
+                                    {
+                                        logger?.LogDebug("[BRANCH] {Path} → STEP4 static match {NodePath} depth={Depth}", fullPath, staticNode.Path, depth);
                                         return Observable.Return<(MeshNode?, int)>((staticNode, depth));
+                                    }
                                 }
+                                logger?.LogDebug("[BRANCH] {Path} → ALL STEPS NULL", fullPath);
                                 return Observable.Return<(MeshNode?, int)>((null, 0));
                             });
                     });

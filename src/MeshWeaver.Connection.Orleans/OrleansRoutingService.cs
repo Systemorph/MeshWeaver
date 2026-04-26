@@ -63,9 +63,12 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 _ = DeliverViaGrainAsync(delivery, address, ct);
             }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            // Normal shutdown
+            // Normal shutdown — Dispose cancels the CTS and completes the channel.
+            // Don't filter on `ct.IsCancellationRequested` because the OperationCanceledException
+            // from ChannelReader can carry an unrelated token (from its internal ValueTask),
+            // which would let it propagate as an unhandled background-task exception.
         }
     }
 

@@ -3,6 +3,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
@@ -26,6 +27,9 @@ public static class NodeCopyHelper
         bool force,
         ILogger? logger = null)
     {
+        logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.NodeCopyHelper");
+
         // Source node: authoritative one-shot read via GetDataRequest on the per-node
         // MeshNodeReference reducer (NEVER ObserveQuery/QueryAsync for a single node's
         // content, and NEVER GetMeshNodeStream(...).Take(1) which pays for a stream
@@ -74,19 +78,26 @@ public static class NodeCopyHelper
                         });
 
                     if (force)
-                        return create;
+                    {
+                        // Overwrite semantics: existence check, then delete-then-create when
+                        // present. Skipping the existence check would either error on a
+                        // non-existent target (delete fails NotFound) or require a broad
+                        // catch that would also swallow auth failures — both undesirable.
+                        return hub.GetMeshNode(newPath, TimeSpan.FromSeconds(5))
+                            .SelectMany(existing => existing == null
+                                ? create
+                                : nodeFactory.DeleteNode(newPath).SelectMany(_ => create));
+                    }
 
-                    // Existence-check via one-shot GetDataRequest. Routing fallback:
-                    // when no per-node hub exists at newPath, monolith routing forwards
-                    // the request to the closest ancestor's hub, which returns ITS OWN
-                    // MeshNode. Filter (.Where) for path-equal matches; treat fallback
-                    // as "not found" so the create proceeds.
+                    // Existence-check via one-shot GetDataRequest. Routing returns
+                    // NotFound (DeliveryFailure) when no per-node hub exists at newPath
+                    // — no ancestor fallback. hub.GetMeshNode emits null in that case.
+                    // create is wrapped in MeshService.CreateNode's Observable.Defer, so
+                    // it only posts when subscribed (i.e. only when existence == null).
                     return hub.GetMeshNode(newPath, TimeSpan.FromSeconds(5))
                         .SelectMany(existing =>
                         {
-                            var actuallyExists = existing != null
-                                && string.Equals(existing.Path, newPath, StringComparison.OrdinalIgnoreCase);
-                            if (actuallyExists)
+                            if (existing != null)
                             {
                                 logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
                                 return Observable.Return(0);
@@ -95,7 +106,6 @@ public static class NodeCopyHelper
                         });
                 });
 
-                // Run creates sequentially; sum the per-op counts into the final total.
                 return Observable.Concat(copyOps).Aggregate(0, (sum, v) => sum + v);
             });
     }

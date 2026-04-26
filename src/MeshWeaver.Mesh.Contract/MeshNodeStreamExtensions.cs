@@ -131,10 +131,12 @@ public static class MeshNodeStreamExtensions
     /// click actions that just need the current value once.
     ///
     /// <para>
-    /// Emits <c>null</c> on timeout, on routing failure (the node does not exist
-    /// and the cold per-node hub never activated), or when the response carries
-    /// no data. Failures during deserialisation also fall through as <c>null</c>;
-    /// turn on debug-level logging on this type to see the underlying exception.
+    /// Emits <c>null</c> on timeout, on routing failure (the node does not exist —
+    /// routing returns DeliveryFailure with NotFound; routing NEVER falls back to
+    /// an ancestor, so a returned non-null node is always the requested path), or
+    /// when the response carries no data. Failures during deserialisation also fall
+    /// through as <c>null</c>; turn on debug-level logging on this type to see the
+    /// underlying exception.
     /// </para>
     ///
     /// <para>
@@ -181,16 +183,6 @@ public static class MeshNodeStreamExtensions
                                     MeshNode? node = resp.Data as MeshNode;
                                     if (node == null && resp.Data is JsonElement je)
                                         node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
-
-                                    // Routing-fallback safety: when no per-node hub
-                                    // exists at the requested path, monolith routing
-                                    // forwards to the closest ancestor's hub, which
-                                    // returns ITS OWN MeshNode. Treat any path mismatch
-                                    // as "not found" so callers see absence not the
-                                    // wrong node.
-                                    if (node != null && !string.Equals(node.Path, path, StringComparison.OrdinalIgnoreCase))
-                                        node = null;
-
                                     EmitOnce(node);
                                 }
                                 else

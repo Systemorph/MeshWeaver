@@ -100,23 +100,59 @@ namespace MeshWeaver.Hosting
         {
             var originalAddress = address;
 
-            // Use ResolvePath to find the deepest matching node in persistence.
+            // Use ResolvePath to find a node at the requested address.
             // Routing-framework boundary — bridges IPathResolver IObservable to Task.
             var resolution = await MeshCatalog.ResolvePath(address.ToString())
                 .FirstAsync().ToTask(cancellationToken);
+
+            // ============================================================================
+            // 🚨🚨🚨  NO  FUCKING  FALLBACK  🚨🚨🚨
+            // ============================================================================
+            // If `resolution.Remainder` is non-empty, the exact requested address has NO
+            // hub of its own — only an ancestor exists. DO NOT FALL BACK to that ancestor.
+            //
+            // A non-empty remainder almost always means the node is broken — no NodeType,
+            // an invalid NodeType, or the node simply doesn't exist. Forwarding the
+            // delivery to the closest ancestor would let that ancestor's handlers respond
+            // (e.g. MeshNodeReference returns the ancestor's OWN MeshNode), and callers
+            // would get back the wrong data instead of seeing absence/failure.
+            //
+            // ⛔️ DO NOT add an "exception" here. DO NOT redirect to the prefix. DO NOT
+            // ⛔️ store the remainder as `UnifiedPath`. The mesh must surface the broken
+            // ⛔️ node honestly so it can be fixed at its source. Every "small" fallback
+            // ⛔️ added here has caused silent data corruption downstream — copy ops that
+            // ⛔️ skip writes thinking the target exists, reads that return ancestor data
+            // ⛔️ as if it were the requested node, etc.
+            //
+            // The right response is NotFound. Period.
+            // ============================================================================
+            if (resolution != null && !string.IsNullOrEmpty(resolution.Remainder))
+            {
+                var failureMessage = $"No node found at '{originalAddress}'. " +
+                    $"Closest ancestor is '{resolution.Prefix}' (remainder='{resolution.Remainder}'). " +
+                    $"This usually means the node is missing, has no NodeType, or has an invalid NodeType.";
+
+                var logger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
+                logger?.LogWarning(
+                    "RouteMessageAsync: NotFound for {MessageType} → {Address}. {FailureMessage}",
+                    delivery.Message.GetType().Name, originalAddress, failureMessage);
+
+                if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                {
+                    Mesh.Post(
+                        new DeliveryFailure(delivery)
+                        {
+                            ErrorType = ErrorType.NotFound,
+                            Message = failureMessage
+                        }, o => o.ResponseFor(delivery));
+                }
+                return delivery.Failed(failureMessage);
+            }
+
             if (resolution != null)
             {
-                // Route to the resolved prefix address, preserving segment structure
+                // Exact match — route to the resolved address (segment structure preserved).
                 address = new Address(resolution.Prefix.Split('/'));
-
-                // If there's a remainder, store it in the delivery context for the hub to use
-                if (!string.IsNullOrEmpty(resolution.Remainder))
-                {
-                    delivery = delivery.WithProperty("UnifiedPath", resolution.Remainder);
-                    // Update target to the resolved hub address to prevent routing loops.
-                    // The hub at the prefix will handle the message using the UnifiedPath property.
-                    delivery = delivery.WithTarget(address);
-                }
             }
 
             // Get node — routing-layer call. NOT a hub round-trip (would recurse —
@@ -126,8 +162,8 @@ namespace MeshWeaver.Hosting
             var node = await ((MeshCatalog)MeshCatalog).GetNodeForRouting(address)
                 .FirstAsync().ToTask(cancellationToken);
 
-            var logger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
-            logger?.LogDebug("RouteMessageAsync: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",
+            var routeLogger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
+            routeLogger?.LogDebug("RouteMessageAsync: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",
                 delivery.Message.GetType().Name, address, originalAddress,
                 resolution?.Prefix, node != null, node?.NodeType, node?.HubConfiguration != null);
 
