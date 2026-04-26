@@ -37,12 +37,38 @@ public static class NodeCopyHelper
         // Returns null if the cold hub never activates (path doesn't exist).
         var source = hub.GetMeshNode(sourcePath, TimeSpan.FromSeconds(15));
 
-        // Descendants is a listing — ObserveQuery is the correct primitive for
-        // namespace/predicate sets.
-        var descendants = meshQuery.ObserveQuery<MeshNode>(
+        // Descendants is a listing — ObserveQuery returns the path set. Per-node
+        // content is then re-fetched through hub.GetMeshNode so we always copy the
+        // latest content (the query index is eventually consistent and may lag
+        // recent updates, see Doc/Architecture/CqrsAndContentAccess.md).
+        var descendantPaths = meshQuery.ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{sourcePath} scope:descendants"))
             .Take(1)
-            .Select(c => c.Items.ToArray());
+            .Select(c => c.Items
+                .Where(n => !string.IsNullOrEmpty(n.Path))
+                .Select(n => n.Path)
+                .ToArray());
+
+        var descendants = descendantPaths.SelectMany(paths =>
+        {
+            if (paths.Length == 0)
+                return Observable.Return(Array.Empty<MeshNode>());
+            // Per-path live content read (per-node hub MeshNodeReference reducer).
+            // Sequential composition keeps the order deterministic.
+            IObservable<List<MeshNode>> chain = Observable.Return(new List<MeshNode>(paths.Length));
+            foreach (var p in paths)
+            {
+                var path = p;
+                chain = chain.SelectMany(acc =>
+                    hub.GetMeshNode(path, TimeSpan.FromSeconds(15))
+                        .Select(node =>
+                        {
+                            if (node != null) acc.Add(node);
+                            return acc;
+                        }));
+            }
+            return chain.Select(list => list.ToArray());
+        });
 
         return source
             .SelectMany(sourceNode => descendants.Select(desc =>
