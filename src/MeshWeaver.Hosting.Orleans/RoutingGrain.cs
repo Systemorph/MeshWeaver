@@ -27,16 +27,33 @@ internal class RoutingGrain(
             delivery.Message.GetType().Name, addressPath, resolution?.Prefix ?? "(null)",
             resolution?.Remainder ?? "(null)", grainKey);
 
-        // When resolution splits the path into prefix + remainder, update the delivery
-        // to match the resolved grain address. Without this, the grain receives a delivery
-        // whose Target doesn't match its hub address â†’ routing loop.
+        // ============================================================================
+        // 🚨🚨🚨  NO  FUCKING  FALLBACK  🚨🚨🚨
+        // ============================================================================
+        // If `resolution.Remainder` is non-empty, the exact requested address has NO
+        // grain/hub of its own — only an ancestor exists. DO NOT FALL BACK to that
+        // ancestor.
+        //
+        // A non-empty remainder almost always means the node is broken — no NodeType,
+        // an invalid NodeType, or the node simply doesn't exist. Forwarding to the
+        // closest ancestor would let it answer with its OWN data (e.g.
+        // MeshNodeReference returns the ancestor's MeshNode), and callers would get
+        // back the wrong data instead of seeing absence/failure.
+        //
+        // ⛔️ DO NOT add an "exception" here. DO NOT redirect to the prefix. DO NOT
+        // ⛔️ store the remainder as `UnifiedPath`. The mesh must surface the broken
+        // ⛔️ node honestly so it can be fixed at its source.
+        //
+        // The right response is NotFound. Period.
+        // ============================================================================
         if (resolution != null && !string.IsNullOrEmpty(resolution.Remainder))
         {
-            logger.LogInformation("RouteMessage: updating target for {MessageType}: {Original} â†’ prefix={Prefix}, remainder={Remainder}",
-                delivery.Message.GetType().Name, addressPath, resolution.Prefix, resolution.Remainder);
-            var resolvedAddress = new Address(resolution.Prefix.Split('/'));
-            delivery = delivery.WithProperty("UnifiedPath", resolution.Remainder);
-            delivery = delivery.WithTarget(resolvedAddress);
+            var failureMessage = $"No node found at '{addressPath}'. " +
+                $"Closest ancestor is '{resolution.Prefix}' (remainder='{resolution.Remainder}'). " +
+                $"This usually means the node is missing, has no NodeType, or has an invalid NodeType.";
+            logger.LogWarning("RouteMessage: NotFound for {MessageType} → {Address}. {FailureMessage}",
+                delivery.Message.GetType().Name, addressPath, failureMessage);
+            return delivery.Failed(failureMessage);
         }
 
         // Portal/client hubs are not grains â€” deliver via Orleans memory stream.

@@ -40,69 +40,77 @@ internal sealed class MeshService(
 
     // === Node CRUD via messaging ===
 
+    // Public CRUD observables are wrapped in Observable.Defer so the underlying
+    // hub.Observe(request, options) — which posts immediately on call — only fires
+    // when the consumer subscribes. Without this, a chain like
+    //   GetMeshNode(target).SelectMany(existing => existing != null
+    //                                   ? Observable.Return(0)
+    //                                   : nodeFactory.CreateNode(node).Select(_ => 1))
+    // would post the create request the moment the observable is *constructed*,
+    // racing the existence check and corrupting the conditional logic.
     public IObservable<MeshNode> CreateNode(MeshNode node)
-    {
-        var captured = CaptureContext();
-        // Typed Observe pre-registers the response subject BEFORE posting (via
-        // WithMessageId), so a synchronously-handled response can't slip through
-        // before the subscription is in place — no race vs. Post + Observe(delivery).
-        return hub.Observe(new CreateNodeRequest(node), o => ConfigurePost(o, captured))
-            .SelectMany(d =>
-            {
-                var r = d.Message;
-                if (r.Success && r.Node != null)
-                    return Observable.Return(r.Node);
-                return Observable.Throw<MeshNode>(r.RejectionReason switch
+        => Observable.Defer(() =>
+        {
+            var captured = CaptureContext();
+            return hub.Observe(new CreateNodeRequest(node), o => ConfigurePost(o, captured))
+                .SelectMany(d =>
                 {
-                    NodeCreationRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                    NodeCreationRejectionReason.NodeAlreadyExists =>
-                        new InvalidOperationException($"Node already exists: {node.Path}"),
-                    _ => new InvalidOperationException(r.Error ?? "Node creation failed")
+                    var r = d.Message;
+                    if (r.Success && r.Node != null)
+                        return Observable.Return(r.Node);
+                    return Observable.Throw<MeshNode>(r.RejectionReason switch
+                    {
+                        NodeCreationRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        NodeCreationRejectionReason.NodeAlreadyExists =>
+                            new InvalidOperationException($"Node already exists: {node.Path}"),
+                        _ => new InvalidOperationException(r.Error ?? "Node creation failed")
+                    });
                 });
-            });
-    }
+        });
 
     public IObservable<MeshNode> UpdateNode(MeshNode node)
-    {
-        var captured = CaptureContext();
-        return hub.Observe(new UpdateNodeRequest(node), o => ConfigurePost(o, captured))
-            .SelectMany(d =>
-            {
-                var r = d.Message;
-                if (r.Success && r.Node != null)
-                    return Observable.Return(r.Node);
-                return Observable.Throw<MeshNode>(r.RejectionReason switch
+        => Observable.Defer(() =>
+        {
+            var captured = CaptureContext();
+            return hub.Observe(new UpdateNodeRequest(node), o => ConfigurePost(o, captured))
+                .SelectMany(d =>
                 {
-                    NodeUpdateRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                    NodeUpdateRejectionReason.NodeNotFound =>
-                        new InvalidOperationException($"Node not found: {node.Path}"),
-                    _ => new InvalidOperationException(r.Error ?? "Node update failed")
+                    var r = d.Message;
+                    if (r.Success && r.Node != null)
+                        return Observable.Return(r.Node);
+                    return Observable.Throw<MeshNode>(r.RejectionReason switch
+                    {
+                        NodeUpdateRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        NodeUpdateRejectionReason.NodeNotFound =>
+                            new InvalidOperationException($"Node not found: {node.Path}"),
+                        _ => new InvalidOperationException(r.Error ?? "Node update failed")
+                    });
                 });
-            });
-    }
+        });
 
     public IObservable<bool> DeleteNode(string path)
-    {
-        var captured = CaptureContext();
-        return hub.Observe(new DeleteNodeRequest(path) { Recursive = true },
-                o => ConfigurePost(o, captured))
-            .SelectMany(d =>
-            {
-                var r = d.Message;
-                if (r.Success)
-                    return Observable.Return(true);
-                return Observable.Throw<bool>(r.RejectionReason switch
+        => Observable.Defer(() =>
+        {
+            var captured = CaptureContext();
+            return hub.Observe(new DeleteNodeRequest(path) { Recursive = true },
+                    o => ConfigurePost(o, captured))
+                .SelectMany(d =>
                 {
-                    NodeDeletionRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                    NodeDeletionRejectionReason.NodeNotFound =>
-                        new InvalidOperationException($"Node not found: {path}"),
-                    _ => new InvalidOperationException(r.Error ?? "Node deletion failed")
+                    var r = d.Message;
+                    if (r.Success)
+                        return Observable.Return(true);
+                    return Observable.Throw<bool>(r.RejectionReason switch
+                    {
+                        NodeDeletionRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        NodeDeletionRejectionReason.NodeNotFound =>
+                            new InvalidOperationException($"Node not found: {path}"),
+                        _ => new InvalidOperationException(r.Error ?? "Node deletion failed")
+                    });
                 });
-            });
-    }
+        });
 
     public IObservable<MeshNode> CreateTransient(MeshNode node)
     {
@@ -123,31 +131,32 @@ internal sealed class MeshService(
 
     public IObservable<MeshNode> CopyNode(string sourcePath, string targetPath,
         bool includeDescendants = true, bool includeSatellites = false)
-    {
-        var captured = CaptureContext();
-        var req = new CopyNodeRequest(sourcePath, targetPath)
+        => Observable.Defer(() =>
         {
-            IncludeDescendants = includeDescendants,
-            IncludeSatellites = includeSatellites
-        };
-        return hub.Observe(req, o => ConfigurePost(o, captured))
-            .SelectMany(d =>
+            var captured = CaptureContext();
+            var req = new CopyNodeRequest(sourcePath, targetPath)
             {
-                var r = d.Message;
-                if (r.Success && r.Node != null)
-                    return Observable.Return(r.Node);
-                return Observable.Throw<MeshNode>(r.RejectionReason switch
+                IncludeDescendants = includeDescendants,
+                IncludeSatellites = includeSatellites
+            };
+            return hub.Observe(req, o => ConfigurePost(o, captured))
+                .SelectMany(d =>
                 {
-                    NodeCopyRejectionReason.TargetAlreadyExists =>
-                        new InvalidOperationException(r.Error ?? "Target already exists"),
-                    NodeCopyRejectionReason.SourceNotFound =>
-                        new InvalidOperationException($"Source node not found: {sourcePath}"),
-                    NodeCopyRejectionReason.Unauthorized =>
-                        new UnauthorizedAccessException(r.Error ?? "Access denied"),
-                    _ => new InvalidOperationException(r.Error ?? "Node copy failed")
+                    var r = d.Message;
+                    if (r.Success && r.Node != null)
+                        return Observable.Return(r.Node);
+                    return Observable.Throw<MeshNode>(r.RejectionReason switch
+                    {
+                        NodeCopyRejectionReason.TargetAlreadyExists =>
+                            new InvalidOperationException(r.Error ?? "Target already exists"),
+                        NodeCopyRejectionReason.SourceNotFound =>
+                            new InvalidOperationException($"Source node not found: {sourcePath}"),
+                        NodeCopyRejectionReason.Unauthorized =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        _ => new InvalidOperationException(r.Error ?? "Node copy failed")
+                    });
                 });
-            });
-    }
+        });
 
     // === Query (delegated to MeshQuery) ===
 

@@ -235,131 +235,153 @@ internal class MeshNodeCompilationService(
         // - If this node is an instance, "self" is the NodeType's path and we compose
         //   via hub.GetMeshNode(...).SelectMany(...) — NEVER await the hub round-trip.
         if (node.Content is NodeTypeDefinition selfDef)
-            return Observable.FromAsync(ct => CompileCoreAsync(node, selfDef, node.Path, ct));
+            return CompileCore(node, selfDef, node.Path);
 
         return hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
-            .SelectMany(typeNode => Observable.FromAsync(ct =>
-                CompileCoreAsync(node, typeNode?.Content as NodeTypeDefinition, node.NodeType, ct)));
+            .SelectMany(typeNode =>
+                CompileCore(node, typeNode?.Content as NodeTypeDefinition, node.NodeType));
     }
 
-    private async Task<string?> CompileCoreAsync(
-        MeshNode node, NodeTypeDefinition? ntDef, string selfPath, CancellationToken ct)
+    /// <summary>
+    /// IObservable end-to-end. The only Task→Observable bridge in this method is the
+    /// Roslyn compile call itself — every other leaf already exposes an IObservable
+    /// surface (<c>meshService.ObserveQuery</c> for source discovery,
+    /// <c>ResolveCodeIncludes</c> for @@ resolution). No <c>Observable.FromAsync</c>,
+    /// no <c>await</c> on hub round-trips — both are the canonical deadlock patterns
+    /// documented in <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </summary>
+    private IObservable<string?> CompileCore(
+        MeshNode node, NodeTypeDefinition? ntDef, string selfPath)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         var dllPath = cacheService.GetDllPath(nodeName);
         var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
-
-        // Two-stage source discovery (CQRS-correct):
-        //   1. Enumerate Code node *paths* via IMeshQueryCore (unfiltered, fresh — sets
-        //      are valid query use; we only need the path projection, not content).
-        //   2. Read each Code node's *content* via hub.GetMeshNode(path) (authoritative
-        //      per-node read; never goes through the lagged read-side index).
-        var codeFiles = new List<CodeConfiguration>();
-        var matchedCodePaths = new List<string>();
         var executedQueries = new List<string>();
-        var queryCore = hub.ServiceProvider.GetService<IMeshQueryCore>();
-        if (queryCore != null)
+        var matchedCodePaths = new List<string>();
+
+        IObservable<List<CodeConfiguration>> discoverCodeFiles;
+        if (meshQuery == null)
+        {
+            discoverCodeFiles = Observable.Return(new List<CodeConfiguration>());
+        }
+        else
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var queriesToRun = CodeQueryResolver
                 .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
-                .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath));
+                .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
+                .ToArray();
 
+            // Source discovery: ObserveQuery returns the initial result set with full
+            // node content (Path + Content). One reactive subscription per query —
+            // .Take(1) snapshots the initial set, .Timeout bounds the wait.
+            IObservable<List<CodeConfiguration>> chain = Observable.Return(new List<CodeConfiguration>());
             foreach (var finalQuery in queriesToRun)
             {
-                executedQueries.Add(finalQuery);
+                var q = finalQuery;
+                executedQueries.Add(q);
 
-                // Stage 1: collect paths only — query result projection.
-                var pathsForQuery = new List<string>();
-                await foreach (var item in queryCore.QueryAsync(
-                    MeshQueryRequest.FromQuery(finalQuery), JsonOptions, ct).WithCancellation(ct))
+                chain = chain.SelectMany(acc =>
+                    meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(15))
+                        .Select(change =>
+                        {
+                            var matched = 0;
+                            foreach (var n in change.Items)
+                            {
+                                if (n == null || string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path))
+                                    continue;
+                                if (n.Content is CodeConfiguration cf
+                                    && !string.IsNullOrWhiteSpace(cf.Code))
+                                {
+                                    acc.Add(cf);
+                                    matchedCodePaths.Add(n.Path);
+                                    matched++;
+                                }
+                            }
+                            logger.LogInformation(
+                                "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
+                                node.Path, q, matched);
+                            return acc;
+                        }));
+            }
+            discoverCodeFiles = chain;
+        }
+
+        return discoverCodeFiles
+            .SelectMany(codeFiles =>
+            {
+                // Stage: resolve @@ include references reactively. Each include lookup
+                // composes via ResolveCodeIncludes (already an IObservable<string>). No await.
+                if (meshQuery == null || codeFiles.Count == 0)
+                    return Observable.Return(codeFiles);
+
+                IObservable<List<CodeConfiguration>> includeChain =
+                    Observable.Return(new List<CodeConfiguration>(codeFiles.Count));
+                foreach (var codeFile in codeFiles)
                 {
-                    if (item is MeshNode n && !string.IsNullOrEmpty(n.Path) && seen.Add(n.Path))
-                        pathsForQuery.Add(n.Path);
+                    var cf = codeFile;
+                    includeChain = includeChain.SelectMany(acc =>
+                        ResolveCodeIncludes(cf.Code!, meshQuery, new HashSet<string>())
+                            .Select(resolvedCode =>
+                            {
+                                acc.Add(resolvedCode != cf.Code ? cf with { Code = resolvedCode } : cf);
+                                return acc;
+                            }));
                 }
-
-                // Stage 2: authoritative content per-path via GetMeshNode (per-node hub).
-                var matchesForThisQuery = 0;
-                foreach (var path in pathsForQuery)
+                return includeChain;
+            })
+            .SelectMany(codeFiles =>
+            {
+                // Final stage: combine + compile. The Roslyn `Compile` call itself is
+                // the only Task→Observable bridge in this whole method (see method-level
+                // doc-comment). Wrapping in Observable.Defer makes the Task lazy so it
+                // only runs on subscribe — composes safely inside the outer chain.
+                CodeConfiguration? codeFile = codeFiles.Count switch
                 {
-                    var codeNode = await hub.GetMeshNode(path, TimeSpan.FromSeconds(10)).ToTask(ct);
-                    if (codeNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
+                    0 => null,
+                    1 => codeFiles[0],
+                    _ => new CodeConfiguration { Code = string.Join("\n\n", codeFiles.Select(cf => cf.Code)) }
+                };
+                var configuration = ntDef?.Configuration;
+                var contentCollections = ntDef?.ContentCollections;
+
+                return Observable.Defer(() =>
+                        CompileAsync(codeFile, configuration, contentCollections, node, CancellationToken.None)
+                            .ToObservable())
+                    .Select(_ =>
                     {
-                        codeFiles.Add(cf);
-                        matchedCodePaths.Add(path);
-                        matchesForThisQuery++;
-                    }
-                }
-
-                logger.LogInformation(
-                    "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
-                    node.Path, finalQuery, matchesForThisQuery);
-            }
-        }
-
-        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Source/LineOfBusiness)
-        if (meshQuery != null)
-        {
-            for (int i = 0; i < codeFiles.Count; i++)
-            {
-                var resolved = await ResolveCodeIncludesAsync(codeFiles[i].Code!, meshQuery, ct);
-                if (resolved != codeFiles[i].Code)
-                    codeFiles[i] = codeFiles[i] with { Code = resolved };
-            }
-        }
-
-        // Combine all code files into a single CodeConfiguration
-        CodeConfiguration? codeFile = codeFiles.Count switch
-        {
-            0 => null,
-            1 => codeFiles[0],
-            _ => new CodeConfiguration { Code = string.Join("\n\n", codeFiles.Select(cf => cf.Code)) }
-        };
-
-        var configuration = ntDef?.Configuration;
-        var contentCollections = ntDef?.ContentCollections;
-
-        try
-        {
-            // Compile using CodeConfiguration, Configuration, and ContentCollections
-            await CompileAsync(codeFile, configuration, contentCollections, node, ct);
-
-            // For disk cache, return the DLL path if it exists
-            if (cacheService.IsDiskCacheEnabled)
-            {
-                if (File.Exists(dllPath))
-                {
-                    logger.LogInformation(
-                        "Compiled assembly for node {NodePath} at {DllPath}",
-                        node.Path, dllPath);
-                    return dllPath;
-                }
-
-                logger.LogWarning("Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
-                return null;
-            }
-
-            // For in-memory cache, return a virtual path (assembly is already loaded)
-            logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
-            return $"memory://{nodeName}";
-        }
-        catch (CompilationException ex)
-        {
-            // Re-throw enriched with the actual queries that ran + which Code nodes matched,
-            // so the error overlay can tell the user *why* references are missing (usually:
-            // 0 Code nodes matched the configured sources).
-            var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
-            logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}", node.Path, diag);
-            throw new CompilationException(
-                ex.NodePath,
-                $"{ex.Message}\n\n--- Source discovery ---\n{diag}",
-                ex);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogError(ex, "Failed to compile assembly for node {NodePath}", node.Path);
-            throw;
-        }
+                        if (cacheService.IsDiskCacheEnabled)
+                        {
+                            if (File.Exists(dllPath))
+                            {
+                                logger.LogInformation(
+                                    "Compiled assembly for node {NodePath} at {DllPath}",
+                                    node.Path, dllPath);
+                                return (string?)dllPath;
+                            }
+                            logger.LogWarning(
+                                "Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
+                            return (string?)null;
+                        }
+                        logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
+                        return (string?)$"memory://{nodeName}";
+                    })
+                    .Catch<string?, CompilationException>(ex =>
+                    {
+                        // Enrich the error with the actual queries that ran + which Code nodes
+                        // matched, so the error overlay can tell the user *why* references are
+                        // missing (usually: 0 Code nodes matched the configured sources).
+                        var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
+                        logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}",
+                            node.Path, diag);
+                        return Observable.Throw<string?>(new CompilationException(
+                            ex.NodePath,
+                            $"{ex.Message}\n\n--- Source discovery ---\n{diag}",
+                            ex));
+                    });
+            });
     }
 
     private static string BuildSourceDiscoveryReport(IReadOnlyList<string> executedQueries, IReadOnlyList<string> matchedCodePaths)

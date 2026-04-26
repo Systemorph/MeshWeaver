@@ -208,17 +208,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         if (node == null && response.Message.Data is System.Text.Json.JsonElement je)
             node = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
 
-        // Routing-fallback safety: when no per-node hub exists at the requested
-        // path, monolith routing forwards the GetDataRequest to the closest
-        // ancestor's hub, and that hub's MeshNodeReference reducer returns ITS
-        // OWN MeshNode. Treat any path mismatch as "not found" so callers can
-        // use ReadNodeAsync(path).Should().BeNull() after a rejected-create or
-        // post-delete without false positives. Tests that read a leaf node
-        // legitimately served by an ancestor hub via UnifiedPath routing should
-        // use a different read primitive.
-        if (node != null && !string.Equals(node.Path, path, StringComparison.OrdinalIgnoreCase))
-            return null;
-
         return node;
     }
 
