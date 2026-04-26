@@ -1007,18 +1007,22 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     [Fact(Timeout = 20000)]
     public async Task FileSystem_VerifyDataStructure()
     {
-        // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading
+        // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading.
+        // Use the IMeshService query path because ReadNodeAsync's per-node-hub
+        // routing applies a path-mismatch safety net that turns ancestor-fallback
+        // responses into null (correct behavior for post-delete reads, but here
+        // we want the authoritative persistence-layer existence check).
+        var ct = TestContext.Current.CancellationToken;
 
-        // Verify expected nodes exist
-        var acmeProject = await ReadNodeAsync("ACME/Project");
+        var acmeProject = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project", ct: ct).FirstOrDefaultAsync(ct);
         acmeProject.Should().NotBeNull("ACME/Project should exist in sample data");
         Output.WriteLine($"ACME/Project: NodeType={acmeProject?.NodeType}, Content={acmeProject?.Content?.GetType().Name}");
 
-        var acmeProjectTodo = await ReadNodeAsync("ACME/Project/Todo");
+        var acmeProjectTodo = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project/Todo", ct: ct).FirstOrDefaultAsync(ct);
         acmeProjectTodo.Should().NotBeNull("ACME/Project/Todo should exist in sample data");
         Output.WriteLine($"ACME/Project/Todo: NodeType={acmeProjectTodo?.NodeType}, Content={acmeProjectTodo?.Content?.GetType().Name}");
 
-        var productLaunch = await ReadNodeAsync("ACME/ProductLaunch");
+        var productLaunch = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch", ct: ct).FirstOrDefaultAsync(ct);
         productLaunch.Should().NotBeNull("ACME/ProductLaunch should exist in sample data");
         Output.WriteLine($"ACME/ProductLaunch: NodeType={productLaunch?.NodeType}, Content={productLaunch?.Content?.GetType().Name}");
     }
