@@ -249,13 +249,16 @@ internal class MeshNodeCompilationService(
         var dllPath = cacheService.GetDllPath(nodeName);
         var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
 
-        // Collect Code nodes from each configured source query (and from Tests, so
-        // test files compile alongside production code and can reference it).
-        // Default: "Source" and "Test" subtrees directly under the NodeType.
+        // Two-stage source discovery (CQRS-correct):
+        //   1. Enumerate Code node *paths* via IMeshQueryCore (unfiltered, fresh — sets
+        //      are valid query use; we only need the path projection, not content).
+        //   2. Read each Code node's *content* via hub.GetMeshNode(path) (authoritative
+        //      per-node read; never goes through the lagged read-side index).
         var codeFiles = new List<CodeConfiguration>();
         var matchedCodePaths = new List<string>();
         var executedQueries = new List<string>();
-        if (meshQuery != null)
+        var queryCore = hub.ServiceProvider.GetService<IMeshQueryCore>();
+        if (queryCore != null)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var queriesToRun = CodeQueryResolver
@@ -265,19 +268,29 @@ internal class MeshNodeCompilationService(
             foreach (var finalQuery in queriesToRun)
             {
                 executedQueries.Add(finalQuery);
-                var matchesForThisQuery = 0;
-                await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(finalQuery, ct: ct).WithCancellation(ct))
+
+                // Stage 1: collect paths only — query result projection.
+                var pathsForQuery = new List<string>();
+                await foreach (var item in queryCore.QueryAsync(
+                    MeshQueryRequest.FromQuery(finalQuery), JsonOptions, ct).WithCancellation(ct))
                 {
-                    if (codeNode.Content is CodeConfiguration cf
-                        && !string.IsNullOrWhiteSpace(cf.Code)
-                        && seen.Add(codeNode.Path ?? cf.Code!))
+                    if (item is MeshNode n && !string.IsNullOrEmpty(n.Path) && seen.Add(n.Path))
+                        pathsForQuery.Add(n.Path);
+                }
+
+                // Stage 2: authoritative content per-path via GetMeshNode (per-node hub).
+                var matchesForThisQuery = 0;
+                foreach (var path in pathsForQuery)
+                {
+                    var codeNode = await hub.GetMeshNode(path, TimeSpan.FromSeconds(10)).ToTask(ct);
+                    if (codeNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
                     {
                         codeFiles.Add(cf);
-                        if (!string.IsNullOrEmpty(codeNode.Path))
-                            matchedCodePaths.Add(codeNode.Path);
+                        matchedCodePaths.Add(path);
                         matchesForThisQuery++;
                     }
                 }
+
                 logger.LogInformation(
                     "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
                     node.Path, finalQuery, matchesForThisQuery);
