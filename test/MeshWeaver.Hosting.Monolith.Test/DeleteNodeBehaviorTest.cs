@@ -58,8 +58,13 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
     private async Task<DeleteNodeResponse> DeleteAsync(
         DeleteNodeRequest req, TimeSpan timeout, CancellationToken ct)
     {
+        // The DeleteNodeRequest handler is registered on the mesh hub (see
+        // MeshExtensions.AddDefaultMeshHandlers → WithHandler<DeleteNodeRequest>).
+        // Post to Mesh.Address so the handler runs and we get a structured
+        // DeleteNodeResponse — no per-node-path routing, no NotFound at the
+        // routing layer for missing-node deletes.
         var resp = await AwaitResponseAsync(req,
-            o => o.WithTarget(new Address(req.Path)),
+            o => o.WithTarget(Mesh.Address),
             hub: Client,
             ct: ct);
         return resp.Message;
