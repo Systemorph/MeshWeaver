@@ -117,8 +117,9 @@ public class NavigationServiceTest
         await service.InitializeAsync(); // Second call should be idempotent
 
         // Assert - verify only one subscription by checking only one event fires
+        // .Skip(1) discards the cached value emitted by ReplaySubject(1) on subscribe.
         var eventCount = 0;
-        service.NavigationContext.Subscribe(_ => eventCount++);
+        service.NavigationContext.Skip(1).Subscribe(_ => eventCount++);
 
         _navigationManager.SimulateLocationChanged("http://localhost/ACME");
 
@@ -507,7 +508,8 @@ public class NavigationServiceTest
         await service.InitializeAsync();
 
         var eventFired = false;
-        service.NavigationContext.Subscribe(_ => eventFired = true);
+        // .Skip(1) discards the cached value (ReplaySubject) so we only count NEW emissions.
+        service.NavigationContext.Skip(1).Subscribe(_ => eventFired = true);
 
         // Act
         service.Dispose();
@@ -544,7 +546,9 @@ public class NavigationServiceTest
         _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
             .Returns(ToAsyncObjects(threadNode));
 
+        var ready = NextContext(service);
         await service.InitializeAsync();
+        await ready;
 
         service.CurrentNamespace.Should().Be(MainNode);
         service.Context!.Namespace.Should().Be(SatellitePath);
