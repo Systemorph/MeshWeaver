@@ -51,10 +51,9 @@ internal class PathResolutionService : IPathResolver, IDisposable
         if (_cache.TryGetValue(cacheKey, out var cached) && cached is AddressResolution resolution)
             return Observable.Return<AddressResolution?>(resolution);
 
-        // Delegate to MeshCatalog (storage I/O, no hub round-trip — bridging via
-        // Observable.FromAsync is safe at this storage boundary; see
-        // Doc/Architecture/AsynchronousCalls.md).
-        return Observable.FromAsync(() => _catalog.ResolvePathCoreAsync(path))
+        // Delegate to MeshCatalog — IObservable end-to-end; FromAsync only at the
+        // DB-leaf hits inside MeshCatalog.ResolvePathCore.
+        return _catalog.ResolvePathCore(path)
             .Do(result =>
             {
                 if (result != null)

@@ -145,9 +145,9 @@ internal sealed class MeshCatalog(
 
     /// <inheritdoc />
     /// <summary>
-    /// IPathResolver implementation — bridges the internal Task-based core via
-    /// Observable.FromAsync. The path-resolution layer is one of two sanctioned places
-    /// that touch persistence directly (the other is IMeshStorage itself); see
+    /// IPathResolver implementation — direct observable composition (no Task bridge).
+    /// The path-resolution layer is one of two sanctioned places that touch persistence
+    /// directly (the other is IMeshStorage itself); see
     /// Doc/Architecture/CqrsAndContentAccess.md.
     /// </summary>
     public IObservable<AddressResolution?> ResolvePath(string path)
@@ -155,7 +155,7 @@ internal sealed class MeshCatalog(
         if (string.IsNullOrEmpty(path)) return Observable.Return<AddressResolution?>(null);
         path = path.TrimStart('/');
         if (string.IsNullOrEmpty(path)) return Observable.Return<AddressResolution?>(null);
-        return Observable.FromAsync(() => ResolvePathCoreAsync(path));
+        return ResolvePathCore(path);
     }
 
     /// <summary>
@@ -197,10 +197,6 @@ internal sealed class MeshCatalog(
                 return new AddressResolution(matchedPath, remainder);
             });
     }
-
-    // Internal Task wrapper retained for the IPathResolver bridge until callers fully migrate.
-    internal Task<AddressResolution?> ResolvePathCoreAsync(string path)
-        => ResolvePathCore(path).FirstAsync().ToTask();
 
     private IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPersistenceMatch(string[] segments)
     {
