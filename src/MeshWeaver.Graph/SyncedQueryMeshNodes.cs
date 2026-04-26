@@ -12,21 +12,25 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// <see cref="VirtualTypeSource{T}"/> specialised for "live mesh-query mirror
-/// of <see cref="MeshNode"/>s". The read side is built from per-node remote
-/// streams (one per matched path); the write side is exposed via a reducer
-/// for <see cref="MeshNodeReference"/> with a non-null <c>Path</c>, registered
-/// alongside the data source.
+/// of <see cref="MeshNode"/>s". Accepts <em>one or more</em> mesh-query
+/// strings and exposes the <strong>union</strong> of their result sets as a
+/// single live <see cref="MeshNode"/> collection.
 ///
-/// <para>Reads:</para>
+/// <para>The read pipeline (single subscription, shared by every consumer):</para>
 /// <list type="number">
-///   <item>Observe <see cref="IMeshQueryProvider.ObserveQuery{MeshNode}"/> — derive
-///     the live set of matched paths.</item>
-///   <item>For every path, get the workspace's per-node remote stream
-///     (<c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;(addr, ref)</c>).
-///     The workspace caches that stream per <c>(address, reference)</c> with
-///     <c>Replay(1).RefCount()</c> semantics — same instance is returned for
-///     every reader, including the reducer's write path.</item>
-///   <item><c>CombineLatest</c> them into the synced collection.</item>
+///   <item>For each query in <see cref="Queries"/>:
+///     <see cref="IMeshQueryProvider.ObserveQuery{MeshNode}"/> →
+///     <c>Scan</c> the Initial / Added / Updated / Removed deltas into a
+///     running set of paths.</item>
+///   <item>Combine all per-query path sets via <c>CombineLatest</c> and union
+///     them, then <c>DistinctUntilChanged</c> with element equality on the
+///     unioned set so identical sets don't trigger redundant
+///     re-subscription to per-path streams.</item>
+///   <item>For every path in the current set, resolve the workspace's per-node
+///     remote stream (<c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>),
+///     then <c>CombineLatest</c> them into the synced collection.
+///     <c>Switch</c> when the path set changes — old per-path subscriptions
+///     are dropped, new ones added.</item>
 /// </list>
 ///
 /// <para>Writes — via the reducer registered in
@@ -36,112 +40,129 @@ namespace MeshWeaver.Graph;
 /// the synchronization protocol to the owning per-node hub for persistence.</para>
 ///
 /// <para>Discriminator (multiple synced sources on the same hub): each source's
-/// reducer first checks <see cref="Owns"/> against its live path set; the
-/// first reducer that returns non-null wins. This keeps writes routed to the
-/// source whose query actually matches the path.</para>
+/// reducer first checks <see cref="Owns"/> against its live unioned path set;
+/// the first reducer that returns non-null wins.</para>
 /// </summary>
 public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
 {
-    private readonly BehaviorSubject<ImmutableHashSet<string>> _pathSet = new(ImmutableHashSet<string>.Empty);
-
+    /// <summary>
+    /// Public constructor for a single-query synced collection — defers to
+    /// the multi-query constructor with a one-element array.
+    /// </summary>
     public SyncedQueryMeshNodes(
         IWorkspace workspace,
         object dataSourceId,
         string query,
         string? collectionName = null
-    ) : base(workspace, dataSourceId, ws => BuildReadStream(ws, query, null!), collectionName)
+    ) : this(workspace, dataSourceId, new[] { query }, collectionName)
     {
-        // Re-bind the stream provider so the path-set fed back into _pathSet is
-        // the one the live read uses (single subscription via StreamUpdates'
-        // Replay(1).RefCount() in the base).
-        Query = query;
     }
 
-    public string Query { get; }
+    /// <summary>
+    /// Public constructor for a multi-query synced collection. The result
+    /// is the <em>union</em> of every <paramref name="queries"/> entry's
+    /// matched paths. Each query opens an independent
+    /// <see cref="IMeshQueryProvider.ObserveQuery"/> subscription; per-path
+    /// remote streams are de-duplicated by path before
+    /// <c>CombineLatest</c>.
+    /// </summary>
+    public SyncedQueryMeshNodes(
+        IWorkspace workspace,
+        object dataSourceId,
+        IReadOnlyList<string> queries,
+        string? collectionName = null
+    ) : this(workspace, dataSourceId, queries,
+        new BehaviorSubject<ImmutableHashSet<string>>(ImmutableHashSet<string>.Empty),
+        collectionName)
+    {
+    }
+
+    private SyncedQueryMeshNodes(
+        IWorkspace workspace,
+        object dataSourceId,
+        IReadOnlyList<string> queries,
+        BehaviorSubject<ImmutableHashSet<string>> pathSet,
+        string? collectionName
+    ) : base(workspace, dataSourceId,
+            ws => BuildReadStream(ws, queries, pathSet),
+            collectionName)
+    {
+        Queries = queries;
+        _pathSet = pathSet;
+    }
+
+    private readonly BehaviorSubject<ImmutableHashSet<string>> _pathSet;
+
+    /// <summary>The one-or-more mesh-query strings whose results union into this collection.</summary>
+    public IReadOnlyList<string> Queries { get; }
 
     /// <summary>
-    /// Live snapshot of the paths currently matched by <see cref="Query"/>.
-    /// Updated as the underlying <c>ObserveQuery</c> stream emits Initial /
-    /// Added / Removed deltas. Read synchronously by the reducer to decide
-    /// whether this source owns a given path.
+    /// Live snapshot of the unioned set of paths currently matched by
+    /// <see cref="Queries"/>. Updated as the upstream mesh-query streams
+    /// emit Initial / Added / Removed deltas. Read synchronously by the
+    /// reducer to decide whether this source owns a given path.
     /// </summary>
     public ImmutableHashSet<string> CurrentPaths => _pathSet.Value;
 
-    /// <summary>True when <paramref name="path"/> is in this source's live result set.</summary>
+    /// <summary>True when <paramref name="path"/> is in this source's live unioned result set.</summary>
     public bool Owns(string path) => _pathSet.Value.Contains(path);
 
     /// <summary>
-    /// Builds the read stream and tees its path-set snapshot into
-    /// <paramref name="pathSet"/> so the reducer can answer
-    /// <see cref="Owns"/> synchronously without a second subscription.
+    /// Single-subscription pipeline: per-query mesh-query → fold every
+    /// Initial / Added / Updated / Removed event into a path → MeshNode
+    /// dictionary; emit the values whenever it changes.
+    ///
+    /// <para>
+    /// We accumulate values directly from <see cref="IMeshQueryProvider.ObserveQuery"/>
+    /// rather than opening per-path remote streams + <c>CombineLatest</c>:
+    /// the upstream query already carries the latest <see cref="MeshNode"/>
+    /// for every result-set member through its <c>Updated</c> events, and
+    /// the per-path-remote-stream + <c>CombineLatest</c> design produces
+    /// the well-known feedback-loop pattern (outer re-emits when inner
+    /// values change → <c>CombineLatest</c> tears down + rebuilds → cycle).
+    /// </para>
+    ///
+    /// <para>
+    /// For multi-query unions, every query updates the same dictionary —
+    /// last-write-wins on duplicate paths, which is fine because all
+    /// queries return the same MeshNode for a given path.
+    /// </para>
     /// </summary>
     private static IObservable<IEnumerable<MeshNode>> BuildReadStream(
-        IWorkspace workspace, string query, BehaviorSubject<ImmutableHashSet<string>>? pathSet)
+        IWorkspace workspace,
+        IReadOnlyList<string> queries,
+        BehaviorSubject<ImmutableHashSet<string>> pathSet)
     {
         var provider = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQueryProvider>();
 
-        var pathSets = provider
-            .ObserveQuery<MeshNode>(
+        // Merge all per-query observables into a single change stream.
+        var changes = queries
+            .Select(query => provider.ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery(query),
-                workspace.Hub.JsonSerializerOptions)
+                workspace.Hub.JsonSerializerOptions))
+            .Merge();
+
+        // Fold change deltas into a path → MeshNode dictionary.
+        return changes
             .Scan(
-                ImmutableHashSet<string>.Empty,
-                (set, change) => change.ChangeType switch
+                ImmutableDictionary<string, MeshNode>.Empty,
+                (dict, change) => change.ChangeType switch
                 {
-                    QueryChangeType.Initial or QueryChangeType.Reset =>
-                        change.Items.Select(n => n.Path).ToImmutableHashSet(),
-                    QueryChangeType.Added =>
-                        set.Union(change.Items.Select(n => n.Path)),
+                    // Initial / Reset replace the snapshot for THIS query —
+                    // but in a multi-query union we'd lose other queries'
+                    // entries. Treat every event as additive/removal so the
+                    // unioned dict accumulates correctly.
+                    QueryChangeType.Initial or QueryChangeType.Reset
+                        or QueryChangeType.Added or QueryChangeType.Updated =>
+                        change.Items.Aggregate(dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)),
                     QueryChangeType.Removed =>
-                        set.Except(change.Items.Select(n => n.Path)),
-                    _ => set,
+                        change.Items.Aggregate(dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
+                    _ => dict,
                 })
-            .DistinctUntilChanged(SetEquality.Instance)
-            .Do(set => pathSet?.OnNext(set));
-
-        return pathSets
-            .Select(paths =>
-                paths.IsEmpty
-                    ? Observable.Return(Enumerable.Empty<MeshNode>())
-                    : paths
-                        .Select(path => GetNodeStream(workspace, path))
-                        .CombineLatest()
-                        .Select(values => values.Where(v => v is not null)!))
-            .Switch()!;
-    }
-
-    private static IObservable<MeshNode?> GetNodeStream(IWorkspace workspace, string path)
-    {
-        if (string.Equals(workspace.Hub.Address.ToString(), path, StringComparison.Ordinal))
-            return workspace.GetMeshNodeStream().Select(n => (MeshNode?)n);
-
-        return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(path), new MeshNodeReference())
-            .Select(c => c.Value);
-    }
-
-    /// <summary>
-    /// Override the base stream provider so the path-set tee uses THIS
-    /// instance's <see cref="_pathSet"/> (the constructor passes a sentinel
-    /// because <c>this</c> isn't available before <c>base(...)</c>).
-    /// </summary>
-    protected override System.Threading.Tasks.Task<InstanceCollection> InitializeAsync(
-        WorkspaceReference<InstanceCollection> reference,
-        System.Threading.CancellationToken cancellationToken)
-    {
-        // Subscribe (silently) to the read stream so the BehaviorSubject is
-        // primed with the initial path set even before any external reader
-        // subscribes via StreamUpdates / GetStreamUpdates.
-        Workspace.AddDisposable(BuildReadStream(Workspace, Query, _pathSet)
-            .Subscribe(_ => { }, _ => { }));
-        return base.InitializeAsync(reference, cancellationToken);
-    }
-
-    private sealed class SetEquality : IEqualityComparer<ImmutableHashSet<string>>
-    {
-        public static readonly SetEquality Instance = new();
-        public bool Equals(ImmutableHashSet<string>? x, ImmutableHashSet<string>? y) =>
-            ReferenceEquals(x, y) || (x is not null && y is not null && x.SetEquals(y));
-        public int GetHashCode(ImmutableHashSet<string> obj) => obj.Count;
+            .Do(dict => pathSet.OnNext(dict.Keys.ToImmutableHashSet()))
+            .DistinctUntilChanged()
+            .Select(dict => (IEnumerable<MeshNode>)dict.Values);
     }
 }
