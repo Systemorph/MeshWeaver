@@ -49,6 +49,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<MarkdownExportSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();

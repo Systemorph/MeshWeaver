@@ -56,6 +56,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<DelegationSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();

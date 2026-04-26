@@ -25,9 +25,6 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
-
-
-
         builder.AddSiloBuilderConfigurator<TestSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();

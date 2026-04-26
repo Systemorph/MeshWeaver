@@ -49,6 +49,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<CommentSiloConfigurator>();
         builder.AddClientBuilderConfigurator<CommentClientConfigurator>();
         Cluster = builder.Build();

@@ -41,6 +41,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<DocSiloConfigurator>();
         builder.AddClientBuilderConfigurator<DocClientConfigurator>();
         Cluster = builder.Build();
