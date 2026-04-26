@@ -1,11 +1,17 @@
+using MeshWeaver.Data;
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Result from compiling a MeshNode assembly.
+/// <see cref="Log"/> carries the executed-query / matched-source-paths /
+/// compiler-output trace so the consumer can surface "compile saw N source
+/// files" without re-running the pipeline.
 /// </summary>
 public record NodeCompilationResult(
     string? AssemblyLocation,
-    IReadOnlyList<NodeTypeConfiguration> NodeTypeConfigurations);
+    IReadOnlyList<NodeTypeConfiguration> NodeTypeConfigurations,
+    ActivityLog? Log = null);
 
 /// <summary>
 /// Service for on-demand compilation of dynamic MeshNode assemblies.

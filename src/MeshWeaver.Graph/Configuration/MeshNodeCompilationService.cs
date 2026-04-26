@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -212,11 +213,30 @@ internal class MeshNodeCompilationService(
 
     /// <inheritdoc />
     public IObservable<string?> GetAssemblyLocation(MeshNode node)
+        => GetAssemblyLocationWithLog(node).Select(t => t.Path);
+
+    /// <summary>
+    /// Companion to <see cref="GetAssemblyLocation"/> that also surfaces the
+    /// <see cref="ActivityLog"/> of the compile attempt — every executed source
+    /// query, every matched Code path, the final compile result. The same chain
+    /// runs underneath; this method is what <see cref="CompileAndGetConfigurations"/>
+    /// uses so the response surfaced through <c>GetCompilationPathResponse.Log</c>
+    /// reflects what actually happened (no double-compile to gather diagnostics).
+    /// </summary>
+    private IObservable<(string? Path, ActivityLog Log)> GetAssemblyLocationWithLog(MeshNode node)
     {
+        var log = new ActivityLog(ActivityCategory.Compilation)
+        {
+            HubPath = node.Path,
+            AffectedPaths = ImmutableList<string>.Empty.Add(node.Path)
+        };
+
         if (string.IsNullOrEmpty(node.NodeType))
         {
             logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
-            return Observable.Return<string?>(null);
+            return Observable.Return<(string?, ActivityLog)>((null,
+                AppendInfo(log, $"Skipped — node '{node.Path}' has no NodeType.")
+                    .Finish((int)hub.Version, ActivityStatus.Succeeded)));
         }
 
         var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -241,9 +261,7 @@ internal class MeshNodeCompilationService(
         return resolveDef.SelectMany(ntDef =>
             // Source-aware cache check: discover the LastModified of every source
             // Code node + the NodeType itself. The cache is valid only if the
-            // compiled DLL is newer than the most recent source change. Without this
-            // check, editing a Source/*.cs node would not trigger recompilation
-            // because the NodeType node's own LastModified hasn't changed.
+            // compiled DLL is newer than the most recent source change.
             DiscoverSourceMaxLastModified(ntDef, selfPath)
                 .SelectMany(maxSourceLastModified =>
                 {
@@ -257,12 +275,25 @@ internal class MeshNodeCompilationService(
                         logger.LogDebug(
                             "Using cached assembly for {NodePath} (effectiveLastModified={EffectiveLastModified})",
                             node.Path, effectiveLastModified);
-                        return Observable.Return<string?>(dllPath);
+                        return Observable.Return<(string?, ActivityLog)>((
+                            dllPath,
+                            AppendInfo(log,
+                                $"Cache hit — returning {dllPath} (effective LastModified={effectiveLastModified:O}).")
+                                .Finish((int)hub.Version, ActivityStatus.Succeeded)));
                     }
 
-                    return CompileCore(node, ntDef, selfPath);
+                    return CompileCore(node, ntDef, selfPath, log);
                 }));
     }
+
+    private static ActivityLog AppendInfo(ActivityLog log, string message)
+        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Information)) };
+
+    private static ActivityLog AppendWarning(ActivityLog log, string message)
+        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Warning)) };
+
+    private static ActivityLog AppendError(ActivityLog log, string message)
+        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Error)) };
 
     /// <summary>
     /// Returns the maximum <c>LastModified</c> across all source Code nodes that
@@ -387,8 +418,8 @@ internal class MeshNodeCompilationService(
     /// no <c>await</c> on hub round-trips — both are the canonical deadlock patterns
     /// documented in <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
-    private IObservable<string?> CompileCore(
-        MeshNode node, NodeTypeDefinition? ntDef, string selfPath)
+    private IObservable<(string? Path, ActivityLog Log)> CompileCore(
+        MeshNode node, NodeTypeDefinition? ntDef, string selfPath, ActivityLog log)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         var dllPath = cacheService.GetDllPath(nodeName);
@@ -477,9 +508,7 @@ internal class MeshNodeCompilationService(
             .SelectMany(codeFiles =>
             {
                 // Final stage: combine + compile. The Roslyn `Compile` call itself is
-                // the only Task→Observable bridge in this whole method (see method-level
-                // doc-comment). Wrapping in Observable.Defer makes the Task lazy so it
-                // only runs on subscribe — composes safely inside the outer chain.
+                // the only Task→Observable bridge in this whole method.
                 CodeConfiguration? codeFile = codeFiles.Count switch
                 {
                     0 => null,
@@ -489,11 +518,33 @@ internal class MeshNodeCompilationService(
                 var configuration = ntDef?.Configuration;
                 var contentCollections = ntDef?.ContentCollections;
 
+                // Snapshot the discovery into the activity log: every executed query +
+                // every matched Code path. Lets the response carry "compile saw N
+                // source files from queries [Q1, Q2…]" without re-running the pipeline.
+                var discoveryLog = log;
+                foreach (var q in executedQueries)
+                    discoveryLog = AppendInfo(discoveryLog, $"Source query: {q}");
+                if (matchedCodePaths.Count == 0)
+                {
+                    discoveryLog = AppendWarning(discoveryLog,
+                        $"Source discovery for '{node.Path}' matched 0 Code nodes — " +
+                        "check that the Source Code nodes exist and the NodeType's " +
+                        "`Sources` list points at them.");
+                }
+                else
+                {
+                    discoveryLog = AppendInfo(discoveryLog,
+                        $"Source discovery matched {matchedCodePaths.Count} Code node(s): " +
+                        string.Join(", ", matchedCodePaths));
+                }
+
                 return Observable.Defer(() =>
                         CompileAsync(codeFile, configuration, contentCollections, node, CancellationToken.None)
                             .ToObservable())
                     .Select(_ =>
                     {
+                        ActivityLog finalLog;
+                        string? finalPath;
                         if (cacheService.IsDiskCacheEnabled)
                         {
                             if (File.Exists(dllPath))
@@ -501,27 +552,37 @@ internal class MeshNodeCompilationService(
                                 logger.LogInformation(
                                     "Compiled assembly for node {NodePath} at {DllPath}",
                                     node.Path, dllPath);
-                                return (string?)dllPath;
+                                finalPath = dllPath;
+                                finalLog = AppendInfo(discoveryLog,
+                                    $"Compiled assembly written to {dllPath}.");
                             }
-                            logger.LogWarning(
-                                "Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
-                            return (string?)null;
+                            else
+                            {
+                                logger.LogWarning(
+                                    "Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
+                                finalPath = null;
+                                finalLog = AppendError(discoveryLog,
+                                    $"Compilation succeeded but DLL not found at {dllPath}.");
+                            }
                         }
-                        logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
-                        return (string?)$"memory://{nodeName}";
+                        else
+                        {
+                            logger.LogInformation("Compiled assembly for node {NodePath} (in-memory)", node.Path);
+                            finalPath = $"memory://{nodeName}";
+                            finalLog = AppendInfo(discoveryLog,
+                                $"Compiled assembly loaded in-memory ({finalPath}).");
+                        }
+                        return (finalPath, finalLog.Finish((int)hub.Version, ActivityStatus.Succeeded));
                     })
-                    .Catch<string?, CompilationException>(ex =>
+                    .Catch<(string?, ActivityLog), CompilationException>(ex =>
                     {
-                        // Enrich the error with the actual queries that ran + which Code nodes
-                        // matched, so the error overlay can tell the user *why* references are
-                        // missing (usually: 0 Code nodes matched the configured sources).
                         var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
                         logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}",
                             node.Path, diag);
-                        return Observable.Throw<string?>(new CompilationException(
-                            ex.NodePath,
-                            $"{ex.Message}\n\n--- Source discovery ---\n{diag}",
-                            ex));
+                        var failedLog = AppendError(discoveryLog,
+                                $"Compilation failed: {ex.Message}\n--- Source discovery ---\n{diag}")
+                            .Finish((int)hub.Version, ActivityStatus.Failed);
+                        return Observable.Return<(string?, ActivityLog)>((null, failedLog));
                     });
             });
     }
@@ -543,10 +604,11 @@ internal class MeshNodeCompilationService(
 
     /// <inheritdoc />
     public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(MeshNode node)
-        => GetAssemblyLocation(node).Select(assemblyLocation =>
+        => GetAssemblyLocationWithLog(node).Select(t =>
         {
+            var (assemblyLocation, log) = t;
             if (string.IsNullOrEmpty(assemblyLocation))
-                return (NodeCompilationResult?)null;
+                return (NodeCompilationResult?)new NodeCompilationResult(null, [], log);
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
 
@@ -556,7 +618,8 @@ internal class MeshNodeCompilationService(
                 if (assembly == null)
                 {
                     logger.LogWarning("Failed to load assembly for {NodePath}", node.Path);
-                    return new NodeCompilationResult(assemblyLocation, []);
+                    return new NodeCompilationResult(assemblyLocation, [],
+                        AppendError(log, $"Failed to load assembly at {assemblyLocation}."));
                 }
 
                 var configurations = new List<NodeTypeConfiguration>();
@@ -589,12 +652,13 @@ internal class MeshNodeCompilationService(
                 logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
                     configurations.Count, assemblyLocation);
 
-                return new NodeCompilationResult(assemblyLocation, configurations);
+                return new NodeCompilationResult(assemblyLocation, configurations, log);
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
-                return new NodeCompilationResult(assemblyLocation, []);
+                return new NodeCompilationResult(assemblyLocation, [],
+                    AppendError(log, $"Failed to extract configurations: {ex.Message}"));
             }
         });
 

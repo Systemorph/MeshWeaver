@@ -427,14 +427,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _notCreatableTypes.TryRemove(nodeTypePath, out _);
         _accessRules.TryRemove(nodeTypePath, out _);
 
-        // Drop every (nodeType, version) entry for this NodeType — the per-version cache
-        // on the owning hub is invalidated independently when the type-def MeshNode
-        // mutates; we mirror that locally so the next EnrichWithNodeType re-asks the hub.
-        foreach (var key in _pathCache.Keys.ToArray())
-        {
-            if (string.Equals(key.NodeType, nodeTypePath, StringComparison.OrdinalIgnoreCase))
-                _pathCache.TryRemove(key, out _);
-        }
+        // Path cache removed — EnrichWithNodeType always issues a fresh
+        // GetCompilationPathRequest and lets the disk-level cache decide. Nothing
+        // to drop here.
 
         // Also delete the on-disk DLL/PDB/source so the next access forces a fresh
         // compile. Without this, IsCacheValid can still return true when the NodeType's
@@ -492,7 +487,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </remarks>
     public IObservable<MeshNode> EnrichWithNodeType(MeshNode node)
     {
-        // Skip only if fully enriched.
+        // Already fully enriched? (built-in / static-provider node already has both fields.)
         if (node.HubConfiguration != null && node.AssemblyLocation != null)
             return Observable.Return(node);
 
@@ -500,30 +495,10 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         if (string.IsNullOrEmpty(nodeType))
             return Observable.Return(ApplyDefaultConfig(node));
 
-        // Per-(nodeType, version) cache. Version "" = HEAD before resolution.
-        var cacheKey = (nodeType, node.Version);
-        if (_pathCache.TryGetValue(cacheKey, out var cached))
-            return Observable.Return(ApplyEntry(node, cached, nodeType));
-
-        // Transitional fast-path: AddMeshNodes built-ins live in meshConfiguration.Nodes
-        // and may not have a per-node hub at Address(nodeType) — routing to them would
-        // hang the 30s timeout. Short-circuit on the in-process registration before we
-        // try the network round-trip. (Plan §5: AddMeshNodes parity is a follow-up.)
-        if (meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNodeFast)
-            && builtInNodeFast?.HubConfiguration != null)
-        {
-            var fastEntry = new PathCacheEntry(
-                builtInNodeFast.AssemblyLocation ?? string.Empty,
-                Collection: null,
-                builtInNodeFast.HubConfiguration);
-            _pathCache[cacheKey] = fastEntry;
-            _hubConfigurations[nodeType] = builtInNodeFast.HubConfiguration;
-            return Observable.Return(ApplyEntry(node, fastEntry, nodeType));
-        }
-
-        // Routing-first lookup. The NodeType's per-node hub owns the compile cache + the
-        // version-history dispatch — see NodeTypeContractHandler. NodeTypeService only
-        // caches the path it gets back.
+        // (a) issue request to NodeType hub. (b) apply the AssemblyLocation +
+        // HubConfiguration delegate the response carries. No request-level cache —
+        // the disk-level CompilationCacheService is source-aware and the NodeType
+        // hub returns the cached DLL path on a hot path.
         return hub.Observe(
                 new GetCompilationPathRequest(/* HEAD */),
                 o => o.WithTarget(new Address(nodeType)))
@@ -533,7 +508,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             .Catch<GetCompilationPathResponse, Exception>(ex =>
             {
                 logger.LogDebug(ex,
-                    "GetCompilationPathRequest to '{NodeType}' faulted — falling back to inline lookup",
+                    "GetCompilationPathRequest to '{NodeType}' faulted — falling back to default config",
                     nodeType);
                 return Observable.Return(new GetCompilationPathResponse(
                     Success: false,
@@ -547,14 +522,15 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 if (response.Success && !string.IsNullOrEmpty(response.AssemblyLocation))
                 {
-                    var entry = new PathCacheEntry(
-                        response.AssemblyLocation!,
-                        response.Collection,
-                        response.HubConfiguration);
-                    _pathCache[cacheKey] = entry;
                     if (response.HubConfiguration != null)
                         _hubConfigurations[nodeType] = response.HubConfiguration;
-                    return ApplyEntry(node, entry, nodeType);
+                    return ApplyEntry(
+                        node,
+                        new PathCacheEntry(
+                            response.AssemblyLocation!,
+                            response.Collection,
+                            response.HubConfiguration),
+                        nodeType);
                 }
 
                 // Last-resort: return default config + (if compile failed) an error overlay.
@@ -603,8 +579,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         string AssemblyLocation,
         string? Collection,
         Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration);
-
-    private readonly ConcurrentDictionary<(string NodeType, long Version), PathCacheEntry> _pathCache = new();
 
     /// <summary>
     /// Copies the Icon from the built-in node type definition to the instance if the instance has no Icon set.
