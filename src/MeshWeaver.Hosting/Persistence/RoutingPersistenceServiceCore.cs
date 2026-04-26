@@ -161,24 +161,63 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        // 1. Initialize default partitions from static providers (creates schemas/tables for PostgreSQL)
-        var defaultPartitions = _staticNodeProviders
+        // 1. Collect every PartitionDefinition declared by any static-provider /
+        //    config-time AddMeshNodes seed. These tell the routing layer which
+        //    partitions exist and where they live. See `AddDocumentation` for the
+        //    canonical pattern: registers a `Documentation` Partition node with
+        //    `Content = new PartitionDefinition { Namespace = "Doc", DataSource = "static" }`.
+        var allStaticNodes = _staticNodeProviders
             .SelectMany(p => p.GetStaticNodes())
+            .ToList();
+
+        var allPartitionDefs = allStaticNodes
             .Select(n => n.Content)
             .OfType<PartitionDefinition>()
             .ToList();
 
-        if (defaultPartitions.Count > 0)
-            await _factory.InitializeDefaultPartitionsAsync(defaultPartitions, ct);
+        // 2. Pre-init writable partitions (DataSource != "static") on the backend
+        //    factory so PostgreSQL `CREATE SCHEMA`, Cosmos containers, etc. are ready.
+        //    Static-only partitions skip this — they have no backing store to provision.
+        var writableDefs = allPartitionDefs
+            .Where(d => !string.Equals(d.DataSource, "static", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (writableDefs.Count > 0)
+            await _factory.InitializeDefaultPartitionsAsync(writableDefs, ct);
 
-        // 2. Discover all existing partitions (including the ones just created)
+        // 3. Discover existing partitions on the writable backend (FS subdirs,
+        //    PostgreSQL schemas, Cosmos containers) — this also re-registers the
+        //    ones we just init'd in step 2.
         await foreach (var (_, _) in DiscoverNewProvidersAsync(ct))
         { }
 
-        // Static nodes (from IStaticNodeProvider like DocumentationNodeProvider) are NOT seeded
-        // into partition stores. They are found on-demand by MeshCatalog.GetNodeAsync which
-        // checks static providers as a fallback. Hub configuration is resolved on-demand
-        // by IMeshNodeHubFactory when a hub is activated.
+        // 4. Register a read-only StaticNodePartitionStore for every PartitionDefinition
+        //    whose DataSource == "static". The store is populated with all
+        //    IStaticNodeProvider nodes whose first segment matches the partition's
+        //    Namespace. This surfaces NodeType definitions, doc namespaces, and test
+        //    seed nodes through the same routing path as writable partitions — without
+        //    leaking IStaticNodeProvider into the writable persisters
+        //    (InMemoryPersistenceService, FileSystemPersistenceService, ...).
+        //    See Doc/Architecture/PartitionedPersistence.md §"Where Partitions Come From".
+        foreach (var def in allPartitionDefs)
+        {
+            if (!string.Equals(def.DataSource, "static", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (string.IsNullOrEmpty(def.Namespace))
+                continue;
+            if (_stores.ContainsKey(def.Namespace))
+                continue; // a writable partition already claimed this name
+
+            var nodesInPartition = allStaticNodes
+                .Where(n => string.Equals(
+                    PathPartition.GetFirstSegment(n.Path),
+                    def.Namespace,
+                    StringComparison.OrdinalIgnoreCase));
+            var store = new StaticNodePartitionStore(nodesInPartition);
+            if (_stores.TryAdd(def.Namespace, store))
+            {
+                _queryProviders[def.Namespace] = new Query.InMemoryMeshQuery(store, changeNotifier: _changeNotifier);
+            }
+        }
     }
 
 

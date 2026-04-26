@@ -34,10 +34,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 4. WatchForExecution triggers â†’ starts streaming â†’ response cell gets text
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"deleg-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"deleg-{name}-{Guid.NewGuid():N}", "Roland");
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {

@@ -30,12 +30,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// to the script's <c>Log</c> global).
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansKernelProgressTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansKernelProgressTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private const int DefaultTimeoutMs = 30_000;
 
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"kernel-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"kernel-{name}-{Guid.NewGuid():N}", "Roland");
 
     [Fact(Timeout = DefaultTimeoutMs, Skip = "Pending task #60: ActivityLog created at kernel dispatch + Log global wired through")]
     public async Task Log_from_script_is_observable_on_activity_log_stream()

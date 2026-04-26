@@ -8,6 +8,8 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -61,7 +63,77 @@ public static class MeshDataSourceExtensions
             })
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
             .WithNodeOperationHandlers()
+            // Per-node-hub contract for resolving (assembly + HubConfiguration) of the
+            // NodeType this hub is responsible for. Cheap on non-NodeType nodes — they
+            // fall through to Success=false and the consumer falls back. See
+            // NodeTypeContractHandler for the per-version cache + compile orchestration.
+            .WithHandler<GetCompilationPathRequest>(NodeTypeContractHandler.Handle)
+            // Post-load INodeValidator-Read hook for MeshNodeReference reads.
+            .AddDeliveryPipeline(AddReadValidatorPipeline)
             .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
+    }
+
+    /// <summary>
+    /// Delivery-pipeline step: for <see cref="GetDataRequest"/> against
+    /// <see cref="MeshNodeReference"/>, loads the per-node hub's own MeshNode and
+    /// runs every <see cref="INodeValidator"/> with
+    /// <see cref="NodeOperation.Read"/>. On rejection, posts a null-Data response
+    /// and short-circuits (does not pass through to the default handler).
+    /// On pass, invokes the next pipeline step normally.
+    /// </summary>
+    private static AsyncPipelineConfig AddReadValidatorPipeline(AsyncPipelineConfig pipeline)
+    {
+        var hub = pipeline.Hub;
+        return pipeline.AddPipeline(async (delivery, ct, next) =>
+        {
+            if (delivery.Message is not GetDataRequest req
+                || req.Reference is not MeshNodeReference)
+                return await next.Invoke(delivery, ct);
+
+            var validators = hub.ServiceProvider.GetServices<INodeValidator>()
+                .Where(v => v.SupportedOperations.Count == 0 || v.SupportedOperations.Contains(NodeOperation.Read))
+                .ToList();
+            if (validators.Count == 0)
+                return await next.Invoke(delivery, ct);
+
+            var workspace = hub.GetWorkspace();
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+            MeshNode? node;
+            try
+            {
+                node = await workspace.GetMeshNodeStream()
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .FirstAsync()
+                    .ToTask(ct);
+            }
+            catch
+            {
+                // Node not loadable (timeout / hub no longer has it) — fall through to
+                // the default handler so it can produce its own response.
+                return await next.Invoke(delivery, ct);
+            }
+
+            var context = new NodeValidationContext
+            {
+                Operation = NodeOperation.Read,
+                Node = node,
+                AccessContext = accessService?.Context ?? accessService?.CircuitContext
+            };
+            foreach (var v in validators)
+            {
+                var result = await v.ValidateAsync(context, ct);
+                if (!result.IsValid)
+                {
+                    hub.Post(new GetDataResponse(null, 0) { Error = result.ErrorMessage },
+                        o => o.ResponseFor(delivery));
+                    return delivery.Processed();
+                }
+            }
+
+            return await next.Invoke(delivery, ct);
+        });
     }
 
     /// <summary>

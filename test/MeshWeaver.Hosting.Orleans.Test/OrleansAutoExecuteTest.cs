@@ -38,10 +38,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// because the child nodes weren't created in persistence.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"autoexec-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"autoexec-{name}-{Guid.NewGuid():N}", "Roland");
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {

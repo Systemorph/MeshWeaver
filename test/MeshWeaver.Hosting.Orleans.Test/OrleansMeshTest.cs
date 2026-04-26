@@ -16,10 +16,10 @@ using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansMeshTests(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansMeshTests(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"mesh-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"mesh-{name}-{Guid.NewGuid():N}", "Roland");
 
     [Fact(Timeout = 30000)]
     public async Task PingPong()

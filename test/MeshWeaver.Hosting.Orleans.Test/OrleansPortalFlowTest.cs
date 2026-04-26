@@ -43,10 +43,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// flow check remains meaningful until the legacy code is removed.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"portal-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"portal-{name}-{Guid.NewGuid():N}", "Roland");
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {

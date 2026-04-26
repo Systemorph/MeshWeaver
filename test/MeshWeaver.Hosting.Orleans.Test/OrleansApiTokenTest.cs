@@ -24,11 +24,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// as Thread/Comment. The RLS validator maps ApiToken â†’ Permission.Api.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
     {
-        var client = await fixture.GetClientAsync($"apitoken-{name}-{Guid.NewGuid():N}", "Roland");
+        var client = await base.GetClientAsync($"apitoken-{name}-{Guid.NewGuid():N}", "Roland");
         client.TypeRegistry
             .WithType(typeof(ValidateTokenRequest), nameof(ValidateTokenRequest))
             .WithType(typeof(ValidateTokenResponse), nameof(ValidateTokenResponse));

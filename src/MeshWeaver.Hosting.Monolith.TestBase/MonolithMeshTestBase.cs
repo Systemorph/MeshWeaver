@@ -207,6 +207,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is System.Text.Json.JsonElement je)
             node = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
+
+        // Routing-fallback safety: when no per-node hub exists at the requested
+        // path, monolith routing forwards the GetDataRequest to the closest
+        // ancestor's hub, and that hub's MeshNodeReference reducer happily returns
+        // ITS OWN MeshNode. Treat any path mismatch as "not found" so callers
+        // can use ReadNodeAsync(path).Should().BeNull() after a delete without
+        // false positives from the parent partition's node.
+        if (node != null && !string.Equals(node.Path, path, StringComparison.OrdinalIgnoreCase))
+        {
+            Output?.WriteLine($"ReadNodeAsync('{path}'): routing returned ancestor '{node.Path}' — treating as not found");
+            return null;
+        }
+
         return node;
     }
 
