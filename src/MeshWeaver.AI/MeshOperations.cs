@@ -256,6 +256,18 @@ public class MeshOperations
                                     MeshNode? node = resp.Data as MeshNode;
                                     if (node == null && resp.Data is JsonElement je)
                                         node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
+
+                                    // Routing-fallback safety: when no per-node hub
+                                    // exists for the requested path, monolith routing
+                                    // forwards GetDataRequest to the closest ancestor's
+                                    // hub, which returns ITS OWN MeshNode. Treat any
+                                    // path mismatch as not-found so callers (Patch,
+                                    // Update, Delete) don't accidentally operate on
+                                    // an ancestor.
+                                    if (node != null
+                                        && !string.Equals(node.Path, resolvedPath, StringComparison.OrdinalIgnoreCase))
+                                        node = null;
+
                                     EmitOnce(node);
                                 }
                                 else
