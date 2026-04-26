@@ -188,7 +188,7 @@ internal class MeshNodeCompilationService(
             }
 
             // Use IMeshStorage directly to bypass routing
-            var referencedNode = await meshStorage.GetNodeAsync(path, ct);
+            var referencedNode = await meshStorage.GetNode(path).FirstAsync().ToTask(ct);
             string? resolvedCode = null;
             if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
             {
@@ -222,24 +222,161 @@ internal class MeshNodeCompilationService(
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         var dllPath = cacheService.GetDllPath(nodeName);
 
-        // Check cache validity first (only for disk cache)
-        if (cacheService.IsDiskCacheEnabled && cacheService.IsCacheValid(nodeName, node.LastModified))
+        // Resolve the owning NodeTypeDefinition once — used for source discovery
+        // (Sources / Source convention) and for Configuration / ContentCollections.
+        IObservable<NodeTypeDefinition?> resolveDef;
+        string selfPath;
+        if (node.Content is NodeTypeDefinition selfDef)
         {
-            logger.LogDebug("Using cached assembly for {NodePath}", node.Path);
-            return Observable.Return<string?>(dllPath);
+            resolveDef = Observable.Return<NodeTypeDefinition?>(selfDef);
+            selfPath = node.Path;
+        }
+        else
+        {
+            resolveDef = hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
+                .Select(typeNode => typeNode?.Content as NodeTypeDefinition);
+            selfPath = node.NodeType;
         }
 
-        // Resolve the owning NodeTypeDefinition once — used both for source discovery
-        // (Sources / Source convention) and for Configuration / ContentCollections.
-        // - If this node IS a NodeType, "self" is its own path and we read its Content.
-        // - If this node is an instance, "self" is the NodeType's path and we compose
-        //   via hub.GetMeshNode(...).SelectMany(...) — NEVER await the hub round-trip.
-        if (node.Content is NodeTypeDefinition selfDef)
-            return CompileCore(node, selfDef, node.Path);
+        return resolveDef.SelectMany(ntDef =>
+            // Source-aware cache check: discover the LastModified of every source
+            // Code node + the NodeType itself. The cache is valid only if the
+            // compiled DLL is newer than the most recent source change. Without this
+            // check, editing a Source/*.cs node would not trigger recompilation
+            // because the NodeType node's own LastModified hasn't changed.
+            DiscoverSourceMaxLastModified(ntDef, selfPath)
+                .SelectMany(maxSourceLastModified =>
+                {
+                    var effectiveLastModified = node.LastModified > maxSourceLastModified
+                        ? node.LastModified
+                        : maxSourceLastModified;
 
-        return hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
-            .SelectMany(typeNode =>
-                CompileCore(node, typeNode?.Content as NodeTypeDefinition, node.NodeType));
+                    if (cacheService.IsDiskCacheEnabled
+                        && cacheService.IsCacheValid(nodeName, effectiveLastModified))
+                    {
+                        logger.LogDebug(
+                            "Using cached assembly for {NodePath} (effectiveLastModified={EffectiveLastModified})",
+                            node.Path, effectiveLastModified);
+                        return Observable.Return<string?>(dllPath);
+                    }
+
+                    return CompileCore(node, ntDef, selfPath);
+                }));
+    }
+
+    /// <summary>
+    /// Returns the maximum <c>LastModified</c> across all source Code nodes that
+    /// would feed a compile of <paramref name="ntDef"/>. Uses the same storage
+    /// enumeration as <see cref="CompileCore"/> so cache invalidation tracks the
+    /// exact same set of files the compile reads. Returns
+    /// <see cref="DateTimeOffset.MinValue"/> if there are no sources.
+    /// </summary>
+    private IObservable<DateTimeOffset> DiscoverSourceMaxLastModified(
+        NodeTypeDefinition? ntDef, string selfPath)
+    {
+        var meshStorage = hub.ServiceProvider.GetService<IMeshStorage>();
+        if (meshStorage == null)
+            return Observable.Return(DateTimeOffset.MinValue);
+
+        var queries = CodeQueryResolver
+            .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
+            .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
+            .ToArray();
+
+        if (queries.Length == 0)
+            return Observable.Return(DateTimeOffset.MinValue);
+
+        IObservable<DateTimeOffset> chain = Observable.Return(DateTimeOffset.MinValue);
+        foreach (var q in queries)
+        {
+            var (queryPath, isSubtree, queryNodeType) = ParseSourceQuery(q);
+            chain = chain.SelectMany(currentMax =>
+                EnumerateStorageSources(meshStorage, queryPath, isSubtree, queryNodeType)
+                    .Aggregate(currentMax, (acc, n) => n.LastModified > acc ? n.LastModified : acc));
+        }
+        return chain;
+    }
+
+    /// <summary>
+    /// Parses a <see cref="CodeQueryResolver"/>-shaped query string into the
+    /// (path, scope, nodeType) tuple needed for storage-direct enumeration.
+    /// CodeQueryResolver always emits one of three shapes:
+    /// <list type="bullet">
+    ///   <item><description><c>namespace:X scope:subtree nodeType:Y</c></description></item>
+    ///   <item><description><c>path:X nodeType:Y</c></description></item>
+    ///   <item><description><c>{namespace:X scope:subtree} nodeType:Y</c></description></item>
+    /// </list>
+    /// </summary>
+    private static (string Path, bool IsSubtree, string? NodeType) ParseSourceQuery(string query)
+    {
+        string path = "";
+        bool isSubtree = false;
+        string? nodeType = null;
+        foreach (var token in query.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (token.StartsWith("namespace:", StringComparison.Ordinal))
+            {
+                path = token["namespace:".Length..];
+                isSubtree = true;
+            }
+            else if (token.StartsWith("path:", StringComparison.Ordinal))
+            {
+                path = token["path:".Length..];
+            }
+            else if (token.Equals("scope:subtree", StringComparison.Ordinal)
+                     || token.Equals("scope:descendants", StringComparison.Ordinal))
+            {
+                isSubtree = true;
+            }
+            else if (token.StartsWith("nodeType:", StringComparison.Ordinal))
+            {
+                nodeType = token["nodeType:".Length..];
+            }
+        }
+        return (path, isSubtree, nodeType);
+    }
+
+    /// <summary>
+    /// Enumerates source nodes via <see cref="IMeshStorage"/> directly.
+    /// Storage is the canonical source of truth; the read-side query index is
+    /// eventually consistent and may lag fresh writes (see
+    /// <c>Doc/Architecture/CqrsAndContentAccess.md</c>) — the compile pipeline
+    /// is one of the two sanctioned places to read storage directly.
+    /// </summary>
+    private static IObservable<MeshNode> EnumerateStorageSources(
+        IMeshStorage storage, string path, bool isSubtree, string? nodeType)
+    {
+        if (string.IsNullOrEmpty(path))
+            return Observable.Empty<MeshNode>();
+
+        var self = storage.GetNode(path)
+            .Where(n => n != null
+                && (nodeType == null
+                    || string.Equals(n.NodeType, nodeType, StringComparison.Ordinal)))
+            .Select(n => n!);
+
+        if (!isSubtree)
+            return self;
+
+        var descendants = Observable.Create<MeshNode>(async (observer, ct) =>
+        {
+            try
+            {
+                await foreach (var d in storage.GetAllDescendantsAsync(path).WithCancellation(ct))
+                {
+                    if (nodeType == null
+                        || string.Equals(d.NodeType, nodeType, StringComparison.Ordinal))
+                        observer.OnNext(d);
+                }
+                observer.OnCompleted();
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+            }
+        });
+
+        return self.Concat(descendants);
     }
 
     /// <summary>
@@ -256,11 +393,12 @@ internal class MeshNodeCompilationService(
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         var dllPath = cacheService.GetDllPath(nodeName);
         var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
+        var meshStorage = hub.ServiceProvider.GetService<IMeshStorage>();
         var executedQueries = new List<string>();
         var matchedCodePaths = new List<string>();
 
         IObservable<List<CodeConfiguration>> discoverCodeFiles;
-        if (meshQuery == null)
+        if (meshStorage == null)
         {
             discoverCodeFiles = Observable.Return(new List<CodeConfiguration>());
         }
@@ -272,25 +410,29 @@ internal class MeshNodeCompilationService(
                 .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
                 .ToArray();
 
-            // Source discovery: ObserveQuery returns the initial result set with full
-            // node content (Path + Content). One reactive subscription per query —
-            // .Take(1) snapshots the initial set, .Timeout bounds the wait.
+            // Source discovery: enumerate via IMeshStorage directly. The read-side
+            // query index is eventually consistent (see Doc/Architecture/CqrsAndContentAccess.md);
+            // a Code node written milliseconds before the compile request may not be
+            // visible through ObserveQuery yet. Storage is the canonical source of
+            // truth and is one of the two sanctioned places to read directly from.
+            // Wrapped in Observable.Create so the IAsyncEnumerable enumeration is the
+            // leaf — the chain stays IObservable end-to-end above this point.
             IObservable<List<CodeConfiguration>> chain = Observable.Return(new List<CodeConfiguration>());
             foreach (var finalQuery in queriesToRun)
             {
                 var q = finalQuery;
                 executedQueries.Add(q);
+                var (queryPath, isSubtree, queryNodeType) = ParseSourceQuery(q);
 
                 chain = chain.SelectMany(acc =>
-                    meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(15))
-                        .Select(change =>
+                    EnumerateStorageSources(meshStorage, queryPath, isSubtree, queryNodeType)
+                        .ToList()
+                        .Select(matches =>
                         {
                             var matched = 0;
-                            foreach (var n in change.Items)
+                            foreach (var n in matches)
                             {
-                                if (n == null || string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path))
+                                if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path))
                                     continue;
                                 if (n.Content is CodeConfiguration cf
                                     && !string.IsNullOrWhiteSpace(cf.Code))

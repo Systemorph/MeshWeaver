@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 
 namespace MeshWeaver.Mesh.Services;
@@ -12,13 +14,15 @@ namespace MeshWeaver.Mesh.Services;
 internal interface IStorageService
 {
     /// <summary>
-    /// Gets a node by its path.
+    /// Gets a node by its path. Returns an observable that emits the node (or null
+    /// if not found) and completes. The Task → IObservable bridge lives inside the
+    /// implementation so callers compose with <c>SelectMany</c>/<c>Subscribe</c>
+    /// instead of bridging at every call site.
     /// </summary>
     /// <param name="path">The node path (e.g., "org/acme/project/web")</param>
     /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The node or null if not found</returns>
-    Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default);
+    /// <returns>Observable emitting the node or null</returns>
+    IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options);
 
     /// <summary>
     /// Gets all child nodes at the specified parent path.
@@ -209,7 +213,7 @@ internal interface IStorageService
     /// <param name="ct">Cancellation token</param>
     /// <returns>The node or null if not found or not authorized</returns>
     Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
-        => GetNodeAsync(path, options, ct);
+        => GetNode(path, options).FirstAsync().ToTask(ct);
 
     /// <summary>
     /// Gets child nodes, filtering out those the user cannot read.

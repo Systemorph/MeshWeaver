@@ -143,47 +143,50 @@ public static class MeshNodeExtensions
             return delivery.Processed();
 
         var options = hub.JsonSerializerOptions;
-        var subHub = hub.GetHostedHub(new Address("_activity"));
-        subHub.InvokeAsync(async ct =>
-        {
-            var encodedPath = req.NodePath.Replace("/", "_");
-            var activityPath = $"User/{req.UserId}/_UserActivity/{encodedPath}";
-            var now = DateTimeOffset.UtcNow;
+        var encodedPath = req.NodePath.Replace("/", "_");
+        var activityPath = $"User/{req.UserId}/_UserActivity/{encodedPath}";
+        var now = DateTimeOffset.UtcNow;
 
-            var existing = await storage.GetNodeAsync(activityPath, options, ct);
-            var existingRecord = existing?.Content as UserActivityRecord;
-
-            var record = new UserActivityRecord
+        // Reactive chain: read existing → fold into new record → save. No await,
+        // no Task; the chain is fire-and-forget via Subscribe (errors logged).
+        storage.GetNode(activityPath, options)
+            .SelectMany(existing =>
             {
-                Id = encodedPath,
-                NodePath = req.NodePath,
-                UserId = req.UserId,
-                ActivityType = ActivityType.Read,
-                FirstAccessedAt = existingRecord?.FirstAccessedAt ?? now,
-                LastAccessedAt = now,
-                AccessCount = (existingRecord?.AccessCount ?? 0) + 1,
-                NodeName = req.NodeName,
-                NodeType = req.NodeType,
-                Namespace = req.Namespace
-            };
-
-            await storage.SaveNodeAsync(
-                MeshNode.FromPath(activityPath) with
+                var existingRecord = existing?.Content as UserActivityRecord;
+                var record = new UserActivityRecord
+                {
+                    Id = encodedPath,
+                    NodePath = req.NodePath,
+                    UserId = req.UserId,
+                    ActivityType = ActivityType.Read,
+                    FirstAccessedAt = existingRecord?.FirstAccessedAt ?? now,
+                    LastAccessedAt = now,
+                    AccessCount = (existingRecord?.AccessCount ?? 0) + 1,
+                    NodeName = req.NodeName,
+                    NodeType = req.NodeType,
+                    Namespace = req.Namespace
+                };
+                var saveNode = MeshNode.FromPath(activityPath) with
                 {
                     NodeType = "UserActivity",
                     Name = req.NodeName ?? encodedPath,
                     MainNode = $"User/{req.UserId}",
                     State = MeshNodeState.Active,
                     Content = record
-                },
-                options, ct);
-        }, ex =>
-        {
-            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.ActivityTracking");
-            logger?.LogError(ex, "Failed to track activity for user={UserId} path={Path}", req.UserId, req.NodePath);
-            return Task.CompletedTask;
-        });
-
+                };
+                // Sanctioned leaf bridge: IStorageService.SaveNodeAsync wraps the actual
+                // disk/DB write. Observable.FromAsync at the persistence boundary is the
+                // documented exception (Doc/Architecture/AsynchronousCalls.md) — the chain
+                // above stays IObservable end-to-end and never re-enters the hub flow.
+                return Observable.FromAsync(ct => storage.SaveNodeAsync(saveNode, options, ct));
+            })
+            .Subscribe(
+                _ => { },
+                ex =>
+                {
+                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.ActivityTracking");
+                    logger?.LogError(ex, "Failed to track activity for user={UserId} path={Path}", req.UserId, req.NodePath);
+                });
         return delivery.Processed();
     }
 

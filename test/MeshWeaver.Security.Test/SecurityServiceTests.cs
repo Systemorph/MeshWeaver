@@ -31,7 +31,13 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    // Combined token: 10-second wall-clock cap AND the test runner's cancellation
+    // (Ctrl+C / `dotnet test --cancel`). Without the linked context token, a hung
+    // test would only release after the full 10 s even when the runner asked it
+    // to stop sooner.
+    private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
+        new CancellationTokenSource(10.Seconds()).Token,
+        TestContext.Current.CancellationToken).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -264,7 +270,13 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 /// </summary>
 public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    // Combined token: 10-second wall-clock cap AND the test runner's cancellation
+    // (Ctrl+C / `dotnet test --cancel`). Without the linked context token, a hung
+    // test would only release after the full 10 s even when the runner asked it
+    // to stop sooner.
+    private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
+        new CancellationTokenSource(10.Seconds()).Token,
+        TestContext.Current.CancellationToken).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -395,7 +407,13 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
 /// </summary>
 public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    // Combined token: 10-second wall-clock cap AND the test runner's cancellation
+    // (Ctrl+C / `dotnet test --cancel`). Without the linked context token, a hung
+    // test would only release after the full 10 s even when the runner asked it
+    // to stop sooner.
+    private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
+        new CancellationTokenSource(10.Seconds()).Token,
+        TestContext.Current.CancellationToken).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -488,7 +506,13 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
 /// </summary>
 public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    // Combined token: 10-second wall-clock cap AND the test runner's cancellation
+    // (Ctrl+C / `dotnet test --cancel`). Without the linked context token, a hung
+    // test would only release after the full 10 s even when the runner asked it
+    // to stop sooner.
+    private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
+        new CancellationTokenSource(10.Seconds()).Token,
+        TestContext.Current.CancellationToken).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -604,7 +628,13 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
 /// </summary>
 public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    // Combined token: 10-second wall-clock cap AND the test runner's cancellation
+    // (Ctrl+C / `dotnet test --cancel`). Without the linked context token, a hung
+    // test would only release after the full 10 s even when the runner asked it
+    // to stop sooner.
+    private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
+        new CancellationTokenSource(10.Seconds()).Token,
+        TestContext.Current.CancellationToken).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -745,7 +775,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
 
         await securityService.SetPolicyAsync(ns, policy, TestTimeout);
 
-        var retrieved = await securityService.GetPolicyAsync(ns, TestTimeout);
+        var retrieved = await securityService.GetPolicy(ns).FirstAsync().ToTask(TestTimeout);
         retrieved.Should().NotBeNull();
         retrieved!.Create.Should().Be(false);
         retrieved.Update.Should().Be(false);
@@ -791,7 +821,13 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
 /// </summary>
 public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    // Combined token: 10-second wall-clock cap AND the test runner's cancellation
+    // (Ctrl+C / `dotnet test --cancel`). Without the linked context token, a hung
+    // test would only release after the full 10 s even when the runner asked it
+    // to stop sooner.
+    private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
+        new CancellationTokenSource(10.Seconds()).Token,
+        TestContext.Current.CancellationToken).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {

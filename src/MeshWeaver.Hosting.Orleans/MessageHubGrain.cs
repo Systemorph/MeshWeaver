@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
@@ -32,7 +34,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         MeshNode? node = null;
         for (var attempt = 0; attempt < 5; attempt++)
         {
-            node = await persistence.GetNodeAsync(addressPath, cancellationToken);
+            // GetNode returns IObservable; bridge once at the grain-activation lifecycle hook.
+            node = await persistence.GetNode(addressPath).FirstAsync().ToTask(cancellationToken);
 
             if (node is null)
             {

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -191,10 +192,11 @@ public static class MeshExtensions
             return request.Processed();
         }
 
-        // 1. Read existing — persistence first (catalog.GetNodeAsync auto-creates from templates),
-        //    then fall back to the in-memory config. Wrap in Observable.FromAsync so no `await`.
+        // 1. Read existing — persistence first (catalog.GetNode auto-creates from templates),
+        //    then fall back to the in-memory config. persistence.GetNode is already
+        //    IObservable so we don't need to wrap it in Observable.FromAsync.
         var existingObs = persistence != null
-            ? Observable.FromAsync(token => persistence.GetNodeAsync(node.Path, token))
+            ? persistence.GetNode(node.Path)
             : Observable.Return<MeshNode?>(null);
 
         existingObs
@@ -681,7 +683,9 @@ public static class MeshExtensions
     {
         return Observable.FromAsync<(MeshNode? Root, IReadOnlyList<MeshNode> ToDelete, bool HasUnlistedChildren)>(async ct =>
         {
-            var root = await persistence.GetNodeAsync(path, ct);
+            // GetNode is IObservable; bridge once at the edge — the surrounding
+            // FromAsync already exists for the IAsyncEnumerable iteration below.
+            var root = await persistence.GetNode(path).FirstAsync().ToTask(ct);
             if (root == null)
                 return (null, Array.Empty<MeshNode>(), false);
 
@@ -819,7 +823,7 @@ public static class MeshExtensions
         var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
         var path = request.Message.Path;
 
-        var existingNodeObs = Observable.FromAsync(token => persistence.GetNodeAsync(path, token));
+        var existingNodeObs = persistence.GetNode(path);
 
         // Running validators against a fabricated DeleteNodeRequest keeps
         // RunDeletionValidatorsObs unchanged — every validator sees the same inputs it

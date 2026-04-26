@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 
 namespace MeshWeaver.Mesh.Security;
@@ -49,8 +50,8 @@ public class NullSecurityService : ISecurityService
         => Task.CompletedTask;
 
     /// <inheritdoc />
-    public Task<PartitionAccessPolicy?> GetPolicyAsync(string targetNamespace, CancellationToken ct = default)
-        => Task.FromResult<PartitionAccessPolicy?>(null);
+    public IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace)
+        => Observable.Return<PartitionAccessPolicy?>(null);
 
     /// <inheritdoc />
     public Task SetPolicyAsync(string targetNamespace, PartitionAccessPolicy policy, CancellationToken ct = default)

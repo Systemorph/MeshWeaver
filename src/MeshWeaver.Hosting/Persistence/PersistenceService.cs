@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -28,8 +29,8 @@ internal class PersistenceService(
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
-    public Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default)
-        => core.GetNodeAsync(path, Options, ct);
+    public IObservable<MeshNode?> GetNode(string path)
+        => core.GetNode(path, Options);
 
     public IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath)
         => core.GetChildrenAsync(parentPath, Options);
@@ -145,7 +146,7 @@ internal class PersistenceService(
 
     public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
     {
-        var node = await core.GetNodeAsync(path, Options, ct);
+        var node = await core.GetNode(path, Options).FirstAsync().ToTask(ct);
         if (node == null || securityService == null)
             return node;
 

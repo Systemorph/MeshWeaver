@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
@@ -619,7 +620,8 @@ internal class InMemoryMeshQuery(
     /// <inheritdoc />
     public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var node = await persistence.GetNodeAsync(path, options, ct);
+        // SelectAsync<T> contract is Task by design; bridge once at the call site.
+        var node = await persistence.GetNode(path, options).FirstAsync().ToTask(ct);
         if (node == null)
             return default;
 

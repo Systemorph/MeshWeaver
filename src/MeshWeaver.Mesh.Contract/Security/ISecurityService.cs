@@ -104,11 +104,12 @@ public interface ISecurityService
 
     /// <summary>
     /// Gets the partition access policy at the specified namespace, if any.
+    /// IObservable to keep callers off the Task-await deadlock surface
+    /// (Doc/Architecture/AsynchronousCalls.md).
     /// </summary>
     /// <param name="targetNamespace">The namespace to check</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The policy or null if none is set</returns>
-    Task<PartitionAccessPolicy?> GetPolicyAsync(string targetNamespace, CancellationToken ct = default);
+    /// <returns>Observable emitting the policy (or null if none) and completing.</returns>
+    IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace);
 
     /// <summary>
     /// Sets or updates the partition access policy at the specified namespace.

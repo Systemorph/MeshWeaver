@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -478,12 +480,12 @@ internal class SecurityService : ISecurityService
 
         // Try to load existing AccessAssignment node (check both old and new paths)
         var path = $"{ns}/{nodeId}";
-        var existingNode = await _persistenceCore.GetNodeAsync(path, Options, ct);
+        var existingNode = await _persistenceCore.GetNode(path, Options).FirstAsync().ToTask(ct);
         // Fallback: check legacy path without _Access segment
         if (existingNode == null && !string.IsNullOrEmpty(targetNamespace))
         {
             var legacyPath = $"{targetNamespace}/{nodeId}";
-            existingNode = await _persistenceCore.GetNodeAsync(legacyPath, Options, ct);
+            existingNode = await _persistenceCore.GetNode(legacyPath, Options).FirstAsync().ToTask(ct);
             if (existingNode != null)
             {
                 // Delete from legacy location — it will be re-created at the correct path
@@ -530,12 +532,12 @@ internal class SecurityService : ISecurityService
             : $"{targetNamespace}/_Access";
         var path = $"{ns}/{nodeId}";
 
-        var existingNode = await _persistenceCore.GetNodeAsync(path, Options, ct);
+        var existingNode = await _persistenceCore.GetNode(path, Options).FirstAsync().ToTask(ct);
         // Fallback: check legacy path without _Access segment
         if (existingNode == null && !string.IsNullOrEmpty(targetNamespace))
         {
             var legacyPath = $"{targetNamespace}/{nodeId}";
-            existingNode = await _persistenceCore.GetNodeAsync(legacyPath, Options, ct);
+            existingNode = await _persistenceCore.GetNode(legacyPath, Options).FirstAsync().ToTask(ct);
             if (existingNode != null)
                 path = legacyPath; // Delete from legacy location
         }
@@ -585,17 +587,20 @@ internal class SecurityService : ISecurityService
     #region Partition Access Policies
 
     /// <inheritdoc />
-    public async Task<PartitionAccessPolicy?> GetPolicyAsync(string targetNamespace, CancellationToken ct = default)
+    public IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace)
     {
         var ns = targetNamespace ?? "";
         if (_policyCache.TryGetValue(ns, out var cached))
-            return cached;
+            return Observable.Return(cached);
 
         var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
-        var node = await _persistenceCore.GetNodeAsync(path, Options, ct);
-        var policy = node != null ? DeserializePolicy(node) : null;
-        _policyCache[ns] = policy;
-        return policy;
+        return _persistenceCore.GetNode(path, Options)
+            .Select(node =>
+            {
+                var policy = node != null ? DeserializePolicy(node) : null;
+                _policyCache[ns] = policy;
+                return policy;
+            });
     }
 
     /// <inheritdoc />

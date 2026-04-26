@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -41,8 +43,11 @@ public static class ActivityTrackingExtensions
                     if (log.HubPath != null && IsSatellitePath(log.HubPath))
                         return;
 
-                    // Also check MainNode != Path for non-satellite-path nodes
-                    var hubNode = log.HubPath != null ? await persistence.GetNodeAsync(log.HubPath) : null;
+                    // Also check MainNode != Path for non-satellite-path nodes.
+                    // GetNode returns IObservable; bridge once at this off-hub bundler.
+                    var hubNode = log.HubPath != null
+                        ? await persistence.GetNode(log.HubPath).FirstAsync().ToTask()
+                        : null;
                     if (hubNode != null && hubNode.MainNode != hubNode.Path)
                         return;
 
