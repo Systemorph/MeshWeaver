@@ -58,14 +58,44 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
-    /// Called after ServiceProvider is built. Logs in the default admin user (DevLogin)
-    /// and sets up access rights so that access control allows operations in tests.
+    /// Called after ServiceProvider is built. Logs in the default admin user (DevLogin),
+    /// pre-warms NodeType hubs that runtime CreateNode calls would otherwise try to
+    /// auto-create (and recurse on), and sets up access rights so that access control
+    /// allows operations in tests.
     /// </summary>
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
         TestUsers.DevLogin(Mesh);
+        PreWarmNodeTypeHubs();
         await SetupAccessRightsAsync();
+    }
+
+    /// <summary>
+    /// Pre-creates the NodeType-definition hubs for built-in types whose
+    /// instances are likely to be created at test runtime
+    /// (<c>AccessAssignment</c>, <c>PartitionAccessPolicy</c>, …). Without
+    /// this, the first runtime <c>IMeshService.CreateNode(node)</c> for one
+    /// of those types triggers a chicken-and-egg recursion:
+    /// CreateNodeRequest → mesh hub posts <c>GetCompilationPathRequest</c> to
+    /// the type hub → routing creates the type hub → construction triggers
+    /// another <c>GetCompilationPathRequest</c> → … stack overflow.
+    /// Pre-warming forces the type hub into the
+    /// <c>HostedHubsCollection</c> cache once so the next
+    /// <c>GetCompilationPathRequest</c> finds it without re-creating.
+    /// </summary>
+    protected virtual void PreWarmNodeTypeHubs()
+    {
+        var meshConfig = Mesh.ServiceProvider.GetService<MeshConfiguration>();
+        if (meshConfig is null) return;
+        foreach (var nodeTypePath in new[] { "AccessAssignment", "PartitionAccessPolicy" })
+        {
+            if (meshConfig.Nodes.TryGetValue(nodeTypePath, out var typeNode)
+                && typeNode.HubConfiguration is { } config)
+            {
+                _ = Mesh.GetHostedHub(new Address(nodeTypePath), config);
+            }
+        }
     }
 
     /// <summary>
