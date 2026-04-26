@@ -22,6 +22,8 @@ public class NodeTypeServiceStatusTest
         public DateTimeOffset? SucceededAt;
 
         public NodeTypeConfiguration? GetCachedConfiguration(string nodeTypePath) => null;
+        public System.IObservable<MeshNode> EnrichWithNodeType(MeshNode node)
+            => System.Reactive.Linq.Observable.Return(node);
         public System.Threading.Tasks.Task<MeshNode> EnrichWithNodeTypeAsync(MeshNode node, System.Threading.CancellationToken ct = default)
             => System.Threading.Tasks.Task.FromResult(node);
         public System.Collections.Generic.IAsyncEnumerable<CreatableTypeInfo> GetCreatableTypesAsync(string nodePath, System.Threading.CancellationToken ct = default)
