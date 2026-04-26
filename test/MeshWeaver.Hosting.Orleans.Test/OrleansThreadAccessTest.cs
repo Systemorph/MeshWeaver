@@ -41,10 +41,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// 4. Verify streaming response arrives
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"threadaccess-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"threadaccess-{name}-{Guid.NewGuid():N}", "Roland");
 
     /// <summary>
     /// Creates a node via CreateNodeRequest, returns the created path.
@@ -99,15 +99,18 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
         var suffix = Guid.NewGuid().ToString("N")[..4];
-        // 1. Create Organization â€” target "User/Roland" (existing hub, routes to silo mesh)
+        // 1. Create Organization under User/Roland — this is where Roland has Admin
+        // (via the seeded Public_Access AccessAssignment with MainNode = "User"). A
+        // root-level path like "TestOrg{suffix}" would fail the RLS Create check
+        // because Public_Access is scoped to "User/*" only.
         var orgPath = await CreateNodeAsync(client,
-            new MeshNode($"TestOrg{suffix}") { Name = "Test Organization", NodeType = "Markdown" },
+            new MeshNode($"TestOrg{suffix}", "User/Roland") { Name = "Test Organization", NodeType = "Markdown" },
             "User/Roland", ct);
         Output.WriteLine($"Organization created: {orgPath}");
 
         // 2. Create Markdown node under org
         var docPath = await CreateNodeAsync(client,
-            new MeshNode($"TestDoc{suffix}", $"TestOrg{suffix}") { Name = "Test Document", NodeType = "Markdown" },
+            new MeshNode($"TestDoc{suffix}", orgPath) { Name = "Test Document", NodeType = "Markdown" },
             "User/Roland", ct);
         Output.WriteLine($"Document created: {docPath}");
 

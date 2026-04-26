@@ -9,11 +9,12 @@ Icon: Beaker
 
 Tests are the one place `await` on hub work is allowed — but that privilege is narrow. A test that reads the mesh the wrong way doesn't fail honestly: it returns stale content (CQRS lag), deadlocks on a hub pump, or hangs until the inactivity timer aborts the whole CI run. The rules below come out of chasing actual incidents in this repo.
 
-Before you write a test, read these three architecture docs — they define the invariants tests have to preserve, not just the ones production code has to follow:
+Before you write a test, read these architecture docs — they define the invariants tests have to preserve, not just the ones production code has to follow:
 
 - [Asynchronous Calls](AsynchronousCalls) — what you can and can't `await`
 - [CQRS — Queries vs. Content Access](CqrsAndContentAccess) — why `QueryAsync` is the wrong read after a write
 - [Data Binding](xref:GUI/DataBinding) — layout areas declare, views subscribe, tests assert against the subscription path
+- [Test State Isolation](TestStateIsolation) — required reading if your tests share a cluster fixture (Orleans, any `ICollectionFixture<>` that builds the mesh once)
 
 ## The golden rules
 

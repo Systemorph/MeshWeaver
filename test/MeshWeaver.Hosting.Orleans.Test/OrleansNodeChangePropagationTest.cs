@@ -55,10 +55,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// - Correct routing of deeply nested sub-thread paths in Orleans
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"nodechange-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"nodechange-{name}-{Guid.NewGuid():N}", "Roland");
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {

@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Services;
@@ -37,10 +39,22 @@ public interface INodeTypeService
     NodeTypeConfiguration? GetCachedConfiguration(string nodeTypePath);
 
     /// <summary>
-    /// Enriches a MeshNode with its NodeType's HubConfiguration (async, with compilation).
-    /// Triggers compilation if needed and waits for it to complete.
+    /// Reactive enrichment: emits a MeshNode populated with its NodeType's
+    /// <see cref="MeshNode.HubConfiguration"/> + <see cref="MeshNode.AssemblyLocation"/>.
+    /// Composes via <c>SelectMany</c> against the per-NodeType-hub's
+    /// <c>GetCompilationPathRequest</c> contract — never <c>await</c> in hub-reachable
+    /// code (see <c>Doc/Architecture/AsynchronousCalls.md</c>).
     /// </summary>
-    Task<MeshNode> EnrichWithNodeTypeAsync(MeshNode node, CancellationToken ct = default);
+    IObservable<MeshNode> EnrichWithNodeType(MeshNode node);
+
+    /// <summary>
+    /// Task-bridged overload retained for the grain-lifecycle boundary
+    /// (<c>MessageHubGrain.OnActivateAsync</c>, etc.) where <c>await</c> is sanctioned.
+    /// Hub handlers MUST use the <see cref="EnrichWithNodeType(MeshNode)"/> Observable
+    /// overload directly.
+    /// </summary>
+    Task<MeshNode> EnrichWithNodeTypeAsync(MeshNode node, CancellationToken ct = default)
+        => EnrichWithNodeType(node).FirstAsync().ToTask(ct);
 
     /// <summary>
     /// Gets the node types that can be created as children of the specified node.

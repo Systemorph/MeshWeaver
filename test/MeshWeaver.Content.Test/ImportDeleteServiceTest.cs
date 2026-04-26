@@ -7,6 +7,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh.Services;
@@ -224,13 +225,13 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         // Arrange
         var client = GetClient();
         // Create parent
-        var parent = new MeshNode("ImportTestParent", "lifecycle") { Name = "Parent" };
+        var parent = new MeshNode("ImportTestParent", "lifecycle") { Name = "Parent", NodeType = "Markdown", Content = new MarkdownContent { Content = "# Placeholder" } };
         var createParent = await client.Observe(new CreateNodeRequest(parent), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createParent.Message.Success.Should().BeTrue();
 
         // Create children
-        var child1 = new MeshNode("Child1", "lifecycle/ImportTestParent") { Name = "Child 1" };
-        var child2 = new MeshNode("Child2", "lifecycle/ImportTestParent") { Name = "Child 2" };
+        var child1 = new MeshNode("Child1", "lifecycle/ImportTestParent") { Name = "Child 1", NodeType = "Markdown", Content = new MarkdownContent { Content = "# Placeholder" } };
+        var child2 = new MeshNode("Child2", "lifecycle/ImportTestParent") { Name = "Child 2", NodeType = "Markdown", Content = new MarkdownContent { Content = "# Placeholder" } };
         await client.Observe(new CreateNodeRequest(child1), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(TestTimeout);
         await client.Observe(new CreateNodeRequest(child2), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask(TestTimeout);
 

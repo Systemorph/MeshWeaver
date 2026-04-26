@@ -32,12 +32,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// via GetDataRequest + CombineLatest (not from cache or local workspace).
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private const string ThreadPath = "User/Roland/_Thread/history-cold-start";
 
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"hist-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"hist-{name}-{Guid.NewGuid():N}", "Roland");
 
     [Fact]
     public async Task ColdStart_AgentSeesAllPreviousMessages()

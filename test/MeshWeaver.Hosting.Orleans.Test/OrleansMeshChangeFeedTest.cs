@@ -35,12 +35,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Uses the shared test cluster.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private IMessageHub ClientMesh => fixture.ClientMesh;
 
     private async Task<IMessageHub> GetClientAsync(string id)
-        => await fixture.GetClientAsync(id);
+        => await base.GetClientAsync(id);
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {

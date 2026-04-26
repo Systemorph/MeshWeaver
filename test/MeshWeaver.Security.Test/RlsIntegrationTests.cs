@@ -714,10 +714,12 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         const string userId = "secureReader";
         const string nodePath = "secure/test/node";
 
-        // Create a node using the public NodeFactory API
+        // Create a node using the public NodeFactory API (legal: NodeType + Content)
         var node = new MeshNode("node", "secure/test")
         {
             Name = "Secure Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Secure" },
             State = MeshNodeState.Active
         };
         await NodeFactory.CreateNode(node);
@@ -739,10 +741,12 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         // Arrange
         const string nodePath = "restricted/hidden/node";
 
-        // Create a node using the public NodeFactory API
+        // Create a node using the public NodeFactory API (legal: NodeType + Content)
         var node = new MeshNode("node", "restricted/hidden")
         {
             Name = "Hidden Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Hidden" },
             State = MeshNodeState.Active
         };
         await NodeFactory.CreateNode(node);
@@ -767,15 +771,19 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         const string userId = "partialAccess";
         const string parentPath = "filter/test";
 
-        // Create multiple nodes using the public NodeFactory API
+        // Create multiple nodes using the public NodeFactory API (legal: NodeType + Content)
         var node1 = new MeshNode("accessible", parentPath)
         {
             Name = "Accessible Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Accessible" },
             State = MeshNodeState.Active
         };
         var node2 = new MeshNode("restricted", parentPath)
         {
             Name = "Restricted Node",
+            NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Restricted" },
             State = MeshNodeState.Active
         };
         await NodeFactory.CreateNode(node1);

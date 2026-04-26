@@ -15,6 +15,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -265,6 +266,7 @@ public class ReentrancyTestSiloConfigurator : ISiloConfigurator, IHostConfigurat
     public void Configure(IHostBuilder hostBuilder)
     {
         hostBuilder.UseOrleansMeshServer()
+            .AddInMemoryPersistence()
             .ConfigurePortalMesh()
             .AddGraph()
             .AddAI()

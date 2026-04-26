@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -426,6 +427,15 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _notCreatableTypes.TryRemove(nodeTypePath, out _);
         _accessRules.TryRemove(nodeTypePath, out _);
 
+        // Drop every (nodeType, version) entry for this NodeType — the per-version cache
+        // on the owning hub is invalidated independently when the type-def MeshNode
+        // mutates; we mirror that locally so the next EnrichWithNodeType re-asks the hub.
+        foreach (var key in _pathCache.Keys.ToArray())
+        {
+            if (string.Equals(key.NodeType, nodeTypePath, StringComparison.OrdinalIgnoreCase))
+                _pathCache.TryRemove(key, out _);
+        }
+
         // Also delete the on-disk DLL/PDB/source so the next access forces a fresh
         // compile. Without this, IsCacheValid can still return true when the NodeType's
         // own LastModified hasn't changed (e.g. a Source/ child was edited).
@@ -466,123 +476,135 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return null;
     }
 
-    private MeshNode EnrichWithNodeType(MeshNode node)
+    /// <inheritdoc />
+    /// <remarks>
+    /// New shape (2026-04-25): NodeTypeService is a path cache. The lookup itself runs on
+    /// the per-NodeType hub via <see cref="GetCompilationPathRequest"/>. NodeTypeService
+    /// only caches the (nodeType, version) → (assemblyPath, hubConfig) tuple it gets back.
+    ///
+    /// <para>
+    /// Transitional fallback: when the hub responds <c>Success = false</c> (e.g. for
+    /// built-in <c>AddMeshNodes</c> types that aren't yet routable as their own per-node
+    /// hub — see plan §5 "AddMeshNodes parity"), we consult <c>meshConfiguration.Nodes</c>
+    /// inline so the legacy registration path keeps working. Remove once routing covers
+    /// every NodeType address.
+    /// </para>
+    /// </remarks>
+    public IObservable<MeshNode> EnrichWithNodeType(MeshNode node)
     {
-        // Skip if HubConfiguration is already set
+        // Skip only if fully enriched.
+        if (node.HubConfiguration != null && node.AssemblyLocation != null)
+            return Observable.Return(node);
+
+        var nodeType = node.NodeType;
+        if (string.IsNullOrEmpty(nodeType))
+            return Observable.Return(ApplyDefaultConfig(node));
+
+        // Per-(nodeType, version) cache. Version "" = HEAD before resolution.
+        var cacheKey = (nodeType, node.Version);
+        if (_pathCache.TryGetValue(cacheKey, out var cached))
+            return Observable.Return(ApplyEntry(node, cached, nodeType));
+
+        // Transitional fast-path: AddMeshNodes built-ins live in meshConfiguration.Nodes
+        // and may not have a per-node hub at Address(nodeType) — routing to them would
+        // hang the 30s timeout. Short-circuit on the in-process registration before we
+        // try the network round-trip. (Plan §5: AddMeshNodes parity is a follow-up.)
+        if (meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNodeFast)
+            && builtInNodeFast?.HubConfiguration != null)
+        {
+            var fastEntry = new PathCacheEntry(
+                builtInNodeFast.AssemblyLocation ?? string.Empty,
+                Collection: null,
+                builtInNodeFast.HubConfiguration);
+            _pathCache[cacheKey] = fastEntry;
+            _hubConfigurations[nodeType] = builtInNodeFast.HubConfiguration;
+            return Observable.Return(ApplyEntry(node, fastEntry, nodeType));
+        }
+
+        // Routing-first lookup. The NodeType's per-node hub owns the compile cache + the
+        // version-history dispatch — see NodeTypeContractHandler. NodeTypeService only
+        // caches the path it gets back.
+        return hub.Observe(
+                new GetCompilationPathRequest(/* HEAD */),
+                o => o.WithTarget(new Address(nodeType)))
+            .Select(d => d.Message)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Catch<GetCompilationPathResponse, Exception>(ex =>
+            {
+                logger.LogDebug(ex,
+                    "GetCompilationPathRequest to '{NodeType}' faulted — falling back to inline lookup",
+                    nodeType);
+                return Observable.Return(new GetCompilationPathResponse(
+                    Success: false,
+                    AssemblyLocation: null,
+                    Collection: null,
+                    Version: null,
+                    Error: ex.Message,
+                    HubConfiguration: null));
+            })
+            .Select(response =>
+            {
+                if (response.Success && !string.IsNullOrEmpty(response.AssemblyLocation))
+                {
+                    var entry = new PathCacheEntry(
+                        response.AssemblyLocation!,
+                        response.Collection,
+                        response.HubConfiguration);
+                    _pathCache[cacheKey] = entry;
+                    if (response.HubConfiguration != null)
+                        _hubConfigurations[nodeType] = response.HubConfiguration;
+                    return ApplyEntry(node, entry, nodeType);
+                }
+
+                // Last-resort: return default config + (if compile failed) an error overlay.
+                return WithCompilationErrorOverlay(node, nodeType, response.Error);
+            });
+    }
+
+    private MeshNode ApplyDefaultConfig(MeshNode node)
+    {
         if (node.HubConfiguration != null)
             return node;
-
-        var nodeType = node.NodeType;
-
-        // If NodeType is not set, try to infer it from the namespace (first path segment)
-        // This handles legacy nodes that were created without NodeType
-        if (string.IsNullOrEmpty(nodeType) && !string.IsNullOrEmpty(node.Namespace))
-        {
-            var firstSegment = node.Namespace.Split('/')[0];
-            // Check if this segment matches a built-in node type
-            if (meshConfiguration.Nodes.ContainsKey(firstSegment) || _hubConfigurations.ContainsKey(firstSegment))
-            {
-                nodeType = firstSegment;
-            }
-        }
-
-        if (!string.IsNullOrEmpty(nodeType))
-        {
-            // Check if this specific nodeType config is cached
-            if (_hubConfigurations.ContainsKey(nodeType))
-            {
-                // NodeType config is compiled - return combined config immediately
-                var cachedHubConfig = GetCachedHubConfiguration(nodeType);
-                return CopyIconFromNodeType(node with { HubConfiguration = cachedHubConfig }, nodeType);
-            }
-
-            // Check if this is a built-in NodeType (registered via AddMeshNodes)
-            if (meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode) &&
-                builtInNode.HubConfiguration != null)
-            {
-                // Use the built-in configuration directly
-                return CopyIconFromNodeType(node with { HubConfiguration = builtInNode.HubConfiguration }, nodeType);
-            }
-
-            // NodeType not compiled yet - return with whatever default config is available
-            // Use EnrichWithNodeTypeAsync for full async compilation support
-            return CopyIconFromNodeType(node with { HubConfiguration = GetCachedHubConfiguration(nodeType) }, nodeType);
-        }
-
-        // No NodeType - return default config if available
         var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
         if (defaultConfig != null)
-        {
             return node with { HubConfiguration = defaultConfig };
-        }
-
         return node;
     }
 
-    /// <inheritdoc />
-    public async Task<MeshNode> EnrichWithNodeTypeAsync(MeshNode node, CancellationToken ct = default)
+    private MeshNode ApplyEntry(MeshNode node, PathCacheEntry entry, string nodeType)
     {
-        // Skip only if fully enriched (both HubConfiguration and AssemblyLocation are set)
-        if (node.HubConfiguration != null && node.AssemblyLocation != null)
-            return node;
-
-        var nodeType = node.NodeType;
-
-        if (!string.IsNullOrEmpty(nodeType))
+        var hubConfig = node.HubConfiguration ?? entry.HubConfiguration;
+        var assemblyLocation = node.AssemblyLocation
+            ?? (string.IsNullOrEmpty(entry.AssemblyLocation) ? null : entry.AssemblyLocation);
+        return CopyIconFromNodeType(node with
         {
-            // Try to get the built-in node definition (registered via AddMeshNodes)
-            meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode);
-
-            // For built-in types that already have AssemblyLocation, use their HubConfiguration
-            // directly — skip GetAssemblyPathAsync which triggers compilation and would overwrite
-            // the built-in HubConfiguration (which includes layout areas like AddUserActivityViews).
-            if (builtInNode?.AssemblyLocation != null)
-            {
-                var hubConfig = node.HubConfiguration ?? builtInNode.HubConfiguration;
-                return CopyIconFromNodeType(node with
-                {
-                    HubConfiguration = hubConfig,
-                    AssemblyLocation = builtInNode.AssemblyLocation
-                }, nodeType);
-            }
-
-            // Dynamic types: get assembly path (triggers compilation if needed)
-            var assemblyPath = await GetAssemblyPathAsync(nodeType, ct);
-
-            // Get hub configuration: keep existing or resolve from cache/built-in
-            var hubConfigDynamic = node.HubConfiguration
-                ?? GetCachedHubConfiguration(nodeType)
-                ?? builtInNode?.HubConfiguration;
-
-            // If compilation failed, add error view on top of the default configuration
-            if (_compilationErrors.TryGetValue(nodeType, out var errorMessage))
-            {
-                var baseConfig = hubConfigDynamic;
-                var errorOverlay = CreateCompilationErrorConfiguration(errorMessage);
-                hubConfigDynamic = baseConfig != null
-                    ? (Func<MessageHubConfiguration, MessageHubConfiguration>)(config => errorOverlay(baseConfig(config)))
-                    : errorOverlay;
-            }
-
-            return CopyIconFromNodeType(node with
-            {
-                HubConfiguration = hubConfigDynamic,
-                AssemblyLocation = assemblyPath ?? node.AssemblyLocation
-            }, nodeType);
-        }
-
-        // No NodeType - return default config if available
-        if (node.HubConfiguration == null)
-        {
-            var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
-            if (defaultConfig != null)
-            {
-                return node with { HubConfiguration = defaultConfig };
-            }
-        }
-
-        return node;
+            HubConfiguration = hubConfig,
+            AssemblyLocation = assemblyLocation
+        }, nodeType);
     }
+
+    private MeshNode WithCompilationErrorOverlay(MeshNode node, string nodeType, string? error)
+    {
+        var baseConfig = node.HubConfiguration
+            ?? GetCachedHubConfiguration(nodeType)
+            ?? meshConfiguration.DefaultNodeHubConfiguration;
+        if (string.IsNullOrEmpty(error))
+            return CopyIconFromNodeType(node with { HubConfiguration = baseConfig }, nodeType);
+
+        var overlay = CreateCompilationErrorConfiguration(error);
+        Func<MessageHubConfiguration, MessageHubConfiguration> composed = baseConfig != null
+            ? (config => overlay(baseConfig(config)))
+            : overlay;
+        return CopyIconFromNodeType(node with { HubConfiguration = composed }, nodeType);
+    }
+
+    private record PathCacheEntry(
+        string AssemblyLocation,
+        string? Collection,
+        Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration);
+
+    private readonly ConcurrentDictionary<(string NodeType, long Version), PathCacheEntry> _pathCache = new();
 
     /// <summary>
     /// Copies the Icon from the built-in node type definition to the instance if the instance has no Icon set.

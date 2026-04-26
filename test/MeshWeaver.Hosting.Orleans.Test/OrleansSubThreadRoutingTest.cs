@@ -37,10 +37,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// the path and update the delivery target.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"subrouting-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"subrouting-{name}-{Guid.NewGuid():N}", "Roland");
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {

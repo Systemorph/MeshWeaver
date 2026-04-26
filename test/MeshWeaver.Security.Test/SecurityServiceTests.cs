@@ -422,7 +422,12 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await securityService.AddUserRoleAsync("Roland", "Admin", "", "system", TestTimeout);
         await NodeFactory.CreateNode(
-            new MeshNode("TestHub") { Name = "Test Hub" });
+            new MeshNode("TestHub")
+            {
+                Name = "Test Hub",
+                NodeType = "Markdown",
+                Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Test Hub" }
+            });
     }
 
     /// <summary>

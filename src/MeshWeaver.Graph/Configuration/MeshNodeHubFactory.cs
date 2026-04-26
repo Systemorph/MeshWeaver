@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -17,8 +19,10 @@ internal class MeshNodeHubFactory(
 {
     public async Task<MeshNode> ResolveHubConfigurationAsync(MeshNode node, CancellationToken ct = default)
     {
-        // Enrich with node type (triggers compilation if needed, sets HubConfiguration)
-        node = await nodeTypeService.EnrichWithNodeTypeAsync(node, ct);
+        // Grain-lifecycle boundary: bridging IObservable → Task is sanctioned here per
+        // Doc/Architecture/AsynchronousCalls.md. EnrichWithNodeType returns
+        // IObservable<MeshNode>; we take the first emission.
+        node = await nodeTypeService.EnrichWithNodeType(node).FirstAsync().ToTask(ct);
 
         // Compose with DefaultNodeHubConfiguration.
         // The node's HubConfiguration (from built-in type or compilation) is applied ON TOP of the default.

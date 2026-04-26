@@ -46,10 +46,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// while the legacy contract is in place.
 /// </summary>
 [Collection(nameof(OrleansClusterCollection))]
-public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputHelper output) : TestBase(output)
+public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await fixture.GetClientAsync($"completion-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"completion-{name}-{Guid.NewGuid():N}", "Roland");
 
     /// <summary>
     /// Verifies that SubmitMessageRequest produces two responses:

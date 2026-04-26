@@ -49,6 +49,13 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(ValidateDeleteRequest), nameof(ValidateDeleteRequest));
         config.TypeRegistry.WithType(typeof(ValidateDeleteResponse), nameof(ValidateDeleteResponse));
 
+        // NodeType compilation lookup. Posted by NodeTypeService → owning per-node hub
+        // (per the GetCompilationPathRequest contract). Registered here so that any hub
+        // posting the request (e.g. from another silo or via a portal client) shares the
+        // same short type name and the JSON discriminator round-trips.
+        config.TypeRegistry.WithType(typeof(GetCompilationPathRequest), nameof(GetCompilationPathRequest));
+        config.TypeRegistry.WithType(typeof(GetCompilationPathResponse), nameof(GetCompilationPathResponse));
+
         // Import/Delete types
         config.TypeRegistry.WithType(typeof(ImportNodesRequest), nameof(ImportNodesRequest));
         config.TypeRegistry.WithType(typeof(ImportNodesResponse), nameof(ImportNodesResponse));
@@ -171,6 +178,19 @@ public static class MeshExtensions
             return request.Processed();
         }
 
+        // 0b. Reject nodes that are neither typed nor have content. A bare MeshNode with
+        // no NodeType and no Content can't spawn a useful per-node hub (no content type
+        // means no AddMeshDataSource / GetDataRequest handler), so it's always a caller bug.
+        if (string.IsNullOrWhiteSpace(node.NodeType) && node.Content == null)
+        {
+            hub.Post(
+                CreateNodeResponse.Fail(
+                    "Node must have a NodeType or Content set; bare nodes are not allowed.",
+                    NodeCreationRejectionReason.ValidationFailed),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
         // 1. Read existing — persistence first (catalog.GetNodeAsync auto-creates from templates),
         //    then fall back to the in-memory config. Wrap in Observable.FromAsync so no `await`.
         var existingObs = persistence != null
@@ -239,13 +259,23 @@ public static class MeshExtensions
                             return Observable.Empty<(string mode, MeshNode node)>();
                         }
 
-                        // 3. NodeType existence check.
+                        // 3. NodeType existence check. Recognise types from
+                        // (a) MeshConfiguration.Nodes (config-time AddMeshNodes),
+                        // (b) IStaticNodeProvider (the canonical seed surface — see
+                        //     Doc/Architecture/TestStateIsolation), and
+                        // (c) persistence (dynamically-created NodeType definitions).
                         IObservable<bool> typeExistsObs;
                         if (string.IsNullOrEmpty(node.NodeType))
                         {
                             typeExistsObs = Observable.Return(true);
                         }
                         else if (catalog.Configuration.Nodes.ContainsKey(node.NodeType))
+                        {
+                            typeExistsObs = Observable.Return(true);
+                        }
+                        else if (hub.ServiceProvider.GetServices<IStaticNodeProvider>()
+                            .SelectMany(p => p.GetStaticNodes())
+                            .Any(n => string.Equals(n.Path, node.NodeType, StringComparison.Ordinal)))
                         {
                             typeExistsObs = Observable.Return(true);
                         }
@@ -285,10 +315,12 @@ public static class MeshExtensions
                                 LastModifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? identity : node.LastModifiedBy,
                             };
 
-                            // 5. Enrich (optional service).
+                            // 5. Enrich (optional service). EnrichWithNodeType returns
+                            //    IObservable<MeshNode> directly — no Observable.FromAsync
+                            //    wrapper, no Task-await deadlock risk in the hub flow.
                             var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
                             var enrichedObs = nodeTypeService != null
-                                ? Observable.FromAsync(token => nodeTypeService.EnrichWithNodeTypeAsync(newNode, token))
+                                ? nodeTypeService.EnrichWithNodeType(newNode)
                                 : Observable.Return(newNode);
 
                             // 6. Persist.

@@ -141,13 +141,23 @@ public static class PersistenceExtensions
         => builder.AddInMemoryPersistence();
 
     /// <summary>
-    /// Adds an in-memory persistence service (no file system backing).
+    /// Adds in-memory persistence (no file system backing) using the routing
+    /// partition stack. Writable partitions get their own per-partition
+    /// <see cref="InMemoryPersistenceService"/> via
+    /// <see cref="InMemoryPartitionedStoreFactory"/>; static-provider partitions
+    /// (<see cref="PartitionDefinition"/> with <c>DataSource = "static"</c>) are
+    /// surfaced through <see cref="StaticNodePartitionStore"/> by
+    /// <see cref="RoutingPersistenceServiceCore"/>. Static partitions are NEVER
+    /// wrapped by <see cref="InMemoryPersistenceService"/>.
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
-        // Register common services and wrapper services
+        // TEMP: revert to single-store registration. The routing-based wiring
+        // regressed Orleans tests where the per-partition store is created on
+        // SaveNodeAsync but the grain activation's GetNodeAsync misses it. Need
+        // to debug the routing-vs-singleton race separately.
         return services.AddCoreAndWrapperServices<InMemoryPersistenceService>();
     }
 

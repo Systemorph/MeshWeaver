@@ -80,6 +80,70 @@ await persistence.SaveNodeAsync(
 
 On startup, `InitializeAsync` discovers existing partitions and restores routing tables.
 
+# Where Partitions Come From
+
+A partition has to be **registered with the routing layer** before any path under it can be read. Three sources contribute partitions, and the rules differ:
+
+## 1. PartitionDefinition (config-time, declared)
+
+Nodes whose `Content` is a `PartitionDefinition` declare a partition explicitly. `RoutingPersistenceServiceCore.InitializeAsync` collects every `PartitionDefinition` from `IStaticNodeProvider`s and `MeshConfiguration.Nodes`, then calls `IPartitionedStoreFactory.InitializeDefaultPartitionsAsync(...)` so each backend can pre-create its store (PostgreSQL `CREATE SCHEMA`, Cosmos container, etc.).
+
+```csharp
+new MeshNode("ACME", "")
+{
+    NodeType = "Partition",
+    Content = new PartitionDefinition
+    {
+        Namespace = "ACME",
+        Schema = "acme",
+        TableMappings = PartitionDefinition.StandardTableMappings
+    }
+}
+```
+
+Use this when a domain has its own backing store (PostgreSQL schema, Cosmos container, dedicated FS subtree). Triggered at startup.
+
+## 2. Backend discovery (runtime, automatic)
+
+`IPartitionedStoreFactory.DiscoverPartitionsAsync` scans the backing store for partitions that already exist:
+- File system: top-level directories.
+- PostgreSQL: schemas containing a `mesh_nodes` table.
+- Cosmos: containers ending in `-nodes`.
+
+Discovered partitions are auto-registered without an explicit `PartitionDefinition`. Use this when the storage layout already encodes partition boundaries (deployed environments, restored backups).
+
+## 3. Auto-provisioning on first save (lazy)
+
+`SaveNodeAsync(node)` whose first segment matches no registered partition calls `IPartitionedStoreFactory.CreateStoreAsync(firstSegment, ct)` to provision a new partition on the fly. Cheap for FS (`mkdir`), heavier for PostgreSQL (`CREATE SCHEMA` + tables). The store is added to the routing table for the rest of the process's lifetime.
+
+## 4. Static-provider seed nodes (read-only fallback)
+
+`IStaticNodeProvider`s also publish nodes that aren't `PartitionDefinition`s — NodeType definitions (`new MeshNode("Markdown") { HubConfiguration = c => c.AddMeshDataSource() }`), seed users, doc namespaces, test fixtures. The routing layer registers a **read-only static partition store** for the first segment of each such node so that `GetNodeAsync(path)` resolves them without a writable backend behind them.
+
+If the same first segment also has a writable partition (declared, discovered, or auto-provisioned), the routing layer **layers** them: writes go to the writable store; reads check the writable store first, then fall through to the static store. This keeps "an immutable seed plus runtime mutations under the same partition" working without each writable store having to know about static seeds.
+
+```csharp
+public sealed class MyNodeTypeProvider : IStaticNodeProvider
+{
+    public IEnumerable<MeshNode> GetStaticNodes() =>
+    [
+        new MeshNode("readable")
+        {
+            Name = "Readable",
+            AssemblyLocation = typeof(MyNodeTypeProvider).Assembly.Location,
+            HubConfiguration = c => c.AddMeshDataSource()
+        }
+    ];
+}
+
+// Auto-registers a "readable" read-only partition; the per-node hub for a
+// MeshNode { NodeType = "readable", ... } picks up HubConfiguration and
+// gets AddMeshDataSource so GetDataRequest works.
+services.AddSingleton<IStaticNodeProvider, MyNodeTypeProvider>();
+```
+
+See [Test State Isolation](TestStateIsolation) for the test-fixture pattern.
+
 # Satellite Tables and Sub-Namespaces
 
 ## PartitionDefinition
