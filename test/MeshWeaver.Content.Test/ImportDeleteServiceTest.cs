@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -106,11 +106,11 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         var jsonOptions = StorageImporter.CreateFullImportOptions();
 
         // Seed source with a node
-        var node = MeshNode.FromPath("test") with { Name = "Test" };
+        var node = MeshNode.FromPath("test") with { Name = "Test" , NodeType = "Markdown"};
         await source.WriteAsync(node, jsonOptions, CancellationToken.None);
 
         // Seed target with existing data at root level (ListChildPathsAsync(null) finds root-level .json files)
-        var existing = MeshNode.FromPath("existing") with { Name = "Existing" };
+        var existing = MeshNode.FromPath("existing") with { Name = "Existing" , NodeType = "Markdown"};
         await target.WriteAsync(existing, jsonOptions, CancellationToken.None);
 
         // Act - run without force
@@ -134,11 +134,11 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         var jsonOptions = StorageImporter.CreateFullImportOptions();
 
         // Seed source
-        var node = MeshNode.FromPath("test") with { Name = "Test Node" };
+        var node = MeshNode.FromPath("test") with { Name = "Test Node" , NodeType = "Markdown"};
         await source.WriteAsync(node, jsonOptions, CancellationToken.None);
 
         // Seed target with existing data at root level
-        var existing = MeshNode.FromPath("existing") with { Name = "Existing" };
+        var existing = MeshNode.FromPath("existing") with { Name = "Existing" , NodeType = "Markdown"};
         await target.WriteAsync(existing, jsonOptions, CancellationToken.None);
 
         // Act - run WITH force
@@ -162,8 +162,8 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         var jsonOptions = StorageImporter.CreateFullImportOptions();
 
         // Seed source with nodes
-        await source.WriteAsync(MeshNode.FromPath("test/node1") with { Name = "Node 1" }, jsonOptions, CancellationToken.None);
-        await source.WriteAsync(MeshNode.FromPath("test/node2") with { Name = "Node 2" }, jsonOptions, CancellationToken.None);
+        await source.WriteAsync(MeshNode.FromPath("test/node1") with { Name = "Node 1" , NodeType = "Markdown"}, jsonOptions, CancellationToken.None);
+        await source.WriteAsync(MeshNode.FromPath("test/node2") with { Name = "Node 2" , NodeType = "Markdown"}, jsonOptions, CancellationToken.None);
 
         var progressCalled = false;
         Action<int, int, string> onProgress = (nodes, partitions, path) => progressCalled = true;
@@ -205,7 +205,7 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         // Seed source with nodes
         var sourceAdapter = new FileSystemStorageAdapter(_sourceDirectory);
         var jsonOptions = StorageImporter.CreateFullImportOptions();
-        await sourceAdapter.WriteAsync(MeshNode.FromPath("svc/node1") with { Name = "Service Node 1" }, jsonOptions, CancellationToken.None);
+        await sourceAdapter.WriteAsync(MeshNode.FromPath("svc/node1") with { Name = "Service Node 1" , NodeType = "Markdown"}, jsonOptions, CancellationToken.None);
 
         // Act
         var result = await importService.ImportNodesAsync(_sourceDirectory, force: true);
@@ -254,3 +254,4 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
 
     #endregion
 }
+
