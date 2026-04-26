@@ -55,24 +55,16 @@ public static class AgentView
         return Controls.Stack
             .WithWidth("100%")
             .WithView(
-                (h, c) => Observable.FromAsync(async () =>
+                (h, c) =>
                 {
                     var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
                     if (meshQuery == null)
-                        return RenderError("Query service not available.");
+                        return Observable.Return(RenderError("Query service not available."));
 
-                    List<MeshNode> agents;
-                    try
-                    {
-                        agents = await meshQuery.QueryAsync<MeshNode>("nodeType:Agent").ToListAsync();
-                    }
-                    catch
-                    {
-                        agents = [];
-                    }
-
-                    return BuildCatalogContent(agents);
-                }),
+                    return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Agent"))
+                        .Select(change => BuildCatalogContent(change.Items.ToList()))
+                        .Catch<UiControl, Exception>(_ => Observable.Return(BuildCatalogContent([])));
+                },
                 "Content");
     }
 
@@ -406,95 +398,90 @@ public static class AgentView
         buttonRow = buttonRow.WithView(Controls.Button("Save")
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
-            .WithClickAction(async actx =>
+            .WithClickAction(actx =>
             {
-                // Get all field values
-                var newDisplayName = await host.Stream.GetDataStream<string>(displayNameDataId).FirstAsync();
-                var newDescription = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
-                var newIconName = await host.Stream.GetDataStream<string>(iconNameDataId).FirstAsync();
-                var newGroupName = await host.Stream.GetDataStream<string>(groupNameDataId).FirstAsync();
-                var newOrderStr = await host.Stream.GetDataStream<string>(orderDataId).FirstAsync();
-                var newPreferredModel = await host.Stream.GetDataStream<string>(preferredModelDataId).FirstAsync();
-                var newContextMatchPattern = await host.Stream.GetDataStream<string>(contextMatchPatternDataId).FirstAsync();
-                var newIsDefaultStr = await host.Stream.GetDataStream<string>(isDefaultDataId).FirstAsync();
-                var newExposedInNavigatorStr = await host.Stream.GetDataStream<string>(exposedInNavigatorDataId).FirstAsync();
-                var newInstructions = await host.Stream.GetDataStream<string>(instructionsDataId).FirstAsync();
-
-                // Parse order
-                if (!int.TryParse(newOrderStr, out var newOrder))
-                    newOrder = 0;
-
-                // Parse booleans
-                var newIsDefault = newIsDefaultStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
-                var newExposedInNavigator = newExposedInNavigatorStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
-
-                // Update the AgentConfiguration
-                var updatedAgent = agent with
-                {
-                    DisplayName = string.IsNullOrWhiteSpace(newDisplayName) ? null : newDisplayName,
-                    Description = string.IsNullOrWhiteSpace(newDescription) ? null : newDescription,
-                    Icon = string.IsNullOrWhiteSpace(newIconName) ? null : newIconName,
-                    GroupName = string.IsNullOrWhiteSpace(newGroupName) ? null : newGroupName,
-                    Order = newOrder,
-                    PreferredModel = string.IsNullOrWhiteSpace(newPreferredModel) ? null : newPreferredModel,
-                    ContextMatchPattern = string.IsNullOrWhiteSpace(newContextMatchPattern) ? null : newContextMatchPattern,
-                    IsDefault = newIsDefault,
-                    ExposedInNavigator = newExposedInNavigator,
-                    Instructions = string.IsNullOrWhiteSpace(newInstructions) ? null : newInstructions
-                };
-
-                var delivery = actx.Host.Hub.Post(
-                    new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedAgent),
-                    o => o.WithTarget(hubAddress))!;
-                IMessageDelivery callbackResponse;
-                try
-                {
-                    callbackResponse = await actx.Host.Hub.Observe(delivery).FirstAsync().ToTask();
-                }
-                catch (Exception ex)
-                {
-                    var dialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-                    return;
-                }
-
-                // Handle routing failures (e.g., agent hub unreachable) and unexpected
-                // response shapes before touching the DataChangeResponse fields.
-                if (callbackResponse.Message is DeliveryFailure deliveryFailure)
-                {
-                    var dialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{deliveryFailure.Message ?? "Delivery failed"}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-                    return;
-                }
-                if (callbackResponse.Message is not DataChangeResponse responseMsg)
-                {
-                    var dialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-                    return;
-                }
-
-                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{responseMsg.Log}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                // Navigate back to details
-                var overviewHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
-                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
+                // Sync click action — Subscribe to combined snapshot of all form streams.
+                Observable.CombineLatest(
+                    host.Stream.GetDataStream<string>(displayNameDataId).Take(1),
+                    host.Stream.GetDataStream<string>(descriptionDataId).Take(1),
+                    host.Stream.GetDataStream<string>(iconNameDataId).Take(1),
+                    host.Stream.GetDataStream<string>(groupNameDataId).Take(1),
+                    host.Stream.GetDataStream<string>(orderDataId).Take(1),
+                    host.Stream.GetDataStream<string>(preferredModelDataId).Take(1),
+                    host.Stream.GetDataStream<string>(contextMatchPatternDataId).Take(1),
+                    host.Stream.GetDataStream<string>(isDefaultDataId).Take(1),
+                    host.Stream.GetDataStream<string>(exposedInNavigatorDataId).Take(1),
+                    host.Stream.GetDataStream<string>(instructionsDataId).Take(1),
+                    (newDisplayName, newDescription, newIconName, newGroupName, newOrderStr,
+                     newPreferredModel, newContextMatchPattern, newIsDefaultStr, newExposedInNavigatorStr, newInstructions) =>
+                    {
+                        if (!int.TryParse(newOrderStr, out var newOrder))
+                            newOrder = 0;
+                        var newIsDefault = newIsDefaultStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+                        var newExposedInNavigator = newExposedInNavigatorStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+                        return agent with
+                        {
+                            DisplayName = string.IsNullOrWhiteSpace(newDisplayName) ? null : newDisplayName,
+                            Description = string.IsNullOrWhiteSpace(newDescription) ? null : newDescription,
+                            Icon = string.IsNullOrWhiteSpace(newIconName) ? null : newIconName,
+                            GroupName = string.IsNullOrWhiteSpace(newGroupName) ? null : newGroupName,
+                            Order = newOrder,
+                            PreferredModel = string.IsNullOrWhiteSpace(newPreferredModel) ? null : newPreferredModel,
+                            ContextMatchPattern = string.IsNullOrWhiteSpace(newContextMatchPattern) ? null : newContextMatchPattern,
+                            IsDefault = newIsDefault,
+                            ExposedInNavigator = newExposedInNavigator,
+                            Instructions = string.IsNullOrWhiteSpace(newInstructions) ? null : newInstructions
+                        };
+                    })
+                    .Take(1)
+                    .Subscribe(updatedAgent =>
+                    {
+                        var delivery = actx.Host.Hub.Post(
+                            new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedAgent),
+                            o => o.WithTarget(hubAddress))!;
+                        actx.Host.Hub.Observe(delivery).Subscribe(
+                            callbackResponse =>
+                            {
+                                if (callbackResponse.Message is DeliveryFailure deliveryFailure)
+                                {
+                                    var dialog = Controls.Dialog(
+                                        Controls.Markdown($"**Error saving:**\n\n{deliveryFailure.Message ?? "Delivery failed"}"),
+                                        "Save Failed"
+                                    ).WithSize("M");
+                                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                                    return;
+                                }
+                                if (callbackResponse.Message is not DataChangeResponse responseMsg)
+                                {
+                                    var dialog = Controls.Dialog(
+                                        Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
+                                        "Save Failed"
+                                    ).WithSize("M");
+                                    actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                                    return;
+                                }
+                                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
+                                {
+                                    var errorDialog = Controls.Dialog(
+                                        Controls.Markdown($"**Error saving:**\n\n{responseMsg.Log}"),
+                                        "Save Failed"
+                                    ).WithSize("M");
+                                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                    return;
+                                }
+                                var overviewHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
+                                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
+                            },
+                            ex =>
+                            {
+                                var dialog = Controls.Dialog(
+                                    Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
+                                    "Save Failed"
+                                ).WithSize("M");
+                                actx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                            });
+                    });
+                return Task.CompletedTask;
             }));
 
         stack = stack.WithView(buttonRow);

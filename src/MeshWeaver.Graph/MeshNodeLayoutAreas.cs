@@ -143,19 +143,20 @@ public static class MeshNodeLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        // Map nodes to control - use SelectMany for async permission check
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+        // CombineLatest with permission stream — pure observable composition, no await.
+        return nodeStream.CombineLatest(
+            PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
+            (nodes, permissions) =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
-            // If user has no read permission, show access denied with request option
-            if (!permissions.HasFlag(Permission.Read))
-                return (UiControl?)BuildAccessDenied(hubPath);
+                // If user has no read permission, show access denied with request option
+                if (!permissions.HasFlag(Permission.Read))
+                    return (UiControl?)BuildAccessDenied(hubPath);
 
-            var canEdit = permissions.HasFlag(Permission.Update);
-            return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
-        });
+                var canEdit = permissions.HasFlag(Permission.Update);
+                return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
+            });
     }
 
     private static UiControl BuildAccessDenied(string nodePath)
@@ -1433,16 +1434,17 @@ public static class MeshNodeLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+        return nodeStream.CombineLatest(
+            PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
+            (nodes, permissions) =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
-            if (!permissions.HasFlag(Permission.Update))
-                return (UiControl?)BuildAccessDenied(hubPath);
+                if (!permissions.HasFlag(Permission.Update))
+                    return (UiControl?)BuildAccessDenied(hubPath);
 
-            return (UiControl?)BuildEditNodeContent(host, node);
-        });
+                return (UiControl?)BuildEditNodeContent(host, node);
+            });
     }
 
     private static UiControl BuildEditNodeContent(LayoutAreaHost host, MeshNode? node)

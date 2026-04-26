@@ -27,6 +27,8 @@ public record NodeMenuItemDefinition(
 /// <summary>
 /// Provider delegate that yields menu items via IAsyncEnumerable.
 /// Providers are evaluated during layout rendering; they can check permissions inline.
+/// TODO: convert to <c>IObservable&lt;NodeMenuItemDefinition&gt;</c> once the renderer
+/// pipeline supports it end-to-end.
 /// </summary>
 public delegate IAsyncEnumerable<NodeMenuItemDefinition> NodeMenuItemProvider(
     LayoutAreaHost host, RenderingContext context);
@@ -49,6 +51,8 @@ public interface INodeMenuProvider
     /// Yields menu items. Providers may check node type / permissions before yielding — the
     /// renderer passes them no filter, so any early-exit (e.g. for the wrong node type) must
     /// happen inside the implementation.
+    /// TODO: convert to <c>IObservable&lt;NodeMenuItemDefinition&gt; GetItems(...)</c>
+    /// once the renderer pipeline supports it end-to-end.
     /// </summary>
     IAsyncEnumerable<NodeMenuItemDefinition> GetItemsAsync(LayoutAreaHost host, RenderingContext context);
 }

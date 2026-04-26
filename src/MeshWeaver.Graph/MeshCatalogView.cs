@@ -53,25 +53,15 @@ public static class MeshCatalogView
         // The ID format is "nodeType" when accessing _Nodes/nodeType
         var nodeTypeFilter = host.Reference?.Id as string;
 
-        return Observable.FromAsync(async ct =>
-        {
-            // Build query with optional nodeType filter
-            var query = string.IsNullOrEmpty(nodeTypeFilter)
-                ? $"namespace:{parentPath}"
-                : $"namespace:{parentPath} nodeType:{nodeTypeFilter}";
+        // Build query with optional nodeType filter
+        var query = string.IsNullOrEmpty(nodeTypeFilter)
+            ? $"namespace:{parentPath}"
+            : $"namespace:{parentPath} nodeType:{nodeTypeFilter}";
 
-            IReadOnlyList<MeshNode> children;
-            try
-            {
-                children = await meshQuery.QueryAsync<MeshNode>(query, ct: ct).ToListAsync(ct);
-            }
-            catch
-            {
-                children = Array.Empty<MeshNode>();
-            }
-
-            return BuildNodesView(host, parentPath, nodeTypeFilter, children);
-        });
+        // Live observable — auto-updates when children added/removed.
+        return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Select(change => BuildNodesView(host, parentPath, nodeTypeFilter, change.Items))
+            .Catch<UiControl, Exception>(_ => Observable.Return(BuildNodesView(host, parentPath, nodeTypeFilter, Array.Empty<MeshNode>())));
     }
 
     private static UiControl BuildNodesView(LayoutAreaHost host, string parentPath, string? nodeTypeFilter, IEnumerable<MeshNode> children)

@@ -1274,27 +1274,26 @@ public static class EditorExtensions
             .WithStyle("justify-content: flex-end; gap: 8px;")
             .WithView(Controls.Button("Add")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async addCtx =>
+                .WithClickAction(addCtx =>
                 {
-                    var formValues = await addCtx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
-
-                    var selectedValue = formValues.GetValueOrDefault("selectedItem")?.ToString()?.Trim();
-                    if (string.IsNullOrEmpty(selectedValue))
-                    {
-                        var errorDialog = Controls.Dialog(
-                            Controls.Markdown("Please select an item."),
-                            "Validation Error"
-                        ).WithSize("S").WithClosable(true);
-                        addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                        return;
-                    }
-
-                    // Close dialog
-                    addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-
-                    // Add the item to the collection
-                    AddCollectionItem(addCtx.Host, dataId, propName, elementType, keyPropName, selectedValue);
+                    addCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(formValues =>
+                        {
+                            var selectedValue = formValues.GetValueOrDefault("selectedItem")?.ToString()?.Trim();
+                            if (string.IsNullOrEmpty(selectedValue))
+                            {
+                                var errorDialog = Controls.Dialog(
+                                    Controls.Markdown("Please select an item."),
+                                    "Validation Error"
+                                ).WithSize("S").WithClosable(true);
+                                addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                return;
+                            }
+                            addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                            AddCollectionItem(addCtx.Host, dataId, propName, elementType, keyPropName, selectedValue);
+                        });
+                    return Task.CompletedTask;
                 }))
             .WithView(Controls.Button("Cancel")
                 .WithAppearance(Appearance.Neutral)

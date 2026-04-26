@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -73,17 +74,16 @@ public static class PartitionNodeType
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
-        public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
             if (context.Operation == NodeOperation.Read)
-                return !string.IsNullOrEmpty(userId);
+                return Observable.Return(!string.IsNullOrEmpty(userId));
 
             if (string.IsNullOrEmpty(userId))
-                return false;
+                return Observable.Return(false);
 
             // Only admins can create/update/delete partitions
-            return await securityService.HasPermissionAsync(
-                context.Node.Path, userId, Permission.Update, ct);
+            return securityService.HasPermission(context.Node.Path, userId, Permission.Update);
         }
     }
 }

@@ -99,14 +99,17 @@ namespace MeshWeaver.Hosting
         )
         {
             var originalAddress = address;
+            var entryLogger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
+            entryLogger?.LogDebug("[ROUTE] enter {MessageType} → {Address}", delivery.Message.GetType().Name, address);
 
             // Use ResolvePath to find a node at the requested address.
             // Routing-framework boundary — bridges IPathResolver IObservable to Task.
             var resolution = await MeshCatalog.ResolvePath(address.ToString())
                 .FirstAsync().ToTask(cancellationToken);
+            entryLogger?.LogDebug("[ROUTE] resolved {Address} → prefix={Prefix} remainder={Remainder}", address, resolution?.Prefix, resolution?.Remainder);
 
             // ============================================================================
-            // 🚨🚨🚨  NO  FUCKING  FALLBACK  🚨🚨🚨
+            // 🚨🚨🚨  NO  FALLBACK  🚨🚨🚨
             // ============================================================================
             // If `resolution.Remainder` is non-empty, the exact requested address has NO
             // hub of its own — only an ancestor exists. DO NOT FALL BACK to that ancestor.

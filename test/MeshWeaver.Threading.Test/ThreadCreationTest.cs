@@ -528,13 +528,13 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
 
     protected override async Task SetupAccessRightsAsync()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Admin user gets full access globally
-        await securityService.AddUserRoleAsync(AdminUserId, "Admin", null, "system");
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(AdminUserId, "Admin", null)).FirstAsync().ToTask();
 
         // Viewer gets only Read+Execute (no Update) at the test context
-        await securityService.AddUserRoleAsync(ViewerUserId, "Viewer", "SecureProject", "system");
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(ViewerUserId, "Viewer", "SecureProject")).FirstAsync().ToTask();
     }
 
     [Fact]

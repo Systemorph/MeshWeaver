@@ -42,19 +42,13 @@ public static class ImportLayoutArea
     {
         var currentPath = host.Hub.Address.ToString();
 
-        return Observable.FromAsync(async () =>
-        {
-            var canCreate = await PermissionHelper.CanCreateAsync(host.Hub, currentPath);
-            if (!canCreate)
-            {
-                return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
+        return PermissionHelper.CanCreate(host.Hub, currentPath)
+            .Select(canCreate => canCreate
+                ? (UiControl?)BuildImportForm(host, currentPath)
+                : (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
                     .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
                     .WithView(Controls.Html(
-                        "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to import nodes here.</p>"));
-            }
-
-            return (UiControl?)BuildImportForm(host, currentPath);
-        });
+                        "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to import nodes here.</p>")));
     }
 
     private static UiControl BuildImportForm(LayoutAreaHost host, string currentPath)

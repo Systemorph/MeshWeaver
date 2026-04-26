@@ -200,6 +200,8 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(RoleAssignment), nameof(RoleAssignment));
         typeRegistry.WithType(typeof(Role), nameof(Role));
         typeRegistry.WithType(typeof(AccessObject), nameof(AccessObject));
+        typeRegistry.WithType(typeof(GetPermissionRequest), nameof(GetPermissionRequest));
+        typeRegistry.WithType(typeof(GetPermissionResponse), nameof(GetPermissionResponse));
         typeRegistry.WithType(typeof(GroupMembership), nameof(GroupMembership));
         typeRegistry.WithType(typeof(MembershipEntry), nameof(MembershipEntry));
         typeRegistry.WithType(typeof(MeshNodeCardControl), nameof(MeshNodeCardControl));

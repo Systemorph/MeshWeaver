@@ -255,9 +255,10 @@ public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshT
         });
 
         // Grant the admin user (already logged in) Viewer role on SecureCorp
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Viewer", "SecureCorp", "system", TestTimeout);
+        // — runtime AccessAssignment node via IMeshService.CreateNode.
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Viewer", "SecureCorp"))
+            .FirstAsync().ToTask(TestTimeout);
 
         // Act: search
         var results = await MeshQuery

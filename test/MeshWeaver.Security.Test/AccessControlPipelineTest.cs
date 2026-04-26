@@ -14,6 +14,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -35,17 +36,13 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         => ConfigureMeshBase(builder)
             .AddMeshNodes(
                 new MeshNode("PipelineTest") { Name = "Pipeline Test" },
-                new MeshNode("Target", "PipelineTest") { Name = "Target Node" }
+                new MeshNode("Target", "PipelineTest") { Name = "Target Node" },
+                // Admin's full access on PipelineTest scope (replaces SetupAccessRightsAsync mutation).
+                AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", scope: "PipelineTest")
             )
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 
-    protected override async Task SetupAccessRightsAsync()
-    {
-        // Grant admin full access so test setup can work
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Admin", "PipelineTest", "system");
-    }
+    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration)
@@ -88,12 +85,13 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 10000)]
     public async Task SubscribeRequest_WithReadPermission_Succeeds()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(
-            "Viewer1", "Viewer", "PipelineTest", "system");
+        // Grant Viewer role at runtime (tests live behavior change after grant).
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Viewer1", "Viewer", "PipelineTest"))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
-        // Verify the permission was granted via ISecurityService
-        var hasRead = await securityService.HasPermissionAsync(
+        // Verify the permission was granted via the GetPermissionRequest round-trip.
+        var hasRead = await Mesh.HasPermissionAsync(
             NodePath, "Viewer1", Permission.Read, TestContext.Current.CancellationToken);
         hasRead.Should().BeTrue("Viewer1 with Viewer role should have Read permission");
     }
@@ -130,8 +128,8 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 10000)]
     public async Task WithPublicRead_AllowsAuthenticatedUserRead()
     {
-        // Organization hub has WithPublicRead() â†’ HubPermissionRuleSet grants Read.
-        // A user with no ISecurityService permissions should still pass Read check.
+        // Organization hub has WithPublicRead() → HubPermissionRuleSet grants Read.
+        // A user with no AccessAssignment should still pass Read check.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         // Clear claim-based roles to simulate Orleans grain
@@ -176,14 +174,13 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
         // In Orleans, claim-based roles from AccessContext aren't available.
         // Admin gets permissions from PublicAdminAccess at root, which should
         // inherit to Organization path. Additionally, Organization hub has
-        // WithPublicRead â†’ HubPermissionRuleSet.
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        // WithPublicRead → HubPermissionRuleSet.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         // Clear claim-based roles
         accessService.SetCircuitContext(null);
 
-        var permissions = await securityService.GetEffectivePermissionsAsync(
+        var permissions = await Mesh.GetPermissionAsync(
             "Organization", TestUsers.Admin.ObjectId, TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Permissions without claims: {permissions}");
@@ -209,9 +206,7 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 10000)]
     public async Task Admin_HasReadPermissionOnOrganizationPath()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-
-        var permissions = await securityService.GetEffectivePermissionsAsync(
+        var permissions = await Mesh.GetPermissionAsync(
             "Organization", TestUsers.Admin.ObjectId, TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Admin permissions on 'Organization': {permissions}");
@@ -228,7 +223,6 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
     [Fact(Timeout = 10000)]
     public async Task Admin_HasReadOnOrganization_WithoutClaimBasedRoles()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         // Clear circuit context to simulate Orleans grain (no claim-based roles)
@@ -239,7 +233,7 @@ public class OrganizationHubAccessTest(ITestOutputHelper output) : MonolithMeshT
         {
             // Without claim-based roles, permissions come only from AccessAssignment nodes.
             // PublicAdminAccess grants Admin at root ("") but not at "Organization" specifically.
-            var permissions = await securityService.GetEffectivePermissionsAsync(
+            var permissions = await Mesh.GetPermissionAsync(
                 "Organization", TestUsers.Admin.ObjectId, TestContext.Current.CancellationToken);
 
             Output.WriteLine($"Admin permissions on 'Organization' (no claims): {permissions}");

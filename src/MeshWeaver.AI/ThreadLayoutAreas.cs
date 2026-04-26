@@ -333,18 +333,11 @@ public static class ThreadLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Query for child Thread nodes (delegations)
-        var childrenStream = Observable.FromAsync(async () =>
-        {
-            try
-            {
-                return await meshQuery.QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}").ToListAsync() as IReadOnlyList<MeshNode>;
-            }
-            catch
-            {
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-            }
-        });
+        // Live observable of child Thread nodes (delegations) — auto-updates on add/remove.
+        var childrenStream = meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}"))
+            .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+            .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
         return nodeStream.CombineLatest(childrenStream, (nodes, children) =>
         {
@@ -431,23 +424,13 @@ public static class ThreadLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Query for child ThreadMessage nodes
-        var messagesStream = Observable.FromAsync(async () =>
-        {
-            if (meshQuery == null)
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-
-            try
-            {
-                return await meshQuery.QueryAsync<MeshNode>(
-                    $"namespace:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} sort:Timestamp-asc"
-                ).ToListAsync() as IReadOnlyList<MeshNode>;
-            }
-            catch
-            {
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-            }
-        });
+        // Live observable of child ThreadMessage nodes — auto-updates on add/edit/remove.
+        var messagesStream = meshQuery == null
+            ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
+            : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} sort:Timestamp-asc"))
+                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
         return nodeStream.CombineLatest(messagesStream, (nodes, messageNodes) =>
         {

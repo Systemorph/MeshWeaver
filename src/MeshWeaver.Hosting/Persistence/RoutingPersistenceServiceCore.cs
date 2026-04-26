@@ -601,68 +601,70 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     #region Secure Operations
 
-    public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        await EnsureInitializedAsync(ct);
-        var store = TryGetStore(path);
-        if (store == null) return null;
-        return await store.GetNodeSecureAsync(path, userId, options, ct);
-    }
+    public IObservable<MeshNode?> GetNodeSecure(string path, string? userId, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => EnsureInitializedAsync(ct))
+            .SelectMany(_ =>
+            {
+                var store = TryGetStore(path);
+                if (store == null)
+                    return Observable.Return<MeshNode?>(null);
+                return store.GetNodeSecure(path, userId, options);
+            });
 
-    public async IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(
+    public IObservable<MeshNode> GetChildrenSecure(
         string? parentPath,
         string? userId,
         JsonSerializerOptions options)
-    {
-        await EnsureInitializedAsync();
-        var segment = PathPartition.GetFirstSegment(parentPath);
-
-        if (segment == null)
-        {
-            // Root level: each partition contributes its root node
-            foreach (var (seg, store) in _stores)
+        => Observable.FromAsync(() => EnsureInitializedAsync())
+            .SelectMany(_ =>
             {
-                var rootNode = await store.GetNodeSecureAsync(seg, userId, options);
-                if (rootNode != null)
-                    yield return rootNode;
-            }
-            yield break;
-        }
+                var segment = PathPartition.GetFirstSegment(parentPath);
 
-        var core = TryGetStore(parentPath);
-        if (core == null) yield break;
-        await foreach (var child in core.GetChildrenSecureAsync(parentPath, userId, options))
-            yield return child;
-    }
+                if (segment == null)
+                {
+                    // Root level: each partition contributes its root node
+                    return _stores
+                        .Select(kvp => kvp.Value.GetNodeSecure(kvp.Key, userId, options))
+                        .Concat()
+                        .Where(n => n != null)
+                        .Select(n => n!);
+                }
 
-    public async IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(
+                var core = TryGetStore(parentPath);
+                if (core == null)
+                    return Observable.Empty<MeshNode>();
+                return core.GetChildrenSecure(parentPath, userId, options);
+            });
+
+    public IObservable<MeshNode> GetDescendantsSecure(
         string? parentPath,
         string? userId,
         JsonSerializerOptions options)
-    {
-        await EnsureInitializedAsync();
-        var segment = PathPartition.GetFirstSegment(parentPath);
-
-        if (segment == null)
-        {
-            // Root level: each partition contributes root node + all descendants
-            foreach (var (seg, store) in _stores)
+        => Observable.FromAsync(() => EnsureInitializedAsync())
+            .SelectMany(_ =>
             {
-                var rootNode = await store.GetNodeSecureAsync(seg, userId, options);
-                if (rootNode != null)
-                    yield return rootNode;
+                var segment = PathPartition.GetFirstSegment(parentPath);
 
-                await foreach (var desc in store.GetDescendantsSecureAsync(seg, userId, options))
-                    yield return desc;
-            }
-            yield break;
-        }
+                if (segment == null)
+                {
+                    // Root level: each partition contributes root node + all descendants
+                    return _stores
+                        .Select(kvp =>
+                        {
+                            var rootObs = kvp.Value.GetNodeSecure(kvp.Key, userId, options)
+                                .Where(n => n != null)
+                                .Select(n => n!);
+                            var descObs = kvp.Value.GetDescendantsSecure(kvp.Key, userId, options);
+                            return rootObs.Concat(descObs);
+                        })
+                        .Concat();
+                }
 
-        var core = TryGetStore(parentPath);
-        if (core == null) yield break;
-        await foreach (var desc in core.GetDescendantsSecureAsync(parentPath, userId, options))
-            yield return desc;
-    }
+                var core = TryGetStore(parentPath);
+                if (core == null)
+                    return Observable.Empty<MeshNode>();
+                return core.GetDescendantsSecure(parentPath, userId, options);
+            });
 
     #endregion
 }

@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -65,17 +67,19 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     protected override async Task SetupAccessRightsAsync()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         // Grant Alice Admin role on her user scope (simulating UserScopeGrantHandler)
-        await securityService.AddUserRoleAsync("Alice", Role.Admin.Id, "User/Alice", "system", Ct);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", Role.Admin.Id, "User/Alice"))
+            .FirstAsync().ToTask(Ct);
         // Grant Alice Viewer role on ACME organization
-        await securityService.AddUserRoleAsync("Alice", Role.Viewer.Id, "ACME", "system", Ct);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", Role.Viewer.Id, "ACME"))
+            .FirstAsync().ToTask(Ct);
     }
 
     private async Task<Permission> GetPermissionsAsync(string path, string userId)
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        return await securityService.GetEffectivePermissionsAsync(path, userId, Ct);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        return await Mesh.GetPermissionAsync(path, userId, Ct);
     }
 
     [Fact(Timeout = 10000)]

@@ -9,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
@@ -127,8 +128,8 @@ internal class InMemoryMeshQuery(
                 var itemPath = GetItemPath(node);
                 if (!string.IsNullOrEmpty(itemPath))
                 {
-                    var permissions = await securityService.GetEffectivePermissionsAsync(
-                        itemPath, userId, ct);
+                    var permissions = await securityService.GetEffectivePermissions(
+                        itemPath, userId).FirstAsync().ToTask(ct);
                     if (!permissions.HasFlag(Permission.Read))
                         continue;
                 }
@@ -280,10 +281,11 @@ internal class InMemoryMeshQuery(
     {
         var pathsToSearch = GetPathsForScope(basePath, effectiveScope);
 
-        // Exact path matches
+        // Exact path matches — bridge IObservable<MeshNode?> back to a one-shot Task
+        // here at the IMeshQuery boundary (sanctioned per AsynchronousCalls.md).
         foreach (var searchPath in pathsToSearch)
         {
-            var node = await persistence.GetNodeSecureAsync(searchPath, userId, options, ct);
+            var node = await persistence.GetNodeSecure(searchPath, userId, options).FirstAsync().ToTask(ct);
             if (node != null && _evaluator.Matches(node, parsedQuery)
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
@@ -298,7 +300,8 @@ internal class InMemoryMeshQuery(
         {
             var source = parsedQuery.HasConditions
                 ? persistence.GetAllChildrenAsync(basePath, options)
-                : persistence.GetChildrenSecureAsync(basePath, userId, options);
+                : ObservableTopNExtensions.ToAsyncEnumerableSequence(
+                    persistence.GetChildrenSecure(basePath, userId, options), ct);
 
             await foreach (var child in source.WithCancellation(ct))
             {
@@ -318,8 +321,8 @@ internal class InMemoryMeshQuery(
 
             foreach (var ancestorPath in pathsToSearchChildren)
             {
-                await foreach (var child in persistence.GetChildrenSecureAsync(
-                    ancestorPath, userId, options).WithCancellation(ct))
+                await foreach (var child in ObservableTopNExtensions.ToAsyncEnumerableSequence(
+                    persistence.GetChildrenSecure(ancestorPath, userId, options), ct))
                 {
                     if (_evaluator.Matches(child, parsedQuery)
                         && !IsExcludedByContext(child, context)
@@ -333,7 +336,7 @@ internal class InMemoryMeshQuery(
         // When the query has conditions (e.g., nodeType:Thread), use GetAllDescendantsAsync
         // to include satellite nodes. Also use GetAllDescendantsAsync when the base path
         // itself is within a satellite partition (e.g., querying subtree of a comment node).
-        // Otherwise use GetDescendantsSecureAsync (excludes satellites from general browsing).
+        // Otherwise use GetDescendantsSecure (excludes satellites from general browsing).
         if (effectiveScope == QueryScope.Descendants
             || effectiveScope == QueryScope.Hierarchy
             || effectiveScope == QueryScope.Subtree)
@@ -341,7 +344,8 @@ internal class InMemoryMeshQuery(
             var includeSatellites = parsedQuery.HasConditions || IsSatellitePath(basePath);
             var source = includeSatellites
                 ? persistence.GetAllDescendantsAsync(basePath, options)
-                : persistence.GetDescendantsSecureAsync(basePath, userId, options);
+                : ObservableTopNExtensions.ToAsyncEnumerableSequence(
+                    persistence.GetDescendantsSecure(basePath, userId, options), ct);
 
             await foreach (var descendant in source.WithCancellation(ct))
             {
@@ -419,7 +423,7 @@ internal class InMemoryMeshQuery(
                 !validator.SupportedOperations.Contains(NodeOperation.Read))
                 continue;
 
-            var result = await validator.ValidateAsync(context, ct);
+            var result = await validator.Validate(context).FirstAsync().ToTask(ct);
             if (!result.IsValid)
             {
                 logger?.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
@@ -477,11 +481,12 @@ internal class InMemoryMeshQuery(
         {
             if (!string.IsNullOrEmpty(normalizedPath))
             {
-                var rootNode = await persistence.GetNodeSecureAsync(normalizedPath, userId, options, ct);
+                var rootNode = await persistence.GetNodeSecure(normalizedPath, userId, options).FirstAsync().ToTask(ct);
                 if (rootNode != null)
                     yield return rootNode;
             }
-            await foreach (var node in persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
+            await foreach (var node in ObservableTopNExtensions.ToAsyncEnumerableSequence(
+                persistence.GetDescendantsSecure(normalizedPath, userId, options), ct))
                 yield return node;
         }
 

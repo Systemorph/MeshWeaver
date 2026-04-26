@@ -6,6 +6,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 
 namespace MeshWeaver.Markdown.Export.Layout;
 
@@ -29,29 +30,42 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var nodes = await (host.Workspace.GetStream<MeshNode>()
+        var nodeStream = host.Workspace.GetStream<MeshNode>()
                 ?.Select(n => n ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>()))
-            .FirstAsync();
-        var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            ?? Observable.Return(Array.Empty<MeshNode>());
 
-        if (node is null || node.NodeType != "Markdown") yield break;
+        // Bridges the live MeshNode + permission streams into the IAsyncEnumerable
+        // contract: first snapshot wins via early yield break (the menu pipeline is
+        // one-shot per render today). TODO: emit live menu updates when the menu
+        // pipeline becomes fully reactive.
+        await foreach (var nodes in nodeStream.ToAsyncEnumerableSequence())
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            if (node is null || node.NodeType != "Markdown")
+                yield break;
 
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-        if (!perms.HasFlag(Permission.Read)) yield break;
+            await foreach (var perms in PermissionHelper.GetEffectivePermissions(host.Hub, hubPath)
+                .ToAsyncEnumerableSequence())
+            {
+                if (!perms.HasFlag(Permission.Read))
+                    yield break;
 
-        yield return new NodeMenuItemDefinition(
-            Label: PdfLabel,
-            Area: ExportDocumentLayoutArea.PdfArea,
-            RequiredPermission: Permission.Read,
-            Order: 27,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea));
+                yield return new NodeMenuItemDefinition(
+                    Label: PdfLabel,
+                    Area: ExportDocumentLayoutArea.PdfArea,
+                    RequiredPermission: Permission.Read,
+                    Order: 27,
+                    Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea));
 
-        yield return new NodeMenuItemDefinition(
-            Label: DocxLabel,
-            Area: ExportDocumentLayoutArea.DocxArea,
-            RequiredPermission: Permission.Read,
-            Order: 28,
-            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea));
+                yield return new NodeMenuItemDefinition(
+                    Label: DocxLabel,
+                    Area: ExportDocumentLayoutArea.DocxArea,
+                    RequiredPermission: Permission.Read,
+                    Order: 28,
+                    Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea));
+                yield break;
+            }
+            yield break;
+        }
     }
 }

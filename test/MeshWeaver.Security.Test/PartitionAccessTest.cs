@@ -52,7 +52,11 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
                         DataSource = "static",
                         Description = "Built-in documentation"
                     }
-                }
+                },
+                // Static role assignment: Roland is global Admin (used by
+                // OrganizationCreation_CreatesPartitionNode). AccessAssignment is
+                // just a MeshNode — SecurityService reads it at hub init.
+                AssignmentNodeFactory.UserRole("Roland", "Admin")
             );
 
     private void LoginAsUnprivilegedUser()
@@ -140,10 +144,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact(Timeout = 30000)]
     public async Task OrganizationCreation_CreatesPartitionNode()
     {
-        // Give creator Admin role so they can create organizations
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync("Roland", "Admin", null, "system");
-
+        // Roland's global Admin role is pre-seeded via ConfigureMesh's static AccessAssignment.
         var orgNode = new MeshNode("Globex")
         {
             Name = "Globex Corp",

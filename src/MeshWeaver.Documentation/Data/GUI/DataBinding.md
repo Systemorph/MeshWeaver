@@ -33,7 +33,7 @@ This is non-negotiable, for three reasons:
 
 | Side | Responsibility |
 |---|---|
-| **Backend layout area** | Build a `UiControl` tree. Pass *paths* (or `JsonPointerReference`s) into controls. Never call `meshQuery.QueryAsync(...)`, never `await` data, never call `PermissionHelper.GetEffectivePermissionsAsync(...)` to gate rendering. |
+| **Backend layout area** | Build a `UiControl` tree. Pass *paths* (or `JsonPointerReference`s) into controls. Never call `meshQuery.QueryAsync(...)`, never `await` data, never `await` `PermissionHelper.GetEffectivePermissions(...)` (compose its `IObservable<Permission>` with `CombineLatest` instead) to gate rendering. |
 | **GUI Blazor view (.razor.cs)** | Hold an `ISynchronizationStream<MeshNode>` field. In `BindData()`, set it to `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference())`. Subscribe via `AddBinding(...)` and call `InvokeAsync(StateHasChanged)` on emissions. Write user edits back via `_nodeStream.Update(current => ...)`. |
 
 ## Backend: declare-only, no fetch
@@ -124,7 +124,7 @@ The framework propagates the patch to the owning hub, persists, and notifies all
 | `SelectMany(async nodes => await ...)` for data resolution | async lambda inside an observable chain — same deadlock surface | Pass paths; bind in GUI |
 | `MeshNodeThumbnailControl.FromNode(loadedNode, ...)` after a backend fetch | Concrete values frozen at render time | `new MeshNodeThumbnailControl { NodePath = path }` |
 | `.Take(1)` on a display stream | View stops updating after first emission | Stay subscribed for the lifetime of the component |
-| `await PermissionHelper.GetEffectivePermissionsAsync(...)` in a layout area | Hub deadlock candidate | Bind permissions on the GUI side via the user's permission stream |
+| `await PermissionHelper.GetEffectivePermissions(...).FirstAsync()` in a layout area | Hub deadlock candidate | Compose the `IObservable<Permission>` via `CombineLatest` with the rest of the layout's reactive chain; bind permissions on the GUI side via the user's permission stream |
 | `try { ... } catch { /* swallowed */ }` around backend reads | Errors disappear, debugging impossible | Propagate via `OnError`; framework handles it |
 
 ## Where to look for working examples

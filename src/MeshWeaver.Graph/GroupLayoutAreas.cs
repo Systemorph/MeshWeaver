@@ -114,7 +114,7 @@ public static class GroupLayoutAreas
     /// Shows members with delete buttons and an Add Member button.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext context)
     {
         var hubPath = host.Hub.Address.ToString();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
@@ -163,11 +163,15 @@ public static class GroupLayoutAreas
                 }
             }
 
-            // Add Member button
+            // Add Member button — sync click action; ShowAddMemberDialog runs as fire-and-forget Task.
             stack = stack.WithView(Controls.Button("Add Member")
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.PersonAdd())
-                .WithClickAction(async ctx => await ShowAddMemberDialog(ctx, hubPath)));
+                .WithClickAction(ctx =>
+                {
+                    _ = ShowAddMemberDialog(ctx, hubPath);
+                    return Task.CompletedTask;
+                }));
 
             return (UiControl?)stack;
         });

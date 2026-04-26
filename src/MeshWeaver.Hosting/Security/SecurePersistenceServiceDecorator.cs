@@ -4,8 +4,8 @@ using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.Logging;
-using System.Runtime.CompilerServices;
 
 namespace MeshWeaver.Hosting.Security;
 
@@ -48,13 +48,19 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     /// <summary>
     /// Checks if a user has read access to a node.
     /// Checks in order: publicly readable → INodeTypeAccessRule → ISecurityService permissions.
+    /// Returns an IObservable&lt;bool&gt; — composes reactively with the secure-read pipeline.
     /// </summary>
-    private async Task<bool> HasReadAccessAsync(MeshNode node, string? userId, CancellationToken ct = default)
+    private IObservable<bool> HasReadAccess(MeshNode node, string? userId)
     {
         if (IsPubliclyReadable(node))
-            return true;
+            return Observable.Return(true);
+
+        IObservable<bool> permissionCheck = string.IsNullOrEmpty(userId)
+            ? SecurityService.HasPermission(node.Path, Permission.Read)
+            : SecurityService.HasPermission(node.Path, userId, Permission.Read);
 
         // Check INodeTypeAccessRule (e.g., User, VUser, Organization nodes with WithPublicRead)
+        // first; fall back to the security service permission check when the rule denies.
         if (!string.IsNullOrEmpty(node.NodeType)
             && _nodeTypeAccessRules.TryGetValue(node.NodeType, out var rule))
         {
@@ -63,49 +69,50 @@ internal class SecurePersistenceServiceDecorator : IStorageService
                 Operation = NodeOperation.Read,
                 Node = node
             };
-            if (await rule.HasAccessAsync(context, userId, ct))
-                return true;
+            return rule.HasAccess(context, userId)
+                .SelectMany(ok => ok ? Observable.Return(true) : permissionCheck);
         }
 
-        return string.IsNullOrEmpty(userId)
-            ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read, ct)
-            : await SecurityService.HasPermissionAsync(node.Path, userId, Permission.Read, ct);
+        return permissionCheck;
     }
 
-    public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var node = await _inner.GetNode(path, options).FirstAsync().ToTask(ct);
-        if (node == null)
-            return null;
+    public IObservable<MeshNode?> GetNodeSecure(string path, string? userId, JsonSerializerOptions options)
+        => _inner.GetNode(path, options)
+            .SelectMany(node =>
+            {
+                if (node == null)
+                    return Observable.Return<MeshNode?>(null);
+                return HasReadAccess(node, userId)
+                    .Select(ok =>
+                    {
+                        if (ok)
+                            return (MeshNode?)node;
+                        _logger.LogWarning("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
+                        return null;
+                    });
+            });
 
-        if (await HasReadAccessAsync(node, userId, ct))
-            return node;
+    public IObservable<MeshNode> GetChildrenSecure(string? parentPath, string? userId, JsonSerializerOptions options)
+        => ObservableTopNExtensions.ToObservableSequence(_inner.GetChildrenAsync(parentPath, options))
+            .SelectMany(node => HasReadAccess(node, userId)
+                .Do(ok =>
+                {
+                    if (!ok)
+                        _logger.LogTrace("SecurePersistence: Filtering out {Path} for user {UserId}", node.Path, userId ?? "(anonymous)");
+                })
+                .Where(ok => ok)
+                .Select(_ => node));
 
-        _logger.LogWarning("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
-        return null;
-    }
-
-    public async IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
-    {
-        await foreach (var node in _inner.GetChildrenAsync(parentPath, options))
-        {
-            if (await HasReadAccessAsync(node, userId))
-                yield return node;
-            else
-                _logger.LogTrace("SecurePersistence: Filtering out {Path} for user {UserId}", node.Path, userId ?? "(anonymous)");
-        }
-    }
-
-    public async IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
-    {
-        await foreach (var node in _inner.GetDescendantsAsync(parentPath, options))
-        {
-            if (await HasReadAccessAsync(node, userId))
-                yield return node;
-            else
-                _logger.LogTrace("SecurePersistence: Filtering out {Path} for user {UserId}", node.Path, userId ?? "(anonymous)");
-        }
-    }
+    public IObservable<MeshNode> GetDescendantsSecure(string? parentPath, string? userId, JsonSerializerOptions options)
+        => ObservableTopNExtensions.ToObservableSequence(_inner.GetDescendantsAsync(parentPath, options))
+            .SelectMany(node => HasReadAccess(node, userId)
+                .Do(ok =>
+                {
+                    if (!ok)
+                        _logger.LogTrace("SecurePersistence: Filtering out {Path} for user {UserId}", node.Path, userId ?? "(anonymous)");
+                })
+                .Where(ok => ok)
+                .Select(_ => node));
 
     #endregion
 

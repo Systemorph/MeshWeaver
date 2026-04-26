@@ -1,4 +1,6 @@
+using MeshWeaver.Data;
 using MeshWeaver.Data.Validation;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -30,15 +32,23 @@ public static class SecurityServiceExtensions
         return builder
             .ConfigureServices(services =>
             {
-                // Register security service (uses IStorageService directly for all storage,
-                // bypassing any security filtering to avoid circular dependency)
-                services.TryAddSingleton<ISecurityService, SecurityService>();
-
-                // Register RLS validator
-                services.AddSingleton<INodeValidator, RlsNodeValidator>();
+                // Per-hub scoped — each hub gets its own SecurityService instance
+                // that reads from THAT hub's workspace (its synced
+                // AccessAssignments collection). RlsNodeValidator runs in the
+                // same scope and resolves the local SecurityService.
+                services.TryAddScoped<ISecurityService, SecurityService>();
+                services.AddScoped<INodeValidator, RlsNodeValidator>();
 
                 return services;
             })
-            .ConfigureDefaultNodeHub(c => c.AddAccessControlPipeline());
+            // The synced AccessAssignments collection is intentionally NOT
+            // registered here — a cross-hub query for "nodeType:AccessAssignment"
+            // triggers infinite recursive hub construction at the AccessAssignment
+            // NodeType hub. SecurityService instead reads static AccessAssignment
+            // nodes directly from MeshConfiguration / IStaticNodeProvider at
+            // construction time. Live mutations: re-construct the SecurityService
+            // (or wire a separate refresh mechanism) — TODO.
+            .ConfigureDefaultNodeHub(c => c
+                .AddAccessControlPipeline());
     }
 }

@@ -1,6 +1,6 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
+using MeshWeaver.Reactive;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
@@ -207,38 +207,37 @@ internal interface IMeshStorage
 
     /// <summary>
     /// Gets a node by path, applying security filtering.
-    /// Returns null if the user doesn't have read permission.
-    /// Default implementation delegates to GetNodeAsync (no security filtering).
+    /// Emits null if the user doesn't have read permission.
+    /// Default implementation delegates to <see cref="GetNode"/> (no security filtering).
     /// Use SecurePersistenceServiceDecorator to add security.
     /// </summary>
     /// <param name="path">The node path</param>
     /// <param name="userId">The user's ObjectId (null for anonymous)</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The node or null if not found or not authorized</returns>
-    Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
-        => GetNode(path).FirstAsync().ToTask(ct);
+    /// <returns>Observable emitting the node, or null if not found / not authorized</returns>
+    IObservable<MeshNode?> GetNodeSecure(string path, string? userId)
+        => GetNode(path);
 
     /// <summary>
     /// Gets child nodes, filtering out those the user cannot read.
-    /// Default implementation delegates to GetChildrenAsync (no security filtering).
+    /// Default implementation delegates to <see cref="GetChildrenAsync"/> (no security filtering).
     /// Use SecurePersistenceServiceDecorator to add security.
     /// </summary>
     /// <param name="parentPath">Parent path (empty or null for root level)</param>
     /// <param name="userId">The user's ObjectId (null for anonymous)</param>
-    /// <returns>Async enumerable of accessible child nodes</returns>
-    IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
-        => GetChildrenAsync(parentPath);
+    /// <returns>Observable of accessible child nodes</returns>
+    IObservable<MeshNode> GetChildrenSecure(string? parentPath, string? userId)
+        => ObservableTopNExtensions.ToObservableSequence(GetChildrenAsync(parentPath));
 
     /// <summary>
     /// Gets descendant nodes, filtering out those the user cannot read.
-    /// Default implementation delegates to GetDescendantsAsync (no security filtering).
+    /// Default implementation delegates to <see cref="GetDescendantsAsync"/> (no security filtering).
     /// Use SecurePersistenceServiceDecorator to add security.
     /// </summary>
     /// <param name="parentPath">Parent path</param>
     /// <param name="userId">The user's ObjectId (null for anonymous)</param>
-    /// <returns>Async enumerable of accessible descendant nodes</returns>
-    IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
-        => GetDescendantsAsync(parentPath);
+    /// <returns>Observable of accessible descendant nodes</returns>
+    IObservable<MeshNode> GetDescendantsSecure(string? parentPath, string? userId)
+        => ObservableTopNExtensions.ToObservableSequence(GetDescendantsAsync(parentPath));
 
     #endregion
 }

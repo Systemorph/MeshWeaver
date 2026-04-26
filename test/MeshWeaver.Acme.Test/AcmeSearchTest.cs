@@ -138,10 +138,10 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // → SecurityService.HasPermissionAsync("ACME", userId, Permission.Read)
         // The Public_Access.json at ACME/_Access grants Viewer to Public,
         // and SecurityService merges Public permissions as floor for authenticated users.
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var userId = TestUsers.Admin.ObjectId;
 
-        var hasRead = await securityService.HasPermissionAsync(
+        var hasRead = await Mesh.HasPermissionAsync(
             "ACME", userId, Permission.Read, CancellationToken.None);
 
         hasRead.Should().BeTrue(

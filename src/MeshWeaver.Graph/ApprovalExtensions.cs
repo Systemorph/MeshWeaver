@@ -1,10 +1,12 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Graph;
@@ -52,14 +54,23 @@ public static class ApprovalExtensions
 
     /// <summary>
     /// Menu provider that yields "Request Approval" for users with update permission.
+    /// Bridges the permission observable into the IAsyncEnumerable contract via
+    /// <c>await foreach</c> + early <c>yield break</c> — first snapshot wins; the
+    /// pipeline is one-shot per render. (TODO: when the menu pipeline becomes
+    /// fully reactive, drop this bridge and emit live menu updates.)
     /// </summary>
     private static async IAsyncEnumerable<NodeMenuItemDefinition> ApprovalMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-        if (perms.HasFlag(Permission.Update))
-            yield return new NodeMenuItemDefinition("Request Approval", "RequestApproval",
-                Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"));
+        await foreach (var perms in PermissionHelper.GetEffectivePermissions(host.Hub, hubPath)
+            .ToAsyncEnumerableSequence())
+        {
+            if (perms.HasFlag(Permission.Update))
+                yield return new NodeMenuItemDefinition(
+                    "Request Approval", "RequestApproval",
+                    Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"));
+            yield break;
+        }
     }
 }

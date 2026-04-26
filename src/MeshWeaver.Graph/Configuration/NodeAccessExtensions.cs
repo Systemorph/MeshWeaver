@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -85,17 +86,17 @@ public record NodeAccessRuleSet
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             ruleSet.Rules.SelectMany(r => r.Operations).Distinct().ToArray();
 
-        public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
             foreach (var (operations, check) in ruleSet.Rules)
             {
                 if (operations.Count == 0 || operations.Contains(context.Operation))
                 {
                     if (check(context, userId))
-                        return Task.FromResult(true);
+                        return Observable.Return(true);
                 }
             }
-            return Task.FromResult(false);
+            return Observable.Return(false);
         }
     }
 }

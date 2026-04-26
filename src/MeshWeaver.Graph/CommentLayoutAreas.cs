@@ -69,7 +69,7 @@ public static class CommentLayoutAreas
 
         // Permissions checked once via Observable (no await, no blocking)
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
-        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, parentPath);
+        var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, parentPath);
 
         return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
         {
@@ -95,7 +95,7 @@ public static class CommentLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+        var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
         return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
         {

@@ -74,7 +74,7 @@ public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : 
 {
     public const string SourceType = "AzureBlob";
 
-    public Task<IStreamProvider> CreateAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
+    public IObservable<IStreamProvider> Create(ContentCollectionConfig config)
     {
         if (config.Settings == null)
             throw new ArgumentException("Settings are required for AzureBlob source type");
@@ -89,7 +89,8 @@ public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : 
         var blobServiceClient = factory.CreateClient(clientName);
 
         var basePath = config.BasePath ?? config.Settings?.GetValueOrDefault("BasePath") ?? "";
-        return Task.FromResult<IStreamProvider>(new AzureBlobStreamProvider(blobServiceClient, containerName, basePath));
+        return System.Reactive.Linq.Observable.Return<IStreamProvider>(
+            new AzureBlobStreamProvider(blobServiceClient, containerName, basePath));
     }
 }
 

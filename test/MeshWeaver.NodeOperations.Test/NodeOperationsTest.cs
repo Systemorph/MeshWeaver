@@ -24,15 +24,15 @@ public class RejectingNodeValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         if (context.Node.Name?.Contains("rejected", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 $"Node name '{context.Node.Name}' is not allowed by hub policy",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -43,19 +43,19 @@ public class RequireContentValidator(string nodeType) : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Only validate nodes of the specific type
         if (context.Node.NodeType != nodeType)
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (context.Node.Content == null)
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 "Node must have Content set",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -66,16 +66,16 @@ public class ProtectedNodeDeletionValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Check if Content contains a protected flag
         if (context.Node.Content is ProtectedContent { IsProtected: true })
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 $"Node '{context.Node.Path}' is protected and cannot be deleted",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -588,19 +588,19 @@ public class RequireTitleValidator : INodeValidator
 
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Create];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Only apply to specific NodeTypes
         if (!ApplicableNodeTypes.Contains(context.Node.NodeType))
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (context.Node.Content is ValidatedContent content && string.IsNullOrWhiteSpace(content.Title))
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 "ValidatedContent must have a non-empty Title",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -611,15 +611,15 @@ public class PreventLockedDeletionValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         if (context.Node.Content is ValidatedContent { Description: "locked" })
         {
-            return Task.FromResult(NodeValidationResult.Invalid(
+            return Observable.Return(NodeValidationResult.Invalid(
                 "Cannot delete node with locked description",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -846,20 +846,20 @@ public class HiddenNodeReadValidator : INodeValidator
 
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Only apply to nodes with the readable NodeType
         if (context.Node.NodeType != ReadableNodeType)
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (context.Node.Content is ReadableContent { IsHidden: true })
         {
-            return Task.FromResult(new NodeValidationResult(
+            return Observable.Return(new NodeValidationResult(
                 false,
                 $"Node '{context.Node.Path}' is hidden",
                 NodeRejectionReason.NodeHidden));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -930,16 +930,16 @@ public class BlockedNodeReadValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         if (context.Node.Name?.Contains("blocked", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(new NodeValidationResult(
+            return Observable.Return(new NodeValidationResult(
                 false,
                 $"Node '{context.Node.Path}' is blocked by global policy",
                 NodeRejectionReason.Unauthorized));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -1014,28 +1014,28 @@ public class NoVersionDowngradeValidator : INodeValidator
 
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Update];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         // Only apply to Update operations with existing node
         if (context.ExistingNode == null)
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         // Only apply to nodes with the updatable NodeType
         if (context.ExistingNode.NodeType != UpdatableNodeType)
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
 
         if (context.ExistingNode.Content is UpdatableContent existingContent &&
             context.Node.Content is UpdatableContent updatedContent)
         {
             if (updatedContent.Version < existingContent.Version)
             {
-                return Task.FromResult(new NodeValidationResult(
+                return Observable.Return(new NodeValidationResult(
                     false,
                     $"Cannot downgrade version from {existingContent.Version} to {updatedContent.Version}",
                     NodeRejectionReason.ValidationFailed));
             }
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 
@@ -1161,16 +1161,16 @@ public class ForbiddenNameUpdateValidator : INodeValidator
 {
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Update];
 
-    public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         if (context.Node.Name?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(new NodeValidationResult(
+            return Observable.Return(new NodeValidationResult(
                 false,
                 "Cannot update node name to contain 'forbidden'",
                 NodeRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(NodeValidationResult.Valid());
+        return Observable.Return(NodeValidationResult.Valid());
     }
 }
 

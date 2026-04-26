@@ -731,23 +731,30 @@ public static class MeshExtensions
                      ?? accessService?.CircuitContext?.ObjectId
                      ?? WellKnownUsers.Anonymous;
 
-        return Observable.FromAsync<IReadOnlyList<string>>(async ct =>
-        {
-            var denied = new List<string>();
-            foreach (var node in nodes)
+        // Compose: per-node permission check via the (now reactive) security
+        // service; collect deny list as we observe each emission.
+        return nodes
+            .ToObservable()
+            .SelectMany(node =>
             {
                 var pathToCheck = node.MainNode ?? node.Path;
-                var perms = await securityService.GetEffectivePermissionsAsync(pathToCheck, userId, ct);
-                if (!perms.HasFlag(Permission.Delete))
+                return securityService.GetEffectivePermissions(pathToCheck, userId)
+                    .Select(perms => (Node: node, Perms: perms));
+            })
+            .Where(x =>
+            {
+                if (!x.Perms.HasFlag(Permission.Delete))
                 {
-                    denied.Add(node.Path);
                     logger.LogDebug(
                         "[DeleteNode] permission-denied for {User} on {Path} (effective={Perms})",
-                        userId, node.Path, perms);
+                        userId, x.Node.Path, x.Perms);
+                    return true;
                 }
-            }
-            return (IReadOnlyList<string>)denied;
-        });
+                return false;
+            })
+            .Select(x => x.Node.Path)
+            .ToList()
+            .Select(deniedPaths => (IReadOnlyList<string>)deniedPaths);
     }
 
     /// <summary>
@@ -886,7 +893,7 @@ public static class MeshExtensions
             return Observable.Return<(string?, NodeCreationRejectionReason)?>(null);
 
         return validators
-            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Select(v => v.Validate(context))
             .Concat()
             .Where(result => !result.IsValid)
             .Select(result =>
@@ -1027,7 +1034,7 @@ public static class MeshExtensions
             return Observable.Return<(string?, NodeDeletionRejectionReason)?>(null);
 
         return validators
-            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Select(v => v.Validate(context))
             .Concat()
             .Where(result => !result.IsValid)
             .Select(result =>
@@ -1074,7 +1081,7 @@ public static class MeshExtensions
             return Observable.Return<(string?, ImmutableList<string>)>((null, ImmutableList<string>.Empty));
 
         return validators
-            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Select(v => v.Validate(context))
             .Concat()
             .ToList()
             .Select(results =>
@@ -1357,7 +1364,7 @@ public static class MeshExtensions
 
         // Run validators sequentially via Concat; emit the first failure (or null at the end).
         return validators
-            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Select(v => v.Validate(context))
             .Concat()
             .Where(result => !result.IsValid)
             .Select(result =>
@@ -1568,7 +1575,7 @@ public static class MeshExtensions
         var validators = hub.ServiceProvider.GetServices<INodeValidator>();
         return validators
             .Where(v => v.SupportedOperations.Count == 0 || v.SupportedOperations.Contains(NodeOperation.Move))
-            .Select(v => Observable.FromAsync(ct => v.ValidateAsync(context, ct)))
+            .Select(v => v.Validate(context))
             .Concat()
             .Where(result => !result.IsValid)
             .Select(result =>

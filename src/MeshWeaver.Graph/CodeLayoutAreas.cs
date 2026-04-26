@@ -62,10 +62,9 @@ public static class CodeLayoutAreas
             ?? Observable.Return(Array.Empty<MeshNode>());
 
         // Combine node data + caller's effective permissions so the Run button
-        // only renders when the caller has Execute. Permission stream is cached
-        // (5-min TTL) in PermissionHelper so this doesn't hit the security
-        // service on every node update.
-        var permissionStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+        // only renders when the caller has Execute. Permission stream is the
+        // live SecurityService observable — re-emits whenever assignments change.
+        var permissionStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
         return nodeStream.CombineLatest(permissionStream, (nodes, perms) =>
         {
@@ -351,60 +350,54 @@ public static class CodeLayoutAreas
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(viewHref));
 
-        // Save button
+        // Save button — sync click action; subscribes to the form snapshot then posts.
         buttonRow = buttonRow.WithView(Controls.Button("Save")
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
-            .WithClickAction(async actx =>
+            .WithClickAction(actx =>
             {
-                var currentCode = await host.Stream.GetDataStream<string>(codeDataId).FirstAsync();
-                var currentDisplayName = await host.Stream.GetDataStream<string>(displayNameDataId).FirstAsync();
-
-                var updatedCodeConfiguration = codeConfig with
-                {
-                    Code = currentCode
-                };
-
-                var delivery = actx.Host.Hub.Post(
-                    new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedCodeConfiguration),
-                    o => o.WithTarget(hubAddress))!;
-                IMessageDelivery callbackResponse;
-                try
-                {
-                    callbackResponse = await actx.Host.Hub.Observe(delivery).FirstAsync().ToTask();
-                }
-                catch (Exception ex)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving code:**\n\n{ex.Message}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-                if (callbackResponse.Message is not DataChangeResponse responseMsg)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving code:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving code:**\n\n{responseMsg.Log}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                // Navigate back to overview
-                var overviewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
-                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
+                host.Stream.GetDataStream<string>(codeDataId)
+                    .Take(1)
+                    .Subscribe(currentCode =>
+                    {
+                        var updatedCodeConfiguration = codeConfig with { Code = currentCode };
+                        var delivery = actx.Host.Hub.Post(
+                            new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedCodeConfiguration),
+                            o => o.WithTarget(hubAddress))!;
+                        actx.Host.Hub.Observe(delivery).Subscribe(
+                            callbackResponse =>
+                            {
+                                if (callbackResponse.Message is not DataChangeResponse responseMsg)
+                                {
+                                    var errorDialog = Controls.Dialog(
+                                        Controls.Markdown($"**Error saving code:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
+                                        "Save Failed"
+                                    ).WithSize("M");
+                                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                    return;
+                                }
+                                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
+                                {
+                                    var errorDialog = Controls.Dialog(
+                                        Controls.Markdown($"**Error saving code:**\n\n{responseMsg.Log}"),
+                                        "Save Failed"
+                                    ).WithSize("M");
+                                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                    return;
+                                }
+                                var overviewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
+                                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
+                            },
+                            ex =>
+                            {
+                                var errorDialog = Controls.Dialog(
+                                    Controls.Markdown($"**Error saving code:**\n\n{ex.Message}"),
+                                    "Save Failed"
+                                ).WithSize("M");
+                                actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                            });
+                    });
+                return Task.CompletedTask;
             }));
 
         stack = stack.WithView(buttonRow);

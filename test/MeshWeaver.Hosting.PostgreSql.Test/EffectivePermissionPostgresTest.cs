@@ -47,8 +47,8 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
 
     protected override async Task SetupAccessRightsAsync()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(TestUsers.Admin.ObjectId, "Admin", null, "system", TestTimeout);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null)).FirstAsync().ToTask(TestTimeout);
     }
 
     [Fact(Timeout = 120000)]
@@ -66,8 +66,8 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         await NodeFactory.CreateNode(orgNode);
 
         // 3) Ask ISecurityService.HasPermission for this node
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var permissions = await securityService.GetEffectivePermissionsAsync(
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var permissions = await Mesh.GetPermissionAsync(
             "Systemorph", TestUsers.Admin.ObjectId, TestTimeout);
 
         // The post-creation handler granted Admin to Roland via persisted AccessAssignment.

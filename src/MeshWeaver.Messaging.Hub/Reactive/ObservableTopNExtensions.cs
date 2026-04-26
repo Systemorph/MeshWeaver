@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Threading.Channels;
 
 namespace MeshWeaver.Reactive;
 
@@ -113,5 +114,97 @@ public static class ObservableTopNExtensions
                 observer.OnError(ex);
             }
         });
+    }
+
+    /// <summary>
+    /// Bridges <see cref="IObservable{T}"/> back to <see cref="IAsyncEnumerable{T}"/>
+    /// via an unbounded channel. Subscription is established on first enumeration and
+    /// disposed when enumeration completes or is cancelled. The reverse of
+    /// <see cref="ToObservableSequence{T}(IAsyncEnumerable{T})"/> — same mechanism the
+    /// autocomplete pipeline uses to bridge its merged IObservable back into legacy
+    /// <c>IAsyncEnumerable</c> consumers (Blazor autocomplete callbacks etc.).
+    /// </summary>
+    public static async IAsyncEnumerable<T> ToAsyncEnumerableSequence<T>(
+        this IObservable<T> source,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var channel = Channel.CreateUnbounded<T>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = true,
+            AllowSynchronousContinuations = false
+        });
+
+        var subscription = source.Subscribe(
+            item => channel.Writer.TryWrite(item),
+            ex => channel.Writer.TryComplete(ex),
+            () => channel.Writer.TryComplete());
+
+        try
+        {
+            while (await channel.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
+            {
+                while (channel.Reader.TryRead(out var item))
+                    yield return item;
+            }
+        }
+        finally
+        {
+            subscription.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Folds an observable into a stream of immutable sorted snapshots, ordered by
+    /// <paramref name="comparer"/>. Like <see cref="ScanTopN{T}(IObservable{T},int,IComparer{T})"/>
+    /// but with no size cap — every input is kept and inserted in sorted position. Emits an
+    /// empty list immediately on subscribe so consumers can render their initial empty state.
+    /// </summary>
+    /// <param name="source">Source observable.</param>
+    /// <param name="comparer">
+    /// Ordering. The smallest item by this comparer ends up at index 0 in the snapshot.
+    /// Items that compare equal are kept (no dedupe) — list, not set semantics.
+    /// </param>
+    public static IObservable<IReadOnlyList<T>> ScanSorted<T>(
+        this IObservable<T> source, IComparer<T> comparer)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(comparer);
+
+        return Observable.Create<IReadOnlyList<T>>(observer =>
+        {
+            var sorted = ImmutableList<T>.Empty;
+            var gate = new object();
+
+            observer.OnNext(sorted);
+
+            return source.Subscribe(
+                item =>
+                {
+                    ImmutableList<T> snapshot;
+                    lock (gate)
+                    {
+                        var idx = sorted.BinarySearch(item, comparer);
+                        if (idx < 0) idx = ~idx;
+                        sorted = sorted.Insert(idx, item);
+                        snapshot = sorted;
+                    }
+                    observer.OnNext(snapshot);
+                },
+                observer.OnError,
+                observer.OnCompleted);
+        });
+    }
+
+    /// <summary>
+    /// Convenience overload: bridges an <see cref="IAsyncEnumerable{T}"/> and applies
+    /// <see cref="ScanSorted{T}(IObservable{T}, IComparer{T})"/>.
+    /// </summary>
+    public static IObservable<IReadOnlyList<T>> ScanSorted<T>(
+        this IAsyncEnumerable<T> source, IComparer<T> comparer)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return source.ToObservableSequence().ScanSorted(comparer);
     }
 }

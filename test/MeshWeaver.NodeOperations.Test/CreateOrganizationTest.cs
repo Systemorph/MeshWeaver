@@ -57,8 +57,8 @@ public class CreateOrganizationTest(ITestOutputHelper output) : MonolithMeshTest
         partition!.NodeType.Should().Be("Partition");
 
         // Assert: Creator has Admin permissions on the org namespace
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var hasAdmin = await securityService.HasPermissionAsync(
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var hasAdmin = await Mesh.HasPermissionAsync(
             orgId, TestUsers.Admin.ObjectId, Permission.Update, TestTimeout);
         hasAdmin.Should().BeTrue("Creator should have Admin permissions on the organization");
 

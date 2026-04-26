@@ -6,6 +6,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -92,40 +93,47 @@ public static class NodeMenuItemsExtensions
 
     /// <summary>
     /// Default provider for the "Node" menu — per-node operations.
+    /// Bridges the live <see cref="GetMenuContext"/> observable into the IAsyncEnumerable
+    /// contract via <c>await foreach</c> + early <c>yield break</c> — first snapshot wins
+    /// per render. (TODO: emit live menu updates when the menu pipeline is fully reactive.)
     /// </summary>
     private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultNodeMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        var (menuPath, _, _, perms) = await GetMenuContextAsync(host);
+        await foreach (var menuCtx in GetMenuContext(host).ToAsyncEnumerableSequence())
+        {
+            var (menuPath, _, _, perms) = menuCtx;
 
-        var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
-        if (edit != null) yield return edit;
+            var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, perms);
+            if (edit != null) yield return edit;
 
-        var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
-        if (files != null) yield return files;
+            var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
+            if (files != null) yield return files;
 
-        yield return MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath);
+            yield return MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath);
 
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var viewerId = accessService?.Context?.ObjectId
-                       ?? accessService?.CircuitContext?.ObjectId;
-        var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
-        if (pin != null) yield return pin;
+            var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+            var viewerId = accessService?.Context?.ObjectId
+                           ?? accessService?.CircuitContext?.ObjectId;
+            var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
+            if (pin != null) yield return pin;
 
-        var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
-        if (versions != null) yield return versions;
+            var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
+            if (versions != null) yield return versions;
 
-        var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
-        if (copy != null) yield return copy;
+            var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
+            if (copy != null) yield return copy;
 
-        var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
-        if (move != null) yield return move;
+            var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
+            if (move != null) yield return move;
 
-        var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
-        if (recycle != null) yield return recycle;
+            var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
+            if (recycle != null) yield return recycle;
 
-        var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
-        if (delete != null) yield return delete;
+            var delete = DeleteLayoutArea.GetMenuItem(menuPath, perms);
+            if (delete != null) yield return delete;
+            yield break;
+        }
     }
 
     /// <summary>
@@ -134,39 +142,47 @@ public static class NodeMenuItemsExtensions
     private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultMeshMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        var (menuPath, _, menuNode, perms) = await GetMenuContextAsync(host);
+        await foreach (var menuCtx in GetMenuContext(host).ToAsyncEnumerableSequence())
+        {
+            var (menuPath, _, menuNode, perms) = menuCtx;
 
-        var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
-        if (create != null) yield return create;
+            var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
+            if (create != null) yield return create;
 
-        var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
-        if (import != null) yield return import;
+            var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
+            if (import != null) yield return import;
 
-        var export = ExportLayoutArea.GetMenuItem(menuPath, perms);
-        if (export != null) yield return export;
+            var export = ExportLayoutArea.GetMenuItem(menuPath, perms);
+            if (export != null) yield return export;
+            yield break;
+        }
     }
 
     /// <summary>
-    /// Shared node lookup: resolves the effective menu node (satellite → main), its name, and the user's permissions.
+    /// Shared node lookup: resolves the effective menu node (satellite → main), its name,
+    /// and the user's permissions. Pure reactive — composes the workspace MeshNode
+    /// stream with the live permission stream via <see cref="Observable.CombineLatest"/>.
     /// </summary>
-    private static async Task<(string menuPath, string nodeName, MeshNode? menuNode, Permission perms)>
-        GetMenuContextAsync(LayoutAreaHost host)
+    private static IObservable<(string menuPath, string nodeName, MeshNode? menuNode, Permission perms)>
+        GetMenuContext(LayoutAreaHost host)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        var nodes = await (host.Workspace.GetStream<MeshNode>()
+        var nodeStream = host.Workspace.GetStream<MeshNode>()
                 ?.Select(n => n ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>()))
-            .FirstAsync();
-        var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            ?? Observable.Return(Array.Empty<MeshNode>());
 
-        // For satellite nodes (threads, comments, etc.), the menu should refer to the main node
-        var menuPath = node != null && node.MainNode != node.Path ? node.MainNode : hubPath;
-        var menuNode = menuPath != hubPath ? nodes.FirstOrDefault(n => n.Path == menuPath) : node;
-        var nodeName = menuNode?.Name ?? node?.Name ?? "";
-
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, menuPath);
-        return (menuPath, nodeName, menuNode, perms);
+        return nodeStream
+            .Select(nodes =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+                // For satellite nodes (threads, comments, etc.), the menu should refer to the main node
+                var menuPath = node != null && node.MainNode != node.Path ? node.MainNode : hubPath;
+                var menuNode = menuPath != hubPath ? nodes.FirstOrDefault(n => n.Path == menuPath) : node;
+                var nodeName = menuNode?.Name ?? node?.Name ?? "";
+                return (menuPath, nodeName, menuNode);
+            })
+            .CombineLatest(PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
+                (ctx, perms) => (ctx.menuPath, ctx.nodeName, ctx.menuNode, perms));
     }
 
     /// <summary>
@@ -241,11 +257,8 @@ public static class NodeMenuItemsExtensions
         params NodeMenuItemDefinition[] items)
         => config.AddNodeMenuItems(MeshMenuContext, items);
 
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> YieldSingle(NodeMenuItemDefinition item)
-    {
-        await Task.CompletedTask;
-        yield return item;
-    }
+    private static IAsyncEnumerable<NodeMenuItemDefinition> YieldSingle(NodeMenuItemDefinition item)
+        => Observable.Return(item).ToAsyncEnumerableSequence();
 
     /// <summary>
     /// Comparer for <see cref="NodeMenuItemDefinition"/> used by the per-context sorted sets.

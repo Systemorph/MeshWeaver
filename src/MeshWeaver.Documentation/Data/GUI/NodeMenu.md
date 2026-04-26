@@ -84,11 +84,18 @@ Use `AddNodeMenuItems()` in your node type's `HubConfiguration` to add items bey
 config => config
     .AddNodeMenuItems(async (host, ctx) =>
     {
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(
-            host.Hub, host.Hub.Address.ToString());
-        if (perms.HasFlag(Permission.Update))
-            yield return new NodeMenuItemDefinition("Suggest", "Suggest",
-                RequiredPermission: Permission.Update, Order: 11);
+        // PermissionHelper.GetEffectivePermissions is IObservable<Permission> — never
+        // awaited directly. Bridge to IAsyncEnumerable via ToAsyncEnumerableSequence
+        // and let the menu pipeline consume via await foreach + early yield break.
+        await foreach (var perms in PermissionHelper
+            .GetEffectivePermissions(host.Hub, host.Hub.Address.ToString())
+            .ToAsyncEnumerableSequence())
+        {
+            if (perms.HasFlag(Permission.Update))
+                yield return new NodeMenuItemDefinition("Suggest", "Suggest",
+                    RequiredPermission: Permission.Update, Order: 11);
+            yield break;
+        }
     })
     .AddLayout(layout => layout
         .WithView("Suggest", MyEditArea.Suggest))

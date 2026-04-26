@@ -149,8 +149,8 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         await NodeFactory.CreateNode(orgNode);
 
         // Check permissions
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var permissions = await securityService.GetEffectivePermissionsAsync(
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var permissions = await Mesh.GetPermissionAsync(
             orgId, TestUsers.Admin.ObjectId, TestTimeout);
 
         Output.WriteLine($"Admin permissions on {orgId}: {permissions}");
@@ -161,7 +161,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         permissions.Should().HaveFlag(Permission.Delete);
 
         // Also check root-level create permission (needed to create new organizations)
-        var rootPermissions = await securityService.GetEffectivePermissionsAsync(
+        var rootPermissions = await Mesh.GetPermissionAsync(
             "", TestUsers.Admin.ObjectId, TestTimeout);
 
         Output.WriteLine($"Admin permissions on root: {rootPermissions}");
@@ -210,8 +210,8 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         // OrganizationAccessRule by hub path "Organization".
 
         // 1. Admin has Create permission via ISecurityService
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var hasCreate = await securityService.HasPermissionAsync(
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var hasCreate = await Mesh.HasPermissionAsync(
             "Organization", TestUsers.Admin.ObjectId, Permission.Create, TestTimeout);
         Output.WriteLine($"Admin has Create on 'Organization' via SecurityService: {hasCreate}");
         hasCreate.Should().BeTrue("Admin should have Create on Organization path");
@@ -232,7 +232,7 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
             Operation = NodeOperation.Create,
             Node = MeshNode.FromPath("TestOrg") with { NodeType = "Organization" }
         };
-        var ruleAllows = await orgRule.HasAccessAsync(ctx, TestUsers.Admin.ObjectId, TestTimeout);
+        var ruleAllows = await orgRule.HasAccess(ctx, TestUsers.Admin.ObjectId).FirstAsync().ToTask(TestTimeout);
         Output.WriteLine($"OrganizationAccessRule.HasAccessAsync for Create: {ruleAllows}");
         ruleAllows.Should().BeTrue(
             "OrganizationAccessRule should allow Create for admin user");
@@ -260,9 +260,9 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
         // The Organization NodeType definition node at path "Organization"
         // should be readable by an admin. This verifies the SubscribeRequest
         // to the Organization hub doesn't fail with "lacks Read permission".
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var hasRead = await securityService.HasPermissionAsync(
+        var hasRead = await Mesh.HasPermissionAsync(
             "Organization", TestUsers.Admin.ObjectId, Permission.Read, TestTimeout);
 
         Output.WriteLine($"Admin has Read on 'Organization': {hasRead}");

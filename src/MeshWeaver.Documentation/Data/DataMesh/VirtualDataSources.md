@@ -80,25 +80,21 @@ own slot in the workspace's `EntityStore`.
 
 # Lifecycle
 
-1. Hub starts → DataContext initializes data sources.
-2. The virtual type source's
-   [`InitializeAsync`](xref:MeshWeaver.Data.VirtualTypeSource`1.InitializeAsync*)
-   subscribes to the stream provider, calls `.Take(1).Timeout(...)`
-   to await the first emission, and seeds the workspace's
-   `EntityStore` with those instances.
-3. The data source's
+1. Hub starts → DataContext sets up data sources.
+2. The virtual data source's
    [`SetupDataSourceStream`](xref:MeshWeaver.Data.VirtualDataSource.SetupDataSourceStream*)
-   keeps the subscription alive and updates the workspace stream on
-   every subsequent emission via `stream.Update(...)`.
-4. Hub-internal code reads via `workspace.GetStream(new CollectionReference("name"))`
-   (or `workspace.GetStream<T>()` if there's only one collection of
-   `T`).
-5. Hub disposal tears down the subscription.
+   subscribes to the stream provider and folds every emission into the
+   workspace stream via `stream.Update(...)`. The subscription is hot
+   for the life of the data source.
+3. Hub-internal code subscribes to `workspace.GetStream(...)` and
+   stays subscribed — no `Take(1)`, no draining the stream after the
+   first value.
+4. Hub disposal tears down the subscription.
 
 The framework caches the stream observable per `(hub, source)` via
 `Replay(1).RefCount()`, so multiple consumers within the hub share a
 single underlying subscription and the latest emission is always
-available without a fresh round-trip.
+available to a new subscriber without a fresh round-trip.
 
 # Reading from a virtual collection
 
@@ -107,22 +103,22 @@ Inside a hub handler, service, or layout area:
 ```csharp
 var workspace = hub.GetWorkspace();
 
-// Single-collection-of-T case:
+// Single-collection-of-T case — long-lived subscription.
 workspace.GetStream<MyType>()
-    ?.Subscribe(items => /* items is the latest snapshot */);
+    ?.Subscribe(items => /* react to every snapshot */);
 
-// Multiple collections of the same T — disambiguate by name:
+// Multiple collections of the same T — disambiguate by name.
 workspace.GetStream(new CollectionReference("Sources"))
-    .Take(1)
     .Subscribe(change =>
     {
         var nodes = change.Value!.Instances.Values.OfType<MeshNode>();
-        // ...
+        /* react to every snapshot */
     });
 ```
 
-Subscribers see the **latest snapshot on subscribe** (Replay(1)),
-plus every subsequent update.
+Subscribers receive the latest snapshot on subscribe (`Replay(1)`)
+and every subsequent update — keep the subscription alive for the
+life of the consumer.
 
 # Cross-hub virtual data sources (parent-sync pattern)
 
@@ -154,27 +150,20 @@ config.AddData(data => data
 In Orleans, the remote-stream subscription crosses silos via the
 routing grain — same delivery path as `MeshNodeReference` reads.
 
-# Caveats
+# Why this is safe — the actor model
 
-- **Read-only mirror semantics.** The synced collection reflects the
-  external source. Writing to it locally does not propagate back. To
-  modify the underlying state, post the appropriate request via
-  `IMeshService` / `IMessageHub.Post`; the source stream pushes the
-  result back into the workspace.
-- **Initialization order.** The synced collection isn't populated
-  until the hub's data context finishes initializing. Hub flows that
-  read from it during `WithInitialization(...)` must compose with
-  `Take(1)` on the workspace stream rather than expecting synchronous
-  availability.
-- **Stream backpressure.** Each emission triggers a workspace update
-  ⇒ a fan-out to subscribers. If the source stream emits 1000 times a
-  second, the workspace will too. For high-rate streams, debounce or
-  batch in the stream provider before passing to `WithVirtualType`.
-- **One subscription per `(hub, query)`.** The `Replay(1).RefCount()`
-  cache means the framework opens one upstream subscription per
-  registered virtual collection. Multiple `workspace.GetStream` calls
-  by hub-internal consumers share that subscription — they do *not*
-  cause additional upstream work.
+The hub is a single-threaded actor. The data source's subscription to
+its source observable, the workspace cache, and any reader that reads
+through `workspace.GetStream(...)` all run on the same single thread.
+There are no other callers, no concurrent updates to the workspace,
+no torn reads. That is why caching is just plain in-memory state: the
+actor model is the integrity guarantee.
+
+# Caveat — RAM footprint
+
+The only real cost is memory: the synced collection replicates the
+underlying state in the hub's address space. Pick the source stream
+(or query) narrow enough that the live set actually belongs in RAM.
 
 # Related
 

@@ -1,4 +1,6 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
@@ -22,7 +24,12 @@ public static class AccessControlPipeline
     private static readonly ConcurrentDictionary<Type, RequiresPermissionAttribute?> AttributeCache = new();
 
     /// <summary>
-    /// Adds the access control pipeline step to a hub configuration.
+    /// Adds the access control pipeline step to a per-node hub. Checks
+    /// <see cref="RequiresPermissionAttribute"/> on incoming messages and rejects
+    /// unauthorized deliveries via <see cref="DeliveryFailure"/>.
+    /// (The <see cref="GetPermissionRequest"/> handler is registered on the mesh
+    /// hub itself by <see cref="SecurityServiceExtensions.AddRowLevelSecurity"/>
+    /// — see <see cref="HandleGetPermission"/>.)
     /// </summary>
     public static MessageHubConfiguration AddAccessControlPipeline(this MessageHubConfiguration config)
         => config.AddDeliveryPipeline(pipeline =>
@@ -39,11 +46,11 @@ public static class AccessControlPipeline
             // Hub-level permission rules (e.g., WithPublicRead) — checked before ISecurityService
             var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
 
-            return pipeline.AddPipeline(async (delivery, ct, next) =>
+            return pipeline.AddPipeline((delivery, ct, next) =>
             {
                 var attr = GetAttribute(delivery.Message.GetType());
                 if (attr == null)
-                    return await next.Invoke(delivery, ct);
+                    return next.Invoke(delivery, ct);
 
                 var userId = ResolveIdentity(delivery, accessService);
 
@@ -62,37 +69,106 @@ public static class AccessControlPipeline
 
                 var hubPath = string.Join("/", hub.Address.Segments);
 
-                foreach (var (path, permission) in attr.GetPermissionChecks(delivery, hubPath))
+                // Filter the permission checks attribute decided this delivery needs;
+                // hub-level rules (e.g. WithPublicRead) get short-circuited synchronously
+                // here so the reactive pipeline below only handles the remaining checks.
+                var pendingChecks = ImmutableList<(string Path, Permission Permission)>.Empty;
+                foreach (var check in attr.GetPermissionChecks(delivery, hubPath))
                 {
-                    // Check hub-level rules first (e.g., WithPublicRead grants Read to authenticated users)
-                    if (hubPermissions != null && hubPermissions.HasPermission(permission, delivery, userId))
+                    if (hubPermissions != null && hubPermissions.HasPermission(check.Permission, delivery, userId))
                         continue;
-
-                    var hasPermission = !string.IsNullOrEmpty(userId)
-                        ? await securityService.HasPermissionAsync(path, userId, permission, ct)
-                        : await securityService.HasPermissionAsync(path, permission, ct);
-
-                    if (!hasPermission)
-                    {
-                        var effectiveUser = userId ?? "(anonymous)";
-                        var message = $"Access denied: user '{effectiveUser}' lacks {permission} permission on '{path}'";
-                        logger?.LogWarning("AccessControlPipeline: {Message}", message);
-
-                        hub.Post(
-                            new DeliveryFailure(delivery)
-                            {
-                                ErrorType = ErrorType.Unauthorized,
-                                Message = message
-                            },
-                            o => o.ResponseFor(delivery));
-
-                        return delivery.Processed();
-                    }
+                    pendingChecks = pendingChecks.Add(check);
                 }
 
-                return await next.Invoke(delivery, ct);
+                if (pendingChecks.IsEmpty)
+                    return next.Invoke(delivery, ct);
+
+                // Sync-delivery shape (Doc/Architecture/AsynchronousCalls.md): the
+                // pipeline lambda returns delivery.Forwarded() immediately. The
+                // reactive chain runs each permission check via the IObservable<bool>
+                // surface (.HasPermission), short-circuits on the first denial, and
+                // either posts the rejection response or fires next from inside
+                // Subscribe — fire-and-forget for next.Invoke (its Task is not
+                // observed by anyone since downstream handlers post their own response).
+                var decided = false;
+                pendingChecks.ToObservable()
+                    .Select(check => (string.IsNullOrEmpty(userId)
+                            ? securityService.HasPermission(check.Path, check.Permission)
+                            : securityService.HasPermission(check.Path, userId, check.Permission))
+                        .Select(ok => (Check: check, Ok: ok)))
+                    .Concat()
+                    .Subscribe(
+                        result =>
+                        {
+                            if (decided || result.Ok) return; // permitted or already rejected
+                            decided = true;
+                            var effectiveUser = userId ?? "(anonymous)";
+                            var message = $"Access denied: user '{effectiveUser}' lacks {result.Check.Permission} permission on '{result.Check.Path}'";
+                            logger?.LogWarning("AccessControlPipeline: {Message}", message);
+
+                            hub.Post(
+                                new DeliveryFailure(delivery)
+                                {
+                                    ErrorType = ErrorType.Unauthorized,
+                                    Message = message
+                                },
+                                o => o.ResponseFor(delivery));
+                        },
+                        ex =>
+                        {
+                            if (decided) return;
+                            decided = true;
+                            // Permission lookup failed — let next process naturally so a
+                            // downstream handler can decide what to do (avoids stuck deliveries).
+                            logger?.LogWarning(ex, "AccessControlPipeline: permission check threw — falling through");
+                            _ = next.Invoke(delivery, ct);
+                        },
+                        () =>
+                        {
+                            if (decided) return;
+                            decided = true;
+                            // All checks passed — invoke next; fire-and-forget.
+                            _ = next.Invoke(delivery, ct);
+                        });
+
+                return Task.FromResult(delivery.Forwarded());
             });
         });
+
+    /// <summary>
+    /// Sync handler for <see cref="GetPermissionRequest"/>. The hub always
+    /// evaluates permissions on its OWN path (<c>hub.Address.ToString()</c>) —
+    /// the request never carries a path; routing decides which hub responds.
+    /// Resolves the per-hub scoped <see cref="ISecurityService"/> and replies
+    /// via Subscribe — no await, no scope juggling at the caller site.
+    /// </summary>
+    internal static IMessageDelivery HandleGetPermission(IMessageHub hub, IMessageDelivery<GetPermissionRequest> request)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.GetPermission");
+        var ownPath = hub.Address.ToString();
+        logger?.LogDebug("[GP] enter hub={Hub}", ownPath);
+
+        var sec = hub.ServiceProvider.GetService<ISecurityService>();
+        if (sec is null)
+        {
+            logger?.LogDebug("[GP] sec is null → posting None");
+            hub.Post(new GetPermissionResponse(Permission.None), o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        // Always evaluate for the current user on the hub's own path.
+        sec.GetEffectivePermissions(ownPath)
+            .Take(1)
+            .Subscribe(perms =>
+            {
+                logger?.LogDebug("[GP] reply hub={Hub} perms={Perms}", ownPath, perms);
+                hub.Post(new GetPermissionResponse(perms), o => o.ResponseFor(request));
+            },
+            ex => logger?.LogWarning(ex, "[GP] stream error hub={Hub}", ownPath));
+
+        return request.Processed();
+    }
 
     /// <summary>
     /// Resolves the user identity from multiple sources in priority order:
