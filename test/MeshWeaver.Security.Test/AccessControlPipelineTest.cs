@@ -105,13 +105,13 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         var nodeAddress = new Address(NodePath);
 
         // GetDataRequest also has [RequiresPermission(Permission.Read)]
-        // AwaitResponse wraps DeliveryFailureException in AggregateException
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask());
+        // hub.Observe(...).FirstAsync().ToTask() surfaces DeliveryFailureException
+        // directly via OnError — no AggregateException wrapping.
+        var ex = await Assert.ThrowsAsync<DeliveryFailureException>(() =>
+            client.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask());
 
-        ex.InnerException.Should().BeOfType<DeliveryFailureException>();
-        ex.InnerException!.Message.Should().Contain("Access denied");
-        ex.InnerException.Message.Should().Contain("NoAccess");
+        ex.Message.Should().Contain("Access denied");
+        ex.Message.Should().Contain("NoAccess");
     }
 }
 
