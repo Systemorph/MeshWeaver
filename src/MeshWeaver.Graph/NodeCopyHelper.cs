@@ -76,15 +76,17 @@ public static class NodeCopyHelper
                     if (force)
                         return create;
 
-                    // Existence-check via one-shot GetDataRequest on the per-node
-                    // MeshNodeReference reducer — true request/response, no lingering
-                    // subscription. The cold hub never activates for a non-existent
-                    // path, so the helper returns null after Timeout — that's our
-                    // "doesn't exist" signal.
+                    // Existence-check via one-shot GetDataRequest. Routing fallback:
+                    // when no per-node hub exists at newPath, monolith routing forwards
+                    // the request to the closest ancestor's hub, which returns ITS OWN
+                    // MeshNode. Filter (.Where) for path-equal matches; treat fallback
+                    // as "not found" so the create proceeds.
                     return hub.GetMeshNode(newPath, TimeSpan.FromSeconds(5))
                         .SelectMany(existing =>
                         {
-                            if (existing != null)
+                            var actuallyExists = existing != null
+                                && string.Equals(existing.Path, newPath, StringComparison.OrdinalIgnoreCase);
+                            if (actuallyExists)
                             {
                                 logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
                                 return Observable.Return(0);

@@ -181,6 +181,16 @@ public static class MeshNodeStreamExtensions
                                     MeshNode? node = resp.Data as MeshNode;
                                     if (node == null && resp.Data is JsonElement je)
                                         node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
+
+                                    // Routing-fallback safety: when no per-node hub
+                                    // exists at the requested path, monolith routing
+                                    // forwards to the closest ancestor's hub, which
+                                    // returns ITS OWN MeshNode. Treat any path mismatch
+                                    // as "not found" so callers see absence not the
+                                    // wrong node.
+                                    if (node != null && !string.Equals(node.Path, path, StringComparison.OrdinalIgnoreCase))
+                                        node = null;
+
                                     EmitOnce(node);
                                 }
                                 else
