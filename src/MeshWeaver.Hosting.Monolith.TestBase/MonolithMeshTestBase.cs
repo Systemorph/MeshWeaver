@@ -66,8 +66,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
-        TestUsers.DevLogin(Mesh);
+        // Pre-warm BEFORE first Mesh access — DevLogin would otherwise trigger
+        // Mesh construction which can hit the NodeType-hub recursion before
+        // PreWarmNodeTypeHubs gets a chance to populate the cache.
         PreWarmNodeTypeHubs();
+        TestUsers.DevLogin(Mesh);
         await SetupAccessRightsAsync();
     }
 
