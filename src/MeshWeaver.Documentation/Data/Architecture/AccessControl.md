@@ -135,30 +135,51 @@ A computed `EffectiveAssignments` virtual collection then merges
 `LocalPolicies` caps and `BreaksInheritance`. That collection is what
 *child* hubs subscribe to.
 
-## Evaluation Flow
+## Evaluation Flow — fully local, zero round-trips
+
+The check happens **inside** the resource's per-node hub via a
+**hub-scoped `ISecurityService`** that reads from the hub's own
+workspace. No cross-hub request, no global singleton, no storage walk.
+
+Every per-node hub registers an `ISecurityService` as scoped DI in its
+own service container. The instance closes over the hub's `IWorkspace`
+and answers from these synced virtual data sources:
+
+- `LocalAccessAssignments` — own `_Access` subtree.
+- `InheritedEffectiveAssignments` — parent hub's `EffectiveAssignments`
+  via cross-hub remote stream.
+- `EffectiveAssignments` — computed merge of the two above + local
+  policy caps.
+- `LocalPolicies` — own `_Policy` node.
+- `GroupMemberships` — global `nodeType:GroupMembership` set, synced
+  via `WithMeshQuery<GroupMembership>`.
+- `Roles` — custom role catalogue, synced from the mesh hub's `Roles`
+  virtual collection.
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant Pipeline as AccessControlPipeline
-    participant UserHub as User/Alice hub
-    participant ResourceHub as ACME/Project hub
+    participant Pipeline as AccessControlPipeline (in resource hub)
+    participant SecSvc as ISecurityService (hub-scoped)
+    participant Workspace as Hub workspace
     Client->>Pipeline: deliver MyMessage[RequiresPermission(Update)] target=ACME/Project
-    Pipeline->>UserHub: GetGroupMembershipsRequest
-    UserHub-->>Pipeline: GroupPaths [Group/dev-team, Group/admins]
-    Pipeline->>ResourceHub: CheckPermissionRequest(Alice, [Group/dev-team, Group/admins], Update)
-    ResourceHub->>ResourceHub: read local EffectiveAssignments (already populated)
-    ResourceHub->>ResourceHub: filter by Alice OR any group
-    ResourceHub->>ResourceHub: sum role permissions, apply policy caps
-    ResourceHub-->>Pipeline: CheckPermissionResponse(IsGranted=true, EffectivePermissions=Read|Update|Comment)
+    Pipeline->>SecSvc: HasPermission(userId, Update)
+    SecSvc->>Workspace: GetStream(EffectiveAssignments)
+    SecSvc->>Workspace: GetStream(GroupMemberships)
+    SecSvc->>Workspace: GetStream(LocalPolicies)
+    Workspace-->>SecSvc: latest snapshots (already populated)
+    SecSvc->>SecSvc: filter assignments by userId OR groups, sum role permissions, apply caps
+    SecSvc-->>Pipeline: IsGranted=true (Read|Update|Comment)
     Pipeline->>Client: invoke handler (or DeliveryFailure on Unauthorized)
 ```
 
-The pipeline does two reactive round-trips per check: one to the user's
-hub for group memberships (synced via
-`WithMeshQuery<GroupMembership>("nodeType:GroupMembership member:User/{id}")`),
-one to the resource's hub for the actual decision. Both hubs answer
-from local workspace state — no storage walk anywhere.
+The user identity rides on the in-flight delivery's
+`AccessContext.ObjectId` — no need to ask anyone where it is.
+
+All inputs are **already in the hub's workspace** by the time the
+check fires (synced reactively via `IDataChangeNotifier`). The check
+itself is a couple of LINQ filters over in-memory collections —
+microseconds, not the hundreds of ms a storage walk used to take.
 
 ## Reactive update semantics
 
@@ -246,84 +267,97 @@ Access control uses these shipped node types:
 - **Content**: `Role` record (Id, DisplayName, Permissions, IsInheritable)
 - Custom roles extend the built-in set
 
-# Permission-check contract
+# ISecurityService — hub-scoped, 100% IObservable
 
-The read path lives on **per-node hubs**, not on a global service. Two
-request types:
-
-```csharp
-// On every per-node hub.
-public record CheckPermissionRequest(
-    string UserId,
-    IReadOnlyList<string> GroupPaths,
-    Permission Permission)
-    : IRequest<CheckPermissionResponse>;
-
-public record CheckPermissionResponse(
-    bool IsGranted,
-    Permission EffectivePermissions,    // for UI helpers
-    string? DenialReason);
-
-// On every per-user hub.
-public record GetGroupMembershipsRequest()
-    : IRequest<GetGroupMembershipsResponse>;
-
-public record GetGroupMembershipsResponse(
-    IReadOnlyList<string> GroupPaths);
-```
-
-Consumers compose them reactively (see
-[Asynchronous Calls](AsynchronousCalls)):
-
-```csharp
-var groups = await hub.Observe(
-        new GetGroupMembershipsRequest(),
-        o => o.WithTarget(new Address($"User/{userId}")))
-    .FirstAsync().ToTask(ct);
-
-var resp = await hub.Observe(
-        new CheckPermissionRequest(userId, groups.GroupPaths, Permission.Update),
-        o => o.WithTarget(new Address(targetPath)))
-    .FirstAsync().ToTask(ct);
-```
-
-# ISecurityService — write-side only, 100% IObservable
-
-`ISecurityService` is now a **write-only** facade. Read-side methods
-(`HasPermissionAsync`, `GetEffectivePermissionsAsync`) have moved to
-the per-node-hub `CheckPermissionRequest` above. Writes stay because
-they POST `CreateNodeRequest` / `DeleteNodeRequest`.
+`ISecurityService` is registered **scoped per per-node hub**, never as
+a singleton. Each instance closes over the hub's `IWorkspace` and
+answers reads from the synced virtual collections listed above. Writes
+post `CreateNodeRequest` / `UpdateNodeRequest` / `DeleteNodeRequest`
+through the hub's `IMessageHub` and surface the response as an
+observable.
 
 **No `Task` returns anywhere on the surface** — every method returns
-`IObservable<T>` (`Unit` for fire-and-forget). Bridging to `Task` from
-hub-reachable code is the canonical deadlock pattern (see
-[Asynchronous Calls](AsynchronousCalls)); the only sanctioned bridge is
-at the test edge or grain-lifecycle boundary, not in production
-service surfaces.
+`IObservable<T>` (`Unit` for fire-and-forget writes). Bridging to
+`Task` from hub-reachable code is the canonical deadlock pattern (see
+[Asynchronous Calls](AsynchronousCalls)); the only sanctioned bridge
+is at the test edge or grain-lifecycle boundary.
 
 ```csharp
 public interface ISecurityService
 {
-    // Role management
-    IObservable<Role?> GetRole(string roleId);
-    IObservable<Role> GetRoles();           // emits per-role
-    IObservable<Unit> SaveRole(Role role);
+    // Read — answers from the hub's own workspace synchronously.
+    IObservable<bool>       HasPermission(string userId, Permission permission);
+    IObservable<Permission> GetEffectivePermissions(string userId);
 
-    // Convenience methods (create/delete AccessAssignment MeshNodes)
+    // Write — POSTs CreateNodeRequest / UpdateNodeRequest / DeleteNodeRequest
+    // via the hub's IMessageHub and surfaces the result.
     IObservable<Unit> AddUserRole(string userId, string roleId, string? targetNamespace, string? assignedBy);
     IObservable<Unit> RemoveUserRole(string userId, string roleId, string? targetNamespace);
 
-    // Partition policy
-    IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace);
     IObservable<Unit> SetPolicy(string targetNamespace, PartitionAccessPolicy policy);
     IObservable<Unit> RemovePolicy(string targetNamespace);
+    IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace);
+
+    // Role catalogue (synced from a Roles virtual collection).
+    IObservable<Role?> GetRole(string roleId);
+    IObservable<Role>  GetRoles();           // emits per-role
+    IObservable<Unit>  SaveRole(Role role);
 }
 ```
 
 Callers compose with `.Subscribe(onNext, onError)` — never `await`.
-The implementation internally posts `CreateNodeRequest` /
-`UpdateNodeRequest` / `DeleteNodeRequest` via `IMeshService` and
-returns the resulting observable.
+The previous singleton's storage walks, `_permissionCache`,
+`_policyCache`, `_customRoleCache`, and `_staticAccessAssignments`
+collection are all gone. **No per-process global state remains.**
+
+## Writes drive the stream — persistence subscribes
+
+Writes (`AddUserRole`, `SetPolicy`, …) **update the hub's local
+workspace stream directly**. The stream is the source of truth. The
+persistence layer (file system / PostgreSQL / Cosmos) is itself a
+**subscriber** of the stream — it observes updates and writes to its
+backing store. Child hubs subscribing to the parent's
+`EffectiveAssignments` see the change via the same stream-sync
+protocol used for `MeshNodeReference`.
+
+```
+┌──────────────────────────────────────┐
+│  ISecurityService.AddUserRole(...)   │
+└──────────────────┬───────────────────┘
+                   │ workspace.UpdateMeshNode (or stream.Update for collections)
+                   ▼
+┌──────────────────────────────────────┐
+│  Hub's local workspace stream         │
+│    EffectiveAssignments emits new ▶   │ ← UI / SecurityService.HasPermission
+│    LocalAccessAssignments emits new ▶ │   subscribers see it instantly
+└──────────────────┬───────────────────┘
+                   │ stream subscription
+       ┌───────────┴────────────┐
+       ▼                        ▼
+┌────────────┐      ┌────────────────────────┐
+│ Persister  │      │ Child hub remote stream │
+│  (DB/disk) │      │  inherited assignments   │
+└────────────┘      └────────────────────────┘
+```
+
+Implementation shape:
+
+```csharp
+public IObservable<Unit> AddUserRole(string userId, string roleId,
+    string? targetNamespace, string? assignedBy)
+{
+    var node = BuildAccessAssignmentNode(...);
+    // The stream update IS the write. Persistence + downstream hubs
+    // observe it.
+    return workspace.UpdateMeshNode(node).Select(_ => Unit.Default);
+}
+```
+
+Why: callers (UI, scripts, tests) need read-after-write consistency.
+The write observable completes when the workspace stream has surfaced
+the change — a follow-up `HasPermission(...)` already reflects it. The
+DB write happens off the critical path, with eventual consistency
+guaranteed by the persister's stream subscription.
 
 # Anonymous and Public Access
 
