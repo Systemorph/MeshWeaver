@@ -1,4 +1,6 @@
 ﻿using MeshWeaver.Layout;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -39,8 +41,7 @@ public static class UserNodeType
             services.AddSingleton<INodeTypeAccessRule>(sp =>
                 new UserAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
-                new UserScopeGrantHandler(
-                    sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                new UserScopeGrantHandler(sp.GetRequiredService<IMeshService>()));
             return services;
         });
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
@@ -127,34 +128,26 @@ public static class UserNodeType
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             [NodeOperation.Create, NodeOperation.Read, NodeOperation.Update];
 
-        public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
-            // Read:
-            // - NodeType definition ("User"): always readable
-            // - Direct user nodes ("User/{id}"): publicly readable (any authenticated caller)
-            // - Children (threads, activities, etc.): delegate to ISecurityService
             if (context.Operation == NodeOperation.Read)
             {
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath))
-                    return false;
-                // NodeType definition
+                    return Observable.Return(false);
                 if (nodePath.Equals("User", StringComparison.OrdinalIgnoreCase))
-                    return true;
-                // Direct user nodes are publicly readable
+                    return Observable.Return(true);
                 if (nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
                     && !nodePath["User/".Length..].Contains('/'))
-                    return !string.IsNullOrEmpty(userId);
-                // Children: delegate to standard permission checks
+                    return Observable.Return(!string.IsNullOrEmpty(userId));
                 if (string.IsNullOrEmpty(userId))
-                    return false;
-                return await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, ct);
+                    return Observable.Return(false);
+                return securityService.HasPermission(nodePath, userId, Permission.Read);
             }
 
             if (string.IsNullOrEmpty(userId))
-                return false;
+                return Observable.Return(false);
 
-            // Update: user can edit their own node
             if (context.Operation == NodeOperation.Update)
             {
                 var nodePath = context.Node.Path;
@@ -163,12 +156,11 @@ public static class UserNodeType
                     var userScopePath = $"User/{userId}";
                     if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
                         || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
-                        return true;
+                        return Observable.Return(true);
                 }
             }
 
-            // Create/Update: portal namespace identities (onboarding flow)
-            return IsPortalIdentity(userId);
+            return Observable.Return(IsPortalIdentity(userId));
         }
     }
 
@@ -202,7 +194,7 @@ public static class UserNodeType
         if (securityService == null)
             yield break;
 
-        var rootPerms = await securityService.GetEffectivePermissionsAsync("", viewerId);
+        var rootPerms = await securityService.GetEffectivePermissions("", viewerId).FirstAsync().ToTask();
         if (!rootPerms.HasFlag(Permission.All))
             yield break;
 
@@ -270,21 +262,41 @@ public static class UserNodeType
     /// Materialized into user_effective_permissions so the standard access control SQL
     /// handles visibility for all satellite nodes (threads, activities, etc.) under the user.
     /// </summary>
-    private class UserScopeGrantHandler(ISecurityService securityService) : INodePostCreationHandler
+    private class UserScopeGrantHandler(IMeshService meshService) : INodePostCreationHandler
     {
         public string NodeType => UserNodeType.NodeType;
 
-        public async Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
+        public Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
         {
-            // Grant the user Admin role on their own User node path.
-            // This materializes into user_effective_permissions with full access on User/{userId}/...
-            // so the user can manage all their own content (threads, activities, etc.).
+            // Grant the user Admin role on their own User/{userId} scope by
+            // creating the AccessAssignment node directly via the mesh service.
+            // No SecurityService.AddUserRole — that surface was removed; mutations
+            // ride the standard data layer.
             var userId = createdNode.Id;
             if (string.IsNullOrEmpty(userId))
-                return;
+                return Task.CompletedTask;
 
             var userPath = createdNode.Path ?? $"User/{userId}";
-            await securityService.AddUserRoleAsync(userId, Role.Admin.Id, userPath, assignedBy: "system", ct);
+            var assignmentNode = new MeshNode($"{userId}_Access", $"{userPath}/_Access")
+            {
+                NodeType = "AccessAssignment",
+                Name = $"{userId} Access",
+                MainNode = userPath,
+                Content = new AccessAssignment
+                {
+                    AccessObject = userId,
+                    DisplayName = userId,
+                    Roles = System.Collections.Immutable.ImmutableList<RoleAssignment>.Empty
+                        .Add(new RoleAssignment { Role = Role.Admin.Id }),
+                },
+            };
+
+            // Fire-and-forget Subscribe — actor model serialises the per-node
+            // hub's writes; we don't need to await before returning.
+            meshService.CreateNode(assignmentNode).Subscribe(
+                _ => { },
+                _ => { /* error logging happens at the data layer */ });
+            return Task.CompletedTask;
         }
     }
 }

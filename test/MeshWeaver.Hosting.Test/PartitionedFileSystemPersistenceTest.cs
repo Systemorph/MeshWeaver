@@ -463,8 +463,11 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions, TestContext.Current.CancellationToken);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions, TestContext.Current.CancellationToken);
 
-        // Act - secure root-level children
-        var children = await _router.GetChildrenSecureAsync(null, "user1", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
+        // Act - secure root-level children (now returns IObservable<MeshNode>)
+        var children = await _router.GetChildrenSecure(null, "user1", _jsonOptions)
+            .ToList()
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         // Assert - should return root nodes from all partitions
         children.Should().HaveCount(2);

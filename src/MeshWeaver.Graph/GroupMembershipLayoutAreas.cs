@@ -57,7 +57,7 @@ public static class GroupMembershipLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
         var ownNode = host.Workspace.GetMeshNodeStream();
-        var permsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+        var permsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
         return ownNode.CombineLatest(permsStream, (node, perms) =>
             {

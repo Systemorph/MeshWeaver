@@ -255,7 +255,7 @@ public static class CommentsView
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
-        var permissionsStream = Observable.FromAsync(() => PermissionHelper.GetEffectivePermissionsAsync(host.Hub, nodePath));
+        var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, nodePath);
 
         // Reactive comment list via mesh query
         var commentsDataId = $"pageComments_{nodePath.Replace("/", "_")}";

@@ -81,15 +81,16 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateNode_WithPermission_Succeeds()
     {
         // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "authorized-user";
         const string parentPath = "Authorized/Parent";
         var nodeId = $"TestNode_{Guid.NewGuid().AsString()}";
         var nodePath = $"{parentPath}/{nodeId}";
 
-        // Grant Editor role (includes Create permission)
-        await securityService.AddUserRoleAsync(userId, "Editor", parentPath, "system", TestTimeout);
+        // Grant Editor role (includes Create permission) — runtime AccessAssignment node.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Editor", parentPath))
+            .FirstAsync().ToTask(TestTimeout);
 
         var node = MeshNode.FromPath(nodePath) with
         {
@@ -125,7 +126,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateNode_IdChanged_CreatesNewNodeAndDeletesTransient()
     {
         // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "editor-user";
         const string parentNamespace = "Editor/Projects";
@@ -134,8 +135,9 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         var transientPath = $"{parentNamespace}/{transientId}";
         var finalPath = $"{parentNamespace}/{desiredId}";
 
-        // Grant Editor role
-        await securityService.AddUserRoleAsync(userId, "Editor", parentNamespace, "system", TestTimeout);
+        // Grant Editor role — runtime AccessAssignment node.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Editor", parentNamespace))
+            .FirstAsync().ToTask(TestTimeout);
 
         // Step 1: Create transient node with GUID-based Id
         var transientNode = MeshNode.FromPath(transientPath) with
@@ -187,7 +189,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateTransientNode_PreservesDesiredId()
     {
         // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "test-user";
         const string parentPath = "Test/DesiredId";
@@ -195,8 +197,9 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         var desiredId = "UserPreferredId";
         var nodePath = $"{parentPath}/{transientId}";
 
-        // Grant permissions
-        await securityService.AddUserRoleAsync(userId, "Admin", parentPath, "system", TestTimeout);
+        // Grant Admin role — runtime AccessAssignment node.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", parentPath))
+            .FirstAsync().ToTask(TestTimeout);
 
         var node = MeshNode.FromPath(nodePath) with
         {
@@ -230,15 +233,16 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task ConfirmTransientNode_UpdatesStateToActive()
     {
         // Arrange
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "confirm-user";
         const string parentPath = "Confirm/Parent";
         var nodeId = $"ConfirmTest_{Guid.NewGuid().AsString()}";
         var nodePath = $"{parentPath}/{nodeId}";
 
-        // Grant permissions
-        await securityService.AddUserRoleAsync(userId, "Admin", parentPath, "system", TestTimeout);
+        // Grant Admin role — runtime AccessAssignment node.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", parentPath))
+            .FirstAsync().ToTask(TestTimeout);
 
         // Step 1: Create transient node via NodeFactory
         var transientNode = MeshNode.FromPath(nodePath) with

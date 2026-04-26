@@ -35,9 +35,8 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     protected override async Task SetupAccessRightsAsync()
     {
         // Grant Editor role to the default admin user on the test namespace
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Editor", "Test", "system", TestTimeout);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Editor", "Test")).FirstAsync().ToTask(TestTimeout);
     }
 
     /// <summary>
@@ -144,9 +143,9 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateNode_ImpersonateAsHub_UsesHubIdentity()
     {
         // Arrange — grant access to the mesh hub's address
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
-        await securityService.AddUserRoleAsync(meshAddress, "Admin", "Impersonate", "system", TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate")).FirstAsync().ToTask(TestTimeout);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";
@@ -182,9 +181,9 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task Query_WithoutImpersonation_ReturnsNoResults()
     {
         // Arrange — grant Admin to mesh hub on "Impersonate" namespace, but NOT to "no-access-user"
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
-        await securityService.AddUserRoleAsync(meshAddress, "Admin", "Impersonate", "system", TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate")).FirstAsync().ToTask(TestTimeout);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";
@@ -238,9 +237,9 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task Query_WithImpersonation_ReturnsNode()
     {
         // Arrange — grant Admin to mesh hub on "Impersonate" namespace
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
-        await securityService.AddUserRoleAsync(meshAddress, "Admin", "Impersonate", "system", TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate")).FirstAsync().ToTask(TestTimeout);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";

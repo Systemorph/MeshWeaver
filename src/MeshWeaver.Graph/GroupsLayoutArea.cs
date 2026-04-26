@@ -22,7 +22,11 @@ namespace MeshWeaver.Graph;
 public static class GroupsLayoutArea
 {
     /// <summary>
-    /// Entry point for the Groups layout area.
+    /// Entry point for the Groups layout area. Pure reactive — composes the
+    /// own-node stream with the live permission stream and the live ancestor
+    /// GroupMembership query. CombineLatest re-renders whenever any input
+    /// changes (assignment changes flip isAdmin, membership additions
+    /// re-render the inherited list).
     /// </summary>
     public static IObservable<UiControl?> Groups(LayoutAreaHost host, RenderingContext _)
     {
@@ -44,37 +48,27 @@ public static class GroupsLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
+        var isAdminStream = IsAdmin(host.Hub, hubPath);
+
+        var inheritedStream = meshQuery is null
+            ? Observable.Return((IReadOnlyList<(GroupMembership Membership, string SourcePath)>)[])
+            : meshQuery
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{hubPath} nodeType:GroupMembership scope:ancestors"))
+                .Select(change => (IReadOnlyList<(GroupMembership Membership, string SourcePath)>)
+                    (change.Items ?? [])
+                        .Select(n => (Membership: DeserializeMembership(n), SourcePath: n.Namespace ?? ""))
+                        .Where(t => t.Membership != null)
+                        .Select(t => (t.Membership!, t.SourcePath))
+                        .ToList());
+
         return nodeStream
-            .SelectMany(async nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
-                var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
-
-                // Load inherited memberships from ancestor nodes via IMeshService (one-shot)
-                var inherited = new List<(GroupMembership Membership, string SourcePath)>();
-                if (meshQuery != null)
+            .CombineLatest(isAdminStream, inheritedStream,
+                (nodes, isAdmin, inherited) =>
                 {
-                    try
-                    {
-                        var ancestorMemberships = await meshQuery
-                            .QueryAsync<MeshNode>($"path:{hubPath} nodeType:GroupMembership scope:ancestors")
-                            .ToListAsync();
-
-                        foreach (var membershipNode in ancestorMemberships)
-                        {
-                            var membership = DeserializeMembership(membershipNode);
-                            if (membership != null)
-                                inherited.Add((membership, membershipNode.Namespace ?? ""));
-                        }
-                    }
-                    catch
-                    {
-                        // Query may fail if index not ready
-                    }
-                }
-
-                return BuildGroupsPage(host, node, hubPath, isAdmin, inherited);
-            });
+                    var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
+                    return (UiControl?)BuildGroupsPage(host, node, hubPath, isAdmin, inherited.ToList());
+                });
     }
 
     internal static GroupMembership? DeserializeMembership(MeshNode node)
@@ -86,11 +80,9 @@ public static class GroupsLayoutArea
         return null;
     }
 
-    private static async Task<bool> CheckAdminPermission(IMessageHub hub, string nodePath)
-    {
-        var permissions = await PermissionHelper.GetEffectivePermissionsAsync(hub, nodePath);
-        return permissions.HasFlag(Permission.Delete);
-    }
+    private static IObservable<bool> IsAdmin(IMessageHub hub, string nodePath)
+        => PermissionHelper.GetEffectivePermissions(hub, nodePath)
+            .Select(p => p.HasFlag(Permission.Delete));
 
     private static UiControl? BuildGroupsPage(
         LayoutAreaHost host,
@@ -128,7 +120,11 @@ public static class GroupsLayoutArea
             stack = stack.WithView(Controls.Button("+ Add Membership")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("align-self: flex-start; margin-top: 8px;")
-                .WithClickAction(async ctx => await ShowAddMembershipDialog(ctx, nodePath)));
+                .WithClickAction(ctx =>
+                {
+                    _ = ShowAddMembershipDialog(ctx, nodePath);
+                    return Task.CompletedTask;
+                }));
         }
 
         return stack;

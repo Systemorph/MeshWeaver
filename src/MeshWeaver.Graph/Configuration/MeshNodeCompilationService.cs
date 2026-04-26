@@ -98,20 +98,12 @@ internal class MeshNodeCompilationService(
     private static readonly Regex CodeIncludePattern = new(@"@@([^\s#\]]+)", RegexOptions.Compiled);
 
     /// <summary>
-    /// Resolves @@path references in code content by fetching the referenced node's CodeConfiguration.
-    /// For example, @@FutuRe/LineOfBusiness/Source/LineOfBusiness resolves to that node's code content.
-    /// Resolution is transitive: if a resolved include itself contains @@references, those are resolved too.
-    /// </summary>
-    internal async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshService meshQuery, CancellationToken ct)
-    {
-        var resolved = new HashSet<string>();
-        return await ResolveCodeIncludesAsync(code, meshQuery, resolved, ct);
-    }
-
-    /// <summary>
-    /// Overload that uses IMeshStorage directly to bypass routing.
-    /// Used by NodeTypeService during compilation to avoid circular hub creation.
+    /// Resolves @@path references in code content by fetching the referenced
+    /// node's CodeConfiguration via <see cref="IMeshStorage"/> directly. Used by
+    /// <c>NodeTypeService</c> during compilation to bypass routing and avoid
+    /// circular hub creation. Resolution is transitive: if a resolved include
+    /// itself contains @@references, those are resolved too.
+    /// For the production reactive path, see <see cref="ResolveCodeIncludes"/>.
     /// </summary>
     internal async Task<string> ResolveCodeIncludesAsync(
         string code, IMeshStorage meshStorage, CancellationToken ct)
@@ -162,11 +154,6 @@ internal class MeshNodeCompilationService(
 
         return chain;
     }
-
-    [Obsolete("Bridge for the storage-only path; production callers use ResolveCodeIncludes (IObservable).")]
-    private async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshService meshQuery, HashSet<string> resolved, CancellationToken ct)
-        => await ResolveCodeIncludes(code, meshQuery, resolved).ToTask(ct);
 
     private async Task<string> ResolveCodeIncludesAsync(
         string code, IMeshStorage meshStorage, HashSet<string> resolved, CancellationToken ct)

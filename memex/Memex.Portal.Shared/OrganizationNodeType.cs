@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
@@ -95,7 +96,7 @@ public static class OrganizationNodeType
                 new OrganizationAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
                 new OrganizationPostCreationHandler(
-                    sp.GetService<ISecurityService>() ?? new NullSecurityService(),
+                    sp.GetRequiredService<IMeshService>(),
                     sp.GetService<ILoggerFactory>()?.CreateLogger<OrganizationPostCreationHandler>()));
             return services;
         });
@@ -134,21 +135,40 @@ public static class OrganizationNodeType
     /// via normal CreateNodeRequest.
     /// </summary>
     private class OrganizationPostCreationHandler(
-        ISecurityService securityService,
+        IMeshService meshService,
         ILogger<OrganizationPostCreationHandler>? logger) : INodePostCreationHandler
     {
         public string NodeType => OrganizationNodeType.NodeType;
 
-        public async Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
+        public Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
         {
             if (string.IsNullOrEmpty(createdBy))
             {
                 logger?.LogWarning("Cannot assign Admin role: no creator identity for Organization at {Path}", createdNode.Path);
-                return;
+                return Task.CompletedTask;
             }
 
             logger?.LogInformation("Granting Admin role to {User} on Organization {Path}", createdBy, createdNode.Path);
-            await securityService.AddUserRoleAsync(createdBy, Role.Admin.Id, createdNode.Id, assignedBy: "system", ct);
+            // Replaces the obsolete ISecurityService.AddUserRoleAsync — write the
+            // AccessAssignment node directly via IMeshService.CreateNode (the only
+            // entry point that boots the per-node hub). Fire-and-forget Subscribe;
+            // failures surface in the data-layer error path.
+            var assignmentNode = new MeshNode($"{createdBy}_Access", $"{createdNode.Id}/_Access")
+            {
+                NodeType = "AccessAssignment",
+                Name = $"{createdBy} Access",
+                MainNode = createdNode.Id,
+                Content = new AccessAssignment
+                {
+                    AccessObject = createdBy,
+                    DisplayName = createdBy,
+                    Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
+                }
+            };
+            meshService.CreateNode(assignmentNode).Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex, "Failed to grant Admin role to {User} on Organization {Path}", createdBy, createdNode.Path));
+            return Task.CompletedTask;
         }
 
         public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode)
@@ -182,24 +202,24 @@ public static class OrganizationNodeType
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
             [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
-        public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
             if (string.IsNullOrEmpty(userId))
-                return false;
+                return Observable.Return(false);
 
             if (context.Operation == NodeOperation.Read)
-                return await securityService.HasPermissionAsync(context.Node.Path, userId, Permission.Read, ct);
+                return securityService.HasPermission(context.Node.Path, userId, Permission.Read);
 
             if (context.Operation == NodeOperation.Create)
             {
                 var parentPath = context.Node.GetParentPath() ?? context.Node.Path;
-                return await securityService.HasPermissionAsync(parentPath, userId, Permission.Create, ct);
+                return securityService.HasPermission(parentPath, userId, Permission.Create);
             }
 
             if (context.Operation is NodeOperation.Update or NodeOperation.Delete)
-                return await securityService.HasPermissionAsync(context.Node.Path, userId, Permission.Update, ct);
+                return securityService.HasPermission(context.Node.Path, userId, Permission.Update);
 
-            return false;
+            return Observable.Return(false);
         }
     }
 }

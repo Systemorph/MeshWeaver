@@ -10,12 +10,11 @@ namespace MeshWeaver.Mesh.Services;
 public interface INodeValidator
 {
     /// <summary>
-    /// Validates a node operation.
+    /// Validates a node operation. Returns an observable that emits exactly one
+    /// <see cref="NodeValidationResult"/> and completes — reactive surface, no
+    /// <c>await</c>/<c>ToTask</c> in consumers (composes via SelectMany / Concat).
     /// </summary>
-    /// <param name="context">Context containing the operation, node(s), and optional request</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Validation result</returns>
-    Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default);
+    IObservable<NodeValidationResult> Validate(NodeValidationContext context);
 
     /// <summary>
     /// Operations this validator handles. Empty collection means all operations.
@@ -130,9 +129,11 @@ public interface INodeTypeAccessRule
 
     /// <summary>
     /// Checks whether the given user/context has access for the operation.
-    /// Returns true to allow, false to deny.
+    /// Returns an observable that emits <c>true</c> to allow / <c>false</c> to deny.
+    /// Reactive surface — composes with the rest of the data-layer chain without
+    /// awaiting hub round-trips.
     /// </summary>
-    Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default);
+    IObservable<bool> HasAccess(NodeValidationContext context, string? userId);
 }
 
 /// <summary>

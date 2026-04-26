@@ -45,7 +45,7 @@ public static class SettingsLayoutArea
         var tabId = host.Reference.Id?.ToString();
 
         var ownNode = host.Workspace.GetMeshNodeStream();
-        var permsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+        var permsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
         return ownNode.CombineLatest(permsStream, (node, perms) => (Node: node, Perms: perms))
             .SelectMany(t => Observable.FromAsync(() =>
@@ -330,23 +330,28 @@ public static class SettingsLayoutArea
             .WithStyle("margin-top: 12px; gap: 8px;")
             .WithView(Controls.Button("Check")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async ctx =>
+                .WithClickAction((Action<UiActionContext>)(ctx =>
                 {
-                    var userId = "";
+                    // Pure reactive — Subscribe to the form value, then SelectMany
+                    // into the permission stream and write the rendered HTML back
+                    // to the result data slot. No await, no Task bridging.
                     ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                         .Take(1)
-                        .Subscribe(data => userId = data?.GetValueOrDefault("userId")?.ToString()?.Trim() ?? "");
-
-                    if (string.IsNullOrEmpty(userId))
-                    {
-                        ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
-                        return;
-                    }
-
-                    var perms = await securityService.GetEffectivePermissionsAsync(hubPath, userId);
-                    var html = BuildPermissionResultHtml(userId, perms);
-                    ctx.Host.UpdateData(resultId, html);
-                })));
+                        .SelectMany(data =>
+                        {
+                            var userId = data?.GetValueOrDefault("userId")?.ToString()?.Trim() ?? "";
+                            if (string.IsNullOrEmpty(userId))
+                            {
+                                ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
+                                return Observable.Empty<(string UserId, Permission Perms)>();
+                            }
+                            return securityService.GetEffectivePermissions(hubPath, userId)
+                                .Take(1)
+                                .Select(perms => (UserId: userId, Perms: perms));
+                        })
+                        .Subscribe(t => ctx.Host.UpdateData(resultId,
+                            BuildPermissionResultHtml(t.UserId, t.Perms)));
+                }))));
 
         stack = stack.WithView((h, _) =>
         {
@@ -556,7 +561,7 @@ public static class SettingsLayoutArea
     /// icon resolver turns that into <c>/static/storage/content/{nodePath}/{filename}</c>
     /// at render time.
     /// </summary>
-    private static Task UseFileAsIcon(UiActionContext actx, string metadataDataId, string quickPickDataId)
+    private static void UseFileAsIcon(UiActionContext actx, string metadataDataId, string quickPickDataId)
     {
         actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(quickPickDataId)
             .Take(1)
@@ -582,7 +587,6 @@ public static class SettingsLayoutArea
                         actx.Host.UpdateData(metadataDataId, updated);
                     });
             });
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -591,14 +595,14 @@ public static class SettingsLayoutArea
     /// IIconGenerator, and writes the resulting SVG back into the metadata object
     /// so the auto-save subscription persists it on the node.
     /// </summary>
-    private static Task RegenerateIconFromMetadata(UiActionContext actx, string metadataDataId)
+    private static void RegenerateIconFromMetadata(UiActionContext actx, string metadataDataId)
     {
         var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
         if (generator == null)
         {
             ShowSettingsErrorDialog(actx, "Regenerate Icon",
                 "Icon generator service is not registered. Call AddAgentChatServices().");
-            return Task.CompletedTask;
+            return;
         }
         actx.Host.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
             .Take(1)
@@ -622,7 +626,6 @@ public static class SettingsLayoutArea
                     },
                     ex => ShowSettingsErrorDialog(actx, "Icon Generation Failed", ex.Message));
             });
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -631,14 +634,14 @@ public static class SettingsLayoutArea
     /// IDescriptionGenerator, and writes the resulting text back into the metadata object
     /// so the auto-save subscription persists it on the node.
     /// </summary>
-    private static Task RegenerateDescriptionFromMetadata(UiActionContext actx, string metadataDataId)
+    private static void RegenerateDescriptionFromMetadata(UiActionContext actx, string metadataDataId)
     {
         var generator = actx.Host.Hub.ServiceProvider.GetService<IDescriptionGenerator>();
         if (generator == null)
         {
             ShowSettingsErrorDialog(actx, "Generate Description",
                 "Description generator service is not registered. Call AddAgentChatServices().");
-            return Task.CompletedTask;
+            return;
         }
         actx.Host.Stream.GetDataStream<MeshNodeMetadata>(metadataDataId)
             .Take(1)
@@ -660,7 +663,6 @@ public static class SettingsLayoutArea
                     },
                     ex => ShowSettingsErrorDialog(actx, "Description Generation Failed", ex.Message));
             });
-        return Task.CompletedTask;
     }
 
     private static void ShowSettingsErrorDialog(UiActionContext ctx, string title, string message)

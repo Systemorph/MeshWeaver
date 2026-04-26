@@ -35,7 +35,7 @@ public static class MoveLayoutArea
     /// <summary>
     /// Layout area handler for the Move action. Pure observable — no await, no
     /// Observable.FromAsync(async ...). Permission gating composes via
-    /// <see cref="PermissionHelper.ObservePermissions"/>.
+    /// <see cref="PermissionHelper.GetEffectivePermissions"/>.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Move(LayoutAreaHost host, RenderingContext _)
@@ -43,7 +43,7 @@ public static class MoveLayoutArea
         var currentPath = host.Hub.Address.ToString();
         var currentId = currentPath.Contains('/') ? currentPath[(currentPath.LastIndexOf('/') + 1)..] : currentPath;
 
-        return PermissionHelper.ObservePermissions(host.Hub, currentPath)
+        return PermissionHelper.GetEffectivePermissions(host.Hub, currentPath)
             .Select(perms =>
             {
                 if (!perms.HasFlag(Permission.Delete))

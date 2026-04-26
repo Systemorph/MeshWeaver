@@ -52,8 +52,8 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         created.Should().NotBeNull();
 
         // Check effective permissions for the creator (admin user from TestBase)
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var permissions = await securityService.GetEffectivePermissionsAsync(
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var permissions = await Mesh.GetPermissionAsync(
             orgId, TestUsers.Admin.ObjectId, TestTimeout);
 
         Output.WriteLine($"Effective permissions on {orgId}: {permissions}");
@@ -88,15 +88,14 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         };
         await NodeFactory.CreateNode(orgNode);
 
-        // Verify the creator has Admin permissions (PostCreationHandler calls AddUserRoleAsync)
-        var securityService2 = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var creatorCheck = await securityService2.HasPermissionAsync(
+        // Verify the creator has Admin permissions (PostCreationHandler creates AccessAssignment)
+        var creatorCheck = await Mesh.HasPermissionAsync(
             orgId, creatorId, Permission.Update, TestTimeout);
         creatorCheck.Should().BeTrue("PostCreationHandler should grant Admin role to creator");
 
         // Now check that a NON-admin user without claim-based roles has NO permissions
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var otherPerms = await securityService.GetEffectivePermissionsAsync(
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var otherPerms = await Mesh.GetPermissionAsync(
             orgId, "SomeOtherUser", TestTimeout);
 
         Output.WriteLine($"Other user permissions on {orgId}: {otherPerms}");
@@ -104,7 +103,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         otherPerms.Should().NotHaveFlag(Permission.Update, "Non-assigned user should NOT have Update");
 
         // And the creator DOES have permissions (from AccessAssignment, not just claim-based)
-        var creatorPerms = await securityService.GetEffectivePermissionsAsync(
+        var creatorPerms = await Mesh.GetPermissionAsync(
             orgId, creatorId, TestTimeout);
 
         Output.WriteLine($"Creator permissions on {orgId}: {creatorPerms}");

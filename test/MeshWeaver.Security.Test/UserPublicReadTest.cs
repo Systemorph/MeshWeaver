@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -48,7 +49,10 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
                     NodeType = "User",
                     State = MeshNodeState.Active,
                     Content = new User { Email = "bob@example.com" }
-                }
+                },
+                // "Creator" gets global Admin so DynamicallyCreated_OrganizationNode_RequiresPartitionAccess
+                // can create an Organization at runtime.
+                AssignmentNodeFactory.UserRole("Creator", "Admin")
             );
 
     private void LoginAsUnprivilegedUser()
@@ -139,11 +143,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task DynamicallyCreated_OrganizationNode_RequiresPartitionAccess()
     {
-        // Create an Organization dynamically (simulates runtime creation)
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        // Give the creator Admin role at root so they can create
-        await securityService.AddUserRoleAsync("Creator", "Admin", null, "system");
-
+        // "Creator" Admin at root is pre-seeded via ConfigureMesh's static AccessAssignment.
         var orgNode = new MeshNode("Globex")
         {
             Name = "Globex Corp",
@@ -164,8 +164,11 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         results.Should().BeEmpty("Organization instances require partition-level access, not public read");
 
-        // Grant Alice (the unprivileged user) Viewer role on Globex
-        await securityService.AddUserRoleAsync("Alice", "Viewer", "Globex", "system");
+        // Grant Alice (the unprivileged user) Viewer role on Globex via runtime CreateNode.
+        // This tests the live behavior change after a permission grant.
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", "Viewer", "Globex"))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var resultsAfterGrant = await MeshQuery.QueryAsync<MeshNode>(
             "path:Globex",

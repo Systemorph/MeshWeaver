@@ -380,12 +380,12 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations { get; } = [NodeOperation.Delete];
 
-        public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+        public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
         {
             if (context.Node.Name == BlockedMarker)
-                return Task.FromResult(
+                return Observable.Return(
                     NodeValidationResult.Invalid($"'{context.Node.Path}' is protected", NodeRejectionReason.ValidationFailed));
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
         }
     }
 
@@ -396,12 +396,12 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations { get; } = [NodeOperation.Delete];
 
-        public Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
+        public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
         {
             if (context.Node.Name == WarnMarker)
-                return Task.FromResult(NodeValidationResult.ValidWithWarning(
+                return Observable.Return(NodeValidationResult.ValidWithWarning(
                     $"{WarnText} ({context.Node.Path})"));
-            return Task.FromResult(NodeValidationResult.Valid());
+            return Observable.Return(NodeValidationResult.Valid());
         }
     }
 
@@ -421,7 +421,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
 
     protected override async Task SetupAccessRightsAsync()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(TestUsers.Admin.ObjectId, "Admin", null, "system");
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null)).FirstAsync().ToTask();
     }
 }

@@ -360,23 +360,23 @@ public static class MeshNodePropertyEditor
 
         var saveButton = Controls.Button("Save")
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(async ctx =>
+            .WithClickAction(ctx =>
             {
-                // Get updated content and save
-                var updatedContent = await ctx.Host.Stream.GetDataStream<JsonElement>(dataId).FirstAsync();
-                var updatedNode = node with { Content = updatedContent };
-                var targetAddress = new Address(nodePath);
-
-                try
-                {
-                    var delivery = ctx.Host.Hub.Post(
-                        new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
-                        o => o.WithTarget(targetAddress))!;
-                    await ctx.Host.Hub.Observe(delivery).FirstAsync().ToTask();
-                }
-                catch { }
-
-                ctx.Host.UpdateData(editStateId, false);
+                // Sync click action — Subscribe to data stream snapshot, then post update.
+                ctx.Host.Stream.GetDataStream<JsonElement>(dataId)
+                    .Take(1)
+                    .Subscribe(updatedContent =>
+                    {
+                        var updatedNode = node with { Content = updatedContent };
+                        var targetAddress = new Address(nodePath);
+                        var delivery = ctx.Host.Hub.Post(
+                            new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
+                            o => o.WithTarget(targetAddress))!;
+                        ctx.Host.Hub.Observe(delivery).Subscribe(
+                            _ => ctx.Host.UpdateData(editStateId, false),
+                            _ => ctx.Host.UpdateData(editStateId, false));
+                    });
+                return Task.CompletedTask;
             });
 
         var cancelButton = Controls.Button("Cancel")

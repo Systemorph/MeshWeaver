@@ -211,35 +211,21 @@ public static class NodeTypeLayoutAreas
             })
             .Switch();
 
-        // Query for NodeType nodes under this namespace
-        var nodeTypesStream = Observable.FromAsync(async () =>
-        {
-            if (meshQuery == null)
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-            try
-            {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
-            }
-            catch
-            {
-                return Array.Empty<MeshNode>();
-            }
-        });
+        // Live observable of NodeType nodes under this namespace.
+        var nodeTypesStream = meshQuery == null
+            ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
+            : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{hubPath} nodeType:NodeType scope:descendants"))
+                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
-        // Query for Agent nodes under this namespace
-        var agentsStream = Observable.FromAsync(async () =>
-        {
-            if (meshQuery == null)
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-            try
-            {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:Agent scope:descendants").ToListAsync() as IReadOnlyList<MeshNode>;
-            }
-            catch
-            {
-                return Array.Empty<MeshNode>();
-            }
-        });
+        // Live observable of Agent nodes under this namespace.
+        var agentsStream = meshQuery == null
+            ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
+            : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{hubPath} nodeType:Agent scope:descendants"))
+                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
         // Return static Splitter structure with observable nested views
         return Controls.Splitter
@@ -929,106 +915,97 @@ public static class NodeTypeLayoutAreas
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(viewHref));
 
-        // Save button - update workspace stream
+        // Save button - sync click action; subscribes to combined form snapshot then posts.
         buttonRow = buttonRow.WithView(Controls.Button("Save")
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
-            .WithClickAction(async actx =>
+            .WithClickAction(actx =>
             {
-                // Get all field values
-                var displayName = await host.Stream.GetDataStream<string>(displayNameDataId).FirstAsync();
-                var description = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
-                var iconName = await host.Stream.GetDataStream<string>(iconNameDataId).FirstAsync();
-                var orderStr = await host.Stream.GetDataStream<string>(orderDataId).FirstAsync();
-                var childrenQuery = await host.Stream.GetDataStream<string>(childrenQueryDataId).FirstAsync();
-                var dependenciesStr = await host.Stream.GetDataStream<string>(dependenciesDataId).FirstAsync();
-                var configuration = await host.Stream.GetDataStream<string>(configurationDataId).FirstAsync();
-
-                // Parse order
-                if (!int.TryParse(orderStr, out var order))
-                    order = 0;
-
-                // Parse dependencies
-                List<string>? dependencies = null;
-                if (!string.IsNullOrWhiteSpace(dependenciesStr))
-                {
-                    dependencies = dependenciesStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-                    if (dependencies.Count == 0)
-                        dependencies = null;
-                }
-
-                // Update the NodeTypeDefinition with content-only properties
-                var updatedDefinition = (content ?? new NodeTypeDefinition()) with
-                {
-                    Description = string.IsNullOrWhiteSpace(description) ? null : description,
-                    ChildrenQuery = string.IsNullOrWhiteSpace(childrenQuery) ? null : childrenQuery,
-                    Dependencies = dependencies,
-                    Configuration = string.IsNullOrWhiteSpace(configuration) ? null : configuration
-                };
-
-                // Get current MeshNode and update both node properties and content
-                var hubPath = host.Hub.Address.ToString();
-                var currentNodes = await host.Workspace.GetStream<MeshNode>()!.FirstAsync();
-                var currentNode = currentNodes?.FirstOrDefault(n => n.Path == hubPath);
-                if (currentNode == null)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown("**Error:** Could not find MeshNode to update."),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                // Update MeshNode with new content and node-level properties
-                var updatedNode = currentNode with
-                {
-                    Name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
-                    Icon = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
-                    Order = order,
-                    Content = updatedDefinition
-                };
-
-                var delivery = actx.Host.Hub.Post(
-                    new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedNode),
-                    o => o.WithTarget(hubAddress))!;
-                IMessageDelivery callbackResponse;
-                try
-                {
-                    callbackResponse = await actx.Host.Hub.Observe(delivery).FirstAsync().ToTask();
-                }
-                catch (Exception ex)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-                if (callbackResponse.Message is not DataChangeResponse responseMsg)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
-                {
-                    var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{responseMsg.Log}"),
-                        "Save Failed"
-                    ).WithSize("M");
-                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                    return;
-                }
-
-                // Navigate back to configuration
-                var configNavHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
-                actx.Host.UpdateArea(actx.Area, new RedirectControl(configNavHref));
+                Observable.CombineLatest(
+                    host.Stream.GetDataStream<string>(displayNameDataId).Take(1),
+                    host.Stream.GetDataStream<string>(descriptionDataId).Take(1),
+                    host.Stream.GetDataStream<string>(iconNameDataId).Take(1),
+                    host.Stream.GetDataStream<string>(orderDataId).Take(1),
+                    host.Stream.GetDataStream<string>(childrenQueryDataId).Take(1),
+                    host.Stream.GetDataStream<string>(dependenciesDataId).Take(1),
+                    host.Stream.GetDataStream<string>(configurationDataId).Take(1),
+                    host.Workspace.GetStream<MeshNode>()!.Take(1),
+                    (displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration, currentNodes) =>
+                    {
+                        if (!int.TryParse(orderStr, out var order)) order = 0;
+                        List<string>? dependencies = null;
+                        if (!string.IsNullOrWhiteSpace(dependenciesStr))
+                        {
+                            dependencies = dependenciesStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                            if (dependencies.Count == 0) dependencies = null;
+                        }
+                        var updatedDefinition = (content ?? new NodeTypeDefinition()) with
+                        {
+                            Description = string.IsNullOrWhiteSpace(description) ? null : description,
+                            ChildrenQuery = string.IsNullOrWhiteSpace(childrenQuery) ? null : childrenQuery,
+                            Dependencies = dependencies,
+                            Configuration = string.IsNullOrWhiteSpace(configuration) ? null : configuration
+                        };
+                        var hubPath = host.Hub.Address.ToString();
+                        var currentNode = currentNodes?.FirstOrDefault(n => n.Path == hubPath);
+                        if (currentNode == null) return null;
+                        return currentNode with
+                        {
+                            Name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
+                            Icon = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
+                            Order = order,
+                            Content = updatedDefinition
+                        };
+                    })
+                    .Take(1)
+                    .Subscribe(updatedNode =>
+                    {
+                        if (updatedNode == null)
+                        {
+                            var errorDialog = Controls.Dialog(
+                                Controls.Markdown("**Error:** Could not find MeshNode to update."),
+                                "Save Failed"
+                            ).WithSize("M");
+                            actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                            return;
+                        }
+                        var delivery = actx.Host.Hub.Post(
+                            new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedNode),
+                            o => o.WithTarget(hubAddress))!;
+                        actx.Host.Hub.Observe(delivery).Subscribe(
+                            callbackResponse =>
+                            {
+                                if (callbackResponse.Message is not DataChangeResponse responseMsg)
+                                {
+                                    var errorDialog = Controls.Dialog(
+                                        Controls.Markdown($"**Error saving:** Unexpected response `{callbackResponse.Message?.GetType().Name ?? "null"}`."),
+                                        "Save Failed"
+                                    ).WithSize("M");
+                                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                    return;
+                                }
+                                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
+                                {
+                                    var errorDialog = Controls.Dialog(
+                                        Controls.Markdown($"**Error saving:**\n\n{responseMsg.Log}"),
+                                        "Save Failed"
+                                    ).WithSize("M");
+                                    actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                    return;
+                                }
+                                var configNavHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
+                                actx.Host.UpdateArea(actx.Area, new RedirectControl(configNavHref));
+                            },
+                            ex =>
+                            {
+                                var errorDialog = Controls.Dialog(
+                                    Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
+                                    "Save Failed"
+                                ).WithSize("M");
+                                actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                            });
+                    });
+                return Task.CompletedTask;
             }));
 
         stack = stack.WithView(buttonRow);

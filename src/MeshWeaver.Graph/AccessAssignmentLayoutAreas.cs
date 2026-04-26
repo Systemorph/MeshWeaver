@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Domain;
@@ -38,7 +37,7 @@ public static class AccessAssignmentLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         // There is always exactly one MeshNode per path — GetMeshNodeStream returns it.
         var ownNode = host.Workspace.GetMeshNodeStream();
-        var permsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+        var permsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
         return ownNode.CombineLatest(permsStream, (node, perms) =>
             {
@@ -171,7 +170,7 @@ public static class AccessAssignmentLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
         var ownNode = host.Workspace.GetMeshNodeStream();
-        var permsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+        var permsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
         return ownNode.CombineLatest(permsStream, (node, perms) =>
             {
@@ -410,25 +409,27 @@ public static class AccessAssignmentLayoutAreas
                 }))
             .WithView(Controls.Button("Add")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async addCtx =>
+                .WithClickAction((Action<UiActionContext>)(addCtx =>
                 {
-                    var formValues = await addCtx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+                    addCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(formValues =>
+                        {
+                            var selectedRole = formValues.GetValueOrDefault("selectedRole")?.ToString()?.Trim();
+                            if (string.IsNullOrEmpty(selectedRole))
+                            {
+                                var errorDialog = Controls.Dialog(
+                                    Controls.Markdown("Please select a **Role**."),
+                                    "Validation Error"
+                                ).WithSize("S").WithClosable(true);
+                                addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                return;
+                            }
 
-                    var selectedRole = formValues.GetValueOrDefault("selectedRole")?.ToString()?.Trim();
-                    if (string.IsNullOrEmpty(selectedRole))
-                    {
-                        var errorDialog = Controls.Dialog(
-                            Controls.Markdown("Please select a **Role**."),
-                            "Validation Error"
-                        ).WithSize("S").WithClosable(true);
-                        addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                        return;
-                    }
-
-                    addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    AddRole(addCtx.Host, nodePath, selectedRole);
-                }));
+                            addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                            AddRole(addCtx.Host, nodePath, selectedRole);
+                        });
+                })));
 
         ctx.Host.UpdateArea(DialogControl.DialogArea,
             Controls.Dialog(formContent, "Add Role").WithSize("M").WithActions(actions));
@@ -467,25 +468,27 @@ public static class AccessAssignmentLayoutAreas
                 }))
             .WithView(Controls.Button("Save")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async saveCtx =>
+                .WithClickAction((Action<UiActionContext>)(saveCtx =>
                 {
-                    var formValues = await saveCtx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+                    saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(formValues =>
+                        {
+                            var selectedSubject = formValues.GetValueOrDefault("accessObject")?.ToString()?.Trim();
+                            if (string.IsNullOrEmpty(selectedSubject))
+                            {
+                                var errorDialog = Controls.Dialog(
+                                    Controls.Markdown("Please select a **Subject**."),
+                                    "Validation Error"
+                                ).WithSize("S").WithClosable(true);
+                                saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                                return;
+                            }
 
-                    var selectedSubject = formValues.GetValueOrDefault("accessObject")?.ToString()?.Trim();
-                    if (string.IsNullOrEmpty(selectedSubject))
-                    {
-                        var errorDialog = Controls.Dialog(
-                            Controls.Markdown("Please select a **Subject**."),
-                            "Validation Error"
-                        ).WithSize("S").WithClosable(true);
-                        saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                        return;
-                    }
-
-                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    UpdateAccessObject(saveCtx.Host, nodePath, selectedSubject);
-                }));
+                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                            UpdateAccessObject(saveCtx.Host, nodePath, selectedSubject);
+                        });
+                })));
 
         ctx.Host.UpdateArea(DialogControl.DialogArea,
             Controls.Dialog(formContent, "Change Subject").WithSize("M").WithActions(actions));

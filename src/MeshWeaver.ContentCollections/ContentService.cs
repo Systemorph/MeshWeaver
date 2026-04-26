@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -160,13 +161,16 @@ public class ContentService : IContentService
         if (factory is null)
             throw new ArgumentException($"Unknown source type {config.SourceType}");
 
-        // Create provider using the factory (now properly async)
-        var provider = await factory.CreateAsync(config, cancellationToken);
-
-        // Create and initialize the collection
-        var collection = new ContentCollection(config, provider, hub);
-        await collection.InitializeAsync(cancellationToken);
-
+        // Bridge the IObservable<IStreamProvider> into the cached Task<ContentCollection?>
+        // surface via await foreach + early return — this is a one-shot creation, the
+        // Task is the framework's caching boundary (Dictionary<string, Task<...>>).
+        ContentCollection? collection = null;
+        await foreach (var provider in factory.Create(config).ToAsyncEnumerableSequence(cancellationToken))
+        {
+            collection = new ContentCollection(config, provider, hub);
+            await collection.InitializeAsync(cancellationToken);
+            return collection;
+        }
         return collection;
     }
 

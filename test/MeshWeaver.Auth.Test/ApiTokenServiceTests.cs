@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Memex.Portal.Shared.Authentication;
@@ -137,8 +139,14 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         await service.RevokeTokenAsync(node.Path);
 
-        // Give the hub a moment to process the UpdateNodeRequest
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        // Wait reactively for the node's IsRevoked flag to flip — replaces the
+        // 100 ms "give the hub a moment" sleep with an actual subscription via
+        // the per-node MeshNode stream exposed by MonolithMeshTestBase.ReadNode.
+        await ReadNode(node.Path!)
+            .Where(n => n.Content is ApiToken t && t.IsRevoked)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask(TestContext.Current.CancellationToken);
 
         var result = await service.ValidateTokenAsync(rawToken);
 

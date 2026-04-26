@@ -240,7 +240,7 @@ Access control uses these shipped node types:
 - **Content**: `AccessAssignment` record with `Id` and `Roles[]` array
 - **Path pattern**: `{scope}/_Access/{Subject}_Access`
 - **Name pattern**: `{Subject} Access`
-- Created via `ISecurityService.AddUserRoleAsync()` or `IMeshCatalog.CreateNodeAsync()`
+- Created via `ISecurityService.AddUserRole(...)` (returns `IObservable<Unit>`; subscribe to drive) or directly via `IMeshService.CreateNode(...)` for advanced cases
 - One node per subject per scope — multiple roles are stored in the `Roles` array
 
 ## User
@@ -371,19 +371,21 @@ MeshWeaver distinguishes between two well-known user groups:
 When no user context is available (empty userId or virtual user), permissions are evaluated for the **Anonymous** user. Authenticated users automatically inherit **Public** permissions in addition to their own.
 
 ```csharp
-// Grant Anonymous users read access to the Welcome page
-await securityService.AddUserRoleAsync("Anonymous", "Viewer", "Welcome", "system", ct);
+// Grant Anonymous users read access to the Welcome page.
+// AddUserRole posts the right CreateNode/UpdateNode through IMeshService;
+// the assignment lands on the resource hub's synced AccessAssignments
+// collection on the next tick — no cache to invalidate.
+securityService.AddUserRole("Anonymous", "Viewer", "Welcome", "system")
+    .Subscribe();
 
-// Grant all logged-in users read access to MeshWeaver content
-await securityService.AddUserRoleAsync("Public", "Viewer", "MeshWeaver", "system", ct);
+// Grant all logged-in users read access to MeshWeaver content.
+securityService.AddUserRole("Public", "Viewer", "MeshWeaver", "system")
+    .Subscribe();
 
-// Anonymous users can read Welcome but not MeshWeaver
-var anonCanRead = await securityService.HasPermissionAsync("MeshWeaver/Docs", "", Permission.Read, ct);
-// anonCanRead == false
-
-// Authenticated users inherit Public permissions
-var authCanRead = await securityService.HasPermissionAsync("MeshWeaver/Docs", "Alice", Permission.Read, ct);
-// authCanRead == true (Alice inherits Public's Viewer role)
+// Read paths return IObservable<bool> from the resource hub's local
+// workspace (no cross-hub round-trip, no TTL). Subscribe to react.
+securityService.HasPermission("Anonymous", Permission.Read)
+    .Subscribe(allowed => /* ... */);
 ```
 
 # Hierarchical Access Pattern
@@ -491,8 +493,7 @@ public class RlsNodeValidator : INodeValidator
     public IReadOnlyCollection<NodeOperation> SupportedOperations
         => [NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
-    public async Task<NodeValidationResult> ValidateAsync(
-        NodeValidationContext context, CancellationToken ct)
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
         var requiredPermission = context.Operation switch
         {
@@ -502,12 +503,13 @@ public class RlsNodeValidator : INodeValidator
             _ => Permission.None
         };
 
-        var hasPermission = await securityService
-            .HasPermissionAsync(context.Node.Path, requiredPermission, ct);
-
-        return hasPermission
-            ? NodeValidationResult.Valid()
-            : NodeValidationResult.Invalid(NodeRejectionReason.Unauthorized);
+        // ISecurityService is hub-scoped and reads from the local workspace's
+        // synced collections — no cross-hub round-trip, no TTL.
+        return securityService
+            .HasPermission(context.UserId, requiredPermission)
+            .Select(allowed => allowed
+                ? NodeValidationResult.Valid()
+                : NodeValidationResult.Invalid(NodeRejectionReason.Unauthorized));
     }
 }
 ```
@@ -772,7 +774,7 @@ The `AccessControlPipeline` is a delivery pipeline step registered by `AddRowLev
 
 1. Reads the `RequiresPermissionAttribute` from the message type (cached per type)
 2. Calls `GetPermissionChecks()` to get the list of `(path, permission)` pairs
-3. Checks each pair against `ISecurityService.HasPermissionAsync()`
+3. Checks each pair against `ISecurityService.HasPermission(...)` (returns `IObservable<bool>` — composed into the pipeline, never awaited)
 4. If any check fails → sends `DeliveryFailure(ErrorType.Unauthorized)` back to sender
 
 Messages without `[RequiresPermission]` pass through unchecked. System messages (`PingRequest`, `InitializeHubRequest`, etc.) are not annotated and are always allowed.
@@ -794,7 +796,7 @@ var builder = new MeshBuilder()
 2. **Use deny sparingly** — deny overrides only the specific role, not all permissions
 3. **Anonymous for unauthenticated access** — configure Anonymous user with Viewer role on namespaces that should be visible without login
 3. **Public for authenticated baseline** — configure Public user with Viewer role on namespaces that all logged-in users should access
-4. **Cache permissions** — SecurityService caches effective permissions with a 5-minute sliding expiration
+4. **No manual caching** — `ISecurityService` is hub-scoped and reads from the local workspace's synced `AccessAssignments` / `Policies` / `Roles` collections. Those collections are kept live by the synced query data source; there is no separate TTL cache to invalidate.
 5. **Fail closed** — no roles assigned means no permissions (Permission.None)
 6. **Audit via MeshNodes** — AccessAssignment nodes provide a clear audit trail of who has access to what
 7. **Use ImpersonateAsHub() for hub operations** — when a hub needs to perform operations as itself, use `PostOptions.ImpersonateAsHub()` instead of setting identity on `AccessService` directly

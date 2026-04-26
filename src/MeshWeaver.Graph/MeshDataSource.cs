@@ -1,5 +1,5 @@
-﻿using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
 using Json.Patch;
@@ -46,7 +46,20 @@ public static class MeshDataSourceExtensions
                         .AddWorkspaceReferenceStream<MeshNode>(
                             (workspace, reference, configuration) =>
                             {
-                                if (reference is not MeshNodeReference) return null;
+                                if (reference is not MeshNodeReference meshRef) return null;
+
+                                // MeshNodeReference(path) with a non-null Path that isn't this
+                                // hub's own address — return the per-node remote stream from
+                                // the workspace's cache (opens one on first call, returns the
+                                // same instance thereafter — see Workspace._remoteStreamCache).
+                                if (meshRef.Path is { Length: > 0 } targetPath
+                                    && !string.Equals(targetPath, workspace.Hub.Address.ToString(), StringComparison.Ordinal))
+                                {
+                                    return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                                        new Address(targetPath), new MeshNodeReference());
+                                }
+
+                                // MeshNodeReference() — own MeshNode via local InstanceCollection.
                                 var collectionStream = workspace.GetStream(
                                     new CollectionReference(nameof(MeshNode)));
                                 return (collectionStream as ISynchronizationStream<InstanceCollection>)
@@ -61,7 +74,7 @@ public static class MeshDataSourceExtensions
                             ?? Observable.Return<object?>(null);
                     });
             })
-            .WithServices(services => services.AddSingleton<DeletedFlag>())
+            .WithServices(services => services.AddSingleton<OwnNodeCache>())
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
             .WithInitialization(SubscribeToOwnDeletion)
             .WithNodeOperationHandlers()
@@ -82,70 +95,84 @@ public static class MeshDataSourceExtensions
     /// <see cref="NodeOperation.Read"/>. On rejection, posts a null-Data response
     /// and short-circuits (does not pass through to the default handler).
     /// On pass, invokes the next pipeline step normally.
+    ///
+    /// Sync-delivery shape (Doc/Architecture/AsynchronousCalls.md): the lambda
+    /// returns <c>delivery.Forwarded()</c> immediately. The reactive chain
+    /// (read own node → run validators → decide) is driven via Subscribe and
+    /// posts the response *only* when validators have all passed (or fired the
+    /// error response when one denies). No <c>await</c> on hub round-trips, no
+    /// <c>ToTask</c>; validator results stay <c>IObservable</c> end-to-end.
     /// </summary>
     private static AsyncPipelineConfig AddReadValidatorPipeline(AsyncPipelineConfig pipeline)
     {
         var hub = pipeline.Hub;
-        return pipeline.AddPipeline(async (delivery, ct, next) =>
+        return pipeline.AddPipeline((delivery, ct, next) =>
         {
             if (delivery.Message is not GetDataRequest req
                 || req.Reference is not MeshNodeReference)
-                return await next.Invoke(delivery, ct);
+                return next.Invoke(delivery, ct);
 
-            // If our own node was deleted from persistence, short-circuit with null Data.
-            // The deletion subscription (SubscribeToOwnDeletion) flips a per-hub
-            // singleton flag when IDataChangeNotifier reports a deletion at our own
-            // path. Cheap to check (volatile bool); no storage round-trip.
-            var deleted = hub.ServiceProvider.GetService<DeletedFlag>();
-            if (deleted?.IsDeleted == true)
+            // OwnNodeCache is kept fresh by SubscribeToOwnDeletion's long-standing
+            // subscription to workspace.GetMeshNodeStream() — synchronous read,
+            // no per-delivery Take(1).
+            var cache = hub.ServiceProvider.GetService<OwnNodeCache>();
+            if (cache?.IsDeleted == true)
             {
                 hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(delivery));
-                return delivery.Processed();
+                return Task.FromResult(delivery.Processed());
             }
 
             var validators = hub.ServiceProvider.GetServices<INodeValidator>()
                 .Where(v => v.SupportedOperations.Count == 0 || v.SupportedOperations.Contains(NodeOperation.Read))
                 .ToList();
             if (validators.Count == 0)
-                return await next.Invoke(delivery, ct);
+                return next.Invoke(delivery, ct);
 
-            var workspace = hub.GetWorkspace();
+            var node = cache?.Current;
+            if (node == null)
+                return next.Invoke(delivery, ct);
+
             var accessService = hub.ServiceProvider.GetService<AccessService>();
-
-            MeshNode? node;
-            try
-            {
-                node = await workspace.GetMeshNodeStream()
-                    .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(15))
-                    .FirstAsync()
-                    .ToTask(ct);
-            }
-            catch
-            {
-                // Node not loadable (timeout / hub no longer has it) — fall through to
-                // the default handler so it can produce its own response.
-                return await next.Invoke(delivery, ct);
-            }
-
             var context = new NodeValidationContext
             {
                 Operation = NodeOperation.Read,
                 Node = node,
                 AccessContext = accessService?.Context ?? accessService?.CircuitContext
             };
-            foreach (var v in validators)
-            {
-                var result = await v.ValidateAsync(context, ct);
-                if (!result.IsValid)
-                {
-                    hub.Post(new GetDataResponse(null, 0) { Error = result.ErrorMessage },
-                        o => o.ResponseFor(delivery));
-                    return delivery.Processed();
-                }
-            }
 
-            return await next.Invoke(delivery, ct);
+            // Sync-delivery shape (Doc/Architecture/AsynchronousCalls.md): the
+            // pipeline lambda returns delivery.Forwarded() immediately. The
+            // Subscribe below drives the verdict — every validator runs to
+            // completion (.Concat over each validator's IObservable<NodeValidationResult>);
+            // failures accumulate; on natural completion we either fire next
+            // (no failures) or post the joined error response (one or more
+            // failures). next.Invoke is fire-and-forget — its Task is not
+            // observed by anyone since the default handler posts its own response.
+            var failures = ImmutableList<NodeValidationResult>.Empty;
+            validators
+                .Select(v => v.Validate(context))
+                .Concat()
+                .Subscribe(
+                    result =>
+                    {
+                        if (!result.IsValid)
+                            failures = failures.Add(result);
+                    },
+                    () =>
+                    {
+                        if (failures.IsEmpty)
+                            _ = next.Invoke(delivery, ct);
+                        else
+                            hub.Post(
+                                new GetDataResponse(null, 0)
+                                {
+                                    Error = string.Join("; ",
+                                        failures.Select(f => f.ErrorMessage))
+                                },
+                                o => o.ResponseFor(delivery));
+                    });
+
+            return Task.FromResult(delivery.Forwarded());
         });
     }
 
@@ -160,31 +187,55 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
-    /// Per-hub flag flipped by <see cref="SubscribeToOwnDeletion"/> when this hub's
-    /// own MeshNode is deleted from persistence. Read by the read pipeline so post-
-    /// delete <see cref="MeshNodeReference"/> reads see <c>null</c> Data instead of
-    /// the workspace's stale cache.
+    /// Per-hub long-standing cache: holds the latest own MeshNode (kept fresh by a
+    /// subscription to <c>workspace.GetMeshNodeStream()</c> at hub init) and the
+    /// IsDeleted flag flipped by <see cref="IDataChangeNotifier"/>. Both fields
+    /// are read synchronously by the read pipeline — no per-delivery Take(1), no
+    /// per-delivery subscription. The subscription stays alive for the hub's
+    /// lifetime; updates flow through naturally as the workspace's MeshNode
+    /// reducer re-emits.
     /// </summary>
-    public sealed class DeletedFlag { public volatile bool IsDeleted; }
+    public sealed class OwnNodeCache
+    {
+        public volatile MeshNode? Current;
+        public volatile bool IsDeleted;
+    }
 
     private static void SubscribeToOwnDeletion(IMessageHub hub)
     {
+        var cache = hub.ServiceProvider.GetService<OwnNodeCache>();
+        if (cache == null)
+            return;
+
+        // Long-standing subscription to the own-node reducer: every new emission
+        // updates the cache. No Take(1); the cache stays current for the hub's
+        // entire lifetime, so the read pipeline can read it synchronously.
+        try
+        {
+            var workspace = hub.GetWorkspace();
+            var nodeSub = workspace.GetMeshNodeStream()
+                .Subscribe(node => cache.Current = node, _ => { });
+            hub.RegisterForDisposal(nodeSub);
+        }
+        catch
+        {
+            // Workspace has no MeshNodeReference reducer (e.g., hub without
+            // MeshDataSource) — leave Current = null; pipeline falls through.
+        }
+
         var notifier = hub.ServiceProvider.GetService<IDataChangeNotifier>();
         if (notifier == null)
             return;
-        var flag = hub.ServiceProvider.GetService<DeletedFlag>();
-        if (flag == null)
-            return;
         var ownPath = hub.Address.ToString();
-        var subscription = notifier.Subscribe(notification =>
+        var delSub = notifier.Subscribe(notification =>
         {
             if (notification.Kind != DataChangeKind.Deleted)
                 return;
             if (!string.Equals(notification.Path, ownPath, StringComparison.OrdinalIgnoreCase))
                 return;
-            flag.IsDeleted = true;
+            cache.IsDeleted = true;
         });
-        hub.RegisterForDisposal(subscription);
+        hub.RegisterForDisposal(delSub);
     }
 
     /// <summary>

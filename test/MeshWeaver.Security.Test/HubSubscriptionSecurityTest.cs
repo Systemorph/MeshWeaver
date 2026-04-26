@@ -30,7 +30,13 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
-            .AddMeshNodes(new MeshNode("SecuredHub") { Name = "Secured Hub" })
+            .AddMeshNodes(
+                new MeshNode("SecuredHub") { Name = "Secured Hub" },
+                // Pre-seed admin's Viewer access on SecuredHub for the
+                // "Subscription_WithReadAccess_PassesAccessCheck" test — static
+                // node provider seeds AccessAssignment at hub init time.
+                AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Viewer", scope: "SecuredHub")
+            )
             .ConfigureDefaultNodeHub(c => c.AddData(d => d));
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -47,10 +53,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task UnauthorizedUser_HasNoReadPermission()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-
-        var permissions = await securityService.GetEffectivePermissionsAsync(
-            "SecuredHub", "NobodyUser", TestTimeout);
+        var permissions = await Mesh.GetPermissionAsync("SecuredHub", "NobodyUser", TestTimeout);
 
         permissions.Should().Be(Permission.None,
             "user with no role assignments should have zero permissions");
@@ -63,12 +66,9 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task Subscription_WithReadAccess_PassesAccessCheck()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        // Admin's Viewer access on SecuredHub is pre-seeded via the static
+        // AccessAssignment in ConfigureMesh — no runtime mutation needed.
         var hubAddress = new Address("SecuredHub");
-
-        // Grant Read access to the admin user on SecuredHub
-        await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Viewer", "SecuredHub", "system", TestTimeout);
 
         // Ensure hub is started
         var client = GetClient();

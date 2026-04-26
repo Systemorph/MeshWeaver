@@ -8,43 +8,34 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Centralized permission checking helper used by layout areas.
-/// When ISecurityService is not configured (RLS disabled), returns Permission.All.
+/// Centralized permission checking helper used by layout areas. Returns
+/// <see cref="IObservable{T}"/> end-to-end — no Task, no await, no FirstAsync /
+/// ToTask. When ISecurityService is not configured (RLS disabled), every
+/// observable emits Permission.All / true.
 /// </summary>
 public static class PermissionHelper
 {
     /// <summary>
-    /// Gets the effective permissions for the current user on a node path.
-    /// Returns Permission.All if RLS is not configured.
+    /// Effective permissions for the current user on a node path, including
+    /// hub-level permission rules (e.g., WithPublicRead). Pure reactive — the
+    /// returned observable emits the current value, then re-emits whenever the
+    /// underlying assignments change.
     /// </summary>
-    public static async Task<Permission> GetEffectivePermissionsAsync(IMessageHub hub, string nodePath)
+    public static IObservable<Permission> GetEffectivePermissions(IMessageHub hub, string nodePath)
     {
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PermissionHelper");
         var securityService = hub.ServiceProvider.GetService<ISecurityService>();
         if (securityService == null)
-        {
-            logger?.LogWarning("No ISecurityService registered — returning Permission.All for {Path}", nodePath);
-            return Permission.All;
-        }
+            return Observable.Return(Permission.All);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var context = accessService?.Context;
-        var userId = context?.ObjectId;
-        logger?.LogInformation(
-            "GetEffectivePermissionsAsync for path={Path}, user={User}, roles=[{Roles}], securityService={Type}",
-            nodePath,
-            userId ?? "(null)",
-            context?.Roles != null ? string.Join(",", context.Roles) : "(null)",
-            securityService.GetType().Name);
+        var userId = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
+        var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
 
-        try
-        {
-            var perms = await securityService.GetEffectivePermissionsAsync(nodePath);
-
-            // Merge hub-level permission rules (e.g., WithPublicRead grants Read to authenticated users)
-            var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
-            if (hubPermissions != null && !string.IsNullOrEmpty(userId))
+        return securityService.GetEffectivePermissions(nodePath)
+            .Select(perms =>
             {
+                if (hubPermissions == null || string.IsNullOrEmpty(userId))
+                    return perms;
                 foreach (Permission flag in Enum.GetValues<Permission>())
                 {
                     if (flag != Permission.None && flag != Permission.All
@@ -54,87 +45,45 @@ public static class PermissionHelper
                         perms |= flag;
                     }
                 }
-            }
-
-            logger?.LogInformation("Effective permissions for {User} on {Path}: {Perms}",
-                userId ?? "(null)", nodePath, perms);
-            return perms;
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "GetEffectivePermissionsAsync failed for {Path} — returning Permission.All", nodePath);
-            return Permission.All; // Fallback: allow on error
-        }
+                return perms;
+            })
+            .Catch<Permission, Exception>(ex =>
+            {
+                hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("PermissionHelper")
+                    ?.LogWarning(ex, "GetEffectivePermissions failed for {Path} — emitting Permission.All", nodePath);
+                return Observable.Return(Permission.All);
+            });
     }
 
     /// <summary>
-    /// Checks if the current user has Update permission on a node path.
+    /// True when the current user has Update permission on the node.
     /// </summary>
-    public static async Task<bool> CanEditAsync(IMessageHub hub, string nodePath)
-    {
-        var permissions = await GetEffectivePermissionsAsync(hub, nodePath);
-        return permissions.HasFlag(Permission.Update);
-    }
+    public static IObservable<bool> CanEdit(IMessageHub hub, string nodePath)
+        => GetEffectivePermissions(hub, nodePath).Select(p => p.HasFlag(Permission.Update));
 
     /// <summary>
-    /// Checks if the current user has Create permission on a parent path.
+    /// True when the current user has Create permission on the parent.
     /// </summary>
-    public static async Task<bool> CanCreateAsync(IMessageHub hub, string parentPath)
-    {
-        var permissions = await GetEffectivePermissionsAsync(hub, parentPath);
-        return permissions.HasFlag(Permission.Create);
-    }
+    public static IObservable<bool> CanCreate(IMessageHub hub, string parentPath)
+        => GetEffectivePermissions(hub, parentPath).Select(p => p.HasFlag(Permission.Create));
 
     /// <summary>
-    /// Checks if the current user has Delete permission on a node path.
+    /// True when the current user has Delete permission on the node.
     /// </summary>
-    public static async Task<bool> CanDeleteAsync(IMessageHub hub, string nodePath)
-    {
-        var permissions = await GetEffectivePermissionsAsync(hub, nodePath);
-        return permissions.HasFlag(Permission.Delete);
-    }
+    public static IObservable<bool> CanDelete(IMessageHub hub, string nodePath)
+        => GetEffectivePermissions(hub, nodePath).Select(p => p.HasFlag(Permission.Delete));
 
     /// <summary>
-    /// Gets effective permissions, resolving satellite nodes to their primary path.
+    /// True when the current user has Comment (or Update) permission on the parent.
     /// </summary>
-    public static async Task<Permission> GetEffectivePermissionsForNodeAsync(
-        IMessageHub hub, MeshNode node)
-    {
-        var path = node.GetPrimaryPath();
-        return await GetEffectivePermissionsAsync(hub, path);
-    }
+    public static IObservable<bool> CanComment(IMessageHub hub, string parentPath)
+        => GetEffectivePermissions(hub, parentPath)
+            .Select(p => p.HasFlag(Permission.Comment) || p.HasFlag(Permission.Update));
 
     /// <summary>
-    /// Checks if the current user has Comment permission on a parent path.
-    /// Update permission implies Comment permission.
+    /// Effective permissions resolving satellite nodes to their primary path.
     /// </summary>
-    public static async Task<bool> CanCommentAsync(IMessageHub hub, string parentPath)
-    {
-        var permissions = await GetEffectivePermissionsAsync(hub, parentPath);
-        return permissions.HasFlag(Permission.Comment) || permissions.HasFlag(Permission.Update);
-    }
-
-    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
-    private static readonly Dictionary<string, (IObservable<Permission> Stream, DateTimeOffset Expiry)> PermissionCache = new();
-
-    /// <summary>
-    /// Returns a cached IObservable that emits the effective permissions.
-    /// Cached per (hub address + nodePath) for 5 minutes.
-    /// Use in layout areas with CombineLatest to avoid await/deadlock.
-    /// </summary>
-    public static IObservable<Permission> ObservePermissions(IMessageHub hub, string nodePath)
-    {
-        var key = $"{hub.Address}:{nodePath}";
-        lock (PermissionCache)
-        {
-            if (PermissionCache.TryGetValue(key, out var cached) && cached.Expiry > DateTimeOffset.UtcNow)
-                return cached.Stream;
-
-            var stream = Observable.FromAsync(() => GetEffectivePermissionsAsync(hub, nodePath))
-                .Replay(1)
-                .RefCount();
-            PermissionCache[key] = (stream, DateTimeOffset.UtcNow + CacheDuration);
-            return stream;
-        }
-    }
+    public static IObservable<Permission> GetEffectivePermissionsForNode(IMessageHub hub, MeshNode node)
+        => GetEffectivePermissions(hub, node.GetPrimaryPath());
 }

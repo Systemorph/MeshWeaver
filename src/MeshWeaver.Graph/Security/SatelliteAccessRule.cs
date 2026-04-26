@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -17,14 +18,14 @@ public class SatelliteAccessRule(string nodeType, ISecurityService securityServi
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
         [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
-    public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+    public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
     {
         if (string.IsNullOrEmpty(userId))
-            return false;
+            return Observable.Return(false);
 
         var mainNodePath = context.Node.MainNode;
         if (string.IsNullOrEmpty(mainNodePath) || mainNodePath == context.Node.Path)
-            return false;
+            return Observable.Return(false);
 
         var permission = context.Operation switch
         {
@@ -32,6 +33,6 @@ public class SatelliteAccessRule(string nodeType, ISecurityService securityServi
             _ => Permission.Update
         };
 
-        return await securityService.HasPermissionAsync(mainNodePath, userId, permission, ct);
+        return securityService.HasPermission(mainNodePath, userId, permission);
     }
 }

@@ -252,19 +252,14 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         client.Post(new ClickedEvent(removeButtonArea!, stream.StreamId),
             o => o.WithTarget(hostAddress));
 
-        // Verify node updated — poll via MeshQuery until role count changes
-        MeshNode? updatedNode = null;
+        // Wait reactively for the node's role count to drop to 1 — replaces the
+        // 100ms polling loop with an actual subscription to the per-node hub stream.
         var ct = TestContext.Current.CancellationToken;
-        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
-        while (System.DateTime.UtcNow < deadline)
-        {
-            updatedNode = await ReadNodeAsync($"{TestNamespace}/iris-access", ct);
-
-            if (updatedNode?.Content is AccessAssignment a && a.Roles.Count == 1)
-                break;
-
-            await Task.Delay(100, ct);
-        }
+        var updatedNode = await ReadNode($"{TestNamespace}/iris-access")
+            .Where(n => n.Content is AccessAssignment a && a.Roles.Count == 1)
+            .FirstAsync()
+            .Timeout(10.Seconds())
+            .ToTask(ct);
 
         updatedNode.Should().NotBeNull();
         var result = updatedNode!.Content as AccessAssignment;
@@ -340,19 +335,13 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var updatedNode = created with { Content = updatedAssignment };
         await NodeFactory.UpdateNode(updatedNode);
 
-        // Verify the update was persisted
+        // Verify the update was persisted — wait reactively for the AccessObject change.
         var ct = TestContext.Current.CancellationToken;
-        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
-        MeshNode? result = null;
-        while (System.DateTime.UtcNow < deadline)
-        {
-            result = await ReadNodeAsync($"{TestNamespace}/dave-access", ct);
-
-            if (result?.Content is AccessAssignment a && a.AccessObject == "User/eve")
-                break;
-
-            await Task.Delay(100, ct);
-        }
+        var result = await ReadNode($"{TestNamespace}/dave-access")
+            .Where(n => n.Content is AccessAssignment a && a.AccessObject == "User/eve")
+            .FirstAsync()
+            .Timeout(10.Seconds())
+            .ToTask(ct);
 
         result.Should().NotBeNull();
         var resultAssignment = result!.Content as AccessAssignment;

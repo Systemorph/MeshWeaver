@@ -22,7 +22,7 @@ public static class MarkdownOverviewLayoutArea
             ?? Observable.Return(Array.Empty<MeshNode>());
 
         // Permissions checked once via Observable (no await, no blocking)
-        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+        var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
         return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
         {

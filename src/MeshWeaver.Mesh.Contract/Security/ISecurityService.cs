@@ -1,132 +1,73 @@
+using System.Reactive;
+
 namespace MeshWeaver.Mesh.Security;
 
 /// <summary>
 /// Service for evaluating permissions and managing security configurations.
-/// Provides row-level security for mesh nodes.
-/// Permissions are derived from AccessAssignment MeshNodes in the node hierarchy.
+/// Provides row-level security for mesh nodes — permissions are derived from
+/// <c>AccessAssignment</c> MeshNodes in the node hierarchy.
+///
+/// <para><b>Surface contract — pure <see cref="IObservable{T}"/></b>. Per
+/// <c>Doc/Architecture/AsynchronousCalls.md</c>: any method that participates
+/// in mesh work returns <see cref="IObservable{T}"/>, never <c>Task</c>.
+/// Callers compose with <c>.Select</c> / <c>.SelectMany</c> / <c>.Subscribe</c>;
+/// the only place this surface bridges to a <see cref="System.Threading.Tasks.Task"/>
+/// is the test edge (<c>.FirstAsync().ToTask(ct)</c>).</para>
 /// </summary>
 public interface ISecurityService
 {
     #region Permission Evaluation
 
     /// <summary>
-    /// Checks if the current user has the specified permission on a node.
-    /// Uses the AccessContext from AccessService.
+    /// True if the current user (from <c>AccessService.Context</c>) has
+    /// <paramref name="permission"/> on <paramref name="nodePath"/>.
     /// </summary>
-    /// <param name="nodePath">The node path to check</param>
-    /// <param name="permission">The required permission</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>True if the user has the permission</returns>
-    Task<bool> HasPermissionAsync(string nodePath, Permission permission, CancellationToken ct = default);
+    IObservable<bool> HasPermission(string nodePath, Permission permission);
 
     /// <summary>
-    /// Checks if a specific user has the specified permission on a node.
+    /// True if <paramref name="userId"/> has <paramref name="permission"/> on <paramref name="nodePath"/>.
     /// </summary>
-    /// <param name="nodePath">The node path to check</param>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="permission">The required permission</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>True if the user has the permission</returns>
-    Task<bool> HasPermissionAsync(string nodePath, string userId, Permission permission, CancellationToken ct = default);
+    IObservable<bool> HasPermission(string nodePath, string userId, Permission permission);
 
     /// <summary>
-    /// Gets all effective permissions for the current user on a node.
-    /// Uses the AccessContext from AccessService.
+    /// All effective permissions for the current user on <paramref name="nodePath"/>.
     /// </summary>
-    /// <param name="nodePath">The node path to check</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Combined permissions from all applicable role assignments</returns>
-    Task<Permission> GetEffectivePermissionsAsync(string nodePath, CancellationToken ct = default);
+    IObservable<Permission> GetEffectivePermissions(string nodePath);
 
     /// <summary>
-    /// Gets all effective permissions for a specific user on a node.
+    /// All effective permissions for <paramref name="userId"/> on <paramref name="nodePath"/>.
     /// </summary>
-    /// <param name="nodePath">The node path to check</param>
-    /// <param name="userId">The user's ObjectId</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Combined permissions from all applicable role assignments</returns>
-    Task<Permission> GetEffectivePermissionsAsync(string nodePath, string userId, CancellationToken ct = default);
+    IObservable<Permission> GetEffectivePermissions(string nodePath, string userId);
 
     #endregion
 
     #region Role Definitions
 
-    /// <summary>
-    /// Gets a role by ID (includes built-in and custom roles).
-    /// </summary>
-    /// <param name="roleId">The role ID</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The role or null if not found</returns>
-    Task<Role?> GetRoleAsync(string roleId, CancellationToken ct = default);
+    /// <summary>The role with id <paramref name="roleId"/> (built-in or custom), or <c>null</c> if not found.</summary>
+    IObservable<Role?> GetRole(string roleId);
 
-    /// <summary>
-    /// Gets all available roles (built-in and custom).
-    /// </summary>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Async enumerable of roles</returns>
-    IAsyncEnumerable<Role> GetRolesAsync(CancellationToken ct = default);
-
-    /// <summary>
-    /// Creates or updates a custom role.
-    /// </summary>
-    /// <param name="role">The role to save</param>
-    /// <param name="ct">Cancellation token</param>
-    Task SaveRoleAsync(Role role, CancellationToken ct = default);
-
-    #endregion
-
-    #region Access Assignment Management
-
-    /// <summary>
-    /// Convenience method that creates an AccessAssignment MeshNode.
-    /// Equivalent to IMeshCatalog.CreateNodeAsync with an AccessAssignment content type.
-    /// </summary>
-    /// <param name="userId">The subject's ObjectId</param>
-    /// <param name="roleId">The role ID to assign</param>
-    /// <param name="targetNamespace">The namespace (null for global)</param>
-    /// <param name="assignedBy">The ObjectId of the user making the assignment</param>
-    /// <param name="ct">Cancellation token</param>
-    Task AddUserRoleAsync(string userId, string roleId, string? targetNamespace, string? assignedBy = null, CancellationToken ct = default);
-
-    /// <summary>
-    /// Convenience method that deletes an AccessAssignment MeshNode.
-    /// Equivalent to IMeshCatalog.DeleteNodeAsync for the matching assignment.
-    /// </summary>
-    /// <param name="userId">The subject's ObjectId</param>
-    /// <param name="roleId">The role ID to remove</param>
-    /// <param name="targetNamespace">The namespace (null for global)</param>
-    /// <param name="ct">Cancellation token</param>
-    Task RemoveUserRoleAsync(string userId, string roleId, string? targetNamespace, CancellationToken ct = default);
+    /// <summary>All available roles (built-in + custom).</summary>
+    IObservable<Role> GetRoles();
 
     #endregion
 
     #region Partition Access Policies
 
-    /// <summary>
-    /// Gets the partition access policy at the specified namespace, if any.
-    /// IObservable to keep callers off the Task-await deadlock surface
-    /// (Doc/Architecture/AsynchronousCalls.md).
-    /// </summary>
-    /// <param name="targetNamespace">The namespace to check</param>
-    /// <returns>Observable emitting the policy (or null if none) and completing.</returns>
+    /// <summary>The current partition access policy at <paramref name="targetNamespace"/>, or <c>null</c> if none.</summary>
     IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace);
 
-    /// <summary>
-    /// Sets or updates the partition access policy at the specified namespace.
-    /// Creates/updates a MeshNode with nodeType "PartitionAccessPolicy" and id "_Policy".
-    /// </summary>
-    /// <param name="targetNamespace">The namespace to apply the policy to</param>
-    /// <param name="policy">The policy to set</param>
-    /// <param name="ct">Cancellation token</param>
-    Task SetPolicyAsync(string targetNamespace, PartitionAccessPolicy policy, CancellationToken ct = default);
-
-    /// <summary>
-    /// Removes the partition access policy at the specified namespace.
-    /// Deletes the "_Policy" MeshNode.
-    /// </summary>
-    /// <param name="targetNamespace">The namespace to remove the policy from</param>
-    /// <param name="ct">Cancellation token</param>
-    Task RemovePolicyAsync(string targetNamespace, CancellationToken ct = default);
-
     #endregion
+
+    // ALL mutating operations are intentionally absent (AddUserRole / RemoveUserRole /
+    // SetPolicy / RemovePolicy / SaveRole / any create / update / delete).
+    //
+    // Static seeds belong in MeshConfiguration via AddMeshNodes (DI-time, immutable).
+    // Dynamic mutations from UI / handlers go through the workspace's standard data
+    // layer:
+    //   • workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ref).Update(...)
+    //     — for in-place updates of an existing AccessAssignment / Policy / Role node.
+    //   • IMeshService.CreateNode(node) — for first-time creation.
+    //   • IMeshService.DeleteNode(path) — for deletion.
+    // SecurityService observes the resulting changes via the synced AccessAssignments
+    // collection (registered by AddRowLevelSecurity); reads stay reactive end-to-end.
 }

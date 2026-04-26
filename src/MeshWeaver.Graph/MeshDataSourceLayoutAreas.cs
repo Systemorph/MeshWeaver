@@ -304,12 +304,13 @@ public static class MeshDataSourceLayoutAreas
             DataContext = dataContext
         });
 
-        // Action button
+        // Action button — sync click; ExecuteCopyInstall runs as fire-and-forget Task (heavy import IO).
         content = content.WithView(Controls.Button("Execute")
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(async ctx =>
+            .WithClickAction(ctx =>
             {
-                await ExecuteCopyInstall(ctx, host, formId, sourceNode, config);
+                _ = ExecuteCopyInstall(ctx, host, formId, sourceNode, config);
+                return Task.CompletedTask;
             }));
 
         var dialog = Controls.Dialog(content, $"Copy / Install: {sourceNode?.Name ?? "Data Source"}")

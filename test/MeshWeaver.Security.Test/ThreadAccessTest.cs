@@ -196,16 +196,17 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [Fact(Timeout = 15000)]
     public async Task CreateThread_InSharedNamespace_RequiresUpdatePermission()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var userId = "shared-thread-user";
         var sharedPath = "SharedProject";
 
         // Grant only Create permission (not Update) — Thread needs Update
-        await securityService.AddUserRoleAsync(userId, "Contributor", sharedPath, "system", TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Contributor", sharedPath))
+            .FirstAsync().ToTask(TestTimeout);
 
-        // Verify Contributor has Create but not Update
-        var hasCreate = await securityService.HasPermissionAsync(sharedPath, userId, Permission.Create, TestTimeout);
-        var hasUpdate = await securityService.HasPermissionAsync(sharedPath, userId, Permission.Update, TestTimeout);
+        // Verify Contributor has Create but not Update — via the GetPermissionRequest round-trip.
+        var hasCreate = await Mesh.HasPermissionAsync(sharedPath, userId, Permission.Create, TestTimeout);
+        var hasUpdate = await Mesh.HasPermissionAsync(sharedPath, userId, Permission.Update, TestTimeout);
 
         // If Contributor doesn't differentiate Create vs Update, skip this test
         if (hasUpdate)
@@ -242,12 +243,13 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [Fact(Timeout = 15000)]
     public async Task CreateThread_InSharedNamespace_WithEditorRole_Succeeds()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var userId = "editor-thread-user";
         var sharedPath = "EditorProject";
 
         // Grant Editor role (includes Update permission)
-        await securityService.AddUserRoleAsync(userId, "Editor", sharedPath, "system", TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Editor", sharedPath))
+            .FirstAsync().ToTask(TestTimeout);
 
         LoginAs(userId);
 
@@ -332,11 +334,10 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             // Thread children under User namespace are NOT publicly readable.
             // Only User/{name} nodes (the User node itself) have public read via INodeTypeAccessRule.
             // Children like User/{name}/{threadId} require explicit access grants.
-            var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-            var canRead = await securityService.HasPermissionAsync(threadPath, "reader-no-access", Permission.Read, TestTimeout);
+            var canRead = await Mesh.HasPermissionAsync(threadPath, "reader-no-access", Permission.Read, TestTimeout);
             canRead.Should().BeFalse("Other user should NOT be able to read threads under someone else's User namespace");
 
-            var canUpdate = await securityService.HasPermissionAsync(threadPath, "reader-no-access", Permission.Update, TestTimeout);
+            var canUpdate = await Mesh.HasPermissionAsync(threadPath, "reader-no-access", Permission.Update, TestTimeout);
             canUpdate.Should().BeFalse("Other user should NOT be able to update someone else's thread");
         }
         finally

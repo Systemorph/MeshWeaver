@@ -100,10 +100,11 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     private async Task SetupTestData()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Admin context for data seeding
-        await securityService.AddUserRoleAsync("setup-admin", "Admin", null, "system", TestTimeout);
+        // Admin context for data seeding — global Admin role for "setup-admin" via runtime CreateNode.
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole("setup-admin", "Admin"))
+            .FirstAsync().ToTask(TestTimeout);
         accessService.SetCircuitContext(new AccessContext { ObjectId = "setup-admin", Name = "Setup Admin" });
 
         // Create namespace nodes
@@ -148,21 +149,24 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         accessService.SetCircuitContext(null);
 
         // User1: Viewer on SharedOrg (can read), no access to PrivateOrg
-        await securityService.AddUserRoleAsync(User1, "Viewer", "SharedOrg", "system", TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User1, "Viewer", "SharedOrg"))
+            .FirstAsync().ToTask(TestTimeout);
 
         // User2: Editor on SharedOrg, Admin on PrivateOrg
-        await securityService.AddUserRoleAsync(User2, "Editor", "SharedOrg", "system", TestTimeout);
-        await securityService.AddUserRoleAsync(User2, "Admin", "PrivateOrg", "system", TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg"))
+            .FirstAsync().ToTask(TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Admin", "PrivateOrg"))
+            .FirstAsync().ToTask(TestTimeout);
 
-        // Break inheritance on SharedOrg/Confidential so parent roles don't propagate
-        await securityService.SetPolicyAsync("SharedOrg/Confidential",
-            new PartitionAccessPolicy
-            {
-                BreaksInheritance = true,
-            });
+        // Break inheritance on SharedOrg/Confidential so parent roles don't propagate.
+        // Policy is just a MeshNode at "{ns}/_Policy".
+        await meshService.CreateNode(AssignmentNodeFactory.Policy("SharedOrg/Confidential",
+            new PartitionAccessPolicy { BreaksInheritance = true }))
+            .FirstAsync().ToTask(TestTimeout);
 
         // Re-grant User2 as Editor on Confidential (after inheritance break)
-        await securityService.AddUserRoleAsync(User2, "Editor", "SharedOrg/Confidential", "system", TestTimeout);
+        await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg/Confidential"))
+            .FirstAsync().ToTask(TestTimeout);
     }
 
     [Fact(Timeout = 30000)]

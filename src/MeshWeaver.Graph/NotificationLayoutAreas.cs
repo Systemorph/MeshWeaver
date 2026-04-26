@@ -96,7 +96,7 @@ public static class NotificationLayoutAreas
         var readLabel = notification.IsRead ? "Mark as Unread" : "Mark as Read";
         buttons = buttons.WithView(Controls.Button(readLabel)
             .WithAppearance(Appearance.Neutral)
-            .WithClickAction(async ctx =>
+            .WithClickAction(ctx =>
             {
                 if (node != null)
                 {
@@ -106,6 +106,7 @@ public static class NotificationLayoutAreas
                     };
                     ctx.Host.Hub.Post(new UpdateNodeRequest(updated));
                 }
+                return Task.CompletedTask;
             }));
 
         // Link to target node

@@ -33,19 +33,19 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddMeshNodes(
-                new MeshNode("IdentityTest") { Name = "Identity Test" },
-                new MeshNode("Target", "IdentityTest") { Name = "Target Node" }
+                // Explicit HubConfiguration so the routing config resolver
+                // doesn't need to compile a NodeType — the default node hub
+                // pipeline (AddAccessControlPipeline + GetPermissionRequest
+                // handler) is applied via ConfigureDefaultNodeHub on top.
+                new MeshNode("IdentityTest") { Name = "Identity Test", HubConfiguration = c => c },
+                new MeshNode("Target", "IdentityTest") { Name = "Target Node", HubConfiguration = c => c },
+                // Pre-seeded role assignments (replaces SetupAccessRightsAsync mutations).
+                AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", scope: "IdentityTest"),
+                AssignmentNodeFactory.UserRole("Viewer1", "Viewer", scope: "IdentityTest")
             )
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 
-    protected override async Task SetupAccessRightsAsync()
-    {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync(
-            TestUsers.Admin.ObjectId, "Admin", "IdentityTest", "system");
-        await securityService.AddUserRoleAsync(
-            "Viewer1", "Viewer", "IdentityTest", "system");
-    }
+    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
@@ -122,9 +122,7 @@ public class LayoutAreaIdentityTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 10000)]
     public async Task ViewerUser_CannotUpdate()
     {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-
-        var perms = await securityService.GetEffectivePermissionsAsync(
+        var perms = await Mesh.GetPermissionAsync(
             "IdentityTest/Target", "Viewer1", TestContext.Current.CancellationToken);
 
         perms.HasFlag(Permission.Read).Should().BeTrue("Viewer1 has Read");

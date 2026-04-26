@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Runtime.CompilerServices;
 
 namespace MeshWeaver.Mesh.Security;
 
@@ -9,55 +8,33 @@ namespace MeshWeaver.Mesh.Security;
 /// </summary>
 public class NullSecurityService : ISecurityService
 {
-    /// <inheritdoc />
-    public Task<bool> HasPermissionAsync(string nodePath, Permission permission, CancellationToken ct = default)
-        => Task.FromResult(true);
-
-    /// <inheritdoc />
-    public Task<bool> HasPermissionAsync(string nodePath, string userId, Permission permission, CancellationToken ct = default)
-        => Task.FromResult(true);
-
-    /// <inheritdoc />
-    public Task<Permission> GetEffectivePermissionsAsync(string nodePath, CancellationToken ct = default)
-        => Task.FromResult(Permission.All);
-
-    /// <inheritdoc />
-    public Task<Permission> GetEffectivePermissionsAsync(string nodePath, string userId, CancellationToken ct = default)
-        => Task.FromResult(Permission.All);
-
     private static readonly Role[] BuiltInRoles = [Role.Admin, Role.Editor, Role.Viewer, Role.Commenter, Role.PlatformAdmin];
 
-    /// <inheritdoc />
-    public Task<Role?> GetRoleAsync(string roleId, CancellationToken ct = default)
-        => Task.FromResult(BuiltInRoles.FirstOrDefault(r => r.Id == roleId));
+    /// <summary>Always grants the requested <paramref name="permission"/> on <paramref name="nodePath"/> for the current user.</summary>
+    public IObservable<bool> HasPermission(string nodePath, Permission permission)
+        => Observable.Return(true);
 
-    /// <inheritdoc />
-    public async IAsyncEnumerable<Role> GetRolesAsync([EnumeratorCancellation] CancellationToken ct = default)
-    {
-        foreach (var role in BuiltInRoles)
-            yield return role;
-    }
+    /// <summary>Always grants the requested <paramref name="permission"/> on <paramref name="nodePath"/> for <paramref name="userId"/>.</summary>
+    public IObservable<bool> HasPermission(string nodePath, string userId, Permission permission)
+        => Observable.Return(true);
 
-    /// <inheritdoc />
-    public Task SaveRoleAsync(Role role, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>Returns <see cref="Permission.All"/> for any path under the current user.</summary>
+    public IObservable<Permission> GetEffectivePermissions(string nodePath)
+        => Observable.Return(Permission.All);
 
-    /// <inheritdoc />
-    public Task AddUserRoleAsync(string userId, string roleId, string? targetNamespace, string? assignedBy = null, CancellationToken ct = default)
-        => Task.CompletedTask;
+    /// <summary>Returns <see cref="Permission.All"/> for any path under <paramref name="userId"/>.</summary>
+    public IObservable<Permission> GetEffectivePermissions(string nodePath, string userId)
+        => Observable.Return(Permission.All);
 
-    /// <inheritdoc />
-    public Task RemoveUserRoleAsync(string userId, string roleId, string? targetNamespace, CancellationToken ct = default)
-        => Task.CompletedTask;
+    /// <summary>Returns the built-in <see cref="Role"/> matching <paramref name="roleId"/>, or <c>null</c> if no such built-in exists.</summary>
+    public IObservable<Role?> GetRole(string roleId)
+        => Observable.Return<Role?>(BuiltInRoles.FirstOrDefault(r => r.Id == roleId));
 
-    /// <inheritdoc />
+    /// <summary>Streams the built-in roles (Admin, Editor, Viewer, Commenter, PlatformAdmin).</summary>
+    public IObservable<Role> GetRoles()
+        => BuiltInRoles.ToObservable();
+
+    /// <summary>Always returns <c>null</c> — the no-op service has no partition access policies.</summary>
     public IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace)
         => Observable.Return<PartitionAccessPolicy?>(null);
-
-    /// <inheritdoc />
-    public Task SetPolicyAsync(string targetNamespace, PartitionAccessPolicy policy, CancellationToken ct = default)
-        => Task.CompletedTask;
-
-    /// <inheritdoc />
-    public Task RemovePolicyAsync(string targetNamespace, CancellationToken ct = default)
-        => Task.CompletedTask;
 }

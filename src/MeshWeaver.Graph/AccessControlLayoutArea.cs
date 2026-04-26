@@ -1,6 +1,5 @@
 using System.Net;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -101,12 +100,6 @@ public static class AccessControlLayoutArea
         return null;
     }
 
-    private static async Task<bool> CheckAdminPermission(IMessageHub hub, string nodePath)
-    {
-        var permissions = await PermissionHelper.GetEffectivePermissionsAsync(hub, nodePath);
-        return permissions.HasFlag(Permission.Delete); // Admin = has Delete permission
-    }
-
     private static UiControl? BuildAccessControlPage(
         LayoutAreaHost host,
         MeshNode? node,
@@ -135,21 +128,37 @@ public static class AccessControlLayoutArea
 
         if (isAdmin && securityService != null)
         {
-            var buttonLabel = activePolicy != null ? "Edit Policy" : "Set Policy";
+            var policyExists = activePolicy != null;
+            var buttonLabel = policyExists ? "Edit Policy" : "Set Policy";
+            var workspace = host.Hub.GetWorkspace();
+            var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var policyPath = string.IsNullOrEmpty(nodePath) ? "_Policy" : $"{nodePath}/_Policy";
+
             stack = stack.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px;")
                 .WithView(Controls.Button(buttonLabel)
                     .WithAppearance(Appearance.Accent)
                     .WithStyle("align-self: flex-start;")
-                    .WithClickAction(async ctx => await ShowSetPolicyDialog(ctx, nodePath, securityService, activePolicy)))
-                .WithView(activePolicy != null
+                    .WithClickAction((Action<UiActionContext>)(ctx => ShowSetPolicyDialog(ctx, nodePath, policyPath, policyExists, workspace, meshService, activePolicy))))
+                .WithView(policyExists
                     ? Controls.Button("Remove Policy")
                         .WithAppearance(Appearance.Neutral)
                         .WithStyle("align-self: flex-start;")
-                        .WithClickAction(async ctx =>
+                        .WithClickAction((Action<UiActionContext>)(ctx =>
                         {
-                            await securityService.RemovePolicyAsync(nodePath);
+                            // Remove via the per-path remote stream — the
+                            // synchronization protocol propagates the cleared
+                            // policy to the owning per-node hub.
+                            var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                                new Address(policyPath), new MeshNodeReference());
+                            stream.Update(current => current is null ? null : new ChangeItem<MeshNode>(
+                                Value: current with { Content = new PartitionAccessPolicy() },
+                                ChangedBy: WellKnownUsers.System,
+                                StreamId: stream.StreamId,
+                                ChangeType: ChangeType.Full,
+                                Version: stream.Hub.Version,
+                                Updates: null));
                             ctx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                        })
+                        }))
                     : (UiControl)Controls.Html("")));
         }
 
@@ -183,7 +192,7 @@ public static class AccessControlLayoutArea
             stack = stack.WithView(Controls.Button("+ Add Assignment")
                 .WithAppearance(Appearance.Accent)
                 .WithStyle("align-self: flex-start; margin-top: 8px;")
-                .WithClickAction(async ctx => await ShowAddAssignmentDialog(ctx, nodePath)));
+                .WithClickAction((Action<UiActionContext>)(ctx => ShowAddAssignmentDialog(ctx, nodePath))));
         }
 
         return stack;
@@ -253,7 +262,7 @@ public static class AccessControlLayoutArea
     /// Shows a dialog to add a new access assignment.
     /// Captures both Subject (user/group) AND Role in one dialog.
     /// </summary>
-    private static Task ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
+    private static void ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
     {
         var formId = $"add_assignment_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>
@@ -294,14 +303,11 @@ public static class AccessControlLayoutArea
             .WithStyle("gap: 8px;")
             .WithView(Controls.Button("Cancel")
                 .WithAppearance(Appearance.Neutral)
-                .WithClickAction(cancelCtx =>
-                {
-                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    return Task.CompletedTask;
-                }))
+                .WithClickAction((Action<UiActionContext>)(cancelCtx =>
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!))))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(saveCtx =>
+                .WithClickAction((Action<UiActionContext>)(saveCtx =>
                 {
                     // Subscribe to the form data stream (synchronous emission via Take(1) —
                     // one-shot read for a click action, per DataBinding doc rule).
@@ -350,15 +356,13 @@ public static class AccessControlLayoutArea
                                 new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
                                 o => o.WithTarget(saveCtx.Hub.Address));
                         });
-                    return Task.CompletedTask;
-                }));
+                })));
 
         var dialog = Controls.Dialog(formContent, "Add Assignment")
             .WithSize("M")
             .WithActions(actions);
 
         ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-        return Task.CompletedTask;
     }
 
     private static void ShowValidationError(UiActionContext ctx, string message)
@@ -383,7 +387,9 @@ public static class AccessControlLayoutArea
         return string.Join(", ", names);
     }
 
-    private static Task ShowSetPolicyDialog(UiActionContext ctx, string nodePath, ISecurityService securityService, PartitionAccessPolicy? existing)
+    private static void ShowSetPolicyDialog(
+        UiActionContext ctx, string nodePath, string policyPath, bool policyExists,
+        IWorkspace workspace, IMeshService meshService, PartitionAccessPolicy? existing)
     {
         var formId = $"set_policy_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>
@@ -434,37 +440,65 @@ public static class AccessControlLayoutArea
             .WithStyle("gap: 8px;")
             .WithView(Controls.Button("Cancel")
                 .WithAppearance(Appearance.Neutral)
-                .WithClickAction(cancelCtx =>
-                {
-                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    return Task.CompletedTask;
-                }))
+                .WithClickAction((Action<UiActionContext>)(cancelCtx =>
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!))))
             .WithView(Controls.Button("Save")
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(async saveCtx =>
+                .WithClickAction((Action<UiActionContext>)(saveCtx =>
                 {
-                    var formValues = await saveCtx.Host.Stream
-                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+                    // Read form values via Subscribe (sync emission of the BehaviorSubject).
+                    // Pure reactive — no await, no FirstAsync, no Task bridging.
+                    saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(formValues =>
+                        {
+                            var policy = new PartitionAccessPolicy
+                            {
+                                Read = formValues.GetValueOrDefault("allowRead") is true ? null : false,
+                                Create = formValues.GetValueOrDefault("allowCreate") is true ? null : false,
+                                Update = formValues.GetValueOrDefault("allowUpdate") is true ? null : false,
+                                Delete = formValues.GetValueOrDefault("allowDelete") is true ? null : false,
+                                Comment = formValues.GetValueOrDefault("allowComment") is true ? null : false,
+                                BreaksInheritance = formValues.GetValueOrDefault("breaksInheritance") is true
+                            };
 
-                    var policy = new PartitionAccessPolicy
-                    {
-                        Read = formValues.GetValueOrDefault("allowRead") is true ? null : false,
-                        Create = formValues.GetValueOrDefault("allowCreate") is true ? null : false,
-                        Update = formValues.GetValueOrDefault("allowUpdate") is true ? null : false,
-                        Delete = formValues.GetValueOrDefault("allowDelete") is true ? null : false,
-                        Comment = formValues.GetValueOrDefault("allowComment") is true ? null : false,
-                        BreaksInheritance = formValues.GetValueOrDefault("breaksInheritance") is true
-                    };
-
-                    await securityService.SetPolicyAsync(nodePath, policy);
-                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                }));
+                            // Caller (the UI) knows whether this is a create or an
+                            // update — branch directly instead of asking SecurityService.
+                            if (policyExists)
+                            {
+                                // In-place update through the per-path remote stream.
+                                var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                                    new Address(policyPath), new MeshNodeReference());
+                                stream.Update(current => current is null ? null : new ChangeItem<MeshNode>(
+                                    Value: current with { Content = policy },
+                                    ChangedBy: WellKnownUsers.System,
+                                    StreamId: stream.StreamId,
+                                    ChangeType: ChangeType.Full,
+                                    Version: stream.Hub.Version,
+                                    Updates: null));
+                            }
+                            else
+                            {
+                                // First-time create — only IMeshService.CreateNode
+                                // brings the per-node hub into existence.
+                                var policyNode = new MeshNode("_Policy", nodePath ?? "")
+                                {
+                                    NodeType = "PartitionAccessPolicy",
+                                    Name = "Access Policy",
+                                    Content = policy,
+                                };
+                                meshService.CreateNode(policyNode).Subscribe(
+                                    _ => { },
+                                    _ => { /* surface via standard data-layer error path */ });
+                            }
+                            saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                        });
+                })));
 
         var dialog = Controls.Dialog(formContent, "Partition Access Policy")
             .WithSize("M")
             .WithActions(actions);
 
         ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-        return Task.CompletedTask;
     }
 }

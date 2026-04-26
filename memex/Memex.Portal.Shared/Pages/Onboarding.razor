@@ -180,13 +180,25 @@
 
                 await NodeFactory.CreateNode(node);
 
-                // First user becomes global Admin (stored in admin.access table)
+                // First user becomes global Admin — write the AccessAssignment node
+                // directly via IMeshService.CreateNode (replaces the obsolete
+                // ISecurityService.AddUserRoleAsync). Subscribe + fire-and-forget; the
+                // navigation below reloads the circuit so the new role is picked up.
                 if (isFirstUser)
                 {
-                    var securityService = PortalApplication.Hub.ServiceProvider
-                        .GetService<ISecurityService>();
-                    if (securityService != null)
-                        await securityService.AddUserRoleAsync(username, Role.Admin.Id, "Admin", username);
+                    var assignmentNode = new MeshNode($"{username}_Access", "Admin/_Access")
+                    {
+                        NodeType = "AccessAssignment",
+                        Name = $"{username} Access",
+                        MainNode = "Admin",
+                        Content = new AccessAssignment
+                        {
+                            AccessObject = username,
+                            DisplayName = username,
+                            Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
+                        }
+                    };
+                    NodeFactory.CreateNode(assignmentNode).Subscribe();
                 }
             }
 

@@ -53,15 +53,13 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
                     Name = "Chat User",
                     NodeType = "User",
                     State = MeshNodeState.Active,
-                }
+                },
+                // Pre-seed: grant ChatUser Editor on their own namespace
+                // (simulates UserScopeGrantHandler) via the static node provider.
+                AssignmentNodeFactory.UserRole("ChatUser", "Editor", scope: UserPath)
             );
 
-    protected override async Task SetupAccessRightsAsync()
-    {
-        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        // Grant the user Editor role on their own namespace (simulates UserScopeGrantHandler)
-        await securityService.AddUserRoleAsync("ChatUser", "Editor", UserPath, "system");
-    }
+    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
