@@ -37,6 +37,7 @@ public static class MeshDataSourceExtensions
             {
                 data.Workspace.Hub.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
                 var dataSource = configuration(new MeshDataSource(data.Workspace.Hub.Address.ToString(), data.Workspace).WithMeshNodes());
+                var hubPath = data.Workspace.Hub.Address.ToString();
                 return data
                     .Configure(rm => rm
                         .ForReducedStream<InstanceCollection>(reduced => reduced
@@ -53,11 +54,20 @@ public static class MeshDataSourceExtensions
                                     ?.Reduce((WorkspaceReference<MeshNode>)reference, configuration);
                             }))
                     .WithDataSource(_ => dataSource)
+                    // Synced Sources/Tests collections — live mirrors of the Code nodes
+                    // under {hubPath}/Source and {hubPath}/Test. Populated by
+                    // IMeshQueryProvider.ObserveQuery via SyncedQueryDataSourceExtensions.
+                    // For non-NodeType hubs there are no such children, so the collections
+                    // stay empty (negligible cost).
+                    .WithVirtualDataSource("$mesh-sources", vs => vs.WithMeshQuery<MeshNode>(
+                        $"namespace:{hubPath}/Source scope:subtree nodeType:Code", "Sources"))
+                    .WithVirtualDataSource("$mesh-tests", vs => vs.WithMeshQuery<MeshNode>(
+                        $"namespace:{hubPath}/Test scope:subtree nodeType:Code", "Tests"))
                     .WithDefaultDataReference(workspace =>
                     {
-                        var hubPath = workspace.Hub.Address.Path;
+                        var path = workspace.Hub.Address.Path;
                         return workspace.GetStream<MeshNode>()
-                            ?.Select(nodes => (object?)nodes?.FirstOrDefault(n => n.Path == hubPath))
+                            ?.Select(nodes => (object?)nodes?.FirstOrDefault(n => n.Path == path))
                             ?? Observable.Return<object?>(null);
                     });
             })
