@@ -60,7 +60,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
         if (!string.IsNullOrEmpty(Value) && (_selectedNode == null || _selectedNode.Path != Value))
         {
-            _ = ResolveSelectedNodeAsync();
+            ResolveSelectedNode();
         }
     }
 
@@ -258,11 +258,11 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         StateHasChanged();
     }
 
-    private async Task ResolveSelectedNodeAsync()
+    private void ResolveSelectedNode()
     {
         if (string.IsNullOrEmpty(Value)) return;
 
-        // First check Items for the selected node (avoids query round-trip)
+        // First check Items for the selected node (avoids hub round-trip).
         var items = BoundItems ?? [];
         if (items.Length > 0)
         {
@@ -275,19 +275,19 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
             }
         }
 
-        // Single-node-by-path content read — one-shot GetDataRequest (NOT QueryAsync,
-        // and NOT GetMeshNodeStream(...).Take(1) which pays for a stream subscription
-        // it immediately throws away). See Doc/Architecture/AsynchronousCalls.md.
-        try
-        {
-            _selectedNode = await Hub.GetMeshNode(Value, TimeSpan.FromSeconds(10)).ToTask();
-            if (_selectedNode == null)
-                _selectedNode = new MeshNode(Value) { Name = Value };
-            StateHasChanged();
-        }
-        catch
-        {
-            _selectedNode = new MeshNode(Value) { Name = Value };
-        }
+        // Reactive — Subscribe, never await (await on a hub round-trip is a 100%
+        // deadlock; see Doc/Architecture/AsynchronousCalls.md).
+        Hub.GetMeshNode(Value, TimeSpan.FromSeconds(10))
+            .Subscribe(
+                node =>
+                {
+                    _selectedNode = node ?? new MeshNode(Value) { Name = Value };
+                    InvokeAsync(StateHasChanged);
+                },
+                _ =>
+                {
+                    _selectedNode = new MeshNode(Value) { Name = Value };
+                    InvokeAsync(StateHasChanged);
+                });
     }
 }

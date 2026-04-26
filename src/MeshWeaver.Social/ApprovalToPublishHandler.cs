@@ -71,48 +71,36 @@ public sealed class ApprovalToPublishHandler : IHostedService, IDisposable
         if (evt.Kind == MeshChangeKind.Deleted) return;
         if (!string.Equals(evt.NodeType, "Approval", StringComparison.OrdinalIgnoreCase)) return;
 
-        // Resolve the approval node and confirm it's actually Approved. A created
-        // approval fires Created with Status=Pending; we only care about Updated →
-        // Approved (or rarely Created with Status=Approved if the caller bypassed
-        // the two-step flow).
-        _ = ProcessAsync(evt.Path);
+        // Reactive composition — hub.GetMeshNode is composed via .SelectMany; never
+        // bridged to Task and awaited (that's a 100% deadlock surface; see
+        // Doc/Architecture/AsynchronousCalls.md).
+        Process(evt.Path)
+            .Subscribe(
+                _ => { },
+                ex => _logger?.LogError(ex, "Failed to handle approval event for {Path}", evt.Path));
     }
 
-    private async System.Threading.Tasks.Task ProcessAsync(string approvalPath)
-    {
-        try
-        {
-            // Single-node-by-path content read — one-shot GetDataRequest (NOT QueryAsync,
-            // which lags through the read-side index, and NOT GetMeshNodeStream(...).Take(1)
-            // which pays for a SubscribeRequest then immediately unsubscribes; see
-            // Doc/Architecture/AsynchronousCalls.md).
-            MeshNode? approvalNode;
-            try
+    private IObservable<System.Reactive.Unit> Process(string approvalPath) =>
+        _hub.GetMeshNode(approvalPath, TimeSpan.FromSeconds(15))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .SelectMany(approvalNode =>
             {
-                approvalNode = await _hub.GetMeshNode(approvalPath, TimeSpan.FromSeconds(15))
-                    .ToTask();
-            }
-            catch
-            {
-                approvalNode = null;
-            }
-            if (approvalNode?.Content is not Approval approval) return;
-            if (approval.Status != ApprovalStatus.Approved) return;
+                if (approvalNode?.Content is not Approval approval
+                    || approval.Status != ApprovalStatus.Approved)
+                    return Observable.Return(System.Reactive.Unit.Default);
 
-            var snapshot = await _bridge.ResolveAsync(approval, CancellationToken.None);
-            if (snapshot is null)
-            {
-                _logger?.LogDebug("Approval {Path} approved but bridge returned no publishable snapshot — skipping", approvalPath);
-                return;
-            }
-
-            _queue.Enqueue(snapshot);
-            _logger?.LogInformation("Queued publish for {PostPath} on {Platform} (scheduled {ScheduledAt})",
-                snapshot.PostPath, snapshot.Platform, snapshot.ScheduledAt);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to handle approval event for {Path}", approvalPath);
-        }
-    }
+                return _bridge.Resolve(approval)
+                    .Do(snapshot =>
+                    {
+                        if (snapshot is null)
+                        {
+                            _logger?.LogDebug("Approval {Path} approved but bridge returned no publishable snapshot — skipping", approvalPath);
+                            return;
+                        }
+                        _queue.Enqueue(snapshot);
+                        _logger?.LogInformation("Queued publish for {PostPath} on {Platform} (scheduled {ScheduledAt})",
+                            snapshot.PostPath, snapshot.Platform, snapshot.ScheduledAt);
+                    })
+                    .Select(_ => System.Reactive.Unit.Default);
+            });
 }

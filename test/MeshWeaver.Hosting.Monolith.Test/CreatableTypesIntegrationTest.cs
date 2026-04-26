@@ -648,7 +648,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 3: Verify node can be resolved via catalog
         Output.WriteLine($"Step 3: Verifying ResolvePathAsync for {nodePath}");
-        var resolution = await PathResolver.ResolvePathAsync(nodePath);
+        var resolution = await PathResolver.ResolvePath(nodePath).FirstAsync().ToTask();
         resolution.Should().NotBeNull($"Path {nodePath} should resolve via catalog");
         Output.WriteLine($"Path resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
 
@@ -939,7 +939,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Output.WriteLine($"Persistence check result: {(persistenceNode != null ? $"Found: {persistenceNode.Path}" : "NULL")}");
 
             // Check resolution
-            var resolution = await PathResolver.ResolvePathAsync(nodePath);
+            var resolution = await PathResolver.ResolvePath(nodePath).FirstAsync().ToTask();
             Output.WriteLine($"ResolvePathAsync result: {(resolution != null ? $"Prefix={resolution.Prefix}, Remainder={resolution.Remainder}" : "NULL")}");
 
             throw;
@@ -1079,3 +1079,4 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             "ProductLaunch (instance of ACME/Project) should be able to create ACME/Project/Todo");
     }
 }
+

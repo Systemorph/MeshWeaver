@@ -1,3 +1,5 @@
+﻿@using System.Reactive.Linq
+@using System.Reactive.Threading.Tasks
 @using MeshWeaver.Layout
 @using MeshWeaver.Mesh.Services
 @inject IPathResolver PathResolver
@@ -35,7 +37,7 @@ else
     private string? DiagInfo { get; set; }
     private LayoutAreaControl? ResolvedViewModel { get; set; }
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
         if (string.IsNullOrEmpty(Path))
         {
@@ -48,45 +50,46 @@ else
         ErrorMessage = null;
         ResolvedViewModel = null;
 
-        try
+        if (PathResolver == null)
         {
-            if (PathResolver == null)
-            {
-                ErrorMessage = "PathResolver service not available";
-                return;
-            }
-
-            var resolution = await PathResolver.ResolvePathAsync(Path);
-            if (resolution != null)
-            {
-                var (area, id) = ParseRemainder(resolution.Remainder);
-                ResolvedViewModel = new LayoutAreaControl(
-                    (Messaging.Address)resolution.Prefix,
-                    new Data.LayoutAreaReference(area) { Id = id }
-                )
-                {
-                    ShowProgress = true,
-                    SpinnerType = Layout.SpinnerType.Skeleton,
-                    ProgressMessage = ShortName
-                };
-                DiagInfo = $"Resolved: {resolution.Prefix}" +
-                    (area != null ? $" area={area}" : "") +
-                    (id != null ? $" id={id}" : "");
-            }
-            else
-            {
-                ErrorMessage = $"Path not found: {Path}";
-            }
-        }
-        catch (Exception ex)
-        {
-            ErrorMessage = $"Error resolving path: {ex.Message}";
-        }
-        finally
-        {
+            ErrorMessage = "PathResolver service not available";
             IsLoading = false;
-            await InvokeAsync(StateHasChanged);
+            return;
         }
+
+        // Reactive — Subscribe, never await on the resolver chain (deadlock surface;
+        // see Doc/Architecture/AsynchronousCalls.md).
+        PathResolver.ResolvePath(Path)
+            .Catch<MeshWeaver.Mesh.Services.AddressResolution?, Exception>(ex =>
+            {
+                ErrorMessage = $"Error resolving path: {ex.Message}";
+                return Observable.Return<MeshWeaver.Mesh.Services.AddressResolution?>(null);
+            })
+            .Subscribe(resolution =>
+            {
+                if (resolution != null)
+                {
+                    var (area, id) = ParseRemainder(resolution.Remainder);
+                    ResolvedViewModel = new LayoutAreaControl(
+                        (Messaging.Address)resolution.Prefix,
+                        new Data.LayoutAreaReference(area) { Id = id }
+                    )
+                    {
+                        ShowProgress = true,
+                        SpinnerType = Layout.SpinnerType.Skeleton,
+                        ProgressMessage = ShortName
+                    };
+                    DiagInfo = $"Resolved: {resolution.Prefix}" +
+                        (area != null ? $" area={area}" : "") +
+                        (id != null ? $" id={id}" : "");
+                }
+                else if (ErrorMessage == null)
+                {
+                    ErrorMessage = $"Path not found: {Path}";
+                }
+                IsLoading = false;
+                InvokeAsync(StateHasChanged);
+            });
     }
 
     private static (string? Area, string? Id) ParseRemainder(string? remainder)
@@ -118,3 +121,5 @@ else
         return (remainder, queryString);
     }
 }
+
+

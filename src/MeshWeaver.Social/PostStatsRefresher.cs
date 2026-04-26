@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
@@ -59,7 +61,7 @@ public sealed class PostStatsRefresher : BackgroundService
                     try
                     {
                         var stats = await publisher.GetStatsAsync(target.Urn, target.Credential, stoppingToken);
-                        await _bridge.ApplyStatsAsync(target.PostPath, stats, stoppingToken);
+                        await _bridge.ApplyStats(target.PostPath, stats).FirstAsync().ToTask(stoppingToken);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {

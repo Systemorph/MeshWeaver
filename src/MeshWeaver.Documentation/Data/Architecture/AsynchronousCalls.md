@@ -2,6 +2,77 @@
 
 > **For GUI rendering, see [Data Binding](xref:GUI/DataBinding) — that is the authoritative pattern.** Layout areas should not load data at all; they declare bindings, and the Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>`. The rules below cover hub-handler / service code, where you still need to compose async work safely.
 
+## 🚨🚨🚨 `await hub.GetMeshNode(...)` (or any hub round-trip) IS A 100% DEADLOCK 🚨🚨🚨
+
+**Every form of bridging a hub round-trip back to a `Task` and awaiting it deadlocks the mesh hub.** This is not a "depends on the scheduler" or "usually safe" rule — it is **100% reproducible** under load and the whole reason the framework switched to `IObservable<T>` end-to-end. The forbidden patterns:
+
+```csharp
+// ❌ DEADLOCK — direct .ToTask() bridge then await.
+var node = await hub.GetMeshNode(path, TimeSpan.FromSeconds(10)).ToTask(ct);
+
+// ❌ DEADLOCK — .FirstOrDefaultAsync() is just .ToTask() under a different name.
+var node = await hub.GetMeshNode(path).FirstOrDefaultAsync();
+
+// ❌ DEADLOCK — wrapping it in Observable.FromAsync does NOT help.
+//    The Func<Task<T>> still re-invokes on each Subscribe and the inner
+//    await still bridges back to the calling scheduler. The `Observable.FromAsync`
+//    is theatre — the deadlock is unchanged.
+return Observable.FromAsync(async ct =>
+{
+    var node = await hub.GetMeshNode(path).ToTask(ct);  // ← still deadlocks
+    return Process(node);
+});
+
+// ❌ DEADLOCK — wrapping the inner method as `async Task` and awaiting later
+//    is the same bug behind a new method boundary.
+private async Task<X> Resolve(string path, CancellationToken ct)
+{
+    var node = await hub.GetMeshNode(path).ToTask(ct);   // ← still deadlocks
+    return Process(node);
+}
+```
+
+**The ONLY correct shape:** compose `hub.GetMeshNode(path)` into your observable chain with `.Select` / `.SelectMany`. The hub round-trip stays observable end-to-end; the continuation is never bridged to a Task that the caller awaits.
+
+```csharp
+// ✅ RIGHT — composable, no Task surface, no scheduler bridge.
+return hub.GetMeshNode(path, TimeSpan.FromSeconds(10))
+    .Select(node => Process(node));
+// or, when the next step is itself an Observable:
+return hub.GetMeshNode(path, TimeSpan.FromSeconds(10))
+    .SelectMany(node => DoNextThing(node));    // returns IObservable<...>
+```
+
+### **Return type MUST be `IObservable<T>` — NEVER `Task<T>`.**
+
+Every public method on a service / handler / helper / extension that participates in mesh work returns `IObservable<T>`. **Not `Task<T>`. Not `ValueTask<T>`. Not `async Task<T>`.** The instant a public method returns a Task, the next caller will `await` it — and that's the deadlock.
+
+```csharp
+// ❌ WRONG — Task on the public surface invites await everywhere it's called.
+public Task<X> ResolveSomethingAsync(...) { ... }
+
+// ✅ RIGHT — IObservable surface forces the caller to compose with .Subscribe / .Select.
+public IObservable<X> ResolveSomething(...) { ... }
+```
+
+This is a **hard contract**, not a style preference:
+
+- New service methods: `IObservable<T>` only.
+- Refactoring an existing `async Task<T>` method that's reachable from hub code: change the signature; update every caller.
+- Don't paper over it with default-interface Task shims. Don't keep the Task overload "for tests". Tests call `.FirstAsync().ToTask(ct)` themselves at *their* edge — the production interface stays Task-free.
+- Don't introduce `Observable.FromAsync(ct => SomeAsyncMethod(...))` to "make it observable" while the inner method still uses `await` on a hub round-trip — that's the same deadlock with one more layer of indirection.
+
+The Task boundary belongs at the test edge (`.FirstAsync().ToTask(ct)`) or at framework lifecycle hooks (`OnActivateAsync` etc.), and even there only when **no further mesh work** runs after the await.
+
+**The same rule applies to every hub round-trip primitive:**
+
+- `hub.GetMeshNode(path)` — never awaited, always composed.
+- `hub.Observe(request, options)` — never awaited / `.ToTask()`'d in production code; subscribe.
+- `meshService.QueryAsync(...)` / `.FirstOrDefaultAsync()` / `.ToListAsync()` — never inside hub-reachable code; use `meshService.ObserveQuery(...).Subscribe(...)`.
+- `workspace.GetRemoteStream<T, TRef>(addr, ref)` — subscribe; never `.Take(1).ToTask()` to fake a fetch.
+
+**No exceptions. No "it's a small helper". No "we wrap it in `Observable.FromAsync` so it's safe".** If you find yourself reaching for any of those, the design is wrong — the public method should return `IObservable<T>`, the call site should `.Subscribe(...)`, and the chain should never touch a Task.
+
 ## 🚨 `No handler found for message type X` is almost always a serialization/type-registry bug
 
 When a routed `IRequest<T>` comes back as a `DeliveryFailure` saying *"No handler found for message type X"*, the handler usually IS registered via `WithHandler<X>(...)` on the target hub. The framework's `FinishDelivery` only emits this when an `IRequest<T>` reached the hub but no `Register<T>(...)` filter matched — and the most common reason is the message arriving on the wire **deserialized as a different type** (or as `JsonElement`) because the receiving hub's `ITypeRegistry` is missing the `WithType(typeof(X), nameof(X))` entry that the sender used as the `$type` discriminator.

@@ -1,6 +1,8 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -136,7 +138,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         assemblyPath.Should().NotBeNull();
         File.Exists(assemblyPath).Should().BeTrue();
 
@@ -176,7 +178,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var act = () => service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var act = () => service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         await act.Should().ThrowAsync<CompilationException>();
     }
 
@@ -244,7 +246,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
         var method = statsType!.GetMethod("MeanAndMaximum", BindingFlags.Public | BindingFlags.Static);
         method.Should().NotBeNull();
 
-        // For xs = 1..100: mean = 50.5 (exact), max = 100 (exact) — sum 150.5.
+        // For xs = 1..100: mean = 50.5 (exact), max = 100 (exact) â€” sum 150.5.
         // Both .Mean() and .Maximum() are MathNet extension methods, so a correct
         // result proves MathNet.Numerics.dll was actually loaded and linked in.
         var xs = Enumerable.Range(1, 100).Select(i => (double)i).ToArray();
@@ -327,7 +329,7 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         assemblyPath.Should().NotBeNull();
         File.Exists(assemblyPath).Should().BeTrue();
 
@@ -347,3 +349,4 @@ public class NodeTypeWithNuGetCompilationTest : IDisposable
         distType.Should().NotBeNull("DistributionsHelper should be compiled into the assembly");
     }
 }
+

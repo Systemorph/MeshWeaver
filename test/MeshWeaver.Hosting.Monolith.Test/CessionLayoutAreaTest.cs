@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -65,7 +65,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task MotorXL_PathResolves()
     {
-        var resolution = await PathResolver.ResolvePathAsync(MotorXLPath);
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).FirstAsync().ToTask();
         resolution.Should().NotBeNull($"Path '{MotorXLPath}' should resolve");
         Output.WriteLine($"Resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
     }
@@ -73,7 +73,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task MotorXL_LayoutArea_ReturnsContent()
     {
-        var resolution = await PathResolver.ResolvePathAsync(MotorXLPath);
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).FirstAsync().ToTask();
         resolution.Should().NotBeNull();
 
         var address = new Address(resolution!.Prefix.ToString()!);
@@ -97,7 +97,7 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         var client = GetClient();
 
         // Resolve path first to get the actual hub address
-        var resolution = await PathResolver.ResolvePathAsync(MotorXLPath);
+        var resolution = await PathResolver.ResolvePath(MotorXLPath).FirstAsync().ToTask();
         resolution.Should().NotBeNull($"Path '{MotorXLPath}' should resolve");
         Output.WriteLine($"Resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
 
@@ -165,7 +165,8 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
         resolvedPath.Should().Be(MotorXLPath);
 
         // And the resolved path actually finds a node
-        var resolution = await PathResolver.ResolvePathAsync(resolvedPath);
+        var resolution = await PathResolver.ResolvePath(resolvedPath).FirstAsync().ToTask();
         resolution.Should().NotBeNull($"Resolved path '{resolvedPath}' should find the MotorXL node");
     }
 }
+

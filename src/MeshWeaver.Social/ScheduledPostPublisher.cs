@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
@@ -90,7 +92,7 @@ public sealed class ScheduledPostPublisher : BackgroundService
                 lastResult = await publisher.PublishAsync(request, ct);
                 if (lastResult.Urn is not null && lastResult.Error is null)
                 {
-                    await _bridge.ApplyPublishAsync(snapshot.PostPath, lastResult, ct);
+                    await _bridge.ApplyPublish(snapshot.PostPath, lastResult).FirstAsync().ToTask(ct);
                     _logger?.LogInformation("Published {PostPath} → {Platform} {Urn}",
                         snapshot.PostPath, snapshot.Platform, lastResult.Urn);
                     return;
@@ -114,6 +116,6 @@ public sealed class ScheduledPostPublisher : BackgroundService
 
         // All attempts exhausted — record the failure on the post.
         if (lastResult is not null)
-            await _bridge.ApplyPublishAsync(snapshot.PostPath, lastResult, ct);
+            await _bridge.ApplyPublish(snapshot.PostPath, lastResult).FirstAsync().ToTask(ct);
     }
 }

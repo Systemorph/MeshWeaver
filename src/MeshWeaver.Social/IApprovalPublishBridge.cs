@@ -1,5 +1,3 @@
-using System.Threading;
-using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Social;
@@ -10,32 +8,32 @@ namespace MeshWeaver.Social;
 /// post (via <c>PrimaryNodePath</c>), look up the post's platform + credential, and
 /// either publish immediately or enqueue for the scheduler.
 ///
-/// The Social project deliberately does NOT hardcode the post nodeType or content shape;
-/// the hosting app supplies a <see cref="IApprovalPublishBridge"/> that maps an
-/// approval's <c>PrimaryNodePath</c> → a <see cref="PublishableSnapshot"/> describing
-/// what to publish. This keeps Social reusable across apps with different post models.
+/// <para>
+/// 100% reactive — every method returns <see cref="IObservable{T}"/>. Compose with
+/// <c>.Select</c> / <c>.SelectMany</c> / <c>.Subscribe</c>. NEVER bridge to <c>Task</c>
+/// (that's a 100% deadlock surface; see
+/// <c>Doc/Architecture/AsynchronousCalls.md</c>).
+/// </para>
 /// </summary>
 public interface IApprovalPublishBridge
 {
     /// <summary>
     /// Resolves the publishable snapshot for an approved <paramref name="approval"/>, or
-    /// <c>null</c> if the target node isn't a publishable post (different node type,
-    /// already published, missing credentials, etc.). Called both from the approval
-    /// event handler and the scheduler.
+    /// emits <c>null</c> if the target node isn't a publishable post (different node type,
+    /// already published, missing credentials, etc.).
     /// </summary>
-    Task<PublishableSnapshot?> ResolveAsync(Approval approval, CancellationToken ct);
+    IObservable<PublishableSnapshot?> Resolve(Approval approval);
 
     /// <summary>
     /// Persists a successful publish result back onto the target post node (sets
-    /// <c>PlatformUrn</c>, <c>PlatformUrl</c>, <c>PublishedAt</c>). Called by the
-    /// scheduler after <see cref="IPlatformPublisher.PublishAsync"/> returns.
+    /// <c>PlatformUrn</c>, <c>PlatformUrl</c>, <c>PublishedAt</c>).
     /// </summary>
-    Task ApplyPublishAsync(string postPath, PublishResult result, CancellationToken ct);
+    IObservable<System.Reactive.Unit> ApplyPublish(string postPath, PublishResult result);
 
     /// <summary>
     /// Patches engagement stats onto a post node after a stats refresh.
     /// </summary>
-    Task ApplyStatsAsync(string postPath, PostStats stats, CancellationToken ct);
+    IObservable<System.Reactive.Unit> ApplyStats(string postPath, PostStats stats);
 }
 
 /// <summary>

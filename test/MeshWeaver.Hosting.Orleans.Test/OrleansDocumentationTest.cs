@@ -101,7 +101,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
     {
         var pathResolver = Cluster.Client.ServiceProvider.GetRequiredService<IPathResolver>();
 
-        var resolution = await pathResolver.ResolvePathAsync("Doc/Architecture/BusinessRules");
+        var resolution = await pathResolver.ResolvePath("Doc/Architecture/BusinessRules").FirstAsync().ToTask();
         Output.WriteLine($"Resolution: Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("Doc/Architecture/BusinessRules should resolve");
     }
@@ -169,3 +169,4 @@ public class DocSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }
+

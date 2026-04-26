@@ -11,24 +11,26 @@ public record NodeCompilationResult(
 /// Service for on-demand compilation of dynamic MeshNode assemblies.
 /// Compiles C# type definitions from DataModel and caches the resulting assemblies.
 /// Implemented in MeshWeaver.Graph, consumed optionally by MeshWeaver.Hosting.Orleans.
+///
+/// <para>
+/// 100% reactive — every method returns <see cref="IObservable{T}"/>. Compose with
+/// <c>.Select</c> / <c>.SelectMany</c> / <c>.Subscribe</c>. NEVER bridge to <c>Task</c>
+/// or <c>await</c> from hub-reachable code — that deadlocks the hub action block. See
+/// <c>Doc/Architecture/AsynchronousCalls.md</c>. Tests bridge at their own edge with
+/// <c>.FirstAsync().ToTask(ct)</c>.
+/// </para>
 /// </summary>
 public interface IMeshNodeCompilationService
 {
     /// <summary>
-    /// Ensures the assembly for a node is compiled and returns its location.
-    /// Uses cache if valid, otherwise compiles and caches.
+    /// Reactive: emits the assembly location (DLL path) for the node, or null if the
+    /// node does not have a NodeType definition.
     /// </summary>
-    /// <param name="node">The MeshNode to ensure assembly for.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The assembly location (DLL path), or null if the node doesn't have a DataModel.</returns>
-    Task<string?> GetAssemblyLocationAsync(MeshNode node, CancellationToken ct = default);
+    IObservable<string?> GetAssemblyLocation(MeshNode node);
 
     /// <summary>
-    /// Compiles the assembly and extracts NodeTypeConfigurations from the MeshNodeProviderAttribute.
-    /// Uses isolated AssemblyLoadContext to avoid conflicts.
+    /// Reactive: emits the full compilation result (assembly + extracted NodeType
+    /// configurations) for the node.
     /// </summary>
-    /// <param name="node">The MeshNode to compile.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>Compilation result with assembly location and extracted configurations.</returns>
-    Task<NodeCompilationResult?> CompileAndGetConfigurationsAsync(MeshNode node, CancellationToken ct = default);
+    IObservable<NodeCompilationResult?> CompileAndGetConfigurations(MeshNode node);
 }

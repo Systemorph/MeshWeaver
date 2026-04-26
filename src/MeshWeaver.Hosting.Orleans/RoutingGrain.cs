@@ -1,3 +1,5 @@
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -18,26 +20,26 @@ internal class RoutingGrain(
         var address = GetHostAddress(delivery.Target!);
         var addressPath = address.ToString();
 
-        var resolution = await pathResolver.ResolvePathAsync(addressPath);
+        var resolution = await pathResolver.ResolvePath(addressPath).FirstAsync().ToTask();
         var grainKey = resolution?.Prefix ?? addressPath;
 
-        logger.LogDebug("RouteMessage: {MessageType} → address={Address}, resolved={Prefix}, remainder={Remainder}, grainKey={GrainKey}",
+        logger.LogDebug("RouteMessage: {MessageType} â†’ address={Address}, resolved={Prefix}, remainder={Remainder}, grainKey={GrainKey}",
             delivery.Message.GetType().Name, addressPath, resolution?.Prefix ?? "(null)",
             resolution?.Remainder ?? "(null)", grainKey);
 
         // When resolution splits the path into prefix + remainder, update the delivery
         // to match the resolved grain address. Without this, the grain receives a delivery
-        // whose Target doesn't match its hub address → routing loop.
+        // whose Target doesn't match its hub address â†’ routing loop.
         if (resolution != null && !string.IsNullOrEmpty(resolution.Remainder))
         {
-            logger.LogInformation("RouteMessage: updating target for {MessageType}: {Original} → prefix={Prefix}, remainder={Remainder}",
+            logger.LogInformation("RouteMessage: updating target for {MessageType}: {Original} â†’ prefix={Prefix}, remainder={Remainder}",
                 delivery.Message.GetType().Name, addressPath, resolution.Prefix, resolution.Remainder);
             var resolvedAddress = new Address(resolution.Prefix.Split('/'));
             delivery = delivery.WithProperty("UnifiedPath", resolution.Remainder);
             delivery = delivery.WithTarget(resolvedAddress);
         }
 
-        // Portal/client hubs are not grains — deliver via Orleans memory stream.
+        // Portal/client hubs are not grains â€” deliver via Orleans memory stream.
         // The portal subscribes to this stream in OrleansRoutingService.RegisterStreamAsync.
         if (address.Type == AddressExtensions.PortalType || address.Type == "client")
         {
@@ -76,3 +78,4 @@ internal class RoutingGrain(
         return address;
     }
 }
+

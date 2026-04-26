@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -93,7 +93,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         var cachedConfig = nodeTypeService.GetCachedHubConfiguration("User");
         cachedConfig.Should().NotBeNull(
-            "User node type should be registered via AddGraph() â†’ AddUserType() with HubConfiguration");
+            "User node type should be registered via AddGraph() Ã¢â€ â€™ AddUserType() with HubConfiguration");
     }
 
     /// <summary>
@@ -121,7 +121,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         node.Should().NotBeNull("Oliver user node should exist in samples/Graph/Data/User/TestUser.json");
         node!.NodeType.Should().Be("User");
 
-        // Enrich with node type â€” this should attach HubConfiguration
+        // Enrich with node type Ã¢â‚¬â€ this should attach HubConfiguration
         var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(node);
         enriched.HubConfiguration.Should().NotBeNull(
             "After enrichment, User node should have HubConfiguration from UserNodeType");
@@ -166,18 +166,18 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
 
         value.Should().NotBe(default(JsonElement),
-            "Activity area should render for User/TestUser â€” AddUserActivityViews() must be invoked");
+            "Activity area should render for User/TestUser Ã¢â‚¬â€ AddUserActivityViews() must be invoked");
     }
 
     /// <summary>
     /// Simulates the production onboarding flow: creates a User node at runtime
     /// (not pre-registered via AddMeshNodes), then verifies the Activity area resolves.
-    /// This tests the path: persistence â†’ MeshCatalog.ResolvePathAsync â†’ routing â†’ hub creation.
+    /// This tests the path: persistence Ã¢â€ â€™ MeshCatalog.ResolvePathAsync Ã¢â€ â€™ routing Ã¢â€ â€™ hub creation.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task ActivityArea_WorksForRuntimeCreatedUser()
     {
-        // Arrange â€” create a user node at runtime (simulating onboarding)
+        // Arrange Ã¢â‚¬â€ create a user node at runtime (simulating onboarding)
         var username = $"RuntimeUser_{Guid.NewGuid():N}"[..20];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -193,7 +193,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
             });
         }
 
-        // Act â€” request the Activity area (same as Index.razor does)
+        // Act Ã¢â‚¬â€ request the Activity area (same as Index.razor does)
         var client = GetClient();
         var userAddress = new Address("User", username);
 
@@ -211,12 +211,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Assert
         value.Should().NotBe(default(JsonElement),
-            "Activity area should render for a runtime-created User node â€” " +
-            "this simulates the production onboarding â†’ Index.razor flow");
+            "Activity area should render for a runtime-created User node Ã¢â‚¬â€ " +
+            "this simulates the production onboarding Ã¢â€ â€™ Index.razor flow");
     }
 
     /// <summary>
-    /// Also verify the Overview area works (baseline â€” this uses AddDefaultLayoutAreas).
+    /// Also verify the Overview area works (baseline Ã¢â‚¬â€ this uses AddDefaultLayoutAreas).
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task OverviewArea_CanBeResolved_ForUserRoland()
@@ -236,6 +236,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
 
         value.Should().NotBe(default(JsonElement),
-            "Overview area should render for User/TestUser â€” AddDefaultLayoutAreas() must be invoked");
+            "Overview area should render for User/TestUser Ã¢â‚¬â€ AddDefaultLayoutAreas() must be invoked");
     }
 }
+

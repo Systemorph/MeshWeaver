@@ -1,8 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Mesh;
@@ -47,7 +49,7 @@ public class NavigationProgressTest
         _hub.ServiceProvider.Returns(_hubServiceProvider);
         _hubServiceProvider.GetService(typeof(INodeTypeService)).Returns(_nodeTypeService);
 
-        // Empty mesh query by default — node-loading path is best-effort.
+        // Empty mesh query by default â€” node-loading path is best-effort.
         _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
             .Returns(ToAsyncObjects());
     }
@@ -71,7 +73,7 @@ public class NavigationProgressTest
     public void Status_BeforeInitialize_EmitsNonEmptyLookingUpMessage()
     {
         // The BehaviorSubject must start with a status that tells the user
-        // something — never a silent initial state that renders as a spinner
+        // something â€” never a silent initial state that renders as a spinner
         // with no label.
         _navigationManager.SetUri("http://localhost/FutuRe/EuropeRe");
         var service = CreateService();
@@ -94,12 +96,13 @@ public class NavigationProgressTest
     {
         _navigationManager.SetUri("http://localhost/ACME/Project");
         var resolveStarted = new TaskCompletionSource();
-        var resolveComplete = new TaskCompletionSource<AddressResolution?>();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(async _ =>
+        // AsyncSubject — single emission then complete; fully reactive (no Task bridge).
+        var resolveSubject = new System.Reactive.Subjects.AsyncSubject<AddressResolution?>();
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(_ =>
             {
                 resolveStarted.TrySetResult();
-                return await resolveComplete.Task;
+                return resolveSubject;
             });
 
         var service = CreateService();
@@ -113,7 +116,8 @@ public class NavigationProgressTest
             "user must see what's being looked up, not a blank spinner");
 
         // Unblock to avoid hanging the test.
-        resolveComplete.TrySetResult(new AddressResolution("ACME/Project", null));
+        resolveSubject.OnNext(new AddressResolution("ACME/Project", null));
+        resolveSubject.OnCompleted();
         await initTask;
     }
 
@@ -123,8 +127,8 @@ public class NavigationProgressTest
     public async Task Status_AfterSuccessfulResolution_EmitsRedirectingWithAddress()
     {
         _navigationManager.SetUri("http://localhost/ACME/Project");
-        _pathResolver.ResolvePathAsync("ACME/Project")
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath("ACME/Project")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         var service = CreateService();
         var emissions = CaptureStatus(service);
@@ -143,8 +147,8 @@ public class NavigationProgressTest
     public async Task Status_AfterSuccessfulResolution_WithArea_IncludesAreaInMessage()
     {
         _navigationManager.SetUri("http://localhost/ACME/Project/Dashboard");
-        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard")
-            .Returns(new AddressResolution("ACME/Project", "Dashboard"));
+        _pathResolver.ResolvePath("ACME/Project/Dashboard")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard")));
 
         var service = CreateService();
         var emissions = CaptureStatus(service);
@@ -162,8 +166,8 @@ public class NavigationProgressTest
     public async Task Status_AfterSuccessfulResolution_WithNoArea_OmitsAreaSuffix()
     {
         _navigationManager.SetUri("http://localhost/ACME/Project");
-        _pathResolver.ResolvePathAsync("ACME/Project")
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath("ACME/Project")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         var service = CreateService();
         var emissions = CaptureStatus(service);
@@ -182,14 +186,14 @@ public class NavigationProgressTest
     [Fact]
     public async Task Status_AllEmissions_HaveNonEmptyMessage()
     {
-        // Drive the service through a full lifecycle: init → resolve ok → navigate
-        // to a path that will NOT resolve → retries → NotFound. Every emission
+        // Drive the service through a full lifecycle: init â†’ resolve ok â†’ navigate
+        // to a path that will NOT resolve â†’ retries â†’ NotFound. Every emission
         // along the way must carry a non-empty message.
         _navigationManager.SetUri("http://localhost/ACME/Project");
-        _pathResolver.ResolvePathAsync("ACME/Project")
-            .Returns(new AddressResolution("ACME/Project", null));
-        _pathResolver.ResolvePathAsync("does/not/exist")
-            .Returns((AddressResolution?)null);
+        _pathResolver.ResolvePath("ACME/Project")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
+        _pathResolver.ResolvePath("does/not/exist")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
 
         var service = CreateService();
         var emissions = CaptureStatus(service);
@@ -200,7 +204,7 @@ public class NavigationProgressTest
 
         emissions.Should().NotBeEmpty();
         emissions.Should().OnlyContain(s => !string.IsNullOrWhiteSpace(s.Message),
-            "no emission — including intermediate ones — may render as an empty spinner");
+            "no emission â€” including intermediate ones â€” may render as an empty spinner");
     }
 
     // -- Test #7: retries in flight must NOT emit NotFound / null context --------
@@ -209,11 +213,11 @@ public class NavigationProgressTest
     public async Task Status_WhenResolutionFailsInitially_DoesNotEmitNotFoundUntilRetriesExhausted()
     {
         // Initial attempt returns null and we schedule retries. The user should
-        // keep seeing "Looking up…" during the retry window — not a flash of
+        // keep seeing "Looking upâ€¦" during the retry window â€” not a flash of
         // "Page Not Found" followed by the real answer.
         _navigationManager.SetUri("http://localhost/does/not/exist");
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns((AddressResolution?)null);
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
 
         // Extra-long retries to widen the window we inspect.
         var service = CreateService(retryDelays: [500, 500, 500]);
@@ -232,20 +236,21 @@ public class NavigationProgressTest
             "while retrying, the status remains 'Looking up'");
     }
 
-    // -- Test #8: retry succeeds → never show NotFound --------------------------
+    // -- Test #8: retry succeeds â†’ never show NotFound --------------------------
 
     [Fact]
     public async Task Status_WhenResolutionFailsOnFirstAttempt_ThenSucceeds_NeverEmitsNotFound()
     {
         _navigationManager.SetUri("http://localhost/eventually/exists");
         var callCount = 0;
-        _pathResolver.ResolvePathAsync("eventually/exists")
+        _pathResolver.ResolvePath("eventually/exists")
             .Returns(_ =>
             {
                 callCount++;
-                return callCount == 1
-                    ? null
-                    : new AddressResolution("eventually/exists", null);
+                return System.Reactive.Linq.Observable.Return<AddressResolution?>(
+                    callCount == 1
+                        ? null
+                        : new AddressResolution("eventually/exists", null));
             });
 
         var service = CreateService(retryDelays: [20, 20, 20]);
@@ -264,8 +269,8 @@ public class NavigationProgressTest
     public async Task OnNavigationContextChanged_IsNotInvokedWithNull_BeforeRetriesExhausted()
     {
         _navigationManager.SetUri("http://localhost/does/not/exist");
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns((AddressResolution?)null);
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
 
         var nullContextCount = 0;
         var service = CreateService(retryDelays: [500, 500, 500]);
@@ -284,8 +289,8 @@ public class NavigationProgressTest
     public async Task Status_WhenAllRetriesExhaust_EmitsNotFoundAndFiresNullContext()
     {
         _navigationManager.SetUri("http://localhost/does/not/exist");
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns((AddressResolution?)null);
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
 
         var nullContextCount = 0;
         var service = CreateService(retryDelays: [5, 5, 5]);
@@ -293,7 +298,7 @@ public class NavigationProgressTest
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
-        await Task.Delay(150, TestContext.Current.CancellationToken); // > 3×5ms + margin
+        await Task.Delay(150, TestContext.Current.CancellationToken); // > 3Ã—5ms + margin
 
         emissions.Should().Contain(s => s.Phase == NavigationPhase.NotFound
                                         && s.Message.Contains("does/not/exist"));
@@ -307,8 +312,8 @@ public class NavigationProgressTest
     public async Task Status_Loading_IncludesAddress()
     {
         _navigationManager.SetUri("http://localhost/ACME/Project/Dashboard");
-        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard")
-            .Returns(new AddressResolution("ACME/Project", "Dashboard"));
+        _pathResolver.ResolvePath("ACME/Project/Dashboard")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard")));
 
         var service = CreateService();
         var emissions = CaptureStatus(service);
@@ -351,3 +356,6 @@ public class NavigationProgressTest
         }
     }
 }
+
+
+

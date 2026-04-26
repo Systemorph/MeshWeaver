@@ -1,8 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Mesh;
@@ -52,8 +54,8 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         // Act
         await service.InitializeAsync();
@@ -62,8 +64,8 @@ public class NavigationServiceTest
         NavigationContext? receivedContext = null;
         service.OnNavigationContextChanged += ctx => receivedContext = ctx;
 
-        _pathResolver.ResolvePathAsync("ACME/Project/Overview")
-            .Returns(new AddressResolution("ACME/Project", "Overview"));
+        _pathResolver.ResolvePath("ACME/Project/Overview")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Overview")));
 
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Overview");
 
@@ -79,8 +81,8 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
 
         // Act
         await service.InitializeAsync();
@@ -103,8 +105,8 @@ public class NavigationServiceTest
         // Arrange
         var service = CreateService();
         _navigationManager.SetUri("http://localhost/ACME/Project");
-        _pathResolver.ResolvePathAsync("ACME/Project")
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath("ACME/Project")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         // Act
         await service.InitializeAsync();
@@ -123,12 +125,12 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
         await service.InitializeAsync();
 
-        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard/123")
-            .Returns(new AddressResolution("ACME/Project", "Dashboard/123"));
+        _pathResolver.ResolvePath("ACME/Project/Dashboard/123")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard/123")));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard/123");
@@ -145,15 +147,15 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
         NavigationContext? receivedContext = null;
         service.OnNavigationContextChanged += ctx => receivedContext = ctx;
 
-        _pathResolver.ResolvePathAsync("ACME/Project")
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath("ACME/Project")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
@@ -177,8 +179,8 @@ public class NavigationServiceTest
         // public ctor), but the 500 ms first-retry window is enough headroom to
         // assert that the null callback is NOT fired in the first ~100 ms.
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
         var previousContext = service.Context;
@@ -190,8 +192,8 @@ public class NavigationServiceTest
             if (ctx is null) nullContextInvocations++;
         };
 
-        _pathResolver.ResolvePathAsync("unknown/path")
-            .Returns((AddressResolution?)null);
+        _pathResolver.ResolvePath("unknown/path")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(null));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/unknown/path");
@@ -209,12 +211,12 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
-        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard/item-123")
-            .Returns(new AddressResolution("ACME/Project", "Dashboard/item-123"));
+        _pathResolver.ResolvePath("ACME/Project/Dashboard/item-123")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard/item-123")));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard/item-123");
@@ -231,12 +233,12 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
-        _pathResolver.ResolvePathAsync("ACME/Project")
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath("ACME/Project")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
@@ -253,12 +255,12 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
-        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard")
-            .Returns(new AddressResolution("ACME/Project", "Dashboard"));
+        _pathResolver.ResolvePath("ACME/Project/Dashboard")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard")));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard");
@@ -275,13 +277,13 @@ public class NavigationServiceTest
     {
         // Arrange - simulates Organization/Search where Organization is a config node
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
         // Organization/Search: address is "Organization", remainder is "Search"
-        _pathResolver.ResolvePathAsync("Organization/Search")
-            .Returns(new AddressResolution("Organization", "Search"));
+        _pathResolver.ResolvePath("Organization/Search")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("Organization", "Search")));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/Organization/Search");
@@ -299,12 +301,12 @@ public class NavigationServiceTest
     {
         // Arrange - simulates Organization/Settings/Metadata
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
-        _pathResolver.ResolvePathAsync("Organization/Settings/Metadata")
-            .Returns(new AddressResolution("Organization", "Settings/Metadata"));
+        _pathResolver.ResolvePath("Organization/Settings/Metadata")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("Organization", "Settings/Metadata")));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/Organization/Settings/Metadata");
@@ -322,12 +324,12 @@ public class NavigationServiceTest
     {
         // Arrange - simulates User/Roland/Settings where User/Roland is a persisted node
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
-        _pathResolver.ResolvePathAsync("User/Roland/Settings")
-            .Returns(new AddressResolution("User/Roland", "Settings"));
+        _pathResolver.ResolvePath("User/Roland/Settings")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("User/Roland", "Settings")));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/User/Roland/Settings");
@@ -352,8 +354,8 @@ public class NavigationServiceTest
         CreatableTypesSnapshot? lastSnapshot = null;
         service.CreatableTypes.Subscribe(s => lastSnapshot = s);
 
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
 
         _nodeTypeService.GetCreatableTypesAsync("ACME", Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable(new CreatableTypeInfo("ACME/Todo")));
@@ -362,8 +364,8 @@ public class NavigationServiceTest
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Change to different node path
-        _pathResolver.ResolvePathAsync("ACME/Project")
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath("ACME/Project")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         _nodeTypeService.GetCreatableTypesAsync("ACME/Project", Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable(
@@ -386,8 +388,8 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         var loadCount = 0;
         _nodeTypeService.GetCreatableTypesAsync("ACME/Project", Arg.Any<CancellationToken>())
@@ -401,8 +403,8 @@ public class NavigationServiceTest
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Navigate to different area within same node
-        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard")
-            .Returns(new AddressResolution("ACME/Project", "Dashboard"));
+        _pathResolver.ResolvePath("ACME/Project/Dashboard")
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", "Dashboard")));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard");
@@ -421,8 +423,8 @@ public class NavigationServiceTest
 
         service.CreatableTypes.Subscribe(s => snapshots.Add(s));
 
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME/Project", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         _nodeTypeService.GetCreatableTypesAsync("ACME/Project", Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerableWithDelay(
@@ -448,8 +450,8 @@ public class NavigationServiceTest
 
         service.CreatableTypes.Subscribe(s => loadingStates.Add(s.IsLoading));
 
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
 
         _nodeTypeService.GetCreatableTypesAsync("ACME", Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerableWithDelay(new CreatableTypeInfo("ACME/Todo")));
@@ -472,8 +474,8 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("ACME", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
         await service.InitializeAsync();
 
         var eventFired = false;
@@ -496,15 +498,15 @@ public class NavigationServiceTest
     public async Task OnLocationChanged_SatelliteNode_CurrentNamespacePointsAtMainNode()
     {
         // User browses to a thread under PartnerRe/AIConsulting. The thread node's MainNode
-        // points back at the parent that owns it, so CurrentNamespace — which downstream
-        // chat/autocomplete/attachment code uses to resolve relative paths — must surface
+        // points back at the parent that owns it, so CurrentNamespace â€” which downstream
+        // chat/autocomplete/attachment code uses to resolve relative paths â€” must surface
         // the main node, not the satellite path.
         var service = CreateService();
         const string SatellitePath = "PartnerRe/AIConsulting/_Thread/abc-123";
         const string MainNode = "PartnerRe/AIConsulting";
 
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution(SatellitePath, null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution(SatellitePath, null)));
 
         var threadNode = new MeshNode("abc-123", "PartnerRe/AIConsulting/_Thread")
         {
@@ -529,13 +531,13 @@ public class NavigationServiceTest
         // PrimaryPath falls back to Namespace when Node is null, so this also covers
         // the no-node-found path (existing tests rely on this fallback).
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("PartnerRe/AIConsulting", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("PartnerRe/AIConsulting", null)));
 
         var mainNode = new MeshNode("AIConsulting", "PartnerRe")
         {
             NodeType = "Group"
-            // MainNode defaults to Path → "PartnerRe/AIConsulting"
+            // MainNode defaults to Path â†’ "PartnerRe/AIConsulting"
         };
         _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
             .Returns(ToAsyncObjects(mainNode));
@@ -553,8 +555,8 @@ public class NavigationServiceTest
         // The creatable-types background load also keys off PrimaryPath so menus on
         // satellite pages reflect what can be created on the parent node.
         var service = CreateService();
-        _pathResolver.ResolvePathAsync(Arg.Any<string>())
-            .Returns(new AddressResolution("PartnerRe/AIConsulting/_Thread/abc-123", null));
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("PartnerRe/AIConsulting/_Thread/abc-123", null)));
 
         var threadNode = new MeshNode("abc-123", "PartnerRe/AIConsulting/_Thread")
         {
@@ -645,3 +647,6 @@ public class NavigationServiceTest
 
     #endregion
 }
+
+
+

@@ -548,19 +548,20 @@ public partial class CollaborativeMarkdownView
     private bool IsResolved(string markerId) =>
         commentNodes.TryGetValue(markerId, out var c) && c.Status == CommentStatus.Resolved;
 
-    private async Task ResolveComment(string markerId)
+    private void ResolveComment(string markerId)
     {
         if (!commentPaths.TryGetValue(markerId, out var path) || string.IsNullOrEmpty(BoundHubAddress))
             return;
-        // One-shot read — GetDataRequest, no lingering subscription. The Blazor view
-        // already owns the live `_nodeStream` for re-renders; this is a read-now-then-update.
-        var node = await Hub.GetMeshNode(path, TimeSpan.FromSeconds(10))
-            .FirstOrDefaultAsync();
-        if (node?.Content is Comment comment)
+        // Reactive read — Subscribe, never await on a hub round-trip (100% deadlock;
+        // see Doc/Architecture/AsynchronousCalls.md).
+        Hub.GetMeshNode(path, TimeSpan.FromSeconds(10)).Subscribe(node =>
         {
-            var updated = node with { Content = comment with { Status = CommentStatus.Resolved } };
-            Hub.Post(new UpdateNodeRequest(updated), o => o.WithTarget(new Address(BoundHubAddress)));
-        }
+            if (node?.Content is Comment comment)
+            {
+                var updated = node with { Content = comment with { Status = CommentStatus.Resolved } };
+                Hub.Post(new UpdateNodeRequest(updated), o => o.WithTarget(new Address(BoundHubAddress)));
+            }
+        });
     }
 
     private void DeleteComment(string markerId)

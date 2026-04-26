@@ -1,4 +1,6 @@
-﻿using MeshWeaver.AI;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using MeshWeaver.AI;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
@@ -94,7 +96,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         await NavigationService.InitializeAsync();
         // Only resolve side panel content if already visible — defer until opened otherwise
         if (SidePanelState.IsVisible)
-            await ResolveSidePanelContentAsync();
+            ResolveSidePanelContent();
     }
 
     /// <summary>
@@ -260,7 +262,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             if (saved != null)
             {
                 SidePanelState.State = saved;
-                await ResolveSidePanelContentAsync();
+                ResolveSidePanelContent();
                 StateHasChanged();
             }
         }
@@ -294,7 +296,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         InvokeAsync(async () =>
         {
-            await ResolveSidePanelContentAsync();
+            ResolveSidePanelContent();
             await SaveSidePanelStateAsync();
             StateHasChanged();
 
@@ -409,7 +411,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// If the content path points to a node that no longer exists (e.g. deleted thread),
     /// the path resolves to a parent with satellite segments as remainder — detect and clear.
     /// </summary>
-    private async Task ResolveSidePanelContentAsync()
+    private void ResolveSidePanelContent()
     {
         var contentPath = SidePanelState.ContentPath;
         if (contentPath == resolvedSidePanelPath)
@@ -423,31 +425,34 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             return;
         }
 
-        var resolution = await PathResolver.ResolvePathAsync(contentPath);
-        if (resolution == null)
+        // Reactive — Subscribe, never await on PathResolver chain (deadlock surface;
+        // see Doc/Architecture/AsynchronousCalls.md).
+        PathResolver.ResolvePath(contentPath).Subscribe(resolution =>
         {
-            // Node doesn't exist at all — clear stale content path
-            sidePanelViewModel = null;
-            SidePanelState.SetContentPath(null);
-            resolvedSidePanelPath = null;
-            return;
-        }
+            if (resolution == null)
+            {
+                sidePanelViewModel = null;
+                SidePanelState.SetContentPath(null);
+                resolvedSidePanelPath = null;
+                InvokeAsync(StateHasChanged);
+                return;
+            }
 
-        // If the resolved prefix doesn't match the content path, it means the node
-        // no longer exists and resolution fell back to a parent (e.g. _Thread/id became
-        // remainder on the parent hub → invalid area). Clear the stale path.
-        if (!string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrEmpty(resolution.Remainder))
-        {
-            sidePanelViewModel = null;
-            SidePanelState.SetContentPath(null);
-            resolvedSidePanelPath = null;
-            return;
-        }
+            if (!string.Equals(resolution.Prefix, contentPath, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrEmpty(resolution.Remainder))
+            {
+                sidePanelViewModel = null;
+                SidePanelState.SetContentPath(null);
+                resolvedSidePanelPath = null;
+                InvokeAsync(StateHasChanged);
+                return;
+            }
 
-        var (area, id) = ParseSidePanelRemainder(resolution.Remainder);
-        var reference = new LayoutAreaReference(area) { Id = id ?? "" };
-        sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
+            var (area, id) = ParseSidePanelRemainder(resolution.Remainder);
+            var reference = new LayoutAreaReference(area) { Id = id ?? "" };
+            sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
+            InvokeAsync(StateHasChanged);
+        });
     }
 
     private static (string? Area, string? Id) ParseSidePanelRemainder(string? remainder)
@@ -512,3 +517,4 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return true;
     }
 }
+

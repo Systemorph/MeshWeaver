@@ -25,28 +25,24 @@
         ? Name
         : Path ?? "";
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
-        if (string.IsNullOrEmpty(Path))
-            return;
+        if (string.IsNullOrEmpty(Path)) return;
 
-        try
-        {
-            var resolution = await PathResolver.ResolvePathAsync(Path);
-            if (resolution != null)
+        // PathResolver is local — Observable.FromAsync is acceptable to bridge it
+        // (no hub round-trip). Hub.GetMeshNode is composed via .SelectMany — never
+        // awaited (100% deadlock; see Doc/Architecture/AsynchronousCalls.md).
+        PathResolver.ResolvePath(Path)
+            .Where(resolution => resolution != null)
+            .SelectMany(resolution => Hub.GetMeshNode(resolution!.Prefix, TimeSpan.FromSeconds(5)))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .Subscribe(node =>
             {
-                // One-shot tooltip read — GetDataRequest, no lingering subscription.
-                var node = await Hub.GetMeshNode(resolution.Prefix, TimeSpan.FromSeconds(5))
-                    .FirstOrDefaultAsync();
                 if (node != null)
                 {
                     Name = node.Name;
+                    InvokeAsync(StateHasChanged);
                 }
-            }
-        }
-        catch
-        {
-            // Silent failure - tooltip will just show the path
-        }
+            });
     }
 }

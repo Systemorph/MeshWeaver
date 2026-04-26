@@ -155,7 +155,7 @@ public static class BlazorHostingExtensions
                 // Pattern 2: /static/{address}/{collection}/{filePath}
                 // Resolve address from path using score-based matching
                 var pathResolver = mainHub.ServiceProvider.GetRequiredService<IPathResolver>();
-                var resolution = await pathResolver.ResolvePathAsync(path);
+                var resolution = await pathResolver.ResolvePath(path).FirstAsync().ToTask();
 
                 if (resolution == null)
                 {
@@ -335,3 +335,4 @@ public static class BlazorHostingExtensions
     private static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
 
 }
+

@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Blazor.Infrastructure;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -45,9 +47,9 @@ public partial class ContentPage : ComponentBase, IDisposable
     [Inject] public PortalApplication PortalApplication { get; set; } = null!;
     private IContentService ContentService => PortalApplication.Hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        await base.OnInitializedAsync();
+        base.OnInitialized();
 
         if (string.IsNullOrEmpty(FullPath))
         {
@@ -63,11 +65,7 @@ public partial class ContentPage : ComponentBase, IDisposable
         }
 
         var firstSegment = pathParts[0];
-
-        // Decode collection name: '~' is used as escape for '/' in collection names
         var decodedFirstSegment = DecodeCollectionName(firstSegment);
-
-        // Check if first segment is a known collection name (global content)
         var knownCollection = ContentService.GetCollectionConfig(decodedFirstSegment);
 
         if (knownCollection != null)
@@ -76,41 +74,39 @@ public partial class ContentPage : ComponentBase, IDisposable
             ResolvedCollection = decodedFirstSegment;
             ResolvedPath = string.Join("/", pathParts.Skip(1));
             TargetAddress = PortalApplication.Hub.Address;
+            ContinueAfterResolve();
+            return;
         }
-        else
-        {
-            // Pattern 2: /content/{address}/{collection}/{path} - address-scoped content
-            // Use IPathResolver to resolve the address from the path
-            var pathResolver = PortalApplication.Hub.ServiceProvider.GetRequiredService<IPathResolver>();
-            var resolution = await pathResolver.ResolvePathAsync(FullPath);
 
+        // Pattern 2: /content/{address}/{collection}/{path} — reactive path resolver.
+        // Subscribe (no await on the resolver chain — deadlock surface; see
+        // Doc/Architecture/AsynchronousCalls.md). Continuation runs in the Subscribe
+        // callback on whichever scheduler the resolver completes.
+        var pathResolver = PortalApplication.Hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        pathResolver.ResolvePath(FullPath).Subscribe(resolution =>
+        {
             if (resolution == null)
             {
                 ErrorMessage = $"No matching address found for path '{FullPath}'";
+                InvokeAsync(StateHasChanged);
                 return;
             }
-
-            // Parse remainder: first segment is collection (with ~ encoding), rest is file path
             if (string.IsNullOrEmpty(resolution.Remainder))
             {
                 ErrorMessage = "Collection and file path are required";
+                InvokeAsync(StateHasChanged);
                 return;
             }
-
             var remainderParts = resolution.Remainder.Split('/');
-            if (remainderParts.Length < 1)
-            {
-                ErrorMessage = "Invalid path format. Expected: /content/{address}/{collection}/{path}";
-                return;
-            }
-
-            // Decode collection name: '~' is used as escape for '/' (e.g., "Submissions@Microsoft~2026")
             ResolvedCollection = DecodeCollectionName(remainderParts[0]);
             ResolvedPath = remainderParts.Length > 1 ? string.Join("/", remainderParts.Skip(1)) : null;
             TargetAddress = (Address)resolution.Prefix;
-        }
+            ContinueAfterResolve();
+        });
+    }
 
-        // Add configuration for address-scoped content collections
+    private void ContinueAfterResolve()
+    {
         if (TargetAddress != null && !string.IsNullOrEmpty(ResolvedCollection))
         {
             ContentService.AddConfiguration(new ContentCollectionConfig
@@ -121,31 +117,46 @@ public partial class ContentPage : ComponentBase, IDisposable
             });
         }
 
-        var collection = await ContentService.GetCollectionAsync(ResolvedCollection!);
-        if (collection is null)
-        {
-            ErrorMessage = $"Collection '{ResolvedCollection}' not found at address '{TargetAddress}'";
-            return;
-        }
+        // ContentService.GetCollectionAsync is local catalog lookup; bridge with
+        // Observable.FromAsync at the file-I/O boundary.
+        Observable.FromAsync(() => ContentService.GetCollectionAsync(ResolvedCollection!))
+            .Subscribe(collection =>
+            {
+                if (collection is null)
+                {
+                    ErrorMessage = $"Collection '{ResolvedCollection}' not found at address '{TargetAddress}'";
+                    InvokeAsync(StateHasChanged);
+                    return;
+                }
 
-        if (string.IsNullOrEmpty(ResolvedPath))
-            return;
+                if (string.IsNullOrEmpty(ResolvedPath))
+                {
+                    InvokeAsync(StateHasChanged);
+                    return;
+                }
 
-        ContentType = collection.GetContentType(ResolvedPath!);
-        // Document types with converter support are rendered as markdown
-        if (IsConvertibleDocument(ResolvedPath!))
-        {
-            ContentType = "text/markdown";
-        }
-        else if (ContentType != "text/markdown")
-        {
-            Content = await collection.GetContentAsync(ResolvedPath!);
-        }
-
-        if (ContentType == "text/csv" && Content != null)
-        {
-            ParseCsv(Content);
-        }
+                ContentType = collection.GetContentType(ResolvedPath!);
+                if (IsConvertibleDocument(ResolvedPath!))
+                {
+                    ContentType = "text/markdown";
+                    InvokeAsync(StateHasChanged);
+                }
+                else if (ContentType != "text/markdown")
+                {
+                    Observable.FromAsync(() => collection.GetContentAsync(ResolvedPath!))
+                        .Subscribe(content =>
+                        {
+                            Content = content;
+                            if (ContentType == "text/csv" && Content != null)
+                                ParseCsv(Content);
+                            InvokeAsync(StateHasChanged);
+                        });
+                }
+                else
+                {
+                    InvokeAsync(StateHasChanged);
+                }
+            });
     }
 
     public byte[] ReadStream(Stream stream)
@@ -251,3 +262,4 @@ public partial class ContentPage : ComponentBase, IDisposable
     /// </summary>
     private static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
 }
+

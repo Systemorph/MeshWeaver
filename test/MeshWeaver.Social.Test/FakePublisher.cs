@@ -109,21 +109,21 @@ public sealed class FakeBridge : IApprovalPublishBridge
     public ConcurrentBag<(string PostPath, PublishResult Result)> PublishApplied { get; } = new();
     public ConcurrentBag<(string PostPath, PostStats Stats)> StatsApplied { get; } = new();
 
-    public Task<PublishableSnapshot?> ResolveAsync(MeshWeaver.Mesh.Approval approval, CancellationToken ct)
+    public IObservable<PublishableSnapshot?> Resolve(MeshWeaver.Mesh.Approval approval)
     {
         Snapshots.TryGetValue(approval.PrimaryNodePath ?? "", out var snap);
-        return Task.FromResult(snap);
+        return System.Reactive.Linq.Observable.Return(snap);
     }
 
-    public Task ApplyPublishAsync(string postPath, PublishResult result, CancellationToken ct)
+    public IObservable<System.Reactive.Unit> ApplyPublish(string postPath, PublishResult result)
     {
         PublishApplied.Add((postPath, result));
-        return Task.CompletedTask;
+        return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
     }
 
-    public Task ApplyStatsAsync(string postPath, PostStats stats, CancellationToken ct)
+    public IObservable<System.Reactive.Unit> ApplyStats(string postPath, PostStats stats)
     {
         StatsApplied.Add((postPath, stats));
-        return Task.CompletedTask;
+        return System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
     }
 }

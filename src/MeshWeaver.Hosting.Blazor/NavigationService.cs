@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Data;
@@ -31,7 +31,7 @@ internal class NavigationService : INavigationService
     private readonly ILogger<NavigationService>? _logger;
     private readonly int[] _retryDelays;
 
-    // Production retry schedule — ~11.5 s total. Tests override via the internal
+    // Production retry schedule â€” ~11.5 s total. Tests override via the internal
     // ctor overload with short delays so the full retry-exhaustion path runs fast.
     private static readonly int[] DefaultRetryDelays = [500, 1000, 2000, 3000, 5000];
 
@@ -70,11 +70,11 @@ internal class NavigationService : INavigationService
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
         _retryDelays = retryDelays ?? DefaultRetryDelays;
 
-        // Start with a descriptive status so the very first render has a label —
+        // Start with a descriptive status so the very first render has a label â€”
         // never a blank spinner. `CurrentPath` reads `NavigationManager.Uri`, which
         // throws "RemoteNavigationManager has not been initialized" if accessed
         // during DI construction (Blazor Server circuit activation). Fall back to
-        // an empty path in that case — InitializeAsync re-emits LookingUp with the
+        // an empty path in that case â€” InitializeAsync re-emits LookingUp with the
         // real path once the NavigationManager is wired up.
         string? initialPath = null;
         try { initialPath = CurrentPath; } catch (InvalidOperationException) { /* not yet initialized */ }
@@ -113,16 +113,18 @@ internal class NavigationService : INavigationService
     }
 
     /// <inheritdoc />
-    public async Task InitializeAsync()
+    public Task InitializeAsync()
     {
         if (_isInitialized)
-            return;
+            return Task.CompletedTask;
 
         _isInitialized = true;
         _navigationManager.LocationChanged += OnLocationChanged;
 
-        // Process the current location
-        await ProcessLocationChangeAsync(CurrentPath ?? "");
+        // Process the current location reactively (no await — chain Subscribes
+        // through ProcessLocationChange).
+        ProcessLocationChange(CurrentPath ?? "");
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -183,80 +185,63 @@ internal class NavigationService : INavigationService
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         var path = _navigationManager.ToBaseRelativePath(e.Location);
-        _ = ProcessLocationChangeAsync(path);
+        ProcessLocationChange(path);
     }
 
-    private async Task ProcessLocationChangeAsync(string path)
+    private void ProcessLocationChange(string path)
     {
         IsResolving = true;
-        // Emit "Looking up …" so every rendered frame carries a label.
         _status.OnNext(NavigationStatus.LookingUp(path));
 
-        // Resolve the path using pattern matching
-        var resolution = await _pathResolver.ResolvePathAsync(path);
-
-        if (resolution is null)
+        // Reactive — Subscribe, never await (await on resolution chain is a deadlock
+        // surface; see Doc/Architecture/AsynchronousCalls.md).
+        _pathResolver.ResolvePath(path).Subscribe(resolution =>
         {
-            // Do NOT fire OnNavigationContextChanged(null) here — that causes the
-            // "Page Not Found" card to flash while retries are still running.
-            // Keep the prior context stale and retry in the background; only flip
-            // to NotFound once all retries are exhausted (see RetryResolutionAsync).
-            _ = RetryResolutionAsync(path);
-            return;
-        }
-
-        await ProcessResolvedPathAsync(path, resolution);
+            if (resolution is null)
+            {
+                // Do NOT fire OnNavigationContextChanged(null) here — that causes the
+                // "Page Not Found" card to flash while retries are still running.
+                RetryResolution(path);
+                return;
+            }
+            ProcessResolvedPath(path, resolution);
+        });
     }
 
-    private async Task ProcessResolvedPathAsync(string path, AddressResolution resolution)
+    private void ProcessResolvedPath(string path, AddressResolution resolution)
     {
-        // Parse remainder into area and id
         var (area, id) = ParseRemainder(resolution.Remainder);
-
-        // The page has been resolved — tell the user we're redirecting to the
-        // concrete address (and area, if any) before we spend time loading the
-        // node. This is the message that replaces "Looking up …".
         _status.OnNext(NavigationStatus.Redirecting(resolution.Prefix, area));
-
-        // Load the MeshNode for pre-rendered HTML and satellite detection
         _status.OnNext(NavigationStatus.Loading(resolution.Prefix));
-        var node = await LoadNodeWithPreRenderedHtmlAsync(resolution);
 
-        IsResolving = false;
-
-        // Create the navigation context
-        var context = new NavigationContext
+        // Reactive load â€” Subscribe, never await (every async bit through a hub
+        // round-trip is a deadlock surface; see Doc/Architecture/AsynchronousCalls.md).
+        LoadNodeWithPreRenderedHtml(resolution).Subscribe(node =>
         {
-            Path = path,
-            Resolution = resolution,
-            Area = area,
-            Id = id,
-            Node = node
-        };
+            IsResolving = false;
 
-        _context = context;
-        // On satellite pages (thread/comment/activity), CurrentNamespace points at the
-        // main node — callers that resolve relative paths, autocomplete, attachments,
-        // and chat context all need the primary node, not the `_Thread/...` sub-address.
-        CurrentNamespace = context.PrimaryPath;
+            var context = new NavigationContext
+            {
+                Path = path,
+                Resolution = resolution,
+                Area = area,
+                Id = id,
+                Node = node
+            };
 
-        // Track navigation activity for "Recently Viewed"
-        if (node != null)
-            TrackNavigationActivity(node);
+            _context = context;
+            CurrentNamespace = context.PrimaryPath;
 
-        OnNavigationContextChanged?.Invoke(context);
+            if (node != null)
+                TrackNavigationActivity(node);
 
-        // Signal the page/layout-area stack that the address+area is bound.
-        // LayoutAreaView will take over progress from here (showing "Compiling …"
-        // or "Subscribing to area …" until the first stream emission).
-        _status.OnNext(NavigationStatus.Ready(resolution.Prefix));
+            OnNavigationContextChanged?.Invoke(context);
+            _status.OnNext(NavigationStatus.Ready(resolution.Prefix));
 
-        // Load creatable types in background when namespace changes
-        var currentNodePath = context.PrimaryPath ?? "";
-        if (currentNodePath != _lastLoadedNodePath)
-        {
-            _ = LoadCreatableTypesAsync(currentNodePath);
-        }
+            var currentNodePath = context.PrimaryPath ?? "";
+            if (currentNodePath != _lastLoadedNodePath)
+                _ = LoadCreatableTypesAsync(currentNodePath);
+        });
     }
 
     /// <summary>
@@ -264,88 +249,65 @@ internal class NavigationService : INavigationService
     /// This handles the case where the mesh catalog is still initializing at startup.
     /// Runs in the background so the UI can show a spinner while waiting.
     /// </summary>
-    private async Task RetryResolutionAsync(string path)
+    /// <summary>
+    /// Reactive retry chain — schedule timer + resolve, recurse to next attempt on
+    /// miss. No await, no Task.Delay; uses Observable.Timer.
+    /// </summary>
+    private void RetryResolution(string path) => AttemptRetry(path, 0);
+
+    private void AttemptRetry(string path, int attemptIdx)
     {
-        foreach (var delay in _retryDelays)
+        if (attemptIdx >= _retryDelays.Length)
         {
-            await Task.Delay(delay);
-
-            // Check if a new navigation happened while we were waiting
-            if (CurrentPath != path)
-                return;
-
-            var resolution = await _pathResolver.ResolvePathAsync(path);
-            if (resolution is not null)
-            {
-                // Success — process the result
-                await ProcessResolvedPathAsync(path, resolution);
-                return;
-            }
+            // All retries exhausted — flip to "Page Not Found".
+            IsResolving = false;
+            _context = null;
+            CurrentNamespace = null;
+            _status.OnNext(NavigationStatus.NotFound(path));
+            OnNavigationContextChanged?.Invoke(null);
+            return;
         }
 
-        // All retries exhausted — flip to "Page Not Found". This is the only
-        // place that fires OnNavigationContextChanged(null); ProcessLocationChangeAsync
-        // no longer flashes a null context while retries are still pending.
-        IsResolving = false;
-        _context = null;
-        CurrentNamespace = null;
-        _status.OnNext(NavigationStatus.NotFound(path));
-        OnNavigationContextChanged?.Invoke(null);
+        Observable.Timer(TimeSpan.FromMilliseconds(_retryDelays[attemptIdx]))
+            .Where(_ => CurrentPath == path) // navigation moved on → drop
+            .SelectMany(_ => _pathResolver.ResolvePath(path))
+            .Subscribe(resolution =>
+            {
+                if (resolution is not null)
+                    ProcessResolvedPath(path, resolution);
+                else
+                    AttemptRetry(path, attemptIdx + 1);
+            });
     }
 
     /// <summary>
-    /// Loads the MeshNode for the resolved address.
-    /// If the node has MarkdownContent but no PreRenderedHtml, generates it and persists back.
+    /// Loads the MeshNode for the resolved address. If the node has MarkdownContent
+    /// but no PreRenderedHtml, generates it and persists back. Reactive â€” no await
+    /// on hub round-trips (100% deadlock; see Doc/Architecture/AsynchronousCalls.md).
     /// </summary>
-    private async Task<MeshNode?> LoadNodeWithPreRenderedHtmlAsync(AddressResolution resolution)
-    {
-        try
-        {
-            var address = (Address)resolution.Prefix;
-            // One-shot read — GetDataRequest, no SubscribeRequest round-trip.
-            var node = await _hub.GetMeshNode(resolution.Prefix, TimeSpan.FromSeconds(10))
-                .FirstOrDefaultAsync();
-            if (node == null)
-                return null;
-
-            // If node has MarkdownContent but no PreRenderedHtml, generate it
-            if (node.PreRenderedHtml == null && node.Content is MarkdownContent md && !string.IsNullOrEmpty(md.Content))
+    private IObservable<MeshNode?> LoadNodeWithPreRenderedHtml(AddressResolution resolution) =>
+        _hub.GetMeshNode(resolution.Prefix, TimeSpan.FromSeconds(10))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .Select(node =>
             {
-                var html = md.PrerenderedHtml;
-                if (html == null)
+                if (node == null) return null;
+                if (node.PreRenderedHtml != null) return node;
+                if (node.Content is not MarkdownContent md || string.IsNullOrEmpty(md.Content))
+                    return node;
+
+                var html = md.PrerenderedHtml
+                    ?? MarkdownContent.Parse(md.Content, node.Path, node.Path).PrerenderedHtml;
+                if (html == null) return node;
+
+                node = node with { PreRenderedHtml = html };
+                try { _hub.Post(new UpdateNodeRequest(node), o => o.WithTarget(_hub.Address)); }
+                catch (Exception ex)
                 {
-                    // PrerenderedHtml not on the MarkdownContent either — generate it.
-                    // Pass node.Path as both hubPath (for content collection) and currentNodePath
-                    // (for resolving relative @references like @../SiblingNode).
-                    var parsed = MarkdownContent.Parse(md.Content, node.Path, node.Path);
-                    html = parsed.PrerenderedHtml;
+                    _hub.ServiceProvider.GetService<ILogger<NavigationService>>()
+                        ?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", node.Path);
                 }
-
-                if (html != null)
-                {
-                    node = node with { PreRenderedHtml = html };
-
-                    // Fire-and-forget: persist the generated PreRenderedHtml back
-                    try
-                    {
-                        _hub.Post(new UpdateNodeRequest(node), o => o.WithTarget(_hub.Address));
-                    }
-                    catch (Exception ex)
-                    {
-                        var logger = _hub.ServiceProvider.GetService<ILogger<NavigationService>>();
-                        logger?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", node.Path);
-                    }
-                }
-            }
-
-            return node;
-        }
-        catch
-        {
-            // Node loading is best-effort for prerender optimization
-            return null;
-        }
-    }
+                return node;
+            });
 
     /// <summary>
     /// Node types excluded from activity tracking.
@@ -361,7 +323,7 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Records a navigation activity for the "Recently Viewed" dashboard section.
-    /// Posts TrackActivityRequest to the hub — handled asynchronously on a sub-hub.
+    /// Posts TrackActivityRequest to the hub â€” handled asynchronously on a sub-hub.
     /// </summary>
     private void TrackNavigationActivity(MeshNode node)
     {
@@ -483,3 +445,4 @@ internal class NavigationService : INavigationService
         }
     }
 }
+

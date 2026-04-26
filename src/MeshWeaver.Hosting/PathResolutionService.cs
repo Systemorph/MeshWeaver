@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Caching.Memory;
@@ -37,26 +38,28 @@ internal class PathResolutionService : IPathResolver, IDisposable
         _deleteSub = changeFeed?.Subscribe(OnDeleted, MeshChangeKind.Deleted);
     }
 
-    public async Task<AddressResolution?> ResolvePathAsync(string path)
+    public IObservable<AddressResolution?> ResolvePath(string path)
     {
         if (string.IsNullOrEmpty(path))
-            return null;
+            return Observable.Return<AddressResolution?>(null);
 
         path = path.TrimStart('/');
         if (string.IsNullOrEmpty(path))
-            return null;
+            return Observable.Return<AddressResolution?>(null);
 
         var cacheKey = $"resolve:{path}";
         if (_cache.TryGetValue(cacheKey, out var cached) && cached is AddressResolution resolution)
-            return resolution;
+            return Observable.Return<AddressResolution?>(resolution);
 
-        // Delegate the actual resolution to MeshCatalog (DB lookups, config matching)
-        var result = await _catalog.ResolvePathCoreAsync(path);
-
-        if (result != null)
-            CacheResolution(path, result);
-
-        return result;
+        // Delegate to MeshCatalog (storage I/O, no hub round-trip — bridging via
+        // Observable.FromAsync is safe at this storage boundary; see
+        // Doc/Architecture/AsynchronousCalls.md).
+        return Observable.FromAsync(() => _catalog.ResolvePathCoreAsync(path))
+            .Do(result =>
+            {
+                if (result != null)
+                    CacheResolution(path, result);
+            });
     }
 
     private void OnCreated(MeshChangeEvent e)

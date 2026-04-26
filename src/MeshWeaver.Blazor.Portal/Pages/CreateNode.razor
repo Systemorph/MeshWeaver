@@ -220,7 +220,7 @@
 
             // Pre-select type: from ?type= param, or default to Markdown
             var defaultType = TypeParam ?? "Markdown";
-            await PreSelectAsync(defaultType, v => selectedTypeItem = v);
+            PreSelect(defaultType, v => selectedTypeItem = v);
 
             // --- Location picker: queries for namespaces ---
             var nsQueries = !string.IsNullOrEmpty(NamespaceQueriesParam)
@@ -239,7 +239,7 @@
 
             // Pre-select location from default namespace
             if (!string.IsNullOrEmpty(defaultNs))
-                await PreSelectAsync(defaultNs, v => selectedLocation = v);
+                PreSelect(defaultNs, v => selectedLocation = v);
         }
         catch (Exception ex)
         {
@@ -263,22 +263,20 @@
         selectedLocation = location;
     }
 
-    private async Task PreSelectAsync(string path, Action<QuerySuggestion> setter)
+    private void PreSelect(string path, Action<QuerySuggestion> setter)
     {
-        try
-        {
-            // One-shot pre-select read — GetDataRequest, no lingering subscription.
-            var node = await Hub.GetMeshNode(path, TimeSpan.FromSeconds(5))
-                .FirstOrDefaultAsync();
-            if (node != null)
-                setter(new QuerySuggestion(node.Path, node.Name ?? node.Id, node.NodeType, 1.0, node.Icon));
-            else
-                setter(new QuerySuggestion(path, path, null, 1.0));
-        }
-        catch
-        {
-            setter(new QuerySuggestion(path, path, null, 1.0));
-        }
+        // Reactive — Subscribe, never await on a hub round-trip (100% deadlock;
+        // see Doc/Architecture/AsynchronousCalls.md).
+        Hub.GetMeshNode(path, TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .Subscribe(node =>
+            {
+                var suggestion = node != null
+                    ? new QuerySuggestion(node.Path, node.Name ?? node.Id, node.NodeType, 1.0, node.Icon)
+                    : new QuerySuggestion(path, path, null, 1.0);
+                setter(suggestion);
+                InvokeAsync(StateHasChanged);
+            });
     }
 
     private string BackHref

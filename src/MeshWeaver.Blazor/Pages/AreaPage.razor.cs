@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Services;
@@ -32,41 +34,38 @@ public partial class AreaPage : ComponentBase
     private Address? Address => Resolution != null ? (Address)Resolution.Prefix : null;
 
     private LayoutAreaReference Reference { get; set; } = null!;
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
-        // Resolve the entire path using pattern matching
-        Resolution = await PathResolver.ResolvePathAsync(Path ?? "");
-
-        if (Resolution is null)
+        // Reactive — Subscribe, never await on PathResolver chain (deadlock surface;
+        // see Doc/Architecture/AsynchronousCalls.md).
+        PathResolver.ResolvePath(Path ?? "").Subscribe(resolution =>
         {
-            PageTitle = $"Page Not Found";
-            return;
-        }
+            Resolution = resolution;
 
-        // Parse remainder into area and id
-        var (area, id) = ParseRemainder(Resolution.Remainder);
+            if (Resolution is null)
+            {
+                PageTitle = "Page Not Found";
+                InvokeAsync(StateHasChanged);
+                return;
+            }
 
-        // Decode area and id, append query string
-        area = area != null ? (string)WorkspaceReference.Decode(area) : null;
-        id = id != null ? (string)WorkspaceReference.Decode(id) : "";
+            var (area, id) = ParseRemainder(Resolution.Remainder);
+            area = area != null ? (string)WorkspaceReference.Decode(area) : null;
+            id = id != null ? (string)WorkspaceReference.Decode(id) : "";
 
-        var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
-        if (!string.IsNullOrEmpty(query))
-            id = id + query;
+            var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
+            if (!string.IsNullOrEmpty(query))
+                id = id + query;
 
-        Reference = new(area)
-        {
-            Id = id,
-        };
+            Reference = new(area) { Id = id };
 
-        ViewModel = Controls.LayoutArea(Address!, Reference)
-            with
-        {
-            ShowProgress = false, // Disable progress indicator for cleaner screenshots
-        };
+            ViewModel = Controls.LayoutArea(Address!, Reference)
+                with
+            { ShowProgress = false };
 
-        // Reset content ready state when parameters change
-        IsContentReady = false;
+            IsContentReady = false;
+            InvokeAsync(StateHasChanged);
+        });
     }
 
     private static (string? Area, string? Id) ParseRemainder(string? remainder)
@@ -95,3 +94,4 @@ public partial class AreaPage : ComponentBase
 
 
 }
+
