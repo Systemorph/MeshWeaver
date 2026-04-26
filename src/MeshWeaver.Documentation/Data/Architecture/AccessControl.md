@@ -80,36 +80,111 @@ public enum Permission
 
 # Permission Evaluation
 
-Permissions are evaluated by walking AccessAssignment nodes from the global scope through each ancestor down to the target path.
+Permissions are evaluated **inside the per-node hub of the resource being
+accessed**, against a locally-cached `EffectiveAssignments` collection.
+The cache is populated by virtual data sources (see
+[Virtual Data Sources](../DataMesh/VirtualDataSources)) that sync from
+two places: the hub's own `_Access` subtree, and the parent hub's
+`EffectiveAssignments` collection. The aggregate is exposed in turn for
+*its* children to sync from. **No storage walk on the read path. No
+cache TTL. Live updates via `IDataChangeNotifier`.**
 
-## Scope Hierarchy
+## Scope Hierarchy as a sync tree
 
-For a target path `ACME/Project/Task1`, the evaluation order is:
+For a target path `ACME/Project/Task1`, the access-data sync tree is:
 
 ```
-"" (global) → "ACME" → "ACME/Project" → "ACME/Project/Task1"
+┌───────────────────────────────────┐
+│  ROOT hub (path "")               │
+│   LocalAccessAssignments          │ ←── own _Access subtree
+│   LocalPolicies                   │ ←── own _Policy node
+│   EffectiveAssignments  ═══ Local │  (no parent)
+└──────────────┬────────────────────┘
+               │ remote stream (RemoteStream<EffectiveAssignments>)
+               ▼
+┌───────────────────────────────────┐
+│  ACME hub                         │
+│   LocalAccessAssignments          │ ←── own _Access subtree
+│   LocalPolicies                   │
+│   InheritedFromParent             │ ←── ROOT.EffectiveAssignments
+│   EffectiveAssignments            │ ═══ Inherited ∪ Local (Policy caps)
+└──────────────┬────────────────────┘
+               │ remote stream
+               ▼
+┌───────────────────────────────────┐
+│  ACME/Project hub                 │
+│   …                               │
+└──────────────┬────────────────────┘
+               │
+               ▼
+┌───────────────────────────────────┐
+│  ACME/Project/Task1 hub           │
+│   EffectiveAssignments            │ ←── used to answer access checks
+└───────────────────────────────────┘
 ```
 
-At each scope level, the system collects AccessAssignment MeshNodes and applies **closest-wins** semantics: a deeper assignment for the same role overrides a shallower one.
+Each hub registers three virtual data sources via `AddMeshDataSource`:
+
+- **`LocalAccessAssignments`** — `WithMeshQuery<AccessAssignment>("nodeType:AccessAssignment namespace:{thisPath}")`
+- **`LocalPolicies`** — `WithMeshQuery<PartitionAccessPolicy>("nodeType:PartitionAccessPolicy namespace:{thisPath}")`
+- **`InheritedEffectiveAssignments`** — cross-hub
+  `WithVirtualType<AccessAssignment>(ws => ws.GetRemoteStream(parentAddr, new CollectionReference("EffectiveAssignments")))`
+
+A computed `EffectiveAssignments` virtual collection then merges
+`InheritedEffectiveAssignments ∪ LocalAccessAssignments`, applying
+`LocalPolicies` caps and `BreaksInheritance`. That collection is what
+*child* hubs subscribe to.
 
 ## Evaluation Flow
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant SecurityService
-    participant Persistence
-    Client->>SecurityService: GetEffectivePermissionsAsync("ACME/Project", "Alice")
-    SecurityService->>Persistence: GetChildrenAsync("") [global scope]
-    Persistence-->>SecurityService: AccessAssignment nodes
-    SecurityService->>Persistence: GetChildrenAsync("ACME")
-    Persistence-->>SecurityService: AccessAssignment nodes
-    SecurityService->>Persistence: GetChildrenAsync("ACME/Project")
-    Persistence-->>SecurityService: AccessAssignment nodes
-    SecurityService->>SecurityService: Resolve roles (closest-wins)
-    SecurityService->>SecurityService: Combine permissions
-    SecurityService-->>Client: Permission.Read | Permission.Create | Permission.Update | Permission.Comment
+    participant Pipeline as AccessControlPipeline
+    participant UserHub as User/Alice hub
+    participant ResourceHub as ACME/Project hub
+    Client->>Pipeline: deliver MyMessage[RequiresPermission(Update)] target=ACME/Project
+    Pipeline->>UserHub: GetGroupMembershipsRequest
+    UserHub-->>Pipeline: GroupPaths [Group/dev-team, Group/admins]
+    Pipeline->>ResourceHub: CheckPermissionRequest(Alice, [Group/dev-team, Group/admins], Update)
+    ResourceHub->>ResourceHub: read local EffectiveAssignments (already populated)
+    ResourceHub->>ResourceHub: filter by Alice OR any group
+    ResourceHub->>ResourceHub: sum role permissions, apply policy caps
+    ResourceHub-->>Pipeline: CheckPermissionResponse(IsGranted=true, EffectivePermissions=Read|Update|Comment)
+    Pipeline->>Client: invoke handler (or DeliveryFailure on Unauthorized)
 ```
+
+The pipeline does two reactive round-trips per check: one to the user's
+hub for group memberships (synced via
+`WithMeshQuery<GroupMembership>("nodeType:GroupMembership member:User/{id}")`),
+one to the resource's hub for the actual decision. Both hubs answer
+from local workspace state — no storage walk anywhere.
+
+## Reactive update semantics
+
+When an `AccessAssignment` is created at scope `S`:
+
+1. The hub at `S` sees the new node via its `LocalAccessAssignments`
+   `WithMeshQuery` subscription (driven by `IDataChangeNotifier`).
+2. The hub at `S` re-emits its `EffectiveAssignments` collection with
+   the new entry merged in.
+3. Every descendant hub subscribed to `S.EffectiveAssignments` via
+   their `InheritedEffectiveAssignments` remote stream sees the update
+   and re-emits their own `EffectiveAssignments`.
+4. The next `CheckPermissionRequest` on any descendant hub reflects
+   the new assignment.
+
+When a user joins or leaves a group:
+
+1. The `GroupMembership` MeshNode is created/deleted.
+2. The user's hub picks up the change via its
+   `WithMeshQuery<GroupMembership>` subscription.
+3. The next `GetGroupMembershipsRequest` returns the new list.
+4. Subsequent `CheckPermissionRequest`s see the updated group set.
+
+End-to-end propagation is on the order of the change-notifier tick
+(low milliseconds), not the 5-minute TTL the previous SecurityService
+cache used.
 
 ## Closest-Wins Semantics
 
@@ -171,27 +246,84 @@ Access control uses these shipped node types:
 - **Content**: `Role` record (Id, DisplayName, Permissions, IsInheritable)
 - Custom roles extend the built-in set
 
-# ISecurityService API
+# Permission-check contract
+
+The read path lives on **per-node hubs**, not on a global service. Two
+request types:
+
+```csharp
+// On every per-node hub.
+public record CheckPermissionRequest(
+    string UserId,
+    IReadOnlyList<string> GroupPaths,
+    Permission Permission)
+    : IRequest<CheckPermissionResponse>;
+
+public record CheckPermissionResponse(
+    bool IsGranted,
+    Permission EffectivePermissions,    // for UI helpers
+    string? DenialReason);
+
+// On every per-user hub.
+public record GetGroupMembershipsRequest()
+    : IRequest<GetGroupMembershipsResponse>;
+
+public record GetGroupMembershipsResponse(
+    IReadOnlyList<string> GroupPaths);
+```
+
+Consumers compose them reactively (see
+[Asynchronous Calls](AsynchronousCalls)):
+
+```csharp
+var groups = await hub.Observe(
+        new GetGroupMembershipsRequest(),
+        o => o.WithTarget(new Address($"User/{userId}")))
+    .FirstAsync().ToTask(ct);
+
+var resp = await hub.Observe(
+        new CheckPermissionRequest(userId, groups.GroupPaths, Permission.Update),
+        o => o.WithTarget(new Address(targetPath)))
+    .FirstAsync().ToTask(ct);
+```
+
+# ISecurityService — write-side only, 100% IObservable
+
+`ISecurityService` is now a **write-only** facade. Read-side methods
+(`HasPermissionAsync`, `GetEffectivePermissionsAsync`) have moved to
+the per-node-hub `CheckPermissionRequest` above. Writes stay because
+they POST `CreateNodeRequest` / `DeleteNodeRequest`.
+
+**No `Task` returns anywhere on the surface** — every method returns
+`IObservable<T>` (`Unit` for fire-and-forget). Bridging to `Task` from
+hub-reachable code is the canonical deadlock pattern (see
+[Asynchronous Calls](AsynchronousCalls)); the only sanctioned bridge is
+at the test edge or grain-lifecycle boundary, not in production
+service surfaces.
 
 ```csharp
 public interface ISecurityService
 {
-    // Permission evaluation
-    Task<bool> HasPermissionAsync(string nodePath, Permission permission, CancellationToken ct);
-    Task<bool> HasPermissionAsync(string nodePath, string userId, Permission permission, CancellationToken ct);
-    Task<Permission> GetEffectivePermissionsAsync(string nodePath, CancellationToken ct);
-    Task<Permission> GetEffectivePermissionsAsync(string nodePath, string userId, CancellationToken ct);
-
     // Role management
-    Task<Role?> GetRoleAsync(string roleId, CancellationToken ct);
-    IAsyncEnumerable<Role> GetRolesAsync(CancellationToken ct);
-    Task SaveRoleAsync(Role role, CancellationToken ct);
+    IObservable<Role?> GetRole(string roleId);
+    IObservable<Role> GetRoles();           // emits per-role
+    IObservable<Unit> SaveRole(Role role);
 
     // Convenience methods (create/delete AccessAssignment MeshNodes)
-    Task AddUserRoleAsync(string userId, string roleId, string? targetNamespace, string? assignedBy, CancellationToken ct);
-    Task RemoveUserRoleAsync(string userId, string roleId, string? targetNamespace, CancellationToken ct);
+    IObservable<Unit> AddUserRole(string userId, string roleId, string? targetNamespace, string? assignedBy);
+    IObservable<Unit> RemoveUserRole(string userId, string roleId, string? targetNamespace);
+
+    // Partition policy
+    IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace);
+    IObservable<Unit> SetPolicy(string targetNamespace, PartitionAccessPolicy policy);
+    IObservable<Unit> RemovePolicy(string targetNamespace);
 }
 ```
+
+Callers compose with `.Subscribe(onNext, onError)` — never `await`.
+The implementation internally posts `CreateNodeRequest` /
+`UpdateNodeRequest` / `DeleteNodeRequest` via `IMeshService` and
+returns the resulting observable.
 
 # Anonymous and Public Access
 
