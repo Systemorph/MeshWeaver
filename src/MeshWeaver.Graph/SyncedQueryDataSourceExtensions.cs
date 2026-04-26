@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -25,6 +27,17 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class SyncedQueryDataSourceExtensions
 {
+    /// <summary>
+    /// Per-workspace lazy registry of named synced mesh-queries.
+    /// Auto-initialised on first <c>GetQuery(...)</c> call for the workspace
+    /// — no DI registration required. Garbage-collected with the workspace.
+    /// </summary>
+    private static readonly ConditionalWeakTable<IWorkspace, SyncedQueryRegistry> _registries = new();
+
+    private static SyncedQueryRegistry RegistryFor(IWorkspace workspace) =>
+        _registries.GetValue(workspace, _ => new SyncedQueryRegistry());
+
+
     /// <summary>
     /// Registers a synced <see cref="MeshNode"/> collection on this data context.
     /// </summary>
@@ -87,6 +100,59 @@ public static class SyncedQueryDataSourceExtensions
         string? collectionName = null)
     {
         var typeSource = new SyncedQueryMeshNodes(ds.Workspace, ds.Id, query, collectionName);
+        // Register in the workspace's lazy per-workspace registry so callers
+        // can look it up later via workspace.GetQuery(id) — O(1) name-keyed
+        // lookup, no TypeSources iteration.
+        RegistryFor(ds.Workspace).Register(ds.Id, typeSource.StreamUpdates());
         return ds.WithTypeSource(typeof(MeshNode), typeSource);
+    }
+
+    /// <summary>
+    /// Retrieves the live <see cref="MeshNode"/> collection observable for the
+    /// synced query registered under <paramref name="id"/> on this workspace.
+    /// Returns <c>null</c> when no synced query has been registered with that
+    /// id. Subscribers receive the current collection on subscribe (replayed)
+    /// and every subsequent change as the underlying mesh-query result set
+    /// evolves.
+    ///
+    /// <para>O(1) name-keyed lookup against the per-workspace registry —
+    /// no <c>TypeSources</c> iteration.</para>
+    /// </summary>
+    public static IObservable<IEnumerable<MeshNode>>? GetQuery(
+        this IWorkspace workspace, object id)
+        => RegistryFor(workspace).Get(id);
+
+    /// <summary>
+    /// Get-or-create overload: returns the cached observable for
+    /// <paramref name="id"/> if one is already registered; otherwise spins up
+    /// a new <see cref="SyncedQueryMeshNodes"/> on the workspace using the
+    /// supplied <paramref name="queries"/> (one or more — the synced
+    /// collection is the <em>union</em> of every query's result set),
+    /// caches its observable in the registry under <paramref name="id"/>,
+    /// and returns it.
+    ///
+    /// <para>The returned observable shares its upstream
+    /// <see cref="IMeshQueryProvider.ObserveQuery"/> subscriptions (one per
+    /// query) via <c>Replay(1).RefCount()</c>: it starts syncing on the
+    /// first subscriber and pauses when none remain. The registry entry
+    /// persists for the lifetime of the workspace so subsequent
+    /// <c>GetQuery(id)</c> calls hit the cache even when no live
+    /// subscribers exist between calls.</para>
+    /// </summary>
+    public static IObservable<IEnumerable<MeshNode>> GetQuery(
+        this IWorkspace workspace, object id, params string[] queries)
+    {
+        if (queries is null || queries.Length == 0)
+            throw new ArgumentException("At least one query string is required.", nameof(queries));
+
+        var registry = RegistryFor(workspace);
+        var existing = registry.Get(id);
+        if (existing is not null)
+            return existing;
+
+        var typeSource = new SyncedQueryMeshNodes(workspace, id, queries);
+        var observable = typeSource.StreamUpdates();
+        registry.Register(id, observable);
+        return observable;
     }
 }
