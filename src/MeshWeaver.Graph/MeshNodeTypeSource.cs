@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -204,7 +206,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken ct)
     {
-        var ownNode = await _persistenceCore.GetNodeAsync(_hubPath, _workspace.Hub.JsonSerializerOptions, ct);
+        var ownNode = await _persistenceCore.GetNode(_hubPath, _workspace.Hub.JsonSerializerOptions).FirstAsync().ToTask(ct);
 
         if (ownNode != null)
             ownNode = ResolveJsonElementContent(ownNode);

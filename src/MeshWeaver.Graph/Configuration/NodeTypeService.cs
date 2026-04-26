@@ -274,7 +274,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// <see cref="IObservable{T}"/>; callers must <c>.Subscribe(...)</c>, not <c>await</c>.
     /// </summary>
     public IObservable<string> GetAssemblyPath(string nodeTypePath) =>
-        Observable.FromAsync(ct => meshStorage.GetNodeAsync(nodeTypePath, ct))
+        meshStorage.GetNode(nodeTypePath)
             .SelectMany(node =>
             {
                 if (node is null)
@@ -833,7 +833,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // This avoids the circular dependency: compilation → routing → hub creation → needs compilation.
 
         // Get the node directly from persistence (no routing)
-        var node = await meshStorage.GetNodeAsync(nodeTypePath, ct);
+        var node = await meshStorage.GetNode(nodeTypePath).FirstAsync().ToTask(ct);
         if (node == null)
         {
             var msg = $"NodeType definition not found at path '{nodeTypePath}'. Check that the NodeType node exists in persistence or a static node provider.";
@@ -867,7 +867,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         foreach (var sourcePath in sourcePaths)
         {
             // Path-exact fetch first (handles `path:X` / `@X` pointing at a single Code node).
-            var single = await meshStorage.GetNodeAsync(sourcePath, ct);
+            var single = await meshStorage.GetNode(sourcePath).FirstAsync().ToTask(ct);
             if (single != null) AddIfCodeNode(single);
 
             // Then all descendants INCLUDING satellites — that's the Code-file case.

@@ -58,7 +58,7 @@ internal sealed class MeshCatalog(
             return Observable.Return<MeshNode?>(node);
         }
 
-        return Observable.FromAsync(() => Persistence.GetNodeAsync(addressKey))
+        return Persistence.GetNode(addressKey)
             .Select(persistenceNode =>
                 persistenceNode ?? staticNodeProviders
                     .SelectMany(p => p.GetStaticNodes())
@@ -267,8 +267,8 @@ internal sealed class MeshCatalog(
         {
             var d = depth;
             var testPath = string.Join("/", segments.Take(d));
-            // ⬇ FromAsync only here — single DB hit per probe.
-            probes.Add(Observable.FromAsync(() => Persistence.GetNodeAsync(testPath))
+            // ⬇ Native IObservable surface — no FromAsync bridging needed.
+            probes.Add(Persistence.GetNode(testPath)
                 .Select(n => ((MeshNode?)n, d)));
         }
         return Observable.Concat(probes)

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -223,7 +225,17 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     #region Node Operations
 
-    public async Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => GetNodeAsyncCore(path, options, ct));
+
+    /// <summary>
+    /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>.
+    /// </summary>
+    [Obsolete("Use GetNode(path, options) which returns IObservable<MeshNode?>.")]
+    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+        => GetNodeAsyncCore(path, options, ct);
+
+    private async Task<MeshNode?> GetNodeAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         await EnsureInitializedAsync(ct);
 
@@ -231,7 +243,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         if (partitionKey == null || !_stores.TryGetValue(partitionKey, out var store))
             return null;
 
-        return await store.GetNodeAsync(path, options, ct);
+        return await store.GetNode(path, options).FirstAsync().ToTask(ct);
     }
 
     public async IAsyncEnumerable<MeshNode> GetChildrenAsync(
@@ -246,7 +258,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             // Root level: each partition contributes its root node
             foreach (var (seg, store) in _stores)
             {
-                var rootNode = await store.GetNodeAsync(seg, options);
+                var rootNode = await store.GetNode(seg, options).FirstAsync().ToTask();
                 if (rootNode != null)
                     yield return rootNode;
             }
@@ -285,7 +297,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             // Root level: each partition contributes root node + all descendants
             foreach (var (seg, store) in _stores)
             {
-                var rootNode = await store.GetNodeAsync(seg, options);
+                var rootNode = await store.GetNode(seg, options).FirstAsync().ToTask();
                 if (rootNode != null)
                     yield return rootNode;
 
@@ -312,7 +324,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         {
             foreach (var (seg, store) in _stores)
             {
-                var rootNode = await store.GetNodeAsync(seg, options);
+                var rootNode = await store.GetNode(seg, options).FirstAsync().ToTask();
                 if (rootNode != null)
                     yield return rootNode;
 
@@ -401,7 +413,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         var sourceStore = await GetOrCreateStoreAsync(sourceSegment, ct);
         var targetStore = await GetOrCreateStoreAsync(targetSegment, ct);
 
-        var sourceNode = await sourceStore.GetNodeAsync(sourcePath, options, ct)
+        var sourceNode = await sourceStore.GetNode(sourcePath, options).FirstAsync().ToTask(ct)
             ?? throw new InvalidOperationException($"Source node not found: {sourcePath}");
 
         if (await targetStore.ExistsAsync(targetPath, ct))

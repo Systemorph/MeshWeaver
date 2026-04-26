@@ -1,4 +1,6 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -89,7 +91,18 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         }
     }
 
-    public async Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => GetNodeAsyncCore(path, options, ct));
+
+    /// <summary>
+    /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>;
+    /// concrete-typed test code may keep using this Task-returning entry point.
+    /// </summary>
+    [Obsolete("Use GetNode(path, options) which returns IObservable<MeshNode?>.")]
+    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+        => GetNodeAsyncCore(path, options, ct);
+
+    private async Task<MeshNode?> GetNodeAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(path);
         if (_nodes.TryGetValue(normalizedPath, out var node))
@@ -515,7 +528,7 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
             for (int depth = segments.Length; depth >= 1; depth--)
             {
                 var testPath = string.Join("/", segments.Take(depth));
-                var node = await GetNodeAsync(testPath, options, ct);
+                var node = await GetNodeAsyncCore(testPath, options, ct);
                 if (node != null)
                     return (node, depth);
             }

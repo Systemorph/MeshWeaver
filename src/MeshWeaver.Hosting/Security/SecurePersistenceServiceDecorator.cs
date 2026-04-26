@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -72,7 +74,7 @@ internal class SecurePersistenceServiceDecorator : IStorageService
 
     public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var node = await _inner.GetNodeAsync(path, options, ct);
+        var node = await _inner.GetNode(path, options).FirstAsync().ToTask(ct);
         if (node == null)
             return null;
 
@@ -109,8 +111,15 @@ internal class SecurePersistenceServiceDecorator : IStorageService
 
     #region Delegated Methods (pass-through to inner service)
 
+    public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options)
+        => _inner.GetNode(path, options);
+
+    /// <summary>
+    /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>.
+    /// </summary>
+    [Obsolete("Use GetNode(path, options) which returns IObservable<MeshNode?>.")]
     public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.GetNodeAsync(path, options, ct);
+        => _inner.GetNode(path, options).FirstAsync().ToTask(ct);
 
     public IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options)
         => _inner.GetChildrenAsync(parentPath, options);

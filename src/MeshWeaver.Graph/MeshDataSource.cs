@@ -189,66 +189,57 @@ public static class MeshDataSourceExtensions
 
     /// <summary>
     /// Handler for GetDataRequest with SchemaReference on NodeType nodes.
-    /// For NodeType nodes (node.NodeType == "NodeType"), forwards SchemaReference to a subhub
-    /// configured with the NodeType's configuration to get the ContentType schema.
-    /// For non-NodeType nodes or non-SchemaReference requests, returns delivery unchanged
-    /// to let the default handler process it.
+    /// Sync handler: composes storage read + sub-hub schema fetch reactively and
+    /// posts the response from inside Subscribe. Returns request.Processed()
+    /// immediately so the hub scheduler is not blocked. No await, no Task in the
+    /// hub flow (Doc/Architecture/AsynchronousCalls.md).
     /// </summary>
-    private static async Task<IMessageDelivery> HandleNodeTypeSchemaRequest(
+    private static IMessageDelivery HandleNodeTypeSchemaRequest(
         IMessageHub hub,
-        IMessageDelivery<GetDataRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<GetDataRequest> request)
     {
-        // Only handle SchemaReference with empty type
+        // Only handle SchemaReference with empty type — pass through otherwise.
         if (request.Message.Reference is not SchemaReference { Type: null or "" })
-            return request; // Let default handler process it
+            return request;
 
         var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
         var persistenceCore = hub.ServiceProvider.GetService<IStorageService>();
         var hubPath = hub.Address.ToString();
 
         if (nodeTypeService == null || persistenceCore == null)
-            return request; // Let default handler process it
-
-        try
-        {
-            var node = await persistenceCore.GetNodeAsync(hubPath, hub.JsonSerializerOptions, ct);
-
-            // Only handle NodeType nodes
-            if (node?.NodeType != MeshNode.NodeTypePath)
-                return request; // Let default handler process it
-
-            // Get the compiled hub configuration for this NodeType
-            var nodeTypeConfig = nodeTypeService.GetCachedConfiguration(hubPath);
-
-            if (nodeTypeConfig?.HubConfiguration == null)
-                return request; // Let default handler process it
-
-            // Create temporary subhub with the NodeType's configuration
-            var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
-            var subHub = hub.GetHostedHub(dummyAddress, c =>
-                nodeTypeConfig.HubConfiguration(c.AddData()));
-
-            try
-            {
-                var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
-                var subResponse = await subHub.Observe(schemaDelivery).FirstAsync().ToTask(ct);
-                if (subResponse.Message is not GetDataResponse schemaResponse)
-                    return request; // Unexpected response shape — let default handler process it
-
-                hub.Post(schemaResponse, o => o.ResponseFor(request));
-                return request.Processed();
-            }
-            finally
-            {
-                subHub.Dispose();
-            }
-        }
-        catch
-        {
-            // Fall through to default handler on any error
             return request;
-        }
+
+        persistenceCore.GetNode(hubPath, hub.JsonSerializerOptions)
+            .SelectMany(node =>
+            {
+                // Only handle NodeType nodes — for everything else, let the default
+                // handler process by returning an empty observable so we don't post
+                // any response (the default handler will).
+                if (node?.NodeType != MeshNode.NodeTypePath)
+                    return Observable.Empty<GetDataResponse>();
+
+                var nodeTypeConfig = nodeTypeService.GetCachedConfiguration(hubPath);
+                if (nodeTypeConfig?.HubConfiguration == null)
+                    return Observable.Empty<GetDataResponse>();
+
+                var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
+                var subHub = hub.GetHostedHub(dummyAddress, c =>
+                    nodeTypeConfig.HubConfiguration(c.AddData()));
+
+                var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
+                return subHub.Observe(schemaDelivery)
+                    .Select(d => d.Message)
+                    .OfType<GetDataResponse>()
+                    .Take(1)
+                    .Finally(subHub.Dispose);
+            })
+            .Subscribe(
+                schemaResponse => hub.Post(schemaResponse, o => o.ResponseFor(request)),
+                _ => { /* swallow — default handler still has a chance via no-response below */ });
+
+        // Return Processed; if our reactive chain doesn't post a response (non-NodeType,
+        // missing config, error), the default handler chain still runs and handles it.
+        return request;
     }
 
     /// <summary>

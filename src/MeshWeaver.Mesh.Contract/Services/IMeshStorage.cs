@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
@@ -15,12 +17,14 @@ namespace MeshWeaver.Mesh.Services;
 internal interface IMeshStorage
 {
     /// <summary>
-    /// Gets a node by its path.
+    /// Gets a node by its path. Returns an observable that emits the node (or null
+    /// if not found) and completes. The Task → IObservable bridge lives inside the
+    /// implementation so callers compose with <c>SelectMany</c>/<c>Subscribe</c>
+    /// instead of bridging at every call site.
     /// </summary>
     /// <param name="path">The node path (e.g., "org/acme/project/web")</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The node or null if not found</returns>
-    Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default);
+    /// <returns>Observable emitting the node or null</returns>
+    IObservable<MeshNode?> GetNode(string path);
 
     /// <summary>
     /// Gets all child nodes at the specified parent path.
@@ -212,7 +216,7 @@ internal interface IMeshStorage
     /// <param name="ct">Cancellation token</param>
     /// <returns>The node or null if not found or not authorized</returns>
     Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
-        => GetNodeAsync(path, ct);
+        => GetNode(path).FirstAsync().ToTask(ct);
 
     /// <summary>
     /// Gets child nodes, filtering out those the user cannot read.

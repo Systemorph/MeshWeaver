@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 
@@ -53,7 +55,17 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
 
     public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
 
-    public async Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => GetNodeAsyncCore(path, options, ct));
+
+    /// <summary>
+    /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>.
+    /// </summary>
+    [Obsolete("Use GetNode(path, options) which returns IObservable<MeshNode?>.")]
+    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+        => GetNodeAsyncCore(path, options, ct);
+
+    private async Task<MeshNode?> GetNodeAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var key = NormalizePath(path);
 
@@ -74,8 +86,8 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
 
         foreach (var path in nodePaths)
         {
-            // Use GetNodeAsync to leverage cache
-            var node = await GetNodeAsync(path, options);
+            // Use GetNodeAsyncCore to leverage cache
+            var node = await GetNodeAsyncCore(path, options, default);
             if (node != null)
                 yield return node;
         }
@@ -88,7 +100,7 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         // Process node children
         foreach (var path in nodePaths)
         {
-            var node = await GetNodeAsync(path, options);
+            var node = await GetNodeAsyncCore(path, options, default);
             if (node != null)
             {
                 yield return node;
@@ -294,7 +306,7 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         for (int depth = segments.Length; depth >= 1; depth--)
         {
             var testPath = string.Join("/", segments.Take(depth));
-            var node = await GetNodeAsync(testPath, options, ct);
+            var node = await GetNodeAsyncCore(testPath, options, ct);
             if (node != null)
                 return (node, depth);
         }
@@ -382,7 +394,7 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         foreach (var searchPath in pathsToSearch)
         {
             // Search MeshNodes at this path
-            var node = await GetNodeAsync(searchPath, options);
+            var node = await GetNodeAsyncCore(searchPath, options, default);
             if (node != null && evaluator.Matches(node, parsedQuery))
             {
                 var score = evaluator.GetFuzzyScore(node, parsedQuery.TextSearch);
