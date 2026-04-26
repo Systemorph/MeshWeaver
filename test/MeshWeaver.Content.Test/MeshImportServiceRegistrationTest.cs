@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System;
 using System.Collections.Generic;
@@ -161,10 +161,10 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
         var jsonOptions = StorageImporter.CreateFullImportOptions();
 
         await sourceAdapter.WriteAsync(
-            MeshNode.FromPath("Progress/Node1") with { Name = "Node 1" },
+            MeshNode.FromPath("Progress/Node1") with { Name = "Node 1" , NodeType = "Markdown"},
             jsonOptions, CancellationToken.None);
         await sourceAdapter.WriteAsync(
-            MeshNode.FromPath("Progress/Node2") with { Name = "Node 2" },
+            MeshNode.FromPath("Progress/Node2") with { Name = "Node 2" , NodeType = "Markdown"},
             jsonOptions, CancellationToken.None);
 
         var progressPaths = new List<string>();
@@ -245,3 +245,4 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
         kept.Should().NotBeNull("node in source should be kept");
     }
 }
+

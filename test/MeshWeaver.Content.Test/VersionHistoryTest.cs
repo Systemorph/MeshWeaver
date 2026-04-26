@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -52,7 +52,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task VersionQuery_GetVersions_ReturnsHistory()
     {
         // Arrange
-        var node = MeshNode.FromPath("test/mynode") with { Name = "V1", State = MeshNodeState.Active };
+        var node = MeshNode.FromPath("test/mynode") with { Name = "V1", State = MeshNodeState.Active, NodeType = "Markdown" };
         var created = await CreateNodeAsync(node);
 
         // Update 3 times
@@ -80,7 +80,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task VersionQuery_GetVersionAsync_ReturnsCorrectSnapshot()
     {
         // Arrange
-        var node = MeshNode.FromPath("test/snapshot") with { Name = "V1", State = MeshNodeState.Active };
+        var node = MeshNode.FromPath("test/snapshot") with { Name = "V1", State = MeshNodeState.Active, NodeType = "Markdown" };
         var created = await CreateNodeAsync(node);
 
         // Get the version of the first save
@@ -110,7 +110,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task VersionQuery_GetVersionBeforeAsync_FindsPreChangeState()
     {
         // Arrange
-        var node = MeshNode.FromPath("test/before") with { Name = "V1", State = MeshNodeState.Active };
+        var node = MeshNode.FromPath("test/before") with { Name = "V1", State = MeshNodeState.Active, NodeType = "Markdown" };
         var created = await CreateNodeAsync(node);
 
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
@@ -214,3 +214,5 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         currentNode!.Name.Should().Be("Original", "the node should have been rolled back to the original name");
     }
 }
+
+
