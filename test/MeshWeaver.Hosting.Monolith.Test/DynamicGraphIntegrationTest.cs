@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -143,7 +143,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task ResolvePath_FindsPersistedNode_NotInConfig()
     {
         // Act
-        var resolution = await PathResolver.ResolvePathAsync($"{TestPartition}/org1");
+        var resolution = await PathResolver.ResolvePath($"{TestPartition}/org1").FirstAsync().ToTask();
 
         // Assert
         resolution.Should().NotBeNull($"persistence has {TestPartition}/org1");
@@ -155,7 +155,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task ResolvePath_WalksUpHierarchy_FindsBestMatch()
     {
         // Act: resolve path that goes deeper than persisted (nonexistent/deep doesn't exist)
-        var resolution = await PathResolver.ResolvePathAsync($"{TestPartition}/org1/proj1/nonexistent/deep");
+        var resolution = await PathResolver.ResolvePath($"{TestPartition}/org1/proj1/nonexistent/deep").FirstAsync().ToTask();
 
         // Assert: should match TestData/org1/proj1 with remainder
         resolution.Should().NotBeNull();
@@ -167,7 +167,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task ResolvePath_ReturnsExactMatch_WhenFullPathExists()
     {
         // Act
-        var resolution = await PathResolver.ResolvePathAsync($"{TestPartition}/org1/proj1/item1");
+        var resolution = await PathResolver.ResolvePath($"{TestPartition}/org1/proj1/item1").FirstAsync().ToTask();
 
         // Assert
         resolution.Should().NotBeNull();
@@ -179,7 +179,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task ResolvePath_WithRemainder_ReturnsCorrectParts()
     {
         // Act: resolve path with additional segments beyond existing node
-        var resolution = await PathResolver.ResolvePathAsync($"{TestPartition}/org1/proj1/item1/Overview");
+        var resolution = await PathResolver.ResolvePath($"{TestPartition}/org1/proj1/item1/Overview").FirstAsync().ToTask();
 
         // Assert
         resolution.Should().NotBeNull();
@@ -191,7 +191,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task ResolvePath_ReturnsNull_WhenNoMatchFound()
     {
         // Act: resolve path that doesn't exist anywhere
-        var resolution = await PathResolver.ResolvePathAsync("nonexistent/path/here");
+        var resolution = await PathResolver.ResolvePath("nonexistent/path/here").FirstAsync().ToTask();
 
         // Assert
         resolution.Should().BeNull();
@@ -201,7 +201,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     public async Task ResolvePath_UnderscoreNamespaceedSegment_ParsesAsRemainder()
     {
         // Act: resolve path with underscore-prefixed segment (layout area)
-        var resolution = await PathResolver.ResolvePathAsync($"{TestPartition}/_Nodes");
+        var resolution = await PathResolver.ResolvePath($"{TestPartition}/_Nodes").FirstAsync().ToTask();
 
         // Assert: TestPartition is the address, "_Nodes" is the remainder (layout area)
         resolution.Should().NotBeNull();
@@ -223,7 +223,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await pathResolver.ResolvePathAsync("Organization");
+        var resolution = await pathResolver.ResolvePath("Organization").FirstAsync().ToTask();
 
         // Assert
         resolution.Should().NotBeNull("Organization should be resolvable");
@@ -260,7 +260,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await pathResolver.ResolvePathAsync(typePath);
+        var resolution = await pathResolver.ResolvePath(typePath).FirstAsync().ToTask();
 
         // Assert
         resolution.Should().NotBeNull($"{typePath} should be resolvable");
@@ -312,7 +312,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         moved!.Path.Should().Be(dst);
         moved.Name.Should().Be("Move Test");
 
-        // Catalog-bound wait â€” ReadNodeAsync(src) would falsely succeed via the
+        // Catalog-bound wait Ã¢â‚¬â€ ReadNodeAsync(src) would falsely succeed via the
         // TestPartition ancestor's MeshNodeReference reducer.
         var paths = await WaitForQueryPathSetAsync(subtreeQuery,
             set => !set.Contains(src) && set.Contains(dst), ct);
@@ -408,7 +408,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         response.Message.Node.Should().NotBeNull();
         response.Message.Node!.Path.Should().Be(dst);
 
-        // Catalog-bound check â€” ReadNodeAsync on src would falsely succeed via
+        // Catalog-bound check Ã¢â‚¬â€ ReadNodeAsync on src would falsely succeed via
         // the TestPartition ancestor.
         var paths = await WaitForQueryPathSetAsync(subtreeQuery,
             set => !set.Contains(src) && set.Contains(dst), ct);
@@ -637,7 +637,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         foreach (var node in nodes)
             Output.WriteLine($"Found with namespace: {node.Path}");
 
-        // Assert: namespace: only checks 1 level deep â€” Code nodes are at depth 2 (ACME/Project/Source/id)
+        // Assert: namespace: only checks 1 level deep Ã¢â‚¬â€ Code nodes are at depth 2 (ACME/Project/Source/id)
         nodes.Should().BeEmpty("namespace: only finds immediate children; Code nodes are 2 levels deep");
     }
 
@@ -964,7 +964,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public async Task Project_CanBeResolved()
     {
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePathAsync(ProjectNodeTypePath);
+        var resolution = await pathResolver.ResolvePath(ProjectNodeTypePath).FirstAsync().ToTask();
         resolution.Should().NotBeNull($"{ProjectNodeTypePath} should be resolvable");
         Output.WriteLine($"Resolved: Prefix={resolution!.Prefix}, Remainder={resolution.Remainder}");
     }
@@ -1023,3 +1023,4 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
 [CollectionDefinition("SamplesGraphData", DisableParallelization = true)]
 public class SamplesGraphDataTestsCollection { }
+

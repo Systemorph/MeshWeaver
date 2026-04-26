@@ -119,59 +119,53 @@ internal class MeshNodeCompilationService(
         return await ResolveCodeIncludesAsync(code, meshStorage, resolved, ct);
     }
 
-    private async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshService meshQuery, HashSet<string> resolved, CancellationToken ct)
+    private IObservable<string> ResolveCodeIncludes(
+        string code, IMeshService meshQuery, HashSet<string> resolved)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
-            return code;
+            return Observable.Return(code);
 
         var matches = CodeIncludePattern.Matches(code);
         if (matches.Count == 0)
-            return code;
+            return Observable.Return(code);
 
-        var result = code;
+        // For each @@ match, fetch the referenced node via composed hub.GetMeshNode
+        // (NEVER await — that's a 100% deadlock). Each result feeds the recursive
+        // resolution; the final substituted string is built up in left-to-right order
+        // by serially aggregating the per-match observables.
+        IObservable<string> chain = Observable.Return(code);
         foreach (Match match in matches)
         {
             var path = match.Groups[1].Value;
-            if (!resolved.Add(path))
+            var matchValue = match.Value;
+            chain = chain.SelectMany(current =>
             {
-                result = result.Replace(match.Value, string.Empty);
-                continue;
-            }
+                if (!resolved.Add(path))
+                    return Observable.Return(current.Replace(matchValue, string.Empty));
 
-            string? resolvedCode = null;
-
-            // Single-node-by-path content read — one-shot GetDataRequest (NOT
-            // QueryAsync, NOT GetMeshNodeStream(...).Take(1) which pays for an
-            // unused subscription; see Doc/Architecture/AsynchronousCalls.md).
-            try
-            {
-                var referencedNode = await hub.GetMeshNode(path, TimeSpan.FromSeconds(15)).ToTask(ct);
-                if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
-                {
-                    resolvedCode = cf.Code;
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch
-            {
-                // Treat as unresolved — falls into the "Could not resolve" path below.
-            }
-
-            if (resolvedCode != null)
-            {
-                logger.LogDebug("Resolved code include @@{Path}", path);
-                resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshQuery, resolved, ct);
-                result = result.Replace(match.Value, resolvedCode);
-            }
-            else
-            {
-                logger.LogWarning("Could not resolve code include @@{Path}", path);
-            }
+                return hub.GetMeshNode(path, TimeSpan.FromSeconds(15))
+                    .SelectMany(referencedNode =>
+                    {
+                        if (referencedNode?.Content is CodeConfiguration cf
+                            && !string.IsNullOrWhiteSpace(cf.Code))
+                        {
+                            logger.LogDebug("Resolved code include @@{Path}", path);
+                            return ResolveCodeIncludes(cf.Code, meshQuery, resolved)
+                                .Select(resolvedInner => current.Replace(matchValue, resolvedInner));
+                        }
+                        logger.LogWarning("Could not resolve code include @@{Path}", path);
+                        return Observable.Return(current);
+                    });
+            });
         }
 
-        return result;
+        return chain;
     }
+
+    [Obsolete("Bridge for the storage-only path; production callers use ResolveCodeIncludes (IObservable).")]
+    private async Task<string> ResolveCodeIncludesAsync(
+        string code, IMeshService meshQuery, HashSet<string> resolved, CancellationToken ct)
+        => await ResolveCodeIncludes(code, meshQuery, resolved).ToTask(ct);
 
     private async Task<string> ResolveCodeIncludesAsync(
         string code, IMeshStorage meshStorage, HashSet<string> resolved, CancellationToken ct)
@@ -217,12 +211,12 @@ internal class MeshNodeCompilationService(
     }
 
     /// <inheritdoc />
-    public async Task<string?> GetAssemblyLocationAsync(MeshNode node, CancellationToken ct = default)
+    public IObservable<string?> GetAssemblyLocation(MeshNode node)
     {
         if (string.IsNullOrEmpty(node.NodeType))
         {
             logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
-            return null;
+            return Observable.Return<string?>(null);
         }
 
         var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -232,39 +226,28 @@ internal class MeshNodeCompilationService(
         if (cacheService.IsDiskCacheEnabled && cacheService.IsCacheValid(nodeName, node.LastModified))
         {
             logger.LogDebug("Using cached assembly for {NodePath}", node.Path);
-            return dllPath;
+            return Observable.Return<string?>(dllPath);
         }
 
         // Resolve the owning NodeTypeDefinition once — used both for source discovery
         // (Sources / Source convention) and for Configuration / ContentCollections.
         // - If this node IS a NodeType, "self" is its own path and we read its Content.
-        // - If this node is an instance, "self" is the NodeType's path and we fetch it.
-        var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
-        NodeTypeDefinition? ntDef = null;
-        string selfPath;
+        // - If this node is an instance, "self" is the NodeType's path and we compose
+        //   via hub.GetMeshNode(...).SelectMany(...) — NEVER await the hub round-trip.
         if (node.Content is NodeTypeDefinition selfDef)
-        {
-            ntDef = selfDef;
-            selfPath = node.Path;
-        }
-        else
-        {
-            selfPath = node.NodeType;
-            // Single-node-by-path content read — one-shot GetDataRequest (NOT
-            // QueryAsync, NOT GetMeshNodeStream(...).Take(1); see
-            // Doc/Architecture/AsynchronousCalls.md).
-            try
-            {
-                var nodeTypeNode = await hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15)).ToTask(ct);
-                if (nodeTypeNode?.Content is NodeTypeDefinition fetched)
-                    ntDef = fetched;
-            }
-            catch (OperationCanceledException) { throw; }
-            catch
-            {
-                // ntDef stays null — the caller will handle "no NodeType definition".
-            }
-        }
+            return Observable.FromAsync(ct => CompileCoreAsync(node, selfDef, node.Path, ct));
+
+        return hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15))
+            .SelectMany(typeNode => Observable.FromAsync(ct =>
+                CompileCoreAsync(node, typeNode?.Content as NodeTypeDefinition, node.NodeType, ct)));
+    }
+
+    private async Task<string?> CompileCoreAsync(
+        MeshNode node, NodeTypeDefinition? ntDef, string selfPath, CancellationToken ct)
+    {
+        var nodeName = cacheService.SanitizeNodeName(node.Path);
+        var dllPath = cacheService.GetDllPath(nodeName);
+        var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
 
         // Collect Code nodes from each configured source query (and from Tests, so
         // test files compile alongside production code and can reference it).
@@ -382,64 +365,61 @@ internal class MeshNodeCompilationService(
     }
 
     /// <inheritdoc />
-    public async Task<NodeCompilationResult?> CompileAndGetConfigurationsAsync(MeshNode node, CancellationToken ct = default)
-    {
-        var assemblyLocation = await GetAssemblyLocationAsync(node, ct);
-        if (string.IsNullOrEmpty(assemblyLocation))
-            return null;
-
-        var nodeName = cacheService.SanitizeNodeName(node.Path);
-
-        try
+    public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(MeshNode node)
+        => GetAssemblyLocation(node).Select(assemblyLocation =>
         {
-            // Load assembly using isolated context
-            var assembly = cacheService.LoadAssembly(nodeName);
-            if (assembly == null)
-            {
-                logger.LogWarning("Failed to load assembly for {NodePath}", node.Path);
-                return new NodeCompilationResult(assemblyLocation, []);
-            }
+            if (string.IsNullOrEmpty(assemblyLocation))
+                return (NodeCompilationResult?)null;
 
-            // Extract NodeTypeConfigurations from MeshNodeProviderAttribute.Nodes
-            var configurations = new List<NodeTypeConfiguration>();
-            foreach (var type in assembly.GetTypes())
+            var nodeName = cacheService.SanitizeNodeName(node.Path);
+
+            try
             {
-                if (typeof(MeshNodeProviderAttribute).IsAssignableFrom(type) && !type.IsAbstract)
+                var assembly = cacheService.LoadAssembly(nodeName);
+                if (assembly == null)
                 {
-                    var attribute = (MeshNodeProviderAttribute?)Activator.CreateInstance(type);
-                    if (attribute != null)
+                    logger.LogWarning("Failed to load assembly for {NodePath}", node.Path);
+                    return new NodeCompilationResult(assemblyLocation, []);
+                }
+
+                var configurations = new List<NodeTypeConfiguration>();
+                foreach (var type in assembly.GetTypes())
+                {
+                    if (typeof(MeshNodeProviderAttribute).IsAssignableFrom(type) && !type.IsAbstract)
                     {
-                        // Extract configurations from Nodes property
-                        foreach (var meshNode in attribute.Nodes)
+                        var attribute = (MeshNodeProviderAttribute?)Activator.CreateInstance(type);
+                        if (attribute != null)
                         {
-                            var hubConfig = meshNode.HubConfiguration;
-                            if (hubConfig != null)
+                            foreach (var meshNode in attribute.Nodes)
                             {
-                                configurations.Add(new NodeTypeConfiguration
+                                var hubConfig = meshNode.HubConfiguration;
+                                if (hubConfig != null)
                                 {
-                                    NodeType = meshNode.Path,
-                                    DataType = typeof(object),
-                                    HubConfiguration = hubConfig,
-                                    DisplayName = meshNode.Name,
-                                    Icon = meshNode.Icon,
-                                });
+                                    configurations.Add(new NodeTypeConfiguration
+                                    {
+                                        NodeType = meshNode.Path,
+                                        DataType = typeof(object),
+                                        HubConfiguration = hubConfig,
+                                        DisplayName = meshNode.Name,
+                                        Icon = meshNode.Icon,
+                                    });
+                                }
                             }
                         }
                     }
                 }
+
+                logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
+                    configurations.Count, assemblyLocation);
+
+                return new NodeCompilationResult(assemblyLocation, configurations);
             }
-
-            logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
-                configurations.Count, assemblyLocation);
-
-            return new NodeCompilationResult(assemblyLocation, configurations);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
-            return new NodeCompilationResult(assemblyLocation, []);
-        }
-    }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
+                return new NodeCompilationResult(assemblyLocation, []);
+            }
+        });
 
     /// <summary>
     /// Compiles CodeConfiguration into an assembly using Roslyn.

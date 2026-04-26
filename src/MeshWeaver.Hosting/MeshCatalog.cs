@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -39,40 +40,40 @@ internal sealed class MeshCatalog(
     private readonly Lazy<INodeConfigurationResolver?> _configResolver = new(() => hub.ServiceProvider.GetService<INodeConfigurationResolver>());
     private INodeConfigurationResolver? ConfigResolver => _configResolver.Value;
 
-    public async Task<MeshNode?> GetNodeAsync(Address address)
+    /// <summary>
+    /// Internal node lookup used ONLY by the routing layer (<see cref="RoutingServiceBase"/>).
+    /// Application code MUST NOT call this — use <c>hub.GetMeshNode(path)</c> /
+    /// <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> instead.
+    /// See <c>Doc/Architecture/CqrsAndContentAccess.md</c>.
+    /// </summary>
+    internal IObservable<MeshNode?> GetNodeForRouting(Address address)
     {
         var addressKey = address.Path;
 
-        // Try exact match in configuration (in-memory MeshConfiguration)
         if (Configuration.Nodes.TryGetValue(addressKey, out var node))
         {
             if (node.HubConfiguration == null && ConfigResolver != null)
-                node = await ConfigResolver.ResolveConfigurationAsync(node);
-            return node;
+                return Observable.FromAsync(ct => ConfigResolver.ResolveConfigurationAsync(node, ct))
+                    .Select(n => (MeshNode?)n);
+            return Observable.Return<MeshNode?>(node);
         }
 
-        // Try loading from persistence (Postgres)
-        var persistenceNode = await Persistence.GetNodeAsync(addressKey);
-
-        // Fallback to static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
-        persistenceNode ??= staticNodeProviders
-            .SelectMany(p => p.GetStaticNodes())
-            .FirstOrDefault(n => string.Equals(n.Path, addressKey, StringComparison.OrdinalIgnoreCase));
-
-        if (persistenceNode != null && ConfigResolver != null)
-            persistenceNode = await ConfigResolver.ResolveConfigurationAsync(persistenceNode);
-
-        return persistenceNode;
+        return Observable.FromAsync(() => Persistence.GetNodeAsync(addressKey))
+            .Select(persistenceNode =>
+                persistenceNode ?? staticNodeProviders
+                    .SelectMany(p => p.GetStaticNodes())
+                    .FirstOrDefault(n => string.Equals(n.Path, addressKey, StringComparison.OrdinalIgnoreCase)))
+            .SelectMany<MeshNode?, MeshNode?>(persistenceNode =>
+            {
+                if (persistenceNode == null) return Observable.Return<MeshNode?>(null);
+                if (ConfigResolver == null) return Observable.Return<MeshNode?>(persistenceNode);
+                return Observable.FromAsync(ct => ConfigResolver.ResolveConfigurationAsync(persistenceNode, ct))
+                    .Select(n => (MeshNode?)n);
+            });
     }
 
-    // IMeshCatalog — delegate to HubNodePersistence
+    // Internal HubNodePersistence helper — used by HandleCreateNodeRequest pipeline.
     private HubNodePersistence NodePersistence => new(hub, this);
-
-    public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
-        => MeshServiceExtensions.ToTask(NodePersistence.CreateNode(node), ct);
-
-    public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-        => MeshServiceExtensions.ToTask(NodePersistence.CreateTransient(node), ct);
 
 
     /// <summary>
@@ -144,26 +145,32 @@ internal sealed class MeshCatalog(
 
     /// <inheritdoc />
     /// <summary>
-    /// Resolves a path. Prefer using IPathResolver (PathResolutionService) which adds caching.
-    /// This method is a direct passthrough to ResolvePathCoreAsync.
+    /// IPathResolver implementation — bridges the internal Task-based core via
+    /// Observable.FromAsync. The path-resolution layer is one of two sanctioned places
+    /// that touch persistence directly (the other is IMeshStorage itself); see
+    /// Doc/Architecture/CqrsAndContentAccess.md.
     /// </summary>
-    public async Task<AddressResolution?> ResolvePathAsync(string path)
+    public IObservable<AddressResolution?> ResolvePath(string path)
     {
-        if (string.IsNullOrEmpty(path))
-            return null;
+        if (string.IsNullOrEmpty(path)) return Observable.Return<AddressResolution?>(null);
         path = path.TrimStart('/');
-        if (string.IsNullOrEmpty(path))
-            return null;
-        return await ResolvePathCoreAsync(path);
+        if (string.IsNullOrEmpty(path)) return Observable.Return<AddressResolution?>(null);
+        return Observable.FromAsync(() => ResolvePathCoreAsync(path));
     }
 
-    internal async Task<AddressResolution?> ResolvePathCoreAsync(string path)
+    /// <summary>
+    /// Resolves a path reactively. The chain stays in observable composition all the way
+    /// down to the leaves; <c>Observable.FromAsync</c> bridges only the actual DB hits
+    /// (<see cref="IMeshStorage.FindBestPrefixMatchAsync"/>, <c>GetNodeAsync</c>,
+    /// <c>GetChildrenAsync</c>) — that's the one place we hit the database. Per
+    /// <c>Doc/Architecture/CqrsAndContentAccess.md</c>, the path-resolution layer is
+    /// one of two sanctioned places that touch persistence directly.
+    /// </summary>
+    internal IObservable<AddressResolution?> ResolvePathCore(string path)
     {
         var segments = path.Split('/');
 
-        // 1. Try configuration first (existing behavior)
-        // Skip satellite types (e.g., Portal) — they are local-only ephemeral hubs
-        // and should never be routing targets for grain activation.
+        // 1. Configuration match — pure in-memory, no I/O. Synchronous.
         var configMatch = Configuration.Nodes.Values
             .Where(node => !node.IsSatelliteType)
             .Select(node => (Node: node, Score: ScoreMatch(node, segments)))
@@ -172,121 +179,150 @@ internal sealed class MeshCatalog(
             .FirstOrDefault();
 
         if (configMatch.Node != null)
-        {
-            return await ResolveFromConfigNodeAsync(configMatch.Node, segments, path);
-        }
+            return ResolveFromConfigNode(configMatch.Node, segments);
 
-        // 2. Try IMeshStorage - walk UP the path hierarchy to find best match
-        var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
-        if (persistenceMatch != null)
-        {
-            // Use the node's actual Path as the address
-            var matchedPath = persistenceMatch.Path;
-            var remainder = matchedSegmentCount < segments.Length
-                ? string.Join("/", segments.Skip(matchedSegmentCount))
-                : null;
-            return new AddressResolution(matchedPath, remainder);
-        }
-
-        logger?.LogDebug("ResolvePathAsync: no match found for path={Path}", path);
-        return null;
+        // 2. Persistence walk — observable chain.
+        return FindBestPersistenceMatch(segments)
+            .Select(match =>
+            {
+                if (match.Node == null)
+                {
+                    logger?.LogDebug("ResolvePath: no match found for path={Path}", path);
+                    return (AddressResolution?)null;
+                }
+                var matchedPath = match.Node.Path;
+                var remainder = match.MatchedSegments < segments.Length
+                    ? string.Join("/", segments.Skip(match.MatchedSegments))
+                    : null;
+                return new AddressResolution(matchedPath, remainder);
+            });
     }
 
-    private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPersistenceMatchAsync(string[] segments)
+    // Internal Task wrapper retained for the IPathResolver bridge until callers fully migrate.
+    internal Task<AddressResolution?> ResolvePathCoreAsync(string path)
+        => ResolvePathCore(path).FirstAsync().ToTask();
+
+    private IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPersistenceMatch(string[] segments)
     {
         var fullPath = string.Join("/", segments);
 
-        // 1. Try dedicated prefix match query (single SQL call in PostgreSQL).
-        //    For file-system backed stores this is a no-op (returns null).
-        var (prefixMatch, prefixSegments) = await Persistence.FindBestPrefixMatchAsync(fullPath);
-        if (prefixMatch != null)
-        {
-            logger?.LogDebug("FindBestPersistenceMatchAsync: prefix match found node at path={Path}", prefixMatch.Path);
-            return (prefixMatch, prefixSegments);
-        }
-
-        // 2. Walk from deepest to shallowest using simple GetNodeAsync lookups.
-        //    Each call routes to the correct partition via the first segment (in-memory dictionary),
-        //    then does an O(1) dictionary lookup on the partition's node cache.
-        for (int depth = segments.Length; depth >= 1; depth--)
-        {
-            var testPath = string.Join("/", segments.Take(depth));
-            var node = await Persistence.GetNodeAsync(testPath);
-            if (node != null)
+        // Step 1: prefix-match query at the DB layer. ⬇ FromAsync only here, at the leaf.
+        return Observable.FromAsync(() => Persistence.FindBestPrefixMatchAsync(fullPath))
+            .SelectMany(prefix =>
             {
-                logger?.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", node.Path);
-                return (node, depth);
-            }
-        }
-
-        // 2. Check for virtual namespaces (paths with children but no explicit node)
-        for (int depth = segments.Length; depth >= 1; depth--)
-        {
-            var testPath = string.Join("/", segments.Take(depth));
-
-            await using var enumerator = Persistence.GetChildrenAsync(testPath).GetAsyncEnumerator();
-            if (await enumerator.MoveNextAsync())
-            {
-                logger?.LogDebug("FindBestPersistenceMatchAsync: found virtual namespace at path={Path}", testPath);
-                var ns = depth > 1 ? string.Join("/", segments.Take(depth - 1)) : null;
-                var virtualNode = new MeshNode(segments[depth - 1], ns)
+                if (prefix.Item1 != null)
                 {
-                    Name = segments[depth - 1]
-                };
-                return (virtualNode, depth);
-            }
-        }
+                    logger?.LogDebug("FindBestPersistenceMatch: prefix match {Path}", prefix.Item1.Path);
+                    return Observable.Return<(MeshNode?, int)>((prefix.Item1, prefix.Item2));
+                }
 
-        // 3. Fallback: check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
-        var staticNodes = staticNodeProviders
-            .SelectMany(p => p.GetStaticNodes())
-            .ToArray();
+                // Step 2: walk deepest-to-shallowest via direct GetNodeAsync.
+                // Build a serial chain (Concat) and short-circuit on first hit.
+                return WalkSegmentsForNode(segments)
+                    .SelectMany(found =>
+                    {
+                        if (found.Node != null)
+                        {
+                            logger?.LogDebug("FindBestPersistenceMatch: node {Path}", found.Node.Path);
+                            return Observable.Return<(MeshNode?, int)>((found.Node, found.Depth));
+                        }
 
-        for (int depth = segments.Length; depth >= 1; depth--)
-        {
-            var testPath = string.Join("/", segments.Take(depth));
-            var node = staticNodes.FirstOrDefault(n =>
-                string.Equals(n.Path, testPath, StringComparison.OrdinalIgnoreCase));
-            if (node != null)
-            {
-                logger?.LogDebug("FindBestPersistenceMatchAsync: found static node at path={Path}", testPath);
-                return (node, depth);
-            }
-        }
+                        // Step 3: virtual-namespace lookup (children iteration).
+                        return WalkSegmentsForVirtualNamespace(segments)
+                            .SelectMany(virt =>
+                            {
+                                if (virt.Node != null)
+                                    return Observable.Return<(MeshNode?, int)>((virt.Node, virt.Depth));
 
-        return (null, 0);
+                                // Step 4: static node provider fallback (in-memory).
+                                var staticNodes = staticNodeProviders
+                                    .SelectMany(p => p.GetStaticNodes())
+                                    .ToArray();
+                                for (int depth = segments.Length; depth >= 1; depth--)
+                                {
+                                    var testPath = string.Join("/", segments.Take(depth));
+                                    var staticNode = staticNodes.FirstOrDefault(n =>
+                                        string.Equals(n.Path, testPath, StringComparison.OrdinalIgnoreCase));
+                                    if (staticNode != null)
+                                        return Observable.Return<(MeshNode?, int)>((staticNode, depth));
+                                }
+                                return Observable.Return<(MeshNode?, int)>((null, 0));
+                            });
+                    });
+            });
     }
 
-    private async Task<AddressResolution?> ResolveFromConfigNodeAsync(MeshNode matchedNode, string[] segments, string _)
+    private IObservable<(MeshNode? Node, int Depth)> WalkSegmentsForNode(string[] segments)
+    {
+        var probes = new List<IObservable<(MeshNode? Node, int Depth)>>();
+        for (int depth = segments.Length; depth >= 1; depth--)
+        {
+            var d = depth;
+            var testPath = string.Join("/", segments.Take(d));
+            // ⬇ FromAsync only here — single DB hit per probe.
+            probes.Add(Observable.FromAsync(() => Persistence.GetNodeAsync(testPath))
+                .Select(n => ((MeshNode?)n, d)));
+        }
+        return Observable.Concat(probes)
+            .Where(t => t.Item1 != null)
+            .Take(1)
+            .DefaultIfEmpty(((MeshNode?)null, 0));
+    }
+
+    private IObservable<(MeshNode? Node, int Depth)> WalkSegmentsForVirtualNamespace(string[] segments)
+    {
+        var probes = new List<IObservable<(MeshNode? Node, int Depth)>>();
+        for (int depth = segments.Length; depth >= 1; depth--)
+        {
+            var d = depth;
+            var testPath = string.Join("/", segments.Take(d));
+            probes.Add(Observable.FromAsync(async () =>
+            {
+                // ⬇ FromAsync wraps the DB hit; first child existence check.
+                await using var enumerator = Persistence.GetChildrenAsync(testPath).GetAsyncEnumerator();
+                if (await enumerator.MoveNextAsync())
+                {
+                    var ns = d > 1 ? string.Join("/", segments.Take(d - 1)) : null;
+                    var virt = new MeshNode(segments[d - 1], ns) { Name = segments[d - 1] };
+                    return ((MeshNode?)virt, d);
+                }
+                return ((MeshNode?)null, 0);
+            }));
+        }
+        return Observable.Concat(probes)
+            .Where(t => t.Item1 != null)
+            .Take(1)
+            .DefaultIfEmpty(((MeshNode?)null, 0));
+    }
+
+    private IObservable<AddressResolution?> ResolveFromConfigNode(MeshNode matchedNode, string[] segments)
     {
         // When path goes deeper than the config node, check persistence for a deeper match
-        // This handles dynamically created child nodes (e.g., kernel/test-kernel via CreateNodeRequest)
         if (segments.Length > matchedNode.Segments.Count &&
             matchedNode.Segments.Count > 0 &&
             segments[0].Equals(matchedNode.Segments[0], StringComparison.OrdinalIgnoreCase))
         {
-            // Find the deepest existing node in persistence
-            var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
-            if (persistenceMatch != null && matchedSegmentCount > matchedNode.Segments.Count)
-            {
-                // Found a deeper match in persistence
-                var matchedPath = persistenceMatch.Path;
-                var persistenceRemainder = matchedSegmentCount < segments.Length
-                    ? string.Join("/", segments.Skip(matchedSegmentCount))
-                    : null;
-                return new AddressResolution(matchedPath, persistenceRemainder);
-            }
-
-            // No deeper persistence match — fall through to use the config node itself.
-            // The extra segments are the layout area/id remainder (e.g., Organization/Search).
+            return FindBestPersistenceMatch(segments)
+                .Select(match =>
+                {
+                    if (match.Node != null && match.MatchedSegments > matchedNode.Segments.Count)
+                    {
+                        var persistenceRemainder = match.MatchedSegments < segments.Length
+                            ? string.Join("/", segments.Skip(match.MatchedSegments))
+                            : null;
+                        return new AddressResolution(match.Node.Path, persistenceRemainder);
+                    }
+                    var remainder = segments.Length > matchedNode.Segments.Count
+                        ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
+                        : null;
+                    return new AddressResolution(matchedNode.Path, remainder);
+                });
         }
 
-        // Exact match or config node covers the full path - use it directly
-        var remainder = segments.Length > matchedNode.Segments.Count
+        var simpleRemainder = segments.Length > matchedNode.Segments.Count
             ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
             : null;
-
-        return new AddressResolution(matchedNode.Path, remainder);
+        return Observable.Return<AddressResolution?>(new AddressResolution(matchedNode.Path, simpleRemainder));
     }
 
     private static int ScoreMatch(MeshNode node, string[] pathSegments)

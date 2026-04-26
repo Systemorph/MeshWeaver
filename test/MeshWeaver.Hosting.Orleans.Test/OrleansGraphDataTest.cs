@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -26,7 +26,7 @@ using Xunit;
 using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture â€” uses GraphDataSiloConfigurator with
+// TODO: needs custom shared fixture Ã¢â‚¬â€ uses GraphDataSiloConfigurator with
 // AddFileSystemPersistence(SamplesGraphData), which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Integration tests that verify Orleans routing works end-to-end
@@ -135,7 +135,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // Check the path resolution (verifies both persistence and catalog are working)
         var pathResolver = siloServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePathAsync("app/Kernel");
+        var resolution = await pathResolver.ResolvePath("app/Kernel").FirstAsync().ToTask();
         Output.WriteLine($"ResolvePathAsync('app/Kernel'): Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("app/Kernel path should resolve");
     }
@@ -187,3 +187,4 @@ public class GraphDataSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }
+

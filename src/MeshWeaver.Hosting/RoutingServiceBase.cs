@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
@@ -98,8 +100,10 @@ namespace MeshWeaver.Hosting
         {
             var originalAddress = address;
 
-            // Use ResolvePath to find the deepest matching node in persistence
-            var resolution = await MeshCatalog.ResolvePathAsync(address.ToString());
+            // Use ResolvePath to find the deepest matching node in persistence.
+            // Routing-framework boundary — bridges IPathResolver IObservable to Task.
+            var resolution = await MeshCatalog.ResolvePath(address.ToString())
+                .FirstAsync().ToTask(cancellationToken);
             if (resolution != null)
             {
                 // Route to the resolved prefix address, preserving segment structure
@@ -115,8 +119,12 @@ namespace MeshWeaver.Hosting
                 }
             }
 
-            // Get node - catalog has no access control (RLS is enforced at query/handler level)
-            var node = await MeshCatalog.GetNodeAsync(address);
+            // Get node — routing-layer call. NOT a hub round-trip (would recurse —
+            // routing.MeshCatalog → catalog → routing). Bridges Persistence I/O at
+            // the routing-framework boundary; application code uses hub.GetMeshNode.
+            // See Doc/Architecture/CqrsAndContentAccess.md.
+            var node = await ((MeshCatalog)MeshCatalog).GetNodeForRouting(address)
+                .FirstAsync().ToTask(cancellationToken);
 
             var logger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
             logger?.LogDebug("RouteMessageAsync: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",

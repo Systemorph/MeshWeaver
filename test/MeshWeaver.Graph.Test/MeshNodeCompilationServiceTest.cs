@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
@@ -137,7 +139,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
         };
 
         // Act
-        var result = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var result = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         result.Should().BeNull("Node with no NodeType should not compile");
@@ -172,7 +174,7 @@ public record StoryType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         assemblyPath.Should().NotBeNull("Assembly should be compiled");
@@ -208,7 +210,7 @@ public record ProjectType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert - user code is in global namespace (no namespace wrapper)
         assemblyPath.Should().NotBeNull();
@@ -244,14 +246,14 @@ public record CachedItemType
         };
 
         // First call compiles
-        var firstPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var firstPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         firstPath.Should().NotBeNull();
 
         var firstWriteTime = File.GetLastWriteTimeUtc(firstPath!);
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Act - Second call should use cache
-        var secondPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var secondPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         secondPath.Should().NotBeNull();
@@ -288,7 +290,7 @@ public record DebugItemType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert - Source file should exist
         assemblyPath.Should().NotBeNull();
@@ -325,7 +327,7 @@ public record WidgetType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert - Find MeshNodeProviderAttribute in assembly
         assemblyPath.Should().NotBeNull();
@@ -369,7 +371,7 @@ public record ComponentType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert - Get nodes from MeshNodeProviderAttribute
         assemblyPath.Should().NotBeNull();
@@ -428,7 +430,7 @@ public record RecordType
         };
 
         // Act
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert - Instantiate the compiled data type
         assemblyPath.Should().NotBeNull();
@@ -490,7 +492,7 @@ public record Organization
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         assemblyPath.Should().NotBeNull();
         var assembly = Assembly.LoadFrom(assemblyPath!);
         assembly.GetType("Organization").Should().NotBeNull();
@@ -554,7 +556,7 @@ public enum ProjectStatus
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         assemblyPath.Should().NotBeNull();
         var assembly = Assembly.LoadFrom(assemblyPath!);
         assembly.GetType("Project").Should().NotBeNull("Data model type should be compiled");
@@ -594,7 +596,7 @@ public record TaskItem
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(nodeTypeNode, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(nodeTypeNode).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         assemblyPath.Should().NotBeNull();
         var assembly = Assembly.LoadFrom(assemblyPath!);
         assembly.GetType("TaskItem").Should().NotBeNull();
@@ -618,7 +620,7 @@ public record TaskItem
         };
 
         // Should still compile (generates MeshNodeProviderAttribute without user types)
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         assemblyPath.Should().NotBeNull();
     }
 
@@ -653,7 +655,7 @@ public record Contact
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var result = await service.CompileAndGetConfigurationsAsync(node, TestContext.Current.CancellationToken);
+        var result = await service.CompileAndGetConfigurations(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         result.Should().NotBeNull();
         result!.AssemblyLocation.Should().NotBeNullOrEmpty();
         result.NodeTypeConfigurations.Should().NotBeEmpty("Should extract HubConfiguration from compiled assembly");
@@ -685,7 +687,7 @@ public record DefaultRelType
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         assemblyPath.Should().NotBeNull();
         Assembly.LoadFrom(assemblyPath!).GetType("DefaultRelType").Should().NotBeNull(
@@ -720,7 +722,7 @@ public record SelfMacroType
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         assemblyPath.Should().NotBeNull();
         Assembly.LoadFrom(assemblyPath!).GetType("SelfMacroType").Should().NotBeNull(
@@ -761,7 +763,7 @@ public record FilterTypeA
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         assemblyPath.Should().NotBeNull(
             "non-Code children must not break compilation — the nodeType:Code filter excludes them");
@@ -824,7 +826,7 @@ public record Profile
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         assemblyPath.Should().NotBeNull("Profile should compile with external Platform from Post/Source");
         var assembly = Assembly.LoadFrom(assemblyPath!);
@@ -864,7 +866,7 @@ public record OverlapType
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         assemblyPath.Should().NotBeNull(
             "overlapping source queries must be deduped so the same type isn't compiled twice");
@@ -1010,10 +1012,11 @@ public record SharedHelper_{suffix.Replace("-", "_")}
             LastModified = DateTimeOffset.UtcNow
         };
 
-        var assemblyPath = await service.GetAssemblyLocationAsync(node, TestContext.Current.CancellationToken);
+        var assemblyPath = await service.GetAssemblyLocation(node).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         assemblyPath.Should().NotBeNull($"'{prefix}path' shorthand should resolve to the Shared Code node");
         var expectedTypeName = $"SharedHelper_{suffix.Replace("-", "_")}";
         Assembly.LoadFrom(assemblyPath!).GetType(expectedTypeName).Should().NotBeNull();
     }
 }
+

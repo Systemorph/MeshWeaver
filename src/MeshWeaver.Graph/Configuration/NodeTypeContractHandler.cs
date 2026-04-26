@@ -94,9 +94,10 @@ internal static class NodeTypeContractHandler
             return request.Processed();
         }
 
-        // Async work wrapped in Observable.FromAsync — handler stays sync, response is
-        // posted from inside the Subscribe(onNext) callback.
-        Observable.FromAsync(ct => ResolveAsync(hub, requestedVersion, hubPath, ct))
+        // Reactive resolution — handler stays sync, response is posted from inside the
+        // Subscribe(onNext) callback. NEVER await hub round-trips inside Resolve* — see
+        // Doc/Architecture/AsynchronousCalls.md.
+        Resolve(hub, requestedVersion, hubPath)
             .Subscribe(
                 response =>
                 {
@@ -138,103 +139,99 @@ internal static class NodeTypeContractHandler
         return request.Processed();
     }
 
-    private static async Task<GetCompilationPathResponse> ResolveAsync(
-        IMessageHub hub, string? requestedVersion, string hubPath, CancellationToken ct)
+    private static IObservable<GetCompilationPathResponse> Resolve(
+        IMessageHub hub, string? requestedVersion, string hubPath)
     {
         // Step 1: get the type-def MeshNode at the requested version (or HEAD).
-        MeshNode? typeDefNode;
-        string? resolvedVersion = requestedVersion;
+        // HEAD: own workspace stream. Historical: IVersionQuery (file-system / store read,
+        // no hub round-trip). NEVER await; compose with .Select / .SelectMany.
+        IObservable<(MeshNode? typeDef, string? resolvedVersion, string? earlyError)> typeDefSource;
 
         if (string.IsNullOrEmpty(requestedVersion))
         {
-            // HEAD — read via the hub's own workspace stream. Bounded with Take(1) +
-            // Timeout because the hub initialises this stream synchronously from
-            // its data source (static-provider node OR persistence).
-            try
-            {
-                typeDefNode = await hub.GetWorkspace().GetMeshNodeStream()
-                    .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(15))
-                    .ToTask(ct);
-            }
-            catch (TimeoutException)
-            {
-                return Fail(requestedVersion,
-                    $"Timed out reading MeshNode at '{hubPath}' from workspace stream.");
-            }
-
-            resolvedVersion = typeDefNode?.Version.ToString();
+            typeDefSource = hub.GetWorkspace().GetMeshNodeStream()
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Select(typeDef => (typeDef, typeDef?.Version.ToString(), (string?)null))
+                .Catch<(MeshNode?, string?, string?), TimeoutException>(_ => Observable.Return<(MeshNode?, string?, string?)>(
+                    (null, requestedVersion, $"Timed out reading MeshNode at '{hubPath}' from workspace stream.")));
         }
         else
         {
-            // Historical version — IVersionQuery.
             var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
             if (versionQuery == null)
-                return Fail(requestedVersion,
-                    "IVersionQuery is not registered — cannot load historical NodeType snapshots.");
+                return Observable.Return(Fail(requestedVersion,
+                    "IVersionQuery is not registered — cannot load historical NodeType snapshots."));
 
             if (!long.TryParse(requestedVersion, out var versionNumber))
-                return Fail(requestedVersion,
-                    $"Version '{requestedVersion}' is not a valid long.");
+                return Observable.Return(Fail(requestedVersion,
+                    $"Version '{requestedVersion}' is not a valid long."));
 
-            typeDefNode = await versionQuery.GetVersionAsync(hubPath, versionNumber,
-                hub.JsonSerializerOptions, ct);
+            // IVersionQuery.GetVersionAsync is store I/O (no hub round-trip) — bridging via
+            // Observable.FromAsync is safe here.
+            typeDefSource = Observable.FromAsync(ct => versionQuery.GetVersionAsync(
+                hubPath, versionNumber, hub.JsonSerializerOptions, ct))
+                .Select(typeDef => (typeDef, requestedVersion, (string?)null));
         }
 
-        if (typeDefNode == null)
-            return Fail(resolvedVersion,
-                $"NodeType definition not found at path '{hubPath}'"
-                + (string.IsNullOrEmpty(requestedVersion) ? "." : $" at version '{requestedVersion}'."));
-
-        // Step 2: short-circuit if AssemblyLocation + HubConfiguration are already set
-        // (the static-provider / AddMeshNodes case).
-        if (!string.IsNullOrEmpty(typeDefNode.AssemblyLocation) && typeDefNode.HubConfiguration != null)
+        return typeDefSource.SelectMany(t =>
         {
-            return new GetCompilationPathResponse(
-                Success: true,
-                AssemblyLocation: typeDefNode.AssemblyLocation,
-                Collection: null,
-                Version: resolvedVersion,
-                Error: null,
-                HubConfiguration: typeDefNode.HubConfiguration);
-        }
+            if (t.earlyError != null)
+                return Observable.Return(Fail(t.resolvedVersion, t.earlyError));
 
-        // Step 3: dynamic compile path. Requires a NodeTypeDefinition Content payload
-        // and a registered IMeshNodeCompilationService.
-        if (typeDefNode.Content is not NodeTypeDefinition)
-        {
-            return Fail(resolvedVersion,
-                $"Node at '{hubPath}' is not a valid NodeType definition "
-                + $"(Content type: {typeDefNode.Content?.GetType().Name ?? "null"}).");
-        }
+            if (t.typeDef == null)
+                return Observable.Return(Fail(t.resolvedVersion,
+                    $"NodeType definition not found at path '{hubPath}'"
+                    + (string.IsNullOrEmpty(requestedVersion) ? "." : $" at version '{requestedVersion}'.")));
 
-        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-        if (compilationService == null)
-        {
-            return Fail(resolvedVersion,
-                $"No IMeshNodeCompilationService registered — cannot compile '{hubPath}'.");
-        }
+            // Step 2: short-circuit if AssemblyLocation + HubConfiguration are already set
+            // (the static-provider / AddMeshNodes case).
+            if (!string.IsNullOrEmpty(t.typeDef.AssemblyLocation) && t.typeDef.HubConfiguration != null)
+            {
+                return Observable.Return(new GetCompilationPathResponse(
+                    Success: true,
+                    AssemblyLocation: t.typeDef.AssemblyLocation,
+                    Collection: null,
+                    Version: t.resolvedVersion,
+                    Error: null,
+                    HubConfiguration: t.typeDef.HubConfiguration));
+            }
 
-        var result = await compilationService.CompileAndGetConfigurationsAsync(typeDefNode, ct);
-        if (result == null || string.IsNullOrEmpty(result.AssemblyLocation))
-        {
-            return Fail(resolvedVersion,
-                $"Compilation produced no assembly location for '{hubPath}'.");
-        }
+            // Step 3: dynamic compile path.
+            if (t.typeDef.Content is not NodeTypeDefinition)
+            {
+                return Observable.Return(Fail(t.resolvedVersion,
+                    $"Node at '{hubPath}' is not a valid NodeType definition "
+                    + $"(Content type: {t.typeDef.Content?.GetType().Name ?? "null"})."));
+            }
 
-        // Pick the HubConfiguration matching this NodeType's path; fall back to the
-        // first available one (the typical case is a single-attribute NodeType).
-        var matchingConfig = result.NodeTypeConfigurations
-            .FirstOrDefault(c => string.Equals(c.NodeType, hubPath, StringComparison.OrdinalIgnoreCase))
-            ?? result.NodeTypeConfigurations.FirstOrDefault();
+            var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+            if (compilationService == null)
+            {
+                return Observable.Return(Fail(t.resolvedVersion,
+                    $"No IMeshNodeCompilationService registered — cannot compile '{hubPath}'."));
+            }
 
-        return new GetCompilationPathResponse(
-            Success: true,
-            AssemblyLocation: result.AssemblyLocation,
-            Collection: null,
-            Version: resolvedVersion,
-            Error: null,
-            HubConfiguration: matchingConfig?.HubConfiguration);
+            return compilationService.CompileAndGetConfigurations(t.typeDef)
+                .Select(result =>
+                {
+                    if (result == null || string.IsNullOrEmpty(result.AssemblyLocation))
+                        return Fail(t.resolvedVersion,
+                            $"Compilation produced no assembly location for '{hubPath}'.");
+
+                    var matchingConfig = result.NodeTypeConfigurations
+                        .FirstOrDefault(c => string.Equals(c.NodeType, hubPath, StringComparison.OrdinalIgnoreCase))
+                        ?? result.NodeTypeConfigurations.FirstOrDefault();
+
+                    return new GetCompilationPathResponse(
+                        Success: true,
+                        AssemblyLocation: result.AssemblyLocation,
+                        Collection: null,
+                        Version: t.resolvedVersion,
+                        Error: null,
+                        HubConfiguration: matchingConfig?.HubConfiguration);
+                });
+        });
     }
 
     private static GetCompilationPathResponse Fail(string? version, string error) =>
