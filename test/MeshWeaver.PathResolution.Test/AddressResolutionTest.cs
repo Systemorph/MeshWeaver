@@ -36,6 +36,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             {
                 Name = "Pricing",
                 Icon = "Calculator",
+                NodeType = "Markdown",
             });
         }
 
@@ -46,6 +47,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             {
                 Name = "Applications",
                 Icon = "App",
+                NodeType = "Markdown",
             });
         }
     }

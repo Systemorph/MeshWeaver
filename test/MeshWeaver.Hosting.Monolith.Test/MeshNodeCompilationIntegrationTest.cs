@@ -31,7 +31,16 @@ public class MeshNodeCompilationIntegrationTest(ITestOutputHelper output) : Mono
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-    private Task CreateNodeType(string nodeTypeId, NodeTypeDefinition definition, params (string Name, string Code)[] sources)
+    /// <summary>
+    /// Reactive chain: create the NodeType + all its source Code nodes, then issue
+    /// the GetCompilationPathRequest — all in one observable. Each create's response
+    /// completes only after persistence commit, so the next step sees the node.
+    /// Single ToTask at the test edge.
+    /// </summary>
+    private Task<GetCompilationPathResponse> CreateAndCompile(
+        string nodeTypeId,
+        NodeTypeDefinition definition,
+        params (string Name, string Code)[] sources)
     {
         var nodeTypePath = $"type/{nodeTypeId}";
         var typeNode = MeshNode.FromPath(nodeTypePath) with
@@ -42,37 +51,32 @@ public class MeshNodeCompilationIntegrationTest(ITestOutputHelper output) : Mono
             State = MeshNodeState.Active
         };
 
+        // Create type-def → for each source, create code node sequentially → then compile.
+        // SelectMany chains; each CreateNode emits AFTER persistence + change-feed completes.
         return MeshService.CreateNode(typeNode)
-            .SelectMany(_ => sources.ToObservable())
-            .SelectMany(source =>
-            {
-                var codeNode = new MeshNode(source.Name, $"{nodeTypePath}/Source")
+            .SelectMany(_ => sources
+                .Select(source => MeshService.CreateNode(new MeshNode(source.Name, $"{nodeTypePath}/Source")
                 {
                     NodeType = "Code",
                     Name = source.Name,
                     Content = new CodeConfiguration { Code = source.Code, Language = "csharp" },
                     State = MeshNodeState.Active
-                };
-                return MeshService.CreateNode(codeNode);
-            })
-            .DefaultIfEmpty()
-            .LastAsync()
-            .ToTask(TestContext.Current.CancellationToken);
-    }
-
-    private Task<GetCompilationPathResponse> CompilePath(string nodeTypeId)
-        => MeshWeaver.Messaging.MessageHubExtensions.Observe(
-                Mesh,
-                (MeshWeaver.Messaging.IRequest<GetCompilationPathResponse>)new GetCompilationPathRequest(),
-                o => o.WithTarget(new Address($"type/{nodeTypeId}")))
+                }))
+                .Aggregate(Observable.Return<MeshNode?>(null), (chain, next) =>
+                    chain.SelectMany(_ => next.Select(n => (MeshNode?)n))))
+            .SelectMany(_ => MeshWeaver.Messaging.MessageHubExtensions.Observe(
+                    Mesh,
+                    (MeshWeaver.Messaging.IRequest<GetCompilationPathResponse>)new GetCompilationPathRequest(),
+                    o => o.WithTarget(new Address(nodeTypePath))))
             .Select(d => d.Message)
             .FirstAsync()
             .ToTask(TestContext.Current.CancellationToken);
+    }
 
     [Fact]
     public async Task CompilesSimpleNodeTypeWithDefaultSources()
     {
-        await CreateNodeType("Story",
+        var response = await CreateAndCompile("Story",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Story>()" },
             ("code", @"
 public record Story
@@ -81,8 +85,6 @@ public record Story
     public string Title { get; init; } = string.Empty;
 }"));
 
-        var response = await CompilePath("Story");
-
         response.Success.Should().BeTrue($"compile should succeed; error: {response.Error}");
         response.AssemblyLocation.Should().NotBeNullOrEmpty();
     }
@@ -90,11 +92,9 @@ public record Story
     [Fact]
     public async Task CompileFailsWhenSourceCodeIsInvalid()
     {
-        await CreateNodeType("Broken",
+        var response = await CreateAndCompile("Broken",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Broken>()" },
             ("code", "public record Broken { this is not valid C# }"));
-
-        var response = await CompilePath("Broken");
 
         response.Success.Should().BeFalse("compile should fail for invalid source");
         response.Error.Should().NotBeNullOrEmpty();
@@ -104,7 +104,7 @@ public record Story
     public async Task CompileWithMultipleSourceLocationsPullsInExternalCode()
     {
         // Post NodeType has Platform record under its Source.
-        await CreateNodeType("Post",
+        var postResponse = await CreateAndCompile("Post",
             new NodeTypeDefinition { Configuration = "config => config.WithContentType<Post>()" },
             ("code", @"
 public record Platform
@@ -115,9 +115,10 @@ public record Post
 {
     public string Id { get; init; } = string.Empty;
 }"));
+        postResponse.Success.Should().BeTrue($"Post should compile; error: {postResponse.Error}");
 
         // Profile NodeType references Platform via cross-NodeType Sources.
-        await CreateNodeType("Profile",
+        var response = await CreateAndCompile("Profile",
             new NodeTypeDefinition
             {
                 Configuration = "config => config.WithContentType<Profile>()",
@@ -133,8 +134,6 @@ public record Profile
     public string Id { get; init; } = string.Empty;
     public Platform? Platform { get; init; }
 }"));
-
-        var response = await CompilePath("Profile");
 
         response.Success.Should().BeTrue($"Profile should compile with cross-NodeType Sources; error: {response.Error}");
         response.AssemblyLocation.Should().NotBeNullOrEmpty();
