@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
@@ -34,10 +35,17 @@ public record GetCompilationPathRequest(string? Version = null)
 /// delegate; cross-silo consumers receive <c>null</c> and must reflect on
 /// <paramref name="AssemblyLocation"/> to recover it.
 /// </param>
+/// <param name="Log">
+/// Activity log of the compilation attempt — every executed source query, every
+/// matched Code path, the final compile result. Lets the caller surface
+/// "compile saw no source files" / "compilation succeeded" without re-running
+/// the pipeline.
+/// </param>
 public record GetCompilationPathResponse(
     bool Success,
     string? AssemblyLocation,
     string? Collection,
     string? Version,
     string? Error,
-    [property: JsonIgnore] Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration);
+    [property: JsonIgnore] Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration,
+    ActivityLog? Log = null);

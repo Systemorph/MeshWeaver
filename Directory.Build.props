@@ -17,10 +17,17 @@
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
-  <!-- Override vulnerable transitive dependency (CVE in 10.0.0).
+  <!-- Override vulnerable transitive dependencies. Forced as direct PackageReference so
+       the version pin in Directory.Packages.props actually applies (transitive deps
+       otherwise resolve to whatever a higher-up package requested).
+       - System.Security.Cryptography.Xml: CVE in 10.0.0 chain
+       - OpenTelemetry.Api: GHSA-g94r-2vxg-569j (1.13.1 vulnerable)
+       - Microsoft.AspNetCore.DataProtection: GHSA-9mv3-2cwr-p262 (10.0.0 vulnerable)
        Conditioned on net10.0 because netstandard2.0 projects (e.g. BusinessRules.Generator)
-       opt out of CPM and don't need this package. -->
+       opt out of CPM and don't need these packages. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <PackageReference Include="System.Security.Cryptography.Xml" />
+    <PackageReference Include="OpenTelemetry.Api" />
+    <PackageReference Include="Microsoft.AspNetCore.DataProtection" />
   </ItemGroup>
 </Project>
