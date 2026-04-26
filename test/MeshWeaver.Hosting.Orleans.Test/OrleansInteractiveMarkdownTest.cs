@@ -47,6 +47,7 @@ public class OrleansInteractiveMarkdownTest(ITestOutputHelper output) : TestBase
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
+        builder.Options.InitialSilosCount = 1;
         builder.AddSiloBuilderConfigurator<InteractiveMarkdownSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();

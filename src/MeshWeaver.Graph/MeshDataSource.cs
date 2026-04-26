@@ -61,7 +61,9 @@ public static class MeshDataSourceExtensions
                             ?? Observable.Return<object?>(null);
                     });
             })
+            .WithServices(services => services.AddSingleton<DeletedFlag>())
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
+            .WithInitialization(SubscribeToOwnDeletion)
             .WithNodeOperationHandlers()
             // Per-node-hub contract for resolving (assembly + HubConfiguration) of the
             // NodeType this hub is responsible for. Cheap on non-NodeType nodes — they
@@ -89,6 +91,17 @@ public static class MeshDataSourceExtensions
             if (delivery.Message is not GetDataRequest req
                 || req.Reference is not MeshNodeReference)
                 return await next.Invoke(delivery, ct);
+
+            // If our own node was deleted from persistence, short-circuit with null Data.
+            // The deletion subscription (SubscribeToOwnDeletion) flips a per-hub
+            // singleton flag when IDataChangeNotifier reports a deletion at our own
+            // path. Cheap to check (volatile bool); no storage round-trip.
+            var deleted = hub.ServiceProvider.GetService<DeletedFlag>();
+            if (deleted?.IsDeleted == true)
+            {
+                hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(delivery));
+                return delivery.Processed();
+            }
 
             var validators = hub.ServiceProvider.GetServices<INodeValidator>()
                 .Where(v => v.SupportedOperations.Count == 0 || v.SupportedOperations.Contains(NodeOperation.Read))
@@ -144,6 +157,34 @@ public static class MeshDataSourceExtensions
     public static MessageHubConfiguration AddMeshDataSource(this MessageHubConfiguration config)
     {
         return config.AddMeshDataSource(source => source);
+    }
+
+    /// <summary>
+    /// Per-hub flag flipped by <see cref="SubscribeToOwnDeletion"/> when this hub's
+    /// own MeshNode is deleted from persistence. Read by the read pipeline so post-
+    /// delete <see cref="MeshNodeReference"/> reads see <c>null</c> Data instead of
+    /// the workspace's stale cache.
+    /// </summary>
+    public sealed class DeletedFlag { public volatile bool IsDeleted; }
+
+    private static void SubscribeToOwnDeletion(IMessageHub hub)
+    {
+        var notifier = hub.ServiceProvider.GetService<IDataChangeNotifier>();
+        if (notifier == null)
+            return;
+        var flag = hub.ServiceProvider.GetService<DeletedFlag>();
+        if (flag == null)
+            return;
+        var ownPath = hub.Address.ToString();
+        var subscription = notifier.Subscribe(notification =>
+        {
+            if (notification.Kind != DataChangeKind.Deleted)
+                return;
+            if (!string.Equals(notification.Path, ownPath, StringComparison.OrdinalIgnoreCase))
+                return;
+            flag.IsDeleted = true;
+        });
+        hub.RegisterForDisposal(subscription);
     }
 
     /// <summary>
