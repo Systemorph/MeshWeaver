@@ -232,7 +232,7 @@ public class ObservableTopNExtensionsTests
             snapshots.Add,
             () => done.TrySetResult());
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         snapshots[^1].Should().Equal(1, 2, 3);
     }
@@ -243,16 +243,16 @@ public class ObservableTopNExtensionsTests
         var cancelled = false;
         var started = new TaskCompletionSource();
 
-        var sub = StallingSource(started, () => cancelled = true)
+        var sub = StallingSource(started, () => cancelled = true, TestContext.Current.CancellationToken)
             .ScanTopN(3, AscInt)
             .Subscribe(_ => { });
 
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         sub.Dispose();
 
         // Give the producer a moment to observe the cancellation.
         for (var i = 0; i < 50 && !cancelled; i++)
-            await Task.Delay(20);
+            await Task.Delay(20, TestContext.Current.CancellationToken);
 
         cancelled.Should().BeTrue();
     }
