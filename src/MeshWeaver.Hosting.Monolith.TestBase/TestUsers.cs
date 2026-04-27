@@ -85,12 +85,15 @@ public static class TestUsers
     }
 
     private static MeshNode CreateAccessNode(string ns, AccessAssignment assignment) =>
-        new(WellKnownUsers.Public + "_Access", ns.Length > 0 ? ns + "/_Access" : "")
+        // Root scope assignments live at "_Access" (not "") so SecurityService.Consume
+        // recognizes them as scope = "" (global). Empty Namespace would put them at
+        // path "Public_Access" with no scope mapping.
+        new(WellKnownUsers.Public + "_Access", ns.Length > 0 ? ns + "/_Access" : "_Access")
         {
             NodeType = "AccessAssignment",
             Name = "Public Access",
             Content = assignment,
-            MainNode = ns.Length > 0 ? ns : null!,
+            MainNode = ns.Length > 0 ? ns : "",
         };
 
     /// <summary>
