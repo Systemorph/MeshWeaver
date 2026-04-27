@@ -138,22 +138,13 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        // Get the node from the workspace stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
         // CombineLatest with permission stream — pure observable composition, no await.
-        return nodeStream.CombineLatest(
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
             PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
-            (nodes, permissions) =>
+            (node, permissions) =>
             {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-
-                // If user has no read permission, show access denied with request option
                 if (!permissions.HasFlag(Permission.Read))
                     return (UiControl?)BuildAccessDenied(hubPath);
-
                 var canEdit = permissions.HasFlag(Permission.Update);
                 return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
             });
@@ -666,14 +657,8 @@ public static class MeshNodeLayoutAreas
         // Get search term from query string (if present)
         var searchTerm = host.GetQueryStringParamValue("q")?.Trim();
 
-        // Get node stream to access node properties
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
+        return host.Workspace.GetMeshNodeStream().Select(node =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-
             // NodeType catalog mode is used when either:
             //  (a) the hub opts in via NodeTypeCatalogMode (e.g. AddNodeTypeView), or
             //  (b) the node itself is a NodeType instance (NodeType = "NodeType") —
