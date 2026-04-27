@@ -201,16 +201,18 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     }
 
     /// <summary>
-    /// Renders the Overview area for a comment (c2) that has NO replies.
-    /// Baseline test â€” should always work.
+    /// Renders the Overview area for a comment (c6) that has NO replies.
+    /// Baseline test â€” should always work. (c2 has replies in the sample data
+    /// even though the original test name suggested otherwise — c6 is the only
+    /// genuinely childless comment.)
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CommentWithoutReplies_Overview_ShouldRender()
     {
         var client = GetClient();
-        var commentAddress = new Address(DocPath + "/c2");
+        var commentAddress = new Address(DocPath + "/_Comment/c6");
 
-        Output.WriteLine("Initializing hub for comment c2 (no replies)...");
+        Output.WriteLine("Initializing hub for comment c6 (no replies)...");
         await client.Observe(new PingRequest(), o => o.WithTarget(commentAddress)).FirstAsync().ToTask();
         Output.WriteLine("Hub initialized.");
 
