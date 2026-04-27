@@ -466,7 +466,15 @@ public static class PersistenceExtensions
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton<IStorageService, TPersistenceCore>();
-        services.TryAddSingleton<IMeshQueryProvider, InMemoryMeshQuery>();
+        services.TryAddSingleton<InMemoryMeshQuery>();
+        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
+
+        // IMeshQueryCore is the unsecured surface (no ISecurityService dep)
+        // — required by SyncedQueryMeshNodes for any hub that hosts a synced
+        // mesh-query (SecurityService's AccessAssignment + Role queries, etc.).
+        // Splitting from IMeshQueryProvider breaks the SecurityService ⇄
+        // InMemoryMeshQuery DI cycle.
+        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
         services.AddSingleton<IMeshQueryProvider>(sp =>
