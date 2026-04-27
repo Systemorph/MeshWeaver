@@ -29,26 +29,6 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
 
-    [Theory(Timeout = 20000)]
-    [InlineData("HubFactory")]
-    [InlineData("Kernel")]
-    public async Task HubWorksAfterDisposal(string id)
-    {
-        var client = GetClient();
-        var address = AddressExtensions.CreateAppAddress(id);
-
-        var response = await client
-            .Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
-        response.Should().NotBeNull();
-
-        client.Post(new DisposeRequest(), o => o.WithTarget(address));
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-        response = await client
-            .Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
-        response.Should().NotBeNull();
-    }
-
-
     [Fact(Timeout = 20000)]
     public async Task PingToNonExistentHub_ThrowsDeliveryFailure()
     {

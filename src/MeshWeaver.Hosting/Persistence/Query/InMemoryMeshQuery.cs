@@ -641,8 +641,25 @@ internal class InMemoryMeshQuery(
         return default;
     }
 
+    /// <inheritdoc cref="IMeshQueryCore.ObserveQuery{T}"/>
+    IObservable<QueryResultChange<T>> IMeshQueryCore.ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+        => ObserveQueryInternal<T>(request, options, useSecurityFilter: false);
+
     /// <inheritdoc />
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
+        => ObserveQueryInternal<T>(request, options, useSecurityFilter: true);
+
+    /// <summary>
+    /// Shared ObserveQuery body. <paramref name="useSecurityFilter"/> selects between the
+    /// security-filtered <see cref="QueryAsync"/> (IMeshQueryProvider surface) and the raw
+    /// <see cref="QueryCoreAsync"/> (IMeshQueryCore surface). The latter is what
+    /// SecurityService consumes via SyncedQueryMeshNodes — it must NOT re-enter
+    /// ISecurityService for filtering, otherwise the DI container detects a cycle.
+    /// </summary>
+    private IObservable<QueryResultChange<T>> ObserveQueryInternal<T>(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        bool useSecurityFilter)
     {
         return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
         {
@@ -664,11 +681,14 @@ internal class InMemoryMeshQuery(
             // Track current result set for detecting changes
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
 
+            IAsyncEnumerable<object> QueryStream(CancellationToken token) =>
+                useSecurityFilter ? QueryAsync(request, options, token) : QueryCoreAsync(request, options, token);
+
             // Emit initial results
             try
             {
                 var initialItems = new List<T>();
-                await foreach (var item in QueryAsync(request, options, ct))
+                await foreach (var item in QueryStream(ct))
                 {
                     if (item is T typedItem)
                     {
@@ -720,7 +740,7 @@ internal class InMemoryMeshQuery(
                 {
                     try
                     {
-                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct);
+                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct, useSecurityFilter);
                     }
                     catch (Exception ex)
                     {
@@ -741,7 +761,8 @@ internal class InMemoryMeshQuery(
         ParsedQuery parsedQuery,
         Dictionary<string, T> currentItems,
         IObserver<QueryResultChange<T>> observer,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool useSecurityFilter)
     {
         var addedItems = new List<T>();
         var updatedItems = new List<T>();
@@ -752,9 +773,11 @@ internal class InMemoryMeshQuery(
             .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
 
-        // Re-query to get current matching items
+        // Re-query to get current matching items — same security flag the
+        // outer ObserveQuery was opened with.
         var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var item in QueryAsync(request, options, ct))
+        var queryStream = useSecurityFilter ? QueryAsync(request, options, ct) : QueryCoreAsync(request, options, ct);
+        await foreach (var item in queryStream)
         {
             if (item is T typedItem)
             {
