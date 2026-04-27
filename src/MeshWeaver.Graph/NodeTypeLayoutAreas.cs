@@ -38,15 +38,11 @@ public static class NodeTypeLayoutAreas
     private const string CodeNodesDataId = "codeNodes";
 
     /// <summary>
-    /// Gets the current MeshNode from the workspace stream.
+    /// Gets the OWN MeshNode of the layout host via the canonical
+    /// <c>MeshNodeReference</c> reducer (per Doc/Architecture/AsynchronousCalls.md).
     /// </summary>
     private static IObservable<MeshNode?> GetNodeStream(LayoutAreaHost host)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-        return nodeStream.Select(nodes => nodes.FirstOrDefault(n => n.Path == hubPath));
-    }
+        => host.Workspace.GetMeshNodeStream();
 
     /// <summary>
     /// Adds NodeType catalog views plus all standard node views (Settings, Files, Threads, Chat,
@@ -87,24 +83,9 @@ public static class NodeTypeLayoutAreas
     [Browsable(false)]
     public static IObservable<UiControl?> ListOverview(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        // Get the node from the workspace stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        // Map nodes and extract NodeTypeDefinition from Content
-        return nodeStream.Select(nodes =>
+        return host.Workspace.GetMeshNodeStream().Select(node =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-
-            // Extract NodeTypeDefinition from MeshNode.Content
-            NodeTypeDefinition? typeDef = null;
-            if (node?.Content != null)
-            {
-                typeDef = node.Content as NodeTypeDefinition;
-            }
-
+            var typeDef = node?.Content as NodeTypeDefinition;
             return host.BuildNodeTypeDetailsContent(node, typeDef);
         });
     }
@@ -929,8 +910,8 @@ public static class NodeTypeLayoutAreas
                     host.Stream.GetDataStream<string>(childrenQueryDataId).Take(1),
                     host.Stream.GetDataStream<string>(dependenciesDataId).Take(1),
                     host.Stream.GetDataStream<string>(configurationDataId).Take(1),
-                    (host.Workspace.GetStream<MeshNode>() ?? Observable.Return<MeshNode[]?>(null)).Take(1),
-                    (displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration, currentNodes) =>
+                    host.Workspace.GetMeshNodeStream().Take(1),
+                    (displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration, currentNode) =>
                     {
                         if (!int.TryParse(orderStr, out var order)) order = 0;
                         List<string>? dependencies = null;
@@ -946,8 +927,6 @@ public static class NodeTypeLayoutAreas
                             Dependencies = dependencies,
                             Configuration = string.IsNullOrWhiteSpace(configuration) ? null : configuration
                         };
-                        var hubPath = host.Hub.Address.ToString();
-                        var currentNode = currentNodes?.FirstOrDefault(n => n.Path == hubPath);
                         if (currentNode == null) return null;
                         return currentNode with
                         {
