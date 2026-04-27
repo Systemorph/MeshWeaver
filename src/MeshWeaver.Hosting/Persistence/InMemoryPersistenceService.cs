@@ -98,7 +98,6 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
     /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>;
     /// concrete-typed test code may keep using this Task-returning entry point.
     /// </summary>
-    [Obsolete("Use GetNode(path, options) which returns IObservable<MeshNode?>.")]
     public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
         => GetNodeAsyncCore(path, options, ct);
 
