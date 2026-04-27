@@ -171,14 +171,27 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
         Subject<QueryResultChange<MeshNode>> externalChanges)
     {
-        // Iterate over IEnumerable<IMeshQueryProvider> — GetRequiredService<>
-        // returns only the last-registered provider (typically
-        // StaticNodeQueryProvider, which completes after Initial), so runtime
-        // CreateNode / DeleteNode events never reach the synced collection.
-        // Unioning every provider gives us static seeds AND the
-        // changeNotifier-driven InMemoryMeshQuery / FileSystemMeshQuery /
-        // PostgreSqlMeshQuery surfaces required for runtime mutation
-        // propagation.
+        // Defer everything to subscribe-time: any DI resolution failure
+        // (missing IMeshQueryCore registration on this hub, etc.) becomes an
+        // OnError on the returned observable instead of a synchronous throw
+        // out of StreamProvider — the caller's subscription error handler
+        // (e.g. AccessControlPipeline's permission-check try/catch) sees it,
+        // never the StreamUpdates() / GetQuery() call site that triggered
+        // the build.
+        return Observable.Defer(() => BuildReadStreamCore(workspace, queries, pathSet, externalChanges));
+    }
+
+    private static IObservable<IEnumerable<MeshNode>> BuildReadStreamCore(
+        IWorkspace workspace,
+        IReadOnlyList<string> queries,
+        BehaviorSubject<ImmutableHashSet<string>> pathSet,
+        Subject<QueryResultChange<MeshNode>> externalChanges)
+    {
+        // Use IMeshQueryCore (the unsecured surface) — its implementation
+        // (InMemoryMeshQueryCore) does NOT take ISecurityService as a
+        // constructor dependency, so resolving it here can never re-enter
+        // SecurityService and create the DI cycle that previously
+        // stack-overflowed.
         //
         // UserId = WellKnownUsers.System bypasses the RLS read-validator chain
         // so the synced query stays infrastructure-level. Without this, a
@@ -186,17 +199,14 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // would recurse: the per-node read validator calls SecurityService
         // which subscribes back to this same stream → deadlock waiting for
         // its own Initial emission.
-        var providers = workspace.Hub.ServiceProvider
-            .GetServices<IMeshQueryProvider>()
-            .ToList();
+        var queryCore = workspace.Hub.ServiceProvider
+            .GetRequiredService<IMeshQueryCore>();
         var options = workspace.Hub.JsonSerializerOptions;
 
         IObservable<QueryResultChange<MeshNode>> ObserveOne(string query) =>
-            providers
-                .Select(p => p.ObserveQuery<MeshNode>(
-                    MeshQueryRequest.FromQuery(query, WellKnownUsers.System),
-                    options))
-                .Merge();
+            queryCore.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery(query, WellKnownUsers.System),
+                options);
 
         // Hub-level change-feed deletion fast-path: when ANY hub publishes a
         // delete via IMeshChangeFeed (the canonical post-delete dispatch in

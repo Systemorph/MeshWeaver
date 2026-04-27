@@ -8,6 +8,7 @@ using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -43,11 +44,6 @@ internal class SecurityService : ISecurityService
         { "Commenter", Role.Commenter },
         { "PlatformAdmin", Role.PlatformAdmin }
     };
-
-    // Custom-role replay surface — every save OnNexts onto the subject; readers
-    // subscribe and stay subscribed (built-in roles are always concatenated in
-    // front). The replay subject IS the cache; no per-key dictionary kept.
-    private readonly System.Reactive.Subjects.ReplaySubject<Role> _customRoles = new();
 
     // Static policies from IStaticNodeProvider (e.g., Doc, Agent, Role namespaces are read-only)
     private readonly Dictionary<string, PartitionAccessPolicy> _staticPolicies;
@@ -215,6 +211,7 @@ internal class SecurityService : ISecurityService
     }
 
     private const string AccessAssignmentQueryId = "$security-access-assignments";
+    private const string RoleQueryId = "$security-roles";
 
     /// <summary>
     /// Live AccessAssignment <see cref="MeshNode"/> collection backed by the
@@ -241,6 +238,44 @@ internal class SecurityService : ISecurityService
             .GetQuery(AccessAssignmentQueryId,
                 $"nodeType:{SecurityCollections.AccessAssignmentNodeType} scope:subtree")
             .Select(arr => arr.ToArray());
+    }
+
+    /// <summary>
+    /// Live <see cref="MeshNode"/> collection for every Role definition in the
+    /// mesh — both the built-in seeds from <see cref="RoleNodeType.AddRoleType"/>'s
+    /// <c>BuiltInRolesProvider</c> AND any custom Role nodes created at runtime.
+    /// Backed by the same workspace-scoped synced-query cache as the
+    /// AccessAssignment surface; runs with <see cref="WellKnownUsers.System"/>
+    /// identity (so the Role namespace's read-validators don't recurse back here).
+    /// Built-in roles still have a fast in-memory dictionary path
+    /// (<see cref="BuiltInRoles"/>) for the hot permission-evaluation loop —
+    /// the synced query is consulted only for non-built-in role IDs.
+    /// </summary>
+    private IObservable<MeshNode[]> ObserveAllRoleNodes()
+    {
+        var workspace = _hub.GetWorkspace();
+        return workspace
+            .GetQuery(RoleQueryId,
+                $"nodeType:{RoleNodeType.NodeType} scope:subtree")
+            .Select(arr => arr.ToArray());
+    }
+
+    private Role? DeserializeRole(MeshNode node)
+    {
+        if (node.Content is Role r)
+            return r;
+        if (node.Content is JsonElement je)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<Role>(je.GetRawText(), Options);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        return null;
     }
 
     /// <summary>
@@ -355,15 +390,49 @@ internal class SecurityService : ISecurityService
         if (BuiltInRoles.TryGetValue(roleId, out var builtIn))
             return Observable.Return<Role?>(builtIn);
 
-        // Hot, replayed view of the role — emits the latest snapshot and every
-        // subsequent SaveRole. No Take(1); subscribers stay subscribed.
-        return _customRoles
-            .Where(r => string.Equals(r.Id, roleId, StringComparison.Ordinal))
-            .Select(r => (Role?)r);
+        // Snapshot lookup of the synced Role collection — Take(1) so the
+        // Aggregate downstream in GetEffectivePermissions actually completes.
+        return ObserveAllRoleNodes()
+            .Take(1)
+            .Select(nodes =>
+            {
+                foreach (var node in nodes)
+                {
+                    var r = DeserializeRole(node);
+                    if (r != null && string.Equals(r.Id, roleId, StringComparison.Ordinal))
+                        return r;
+                }
+                return (Role?)null;
+            });
     }
 
     public IObservable<Role> GetRoles()
-        => BuiltInRoles.Values.ToObservable().Concat(_customRoles);
+    {
+        // Snapshot — built-in roles always present (in case the synced query
+        // hasn't surfaced their static MeshNodes yet), then any custom roles
+        // from the synced collection (de-duplicated by Id).
+        return ObserveAllRoleNodes()
+            .Take(1)
+            .SelectMany(nodes =>
+            {
+                var seen = ImmutableHashSet<string>.Empty;
+                var result = ImmutableList<Role>.Empty;
+                foreach (var br in BuiltInRoles.Values)
+                {
+                    seen = seen.Add(br.Id);
+                    result = result.Add(br);
+                }
+                foreach (var node in nodes)
+                {
+                    var r = DeserializeRole(node);
+                    if (r == null || seen.Contains(r.Id))
+                        continue;
+                    seen = seen.Add(r.Id);
+                    result = result.Add(r);
+                }
+                return result;
+            });
+    }
 
     #endregion
 
