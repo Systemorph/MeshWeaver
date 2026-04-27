@@ -154,7 +154,11 @@ internal class PersistenceService(
             {
                 if (node == null || securityService == null)
                     return Observable.Return(node);
+                // Take(1): HasReadAccess rides the live AccessAssignment synced
+                // query and is hot — without bounding it the surrounding
+                // SelectMany never completes for the single-node case.
                 return HasReadAccess(node, userId)
+                    .Take(1)
                     .Select(ok =>
                     {
                         if (ok)
@@ -169,14 +173,14 @@ internal class PersistenceService(
             .SelectMany(node =>
                 securityService == null
                     ? Observable.Return(node)
-                    : HasReadAccess(node, userId).Where(ok => ok).Select(_ => node));
+                    : HasReadAccess(node, userId).Take(1).Where(ok => ok).Select(_ => node));
 
     public IObservable<MeshNode> GetDescendantsSecure(string? parentPath, string? userId)
         => ObservableTopNExtensions.ToObservableSequence(core.GetDescendantsAsync(parentPath, Options))
             .SelectMany(node =>
                 securityService == null
                     ? Observable.Return(node)
-                    : HasReadAccess(node, userId).Where(ok => ok).Select(_ => node));
+                    : HasReadAccess(node, userId).Take(1).Where(ok => ok).Select(_ => node));
 
     #endregion
 }
