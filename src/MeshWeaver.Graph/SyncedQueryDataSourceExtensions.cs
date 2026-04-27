@@ -34,7 +34,15 @@ public static class SyncedQueryDataSourceExtensions
     /// </summary>
     private static readonly ConditionalWeakTable<IWorkspace, SyncedQueryRegistry> _registries = new();
 
-    private static SyncedQueryRegistry RegistryFor(IWorkspace workspace) =>
+    /// <summary>
+    /// Resolves the per-workspace synced-query registry — used internally by
+    /// <see cref="GetQuery(IWorkspace, object)"/> /
+    /// <see cref="WithMeshQuery"/> and by the framework's
+    /// <c>HandleDeleteNodeRequest</c> to walk every registered synced query
+    /// and route a synchronous <see cref="SyncedQueryMeshNodes.NotifyDeleted"/>
+    /// for each path the query owns.
+    /// </summary>
+    internal static SyncedQueryRegistry RegistryFor(IWorkspace workspace) =>
         _registries.GetValue(workspace, _ => new SyncedQueryRegistry());
 
 
@@ -102,8 +110,10 @@ public static class SyncedQueryDataSourceExtensions
         var typeSource = new SyncedQueryMeshNodes(ds.Workspace, ds.Id, query, collectionName);
         // Register in the workspace's lazy per-workspace registry so callers
         // can look it up later via workspace.GetQuery(id) — O(1) name-keyed
-        // lookup, no TypeSources iteration.
-        RegistryFor(ds.Workspace).Register(ds.Id, typeSource.StreamUpdates());
+        // lookup, no TypeSources iteration. Registering both the typesource
+        // and its cached stream lets the framework's delete handler walk
+        // every synced query and push direct NotifyDeleted events.
+        RegistryFor(ds.Workspace).Register(ds.Id, typeSource, typeSource.StreamUpdates());
         return ds.WithTypeSource(typeof(MeshNode), typeSource);
     }
 
@@ -152,7 +162,7 @@ public static class SyncedQueryDataSourceExtensions
 
         var typeSource = new SyncedQueryMeshNodes(workspace, id, queries);
         var observable = typeSource.StreamUpdates();
-        registry.Register(id, observable);
+        registry.Register(id, typeSource, observable);
         return observable;
     }
 }

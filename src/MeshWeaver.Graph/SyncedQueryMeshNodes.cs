@@ -74,6 +74,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         string? collectionName = null
     ) : this(workspace, dataSourceId, queries,
         new BehaviorSubject<ImmutableHashSet<string>>(ImmutableHashSet<string>.Empty),
+        new Subject<QueryResultChange<MeshNode>>(),
         collectionName)
     {
     }
@@ -83,16 +84,24 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         object dataSourceId,
         IReadOnlyList<string> queries,
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
+        Subject<QueryResultChange<MeshNode>> externalChanges,
         string? collectionName
     ) : base(workspace, dataSourceId,
-            ws => BuildReadStream(ws, queries, pathSet),
+            ws => BuildReadStream(ws, queries, pathSet, externalChanges),
             collectionName)
     {
         Queries = queries;
         _pathSet = pathSet;
+        _externalChanges = externalChanges;
     }
 
     private readonly BehaviorSubject<ImmutableHashSet<string>> _pathSet;
+
+    // Synchronous side-channel for synthetic Removed events pushed by the
+    // delete handler (see <see cref="NotifyDeleted"/>). Merged into the per-query
+    // upstream stream in <see cref="BuildReadStream"/> so the downstream Scan +
+    // _pathSet update treats them identically to upstream-driven Removed events.
+    private readonly Subject<QueryResultChange<MeshNode>> _externalChanges;
 
     /// <summary>The one-or-more mesh-query strings whose results union into this collection.</summary>
     public IReadOnlyList<string> Queries { get; }
@@ -107,6 +116,33 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
 
     /// <summary>True when <paramref name="path"/> is in this source's live unioned result set.</summary>
     public bool Owns(string path) => _pathSet.Value.Contains(path);
+
+    /// <summary>
+    /// Pushes a synthetic <see cref="QueryChangeType.Removed"/> event into this
+    /// source's pipeline. Callers should typically gate this on
+    /// <see cref="Owns"/> first to avoid emitting spurious removals for paths
+    /// that were never in the result set.
+    ///
+    /// <para>Used by the framework's delete handler as a synchronous reliability
+    /// path on top of the upstream change-notifier-driven Removed event:
+    /// the upstream path can be debounced, security-filtered, or stalled by
+    /// per-hub locks, which causes flaky in-memory delete propagation. A direct
+    /// notify here removes the path from the dictionary immediately, the
+    /// downstream <c>DistinctUntilChanged</c> de-duplicates if the upstream
+    /// later emits the same Removed event.</para>
+    /// </summary>
+    public void NotifyDeleted(string path, MeshNode? node = null)
+    {
+        if (string.IsNullOrEmpty(path))
+            return;
+        var item = node ?? new MeshNode(path);
+        _externalChanges.OnNext(new QueryResultChange<MeshNode>
+        {
+            ChangeType = QueryChangeType.Removed,
+            Items = new[] { item },
+            Timestamp = DateTimeOffset.UtcNow,
+        });
+    }
 
     /// <summary>
     /// Single-subscription pipeline: per-query mesh-query → fold every
@@ -132,7 +168,8 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     private static IObservable<IEnumerable<MeshNode>> BuildReadStream(
         IWorkspace workspace,
         IReadOnlyList<string> queries,
-        BehaviorSubject<ImmutableHashSet<string>> pathSet)
+        BehaviorSubject<ImmutableHashSet<string>> pathSet,
+        Subject<QueryResultChange<MeshNode>> externalChanges)
     {
         // Iterate over IEnumerable<IMeshQueryProvider> — GetRequiredService<>
         // returns only the last-registered provider (typically
@@ -161,9 +198,31 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                     options))
                 .Merge();
 
+        // Hub-level change-feed deletion fast-path: when ANY hub publishes a
+        // delete via IMeshChangeFeed (the canonical post-delete dispatch in
+        // <c>HandleDeleteNodeRequest</c>), translate it into a synthetic
+        // Removed event for the path-set Scan. Synchronous reliability path
+        // on top of the upstream IMeshQueryProvider.ObserveQuery's Removed
+        // event, which can be debounced/stalled by the persistence layer's
+        // change-notifier and security-filter chain.
+        var changeFeed = workspace.Hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        var feedRemovals = changeFeed is null
+            ? Observable.Empty<QueryResultChange<MeshNode>>()
+            : Observable.Create<QueryResultChange<MeshNode>>(observer =>
+                changeFeed.Subscribe(
+                    e => observer.OnNext(new QueryResultChange<MeshNode>
+                    {
+                        ChangeType = QueryChangeType.Removed,
+                        Items = new[] { new MeshNode(e.Path) },
+                        Timestamp = e.Timestamp,
+                    }),
+                    MeshChangeKind.Deleted));
+
         var changes = queries
             .Select(ObserveOne)
-            .Merge();
+            .Merge()
+            .Merge(externalChanges)
+            .Merge(feedRemovals);
 
         // Fold change deltas into a path → MeshNode dictionary.
         return changes
