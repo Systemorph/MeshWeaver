@@ -15,6 +15,7 @@ public class UserNodeTypePermissionTest
     {
         var config = new MessageHubConfiguration(null, new Address("User", "Alice"));
         var meshNode = UserNodeType.CreateMeshNode();
+        Assert.NotNull(meshNode.HubConfiguration);
         return meshNode.HubConfiguration(config);
     }
 
@@ -74,7 +75,7 @@ public class UserNodeTypePermissionTest
         // Path = "User/Alice" (derived from ns/id)
         var context = ReadContext("Alice", "User");
 
-        var result = await accessRule.HasAccessAsync(context, "bob");
+        var result = await accessRule.HasAccessAsync(context, "bob", TestContext.Current.CancellationToken);
         result.Should().BeTrue("any authenticated user can read a direct User node");
     }
 
@@ -87,10 +88,10 @@ public class UserNodeTypePermissionTest
 
         var context = ReadContext("Alice", "User");
 
-        var resultNull = await accessRule.HasAccessAsync(context, null);
+        var resultNull = await accessRule.HasAccessAsync(context, null, TestContext.Current.CancellationToken);
         resultNull.Should().BeFalse("unauthenticated user (null) should be denied");
 
-        var resultEmpty = await accessRule.HasAccessAsync(context, "");
+        var resultEmpty = await accessRule.HasAccessAsync(context, "", TestContext.Current.CancellationToken);
         resultEmpty.Should().BeFalse("unauthenticated user (empty) should be denied");
     }
 
@@ -104,7 +105,7 @@ public class UserNodeTypePermissionTest
         // Path = "User/Alice/thread1" (child node)
         var context = ReadContext("thread1", "User/Alice");
 
-        var result = await accessRule.HasAccessAsync(context, "bob");
+        var result = await accessRule.HasAccessAsync(context, "bob", TestContext.Current.CancellationToken);
         result.Should().BeFalse("child nodes (threads, activities) should not be publicly readable");
     }
 
@@ -117,7 +118,7 @@ public class UserNodeTypePermissionTest
 
         var context = UpdateContext("Alice", "User");
 
-        var result = await accessRule.HasAccessAsync(context, "Alice");
+        var result = await accessRule.HasAccessAsync(context, "Alice", TestContext.Current.CancellationToken);
         result.Should().BeTrue("users should be able to edit their own node");
     }
 
@@ -130,7 +131,7 @@ public class UserNodeTypePermissionTest
 
         var context = UpdateContext("Alice", "User");
 
-        var result = await accessRule.HasAccessAsync(context, "Bob");
+        var result = await accessRule.HasAccessAsync(context, "Bob", TestContext.Current.CancellationToken);
         result.Should().BeFalse("users should not be able to edit other users' nodes");
     }
 
