@@ -170,7 +170,14 @@ public static class NodeMenuItemsExtensions
         GetMenuContext(LayoutAreaHost host)
     {
         var hubPath = host.Hub.Address.ToString();
-        var ownNodeStream = host.Workspace.GetMeshNodeStream();
+
+        // Hubs without a MeshDataSource registered (e.g., temporary scratch hubs,
+        // hubs in startup before data context init, hubs past Started mid-dispose)
+        // don't have the MeshNodeReference reducer — GetMeshNodeStream() throws
+        // synchronously in those cases. Catch and emit a "no node" tuple so the
+        // menu still renders (header, breadcrumb) without an effective MeshNode.
+        var ownNodeStream = host.Workspace.GetMeshNodeStream()
+            .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
 
         var menuContext = ownNodeStream
             .SelectMany(own =>
