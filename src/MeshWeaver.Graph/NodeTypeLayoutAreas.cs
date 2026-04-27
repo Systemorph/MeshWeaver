@@ -929,7 +929,7 @@ public static class NodeTypeLayoutAreas
                     host.Stream.GetDataStream<string>(childrenQueryDataId).Take(1),
                     host.Stream.GetDataStream<string>(dependenciesDataId).Take(1),
                     host.Stream.GetDataStream<string>(configurationDataId).Take(1),
-                    host.Workspace.GetStream<MeshNode>()!.Take(1),
+                    (host.Workspace.GetStream<MeshNode>() ?? Observable.Return<MeshNode[]?>(null)).Take(1),
                     (displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration, currentNodes) =>
                     {
                         if (!int.TryParse(orderStr, out var order)) order = 0;
