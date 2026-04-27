@@ -134,10 +134,23 @@ public static class AccessControlPipeline
                         {
                             if (decided) return;
                             decided = true;
-                            // Permission lookup failed — let next process naturally so a
-                            // downstream handler can decide what to do (avoids stuck deliveries).
-                            logger?.LogWarning(ex, "AccessControlPipeline: permission check threw — falling through");
-                            _ = next.Invoke(delivery, ct);
+                            // Fail closed: a permission lookup that throws is treated as a
+                            // denial — post a DeliveryFailure so the caller observes a clean
+                            // Unauthorized rather than waiting for the request timeout (the
+                            // previous fall-through silently invoked next, which then hung
+                            // because downstream handlers expected a permission check to
+                            // have happened).
+                            var effectiveUser = userId ?? "(anonymous)";
+                            var message = $"Access denied: permission check failed for user '{effectiveUser}' on '{hubPath}' — {ex.Message}";
+                            logger?.LogWarning(ex, "AccessControlPipeline: {Message}", message);
+
+                            hub.Post(
+                                new DeliveryFailure(delivery)
+                                {
+                                    ErrorType = ErrorType.Unauthorized,
+                                    Message = message
+                                },
+                                o => o.ResponseFor(delivery));
                         },
                         () =>
                         {
