@@ -3,6 +3,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.FluentUI.AspNetCore.Components;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Components;
 
@@ -23,6 +24,9 @@ public partial class SearchBar : IAsyncDisposable
     [Inject]
     public INavigationService? NavigationService { get; set; }
 
+    [Inject]
+    public required IJSRuntime JSRuntime { get; set; }
+
     private SearchHub? _searchHub;
     private ElementReference inputRef;
     private int _inputKey;
@@ -41,12 +45,17 @@ public partial class SearchBar : IAsyncDisposable
         _searchHub = new SearchHub(Hub);
     }
 
-    public Task OnKeyDownAsync(FluentKeyCodeEventArgs? args)
+    public async Task OnKeyDownAsync(FluentKeyCodeEventArgs? args)
     {
         if (args is not null && args.Key == KeyCode.Slash)
-            _ = inputRef.FocusAsync();
-
-        return Task.CompletedTask;
+        {
+            var isEditing = await JSRuntime.InvokeAsync<bool>(
+                "eval",
+                "(() => { const el = document.activeElement; if (!el) return false; const tag = el.tagName; if (tag === 'TEXTAREA' || (tag === 'INPUT' && /^(text|search|url|email|tel|password)$/i.test(el.type))) return true; if (el.isContentEditable) return true; if (el.closest('.monaco-editor')) return true; return false; })()"
+            );
+            if (!isEditing)
+                _ = inputRef.FocusAsync();
+        }
     }
 
     /// <summary>

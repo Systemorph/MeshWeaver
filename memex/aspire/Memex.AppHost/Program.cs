@@ -4,17 +4,15 @@ using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Mode: "local" (default), "local-test", "local-prod", "test", "prod", "monolith"
-// Pass as command line argument: dotnet run -- --mode local-test
+// Mode: "local" (default), "test", "prod", "monolith"
+// Pass as command line argument: dotnet run -- --mode test
 //
 // Mode matrix:
 //   Mode        | PostgreSQL              | Blob Storage | Orleans    | Portal Name
 //   ----------- | ----------------------- | ------------ | ---------- | -----------
-//   local       | Docker pgvector (memex)      | Emulated     | Emulated   | memex-local
-//   local-test  | Azure (memex-test)           | Azure (meshweavermemextest) | Emulated   | memex-local
-//   local-prod  | Azure (memex)                | Azure (meshweavermemex)     | Emulated   | memex-local
-//   test        | Azure (memex-test)           | Azure (meshweavermemextest) | Azure      | memex-test
-//   prod        | Azure (memex)                | Azure (meshweavermemex)     | Azure      | memex-prod
+//   local       | Docker pgvector (memex) | Emulated     | Emulated   | memex-local
+//   test        | Azure (memex-test)      | Azure        | Azure      | memex-test
+//   prod        | Azure (memex)           | Azure        | Azure      | memex-prod
 //   monolith    | FileSystem (standalone) | —            | —          | memex-monolith
 //
 // Secrets: set locally via `dotnet user-secrets`, in CI/CD via GitHub secrets.
@@ -27,7 +25,8 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Parameters:embedding-model
 //   Parameters:microsoft-client-id
 //   Parameters:microsoft-client-secret
-//   Social:LinkedIn:ClientSecret               (LinkedIn publishing — client id is inlined above)
+//   Parameters:microsoft-tenant-id
+//   Parameters:linkedin-client-secret          (LinkedIn publishing — client id is inlined below)
 //
 // For local-test/local-prod, also set the connection string to the Azure PostgreSQL:
 //   ConnectionStrings:memex  (Azure PostgreSQL, bypassing provisioning)
@@ -40,6 +39,7 @@ if (mode == "monolith")
     // Standalone portal without Orleans or external infrastructure
     builder
         .AddProject<Projects.Memex_Portal_Monolith>("memex-monolith")
+        .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
         .WithExternalHttpEndpoints();
     builder.Build().Run();
     return;
@@ -50,16 +50,28 @@ if (mode == "monolith")
 // LLM API key (single Azure Foundry key for both Anthropic and OpenAI endpoints)
 var azureFoundryKey = builder.AddParameter("azure-foundry-key", secret: true);
 
-// Embedding configuration
-var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
-var embeddingKey = builder.AddParameter("embedding-key", secret: true);
-var embeddingModel = builder.AddParameter("embedding-model", secret: false);
-
-// Authentication
+// Authentication (Microsoft is required; Google is optional for local)
 var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
-var googleClientId = builder.AddParameter("google-client-id", secret: false);
-var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
+var microsoftTenantId = builder.AddParameter("microsoft-tenant-id", secret: false);
+
+// Embedding, Google auth, and custom domain (non-secret optional — ACA accepts empty env vars)
+var embeddingEndpoint = builder.AddParameter("embedding-endpoint", value: "", secret: false);
+var embeddingModel = builder.AddParameter("embedding-model", value: "", secret: false);
+var googleClientId = builder.AddParameter("google-client-id", value: "", secret: false);
+var customDomain = builder.AddParameter("custom-domain", value: "", secret: false);
+var certificateName = builder.AddParameter("certificate-name", value: "", secret: false);
+
+// Optional secrets/params: ACA rejects secrets with empty values; ConfigureCustomDomain
+// rejects empty hostnames. Read actual config values to guard optional registrations.
+var embeddingKeyValue = builder.Configuration["Parameters:embedding-key"] ?? "";
+var googleClientSecretValue = builder.Configuration["Parameters:google-client-secret"] ?? "";
+var linkedinClientSecretValue = builder.Configuration["Parameters:linkedin-client-secret"] ?? "";
+var customDomainValue = builder.Configuration["Parameters:custom-domain"] ?? "";
+IResourceBuilder<ParameterResource>? embeddingKey = string.IsNullOrEmpty(embeddingKeyValue)
+    ? null : builder.AddParameter("embedding-key", secret: true);
+IResourceBuilder<ParameterResource>? googleClientSecret = string.IsNullOrEmpty(googleClientSecretValue)
+    ? null : builder.AddParameter("google-client-secret", secret: true);
 
 // Social publishing — LinkedIn OAuth app used for publishing posts on behalf
 // of the signed-in user. Client Id is public (shown on the consent screen URL)
@@ -71,11 +83,8 @@ var googleClientSecret = builder.AddParameter("google-client-secret", secret: tr
 // "client_secret missing").
 //   dotnet user-secrets set "Parameters:linkedin-client-secret" "<value>" --project memex/aspire/Memex.AppHost
 const string LinkedInClientId = "780dsuvyxglmc4";
-var linkedinClientSecret = builder.AddParameter("linkedin-client-secret", secret: true);
-
-// --- Custom domain (for deployed modes) ---
-var customDomain = builder.AddParameter("custom-domain", secret: false);
-var certificateName = builder.AddParameter("certificate-name", secret: false);
+IResourceBuilder<ParameterResource>? linkedinClientSecret = string.IsNullOrEmpty(linkedinClientSecretValue)
+    ? null : builder.AddParameter("linkedin-client-secret", secret: true);
 
 // --- Infrastructure axes ---
 var isDeployed = mode is "test" or "prod";
@@ -142,9 +151,10 @@ var portal = builder
     .AddProject<Projects.Memex_Portal_Distributed>(isDeployed ? $"memex-{mode}" : "memex-local")
     .WithExternalHttpEndpoints()
     .WithReference(orleans)
+    // Local modes need Development environment for static web assets (_framework, _content)
+    .WithEnvironment("ASPNETCORE_ENVIRONMENT", isDeployed ? "Production" : "Development")
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
-    .WithEnvironment("Embedding__ApiKey", embeddingKey)
     .WithEnvironment("Embedding__Model", embeddingModel)
     // LLM: Anthropic (Azure Foundry Claude)
     .WithEnvironment("Anthropic__Endpoint", "https://s-meshweaver.services.ai.azure.com/anthropic/")
@@ -152,6 +162,7 @@ var portal = builder
     .WithEnvironment("Anthropic__Models__0", "claude-sonnet-4-6")
     .WithEnvironment("Anthropic__Models__1", "claude-opus-4-7")
     .WithEnvironment("Anthropic__Models__2", "claude-haiku-4-5")
+    .WithEnvironment("Anthropic__Order", "1")
     // Model tiers: map agent tiers to concrete models
     .WithEnvironment("ModelTier__Heavy", "claude-opus-4-7")
     .WithEnvironment("ModelTier__Standard", "claude-sonnet-4-6")
@@ -161,15 +172,21 @@ var portal = builder
     .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
     .WithEnvironment("AzureOpenAIS__Models__0", "gpt-5-mini")
     .WithEnvironment("AzureOpenAIS__Models__1", "gpt-5.4")
+    .WithEnvironment("AzureOpenAIS__Order", "2")
+    // LLM: Azure AI Foundry (multi-model inference endpoint)
+    .WithEnvironment("AzureAIS__Endpoint", "https://fy-meshweaver3-dev-swc-001.services.ai.azure.com/models")
+    .WithEnvironment("AzureAIS__ApiKey", azureFoundryKey)
+    .WithEnvironment("AzureAIS__Models__0", "gpt-5.4")
+    .WithEnvironment("AzureAIS__Models__1", "gpt-5.3-codex")
+    .WithEnvironment("AzureAIS__Models__2", "Mistral-Large-3")
+    .WithEnvironment("AzureAIS__Models__3", "DeepSeek-V3.2")
+    .WithEnvironment("AzureAIS__Order", "0")
     // Authentication
     .WithEnvironment("Authentication__EnableDevLogin", mode != "prod" ? "true" : "false")
     .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
+    .WithEnvironment("Authentication__Microsoft__TenantId", microsoftTenantId)
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
-    .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
-    // Social publishing (LinkedIn)
-    .WithEnvironment("Social__LinkedIn__ClientId", LinkedInClientId)
-    .WithEnvironment("Social__LinkedIn__ClientSecret", linkedinClientSecret)
     // NuGet cache for #r "nuget:..." directives (in-process restore via MeshWeaver.NuGet).
     .WithEnvironment("NUGET_PACKAGES", "/tmp/nuget-cache")
     // Wait for dependencies
@@ -179,13 +196,25 @@ var portal = builder
     .PublishAsAzureContainerApp((module, app) =>
     {
         app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
-        app.ConfigureCustomDomain(customDomain, certificateName);
+        if (!string.IsNullOrEmpty(customDomainValue))
+            app.ConfigureCustomDomain(customDomain, certificateName);
 
         // Scale: min 2 replicas (Orleans needs ≥2 for resilience), max 6 under load.
         // Each replica: 2 vCPU / 4Gi (50% of Consumption tier max 4 vCPU / 8Gi).
         app.Template.Scale.MinReplicas = 2;
         app.Template.Scale.MaxReplicas = 6;
     });
+
+// Optional secrets: only add as env vars when configured (ACA rejects empty secrets)
+if (embeddingKey is not null)
+    portal.WithEnvironment("Embedding__ApiKey", embeddingKey);
+if (googleClientSecret is not null)
+    portal.WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret);
+if (linkedinClientSecret is not null)
+{
+    portal.WithEnvironment("Social__LinkedIn__ClientId", LinkedInClientId);
+    portal.WithEnvironment("Social__LinkedIn__ClientSecret", linkedinClientSecret);
+}
 
 if (appInsights is not null)
     portal = portal.WithReference(appInsights);
@@ -251,14 +280,6 @@ if (useLocalDb)
 
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
-}
-else if (mode is "local-test" or "local-prod")
-{
-    // Use pre-configured connection string (set via dotnet user-secrets)
-    // to connect to existing Azure PostgreSQL without Aspire provisioning.
-    var db = builder.AddConnectionString("memex");
-    dbMigration.WithReference(db);
-    portal.WithReference(db);
 }
 else
 {

@@ -1,5 +1,5 @@
 ---
-NodeType: Markdown
+NodeType: Organization
 Name: Cornerstone
 Category: Insurance
 Description: Reinsurance pricing demo showcasing property risk management, geographic visualization, and Excel data import

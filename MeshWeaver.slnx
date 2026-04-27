@@ -150,6 +150,7 @@
     <Project Path="test/MeshWeaver.Persistence.Test/MeshWeaver.Persistence.Test.csproj" />
     <Project Path="test/MeshWeaver.Autocomplete.Test/MeshWeaver.Autocomplete.Test.csproj" />
     <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
+    <Project Path="test/Memex.Portal.Shared.Test/Memex.Portal.Shared.Test.csproj" />
   </Folder>
   <Project Path="test/MeshWeaver.MemexTemplate.Test/MeshWeaver.MemexTemplate.Test.csproj" />
   <Folder Name="/tools/">

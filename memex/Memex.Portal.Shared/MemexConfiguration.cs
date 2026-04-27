@@ -66,6 +66,9 @@ public static class MemexConfiguration
         // Trust forwarded headers from Azure Container Apps reverse proxy
         services.Configure<ForwardedHeadersOptions>(options =>
         {
+            options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
+                                     | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+                                     | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedHost;
             options.KnownIPNetworks.Clear();
             options.KnownProxies.Clear();
         });
@@ -335,10 +338,15 @@ public static class MemexConfiguration
                 // Each hub gets its own "content" collection pointing to a subdirectory
                 .ConfigureDefaultNodeHub(config =>
                 {
+                    // Declared before the if-block so it's available for both the "content"
+                    // collection mapping below and the "attachments" mapping further down.
+                    var nodePath = config.Address.ToString();
+
                     if (contentStorageConfig != null)
                     {
-                        var nodePath = config.Address.ToString();
-                        var contentSubdir = nodePath;
+                        // Scope static media (SVG, PNG, JPG) to a per-node subdirectory
+                        // so each hub serves only its own content files.
+                        var contentSubdir = $"content/{nodePath}";
                         // Combine with original BasePath for FileSystem; for AzureBlob, subdirectory is the blob prefix
                         var basePath = string.IsNullOrEmpty(contentStorageConfig.BasePath)
                             ? contentSubdir
@@ -355,6 +363,10 @@ public static class MemexConfiguration
                         };
                         config = config.AddContentCollection(_ => nodeContentConfig);
                     }
+
+                    // Map "attachments" to "storage" with per-node subdirectory
+                    // (needed by FutuRe and other samples that store datacube.csv, etc.)
+                    config = config.MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
 
                     return config
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
@@ -405,11 +417,9 @@ public static class MemexConfiguration
 
         // Forward headers from reverse proxy (Azure Container Apps) so OIDC
         // middleware constructs redirect URIs with the correct scheme and host.
-        app.UseForwardedHeaders(new ForwardedHeadersOptions
-        {
-            ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
-                             | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
-        });
+        // Always enabled: in production it reads X-Forwarded-* from the ACA proxy;
+        // in local dev it's a no-op since no proxy sets those headers.
+        app.UseForwardedHeaders();
 
         // `@/` is a markdown-authoring / autocomplete prefix — not a URL segment.
         // Authors occasionally leak `@/` into raw HTML hrefs or users paste broken links.

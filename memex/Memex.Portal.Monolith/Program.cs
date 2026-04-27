@@ -1,5 +1,6 @@
 ﻿using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
+using MeshWeaver.AI;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
