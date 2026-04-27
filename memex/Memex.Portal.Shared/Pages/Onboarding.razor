@@ -5,6 +5,7 @@
 @using MeshWeaver.Mesh.Security
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
+@using MeshWeaver.Hosting.Blazor
 @using Microsoft.Extensions.DependencyInjection
 @using System.Reactive.Linq
 @inject AccessService AccessService
@@ -12,99 +13,152 @@
 @inject IMeshService MeshQuery
 @inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
+@inject CircuitAccessHandler CircuitAccessHandler
 
 <PageTitle>Complete Your Profile - Memex Portal</PageTitle>
 
-<div class="onboarding-container">
-    <div class="onboarding-card">
-        <div class="onboarding-header">
-            <FluentIcon Value="@(new Icons.Regular.Size24.PersonAdd())" />
-            <h1>Complete Your Profile</h1>
-            <p class="onboarding-subtitle">Tell us a bit about yourself to get started</p>
+@if (!checkCompleted || existingUserFound)
+{
+    <div class="onboarding-container">
+        <div class="onboarding-card" style="text-align: center; padding: 3rem;">
+            <FluentProgressRing />
+            <p style="margin-top: 1rem;">@(existingUserFound ? "Redirecting..." : "Loading...")</p>
         </div>
-
-        @if (!string.IsNullOrEmpty(errorMessage))
-        {
-            <FluentMessageBar Intent="@MessageIntent.Error" Style="margin-bottom: 1rem;">
-                @errorMessage
-            </FluentMessageBar>
-        }
-
-        <EditForm Model="model" OnValidSubmit="HandleSubmit" FormName="onboarding">
-            <DataAnnotationsValidator />
-
-            <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
-                <FluentTextField Label="Full Name"
-                                 Required="true"
-                                 @bind-Value="model.FullName"
-                                 Placeholder="Your full name"
-                                 Style="width: 100%;" />
-
-                <FluentTextField Label="Username"
-                                 Required="true"
-                                 @bind-Value="model.Username"
-                                 Placeholder="Pick a username"
-                                 Style="width: 100%;" />
-
-                <FluentTextField Label="Email"
-                                 Required="true"
-                                 ReadOnly="@emailReadOnly"
-                                 @bind-Value="model.Email"
-                                 Placeholder="your@email.com"
-                                 Style="@($"width: 100%;{(emailReadOnly ? " opacity: 0.7;" : "")}")" />
-
-                <FluentTextArea Label="Bio"
-                                @bind-Value="model.Bio"
-                                Placeholder="A short bio about yourself (optional)"
-                                Rows="3"
-                                Style="width: 100%;" />
-
-                <FluentTextField Label="Role"
-                                 @bind-Value="model.Role"
-                                 Placeholder="e.g., Developer, Manager, Designer (optional)"
-                                 Style="width: 100%;" />
-
-                <FluentTextField Label="Avatar URL"
-                                 @bind-Value="model.AvatarUrl"
-                                 Placeholder="https://example.com/avatar.jpg (optional)"
-                                 Style="width: 100%;" />
-
-                <FluentButton Type="ButtonType.Submit"
-                              Appearance="Appearance.Accent"
-                              Style="width: 100%; margin-top: 8px;"
-                              Loading="isSaving"
-                              Disabled="isSaving">
-                    Get Started
-                </FluentButton>
-            </FluentStack>
-        </EditForm>
     </div>
-</div>
+}
+else
+{
+    <div class="onboarding-container">
+        <div class="onboarding-card">
+            <div class="onboarding-header">
+                <FluentIcon Value="@(new Icons.Regular.Size24.PersonAdd())" />
+                <h1>Complete Your Profile</h1>
+                <p class="onboarding-subtitle">Tell us a bit about yourself to get started</p>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <FluentMessageBar Intent="@MessageIntent.Error" Style="margin-bottom: 1rem;">
+                    @errorMessage
+                </FluentMessageBar>
+            }
+
+            <EditForm Model="model" OnValidSubmit="HandleSubmit" FormName="onboarding">
+                <DataAnnotationsValidator />
+
+                <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+                    <FluentTextField Label="Full Name"
+                                     Required="true"
+                                     @bind-Value="model.FullName"
+                                     Placeholder="Your full name"
+                                     Style="width: 100%;" />
+
+                    <FluentTextField Label="Username"
+                                     Required="true"
+                                     @bind-Value="model.Username"
+                                     Placeholder="Pick a username"
+                                     Style="width: 100%;" />
+
+                    <FluentTextField Label="Email"
+                                     Required="true"
+                                     ReadOnly="@emailReadOnly"
+                                     @bind-Value="model.Email"
+                                     Placeholder="your@email.com"
+                                     Style="@($"width: 100%;{(emailReadOnly ? " opacity: 0.7;" : "")}")" />
+
+                    <FluentTextArea Label="Bio"
+                                    @bind-Value="model.Bio"
+                                    Placeholder="A short bio about yourself (optional)"
+                                    Rows="3"
+                                    Style="width: 100%;" />
+
+                    <FluentTextField Label="Role"
+                                     @bind-Value="model.Role"
+                                     Placeholder="e.g., Developer, Manager, Designer (optional)"
+                                     Style="width: 100%;" />
+
+                    <FluentTextField Label="Avatar URL"
+                                     @bind-Value="model.AvatarUrl"
+                                     Placeholder="https://example.com/avatar.jpg (optional)"
+                                     Style="width: 100%;" />
+
+                    <FluentButton Type="ButtonType.Submit"
+                                  Appearance="Appearance.Accent"
+                                  Style="width: 100%; margin-top: 8px;"
+                                  Loading="isSaving"
+                                  Disabled="isSaving">
+                        Get Started
+                    </FluentButton>
+                </FluentStack>
+            </EditForm>
+        </div>
+    </div>
+}
 
 @code {
     private OnboardingModel model = new();
     private bool isSaving;
     private bool emailReadOnly;
     private string? errorMessage;
+    private bool checkCompleted;
+    private bool existingUserFound;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        var context = AccessService?.Context;
-        if (context != null)
+        var context = AccessService?.Context ?? AccessService?.CircuitContext;
+        if (context == null) { checkCompleted = true; return; }
+
+        model.Email = context.Email ?? "";
+
+        // Only lock the email field if we got a valid email from OAuth
+        emailReadOnly = !string.IsNullOrEmpty(context.Email) && context.Email.Contains('@');
+
+        // Pre-populate full name from OAuth claims
+        if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")
+            model.FullName = context.Name;
+
+        // Suggest username from email prefix (lowercase)
+        if (!string.IsNullOrEmpty(context.Email) && context.Email.Contains('@'))
+            model.Username = context.Email.Split('@')[0].ToLowerInvariant();
+
+        // Check if a User node already exists for this email (e.g., created via another portal)
+        if (!string.IsNullOrEmpty(context.Email))
         {
-            model.Email = context.Email ?? "";
+            using (AccessService!.ImpersonateAsHub(PortalApplication!.Hub))
+            {
+                var existing = await MeshQuery.QueryAsync<MeshNode>(
+                    $"nodeType:User namespace:User content.email:{context.Email} limit:1")
+                    .FirstOrDefaultAsync();
 
-            // Only lock the email field if we got a valid email from OAuth
-            emailReadOnly = !string.IsNullOrEmpty(context.Email) && context.Email.Contains('@');
-
-            // Pre-populate full name from OAuth claims
-            if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")
-                model.FullName = context.Name;
-
-            // Suggest username from email prefix (lowercase)
-            if (!string.IsNullOrEmpty(context.Email) && context.Email.Contains('@'))
-                model.Username = context.Email.Split('@')[0].ToLowerInvariant();
+                if (existing is { State: MeshNodeState.Active })
+                {
+                    // Adopt existing identity and skip onboarding
+                    var updated = (AccessService.Context ?? new AccessContext()) with
+                    {
+                        ObjectId = existing.Id,
+                        Name = existing.Name ?? existing.Id,
+                        Email = context.Email
+                    };
+                    AccessService.SetContext(updated);
+                    // Update the circuit-level context so subsequent client-side
+                    // navigations (e.g., to Index.razor) see the resolved identity.
+                    CircuitAccessHandler.UpdateUserContext(updated);
+                    existingUserFound = true;
+                    checkCompleted = true;
+                    return;
+                }
+            }
         }
+        checkCompleted = true;
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && existingUserFound)
+        {
+            Navigation.NavigateTo("/"); // Client-side only, no forceLoad
+        }
+        return Task.CompletedTask;
     }
 
     private async Task HandleSubmit()
@@ -120,7 +174,8 @@
 
         try
         {
-            var userId = AccessService?.Context?.ObjectId;
+            var userId = AccessService?.Context?.ObjectId
+                         ?? AccessService?.CircuitContext?.ObjectId;
             if (string.IsNullOrEmpty(userId))
             {
                 errorMessage = "Not authenticated. Please sign in again.";

@@ -107,7 +107,18 @@ Flexible security through `IDataValidator`:
 
 ---
 
-## 7. Deployment
+## 7. Project Templates
+
+Bootstrap a new MeshWeaver portal with a single command:
+- `dotnet new meshweaver-memex -o MyProject` scaffolds a complete solution
+- Monolith and distributed deployment modes included
+- Sample data, dev login users, and access control pre-configured
+
+[Read more: Project Templates](ProjectTemplates)
+
+---
+
+## 8. Deployment
 
 Deploy with **.NET Aspire** to Azure Container Apps:
 - Multiple modes: `local`, `local-test`, `local-prod`, `test`, `prod`, `monolith`
