@@ -46,9 +46,9 @@ Topics: Message-based communication, Actor model, UI streaming, AI agents, Data 
 
 **When a hub-handler test hangs or a message disappears: read `Doc/Architecture/DebuggingMessageFlow.md` first.** It tells you exactly which trace tags to grep, where to crank the log levels, and **why you should never rerun a hung test 2-3 times "to see"** — the framework already prints a structured `MESSAGE_FLOW:` trace at `Trace` level. Run once, grep, fix.
 
-### `No handler found for message type X` = type-registry mismatch
+### `type 'X' is not registered in this hub's TypeRegistry` = registry parity mismatch
 
-The handler is almost certainly registered. The message just arrived deserialized as a different CLR type (or `JsonElement`) because one side's `ITypeRegistry` is missing `WithType(typeof(X), nameof(X))`. Check sender + receiver registry parity first; for Orleans, that includes both silo hub config and any client/portal hub posting the request.
+The handler is registered, but the inbound `$type` discriminator doesn't resolve on the receiver — `MessageService.DeserializeDelivery` catches the JsonElement fallback and posts `DeliveryFailure` back, so the sender's `hub.Observe(...)` surfaces this through `OnError` (no silent drop, no hang). Fix: `WithType(typeof(X), nameof(X))` on the receiving hub. For Orleans, that's both the silo hub config and any client/portal hub posting the request. Full treatment: `Doc/Architecture/DebuggingMessageFlow.md` → "Type-registry mismatch".
 
 ### Request/response: `hub.Observe(...)` — NOT `RegisterCallback` / `AwaitResponse`
 
