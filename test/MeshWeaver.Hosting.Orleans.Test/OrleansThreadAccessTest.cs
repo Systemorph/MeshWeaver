@@ -44,7 +44,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"threadaccess-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"threadaccess-{name}-{Guid.NewGuid():N}", "TestUser");
 
     /// <summary>
     /// Creates a node via CreateNodeRequest, returns the created path.
@@ -99,23 +99,23 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
         var suffix = Guid.NewGuid().ToString("N")[..4];
-        // 1. Create Organization under User/Roland — this is where Roland has Admin
+        // 1. Create Organization under User/TestUser — this is where TestUser has Admin
         // (via the seeded Public_Access AccessAssignment with MainNode = "User"). A
         // root-level path like "TestOrg{suffix}" would fail the RLS Create check
         // because Public_Access is scoped to "User/*" only.
         var orgPath = await CreateNodeAsync(client,
-            new MeshNode($"TestOrg{suffix}", "User/Roland") { Name = "Test Organization", NodeType = "Markdown" },
-            "User/Roland", ct);
+            new MeshNode($"TestOrg{suffix}", "User/TestUser") { Name = "Test Organization", NodeType = "Markdown" },
+            "User/TestUser", ct);
         Output.WriteLine($"Organization created: {orgPath}");
 
         // 2. Create Markdown node under org
         var docPath = await CreateNodeAsync(client,
             new MeshNode($"TestDoc{suffix}", orgPath) { Name = "Test Document", NodeType = "Markdown" },
-            "User/Roland", ct);
+            "User/TestUser", ct);
         Output.WriteLine($"Document created: {docPath}");
 
         // 3. Create Thread under the document context (mimics side panel: CreateNodeRequest to doc address)
-        var threadNode = ThreadNodeType.BuildThreadNode(docPath, "Hello from test", "Roland");
+        var threadNode = ThreadNodeType.BuildThreadNode(docPath, "Hello from test", "TestUser");
         Output.WriteLine($"BuildThreadNode: id={threadNode.Id}, ns={threadNode.Namespace}, path={threadNode.Path}");
 
         // Target the document address â€” same as the side panel does
@@ -131,7 +131,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
     }
 
     /// <summary>
-    /// Create a thread under User/Roland (mimics side panel with no context).
+    /// Create a thread under User/TestUser (mimics side panel with no context).
     /// This should always work since the user has Admin on their own partition.
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -140,15 +140,15 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
 
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "User thread test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "User thread test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
 
-        threadPath.Should().StartWith("User/Roland/_Thread/");
+        threadPath.Should().StartWith("User/TestUser/_Thread/");
         Output.WriteLine($"Thread under user partition: {threadPath}");
 
         var content = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
         content.Should().NotBeNull();
-        content!.CreatedBy.Should().Be("Roland");
+        content!.CreatedBy.Should().Be("TestUser");
     }
 
     /// <summary>
@@ -162,8 +162,8 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var client = await GetClientAsync();
 
         // 1. Create thread under user (side panel default when no context)
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Chat flow test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Chat flow test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
         Output.WriteLine($"Thread: {threadPath}");
 
         // 2. Subscribe to message stream (like ThreadChatView does)
@@ -179,7 +179,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello from side panel test",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("AppendUserMessageRequest succeeded");
@@ -246,15 +246,15 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
         {
-            ObjectId = "Roland",
-            Name = "Roland Buergi",
-            Email = "rbuergi@systemorph.com"
+            ObjectId = "TestUser",
+            Name = "Test User",
+            Email = "testuser@meshweaver.io"
         });
         Output.WriteLine($"CircuitContext set: {accessService.CircuitContext?.ObjectId}");
 
         // 3. Create thread under user partition (like the GUI does)
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", $"Identity chain test {Guid.NewGuid():N}", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", $"Identity chain test {Guid.NewGuid():N}", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
         // 5. Subscribe to thread messages (like ThreadChatView subscribes)
@@ -273,7 +273,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello with identity",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             },
             o => o.WithTarget(new Address(threadPath)));
         submitDelivery.Should().NotBeNull("Post should return delivery");
@@ -300,7 +300,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
 
         Output.WriteLine($"AppendUserMessageRequest result: {responseError ?? "SUCCESS"}");
         responseError.Should().BeNull(
-            $"AppendUserMessageRequest should succeed with identity 'Roland'. Got: {responseError}");
+            $"AppendUserMessageRequest should succeed with identity 'TestUser'. Got: {responseError}");
 
         // 6. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
@@ -356,12 +356,12 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         // But first we need the thread to exist â€” create with a privileged context
         accessService.SetCircuitContext(new AccessContext
         {
-            ObjectId = "Roland",
-            Name = "Roland"
+            ObjectId = "TestUser",
+            Name = "TestUser"
         });
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland",
-            $"Error test {Guid.NewGuid():N}", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser",
+            $"Error test {Guid.NewGuid():N}", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
         // Switch to unprivileged user
@@ -378,7 +378,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Should be denied",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             },
             o => o.WithTarget(new Address(threadPath)));
         submitDelivery.Should().NotBeNull();
@@ -418,8 +418,8 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
 
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", $"Child node test {Guid.NewGuid():N}", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", $"Child node test {Guid.NewGuid():N}", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
 
         // Submit message to create child nodes
         var twoMessages = ObserveThreadMessages(client, threadPath)
@@ -430,7 +430,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test child nodes",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
@@ -470,7 +470,7 @@ public class RlsChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .AddRowLevelSecurity()
             // Pre-seed sample users and Public Admin access (same as MonolithMeshTestBase)
             .AddMeshNodes(
-                new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
+                new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
             .AddMeshNodes(PublicEditorAccess())
             .ConfigureServices(services =>
             {
@@ -481,9 +481,9 @@ public class RlsChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
     }
 
     /// <summary>
-    /// Creates Public Editor access on User partition.
-    /// Static access assignments are keyed by Namespace (scope),
-    /// so we use "User" not "User/_Access".
+    /// Creates Public Admin access on the User partition. The AccessAssignment
+    /// node MUST live in a namespace ending in "/_Access" — SecurityService.
+    /// ComputeScopeRoles drops anything else from the scope→roles map.
     /// </summary>
     private static MeshNode[] PublicEditorAccess()
     {
@@ -495,7 +495,7 @@ public class RlsChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
         };
         return
         [
-            new("Public_Access", "User")
+            new("Public_Access", "User/_Access")
             {
                 NodeType = "AccessAssignment",
                 Name = "Public Access",

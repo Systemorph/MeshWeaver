@@ -40,7 +40,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(output)
 {
-    private const string TestUserId = "Roland";
+    private const string TestUserId = "TestUser";
 
     private TestCluster Cluster { get; set; } = null!;
     private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
@@ -81,8 +81,8 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         accessService.SetCircuitContext(new AccessContext
         {
             ObjectId = TestUserId,
-            Name = "Roland Buergi",
-            Email = "rbuergi@systemorph.com"
+            Name = "Test User",
+            Email = "testuser@meshweaver.io"
         });
         await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
             .RegisterStreamAsync(client.Address, client.DeliverMessage);
@@ -316,9 +316,9 @@ public class MarkdownExportSiloConfigurator : ISiloConfigurator, IHostConfigurat
             .AddInMemoryPersistence()
             .ConfigurePortalMesh()
             .AddMarkdownExport()
-            .AddMeshNodes(new MeshNode(TestUserId, "User") { Name = "Roland", NodeType = "User" })
+            .AddMeshNodes(new MeshNode(TestUserId, "User") { Name = "TestUser", NodeType = "User" })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    private const string TestUserId = "Roland";
+    private const string TestUserId = "TestUser";
 }

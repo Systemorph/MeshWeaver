@@ -58,7 +58,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"nodechange-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"nodechange-{name}-{Guid.NewGuid():N}", "TestUser");
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
@@ -108,8 +108,8 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         var client = await GetClientAsync();
 
         // 1. Create thread â€” exactly like ThreadChatView.SendMessageAsync does
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "NodeChange propagation test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "NodeChange propagation test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
         // 2. Subscribe to messages (like ThreadChatView data-binding)
@@ -128,7 +128,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Create a doc and delegate updates to Executor",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("AppendUserMessageRequest succeeded â€” submission queued");
@@ -172,7 +172,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         // 7. Verify the Markdown node was created by the Create tool
         var meshService = Fixture.Cluster.Client.ServiceProvider.GetRequiredService<IMeshService>();
         var createdNodes = await meshService
-            .QueryAsync<MeshNode>("path:User/Roland/test-doc-nodechange", ct: ct)
+            .QueryAsync<MeshNode>("path:User/TestUser/test-doc-nodechange", ct: ct)
             .ToListAsync(ct);
         createdNodes.Should().ContainSingle("Create tool should have created the Markdown node");
         Output.WriteLine($"Created node: {createdNodes[0].Path}, name={createdNodes[0].Name}");
@@ -228,8 +228,8 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         var client = await GetClientAsync();
 
         // 1. Create and execute a thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Resubmit deadlock test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Resubmit deadlock test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
 
         var twoMessages = ObserveThreadMessages(client, threadPath)
             .Where(ids => ids.Count >= 2)
@@ -241,7 +241,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "First message",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var msgIds = await twoMessages;
@@ -327,7 +327,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
                 new Dictionary<string, object?>
                 {
                     ["agentName"] = "Worker",
-                    ["task"] = "Patch the node at User/Roland/test-doc-nodechange: set name to 'Updated by sub-agent'"
+                    ["task"] = "Patch the node at User/TestUser/test-doc-nodechange: set name to 'Updated by sub-agent'"
                 });
             return Task.FromResult(new ChatResponse(
                 new ChatMessage(ChatRole.Assistant, [delegateCall])));
@@ -339,7 +339,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
             var nodeJson = JsonSerializer.Serialize(new
             {
                 id = "test-doc-nodechange",
-                @namespace = "User/Roland",
+                @namespace = "User/TestUser",
                 nodeType = "Markdown",
                 name = "Test Doc for NodeChange",
                 content = "# Initial Content"
@@ -417,7 +417,7 @@ internal class PatchToolChatClient : IChatClient
             var patchCall = new FunctionCallContent("call_patch", "Patch",
                 new Dictionary<string, object?>
                 {
-                    ["path"] = "User/Roland/test-doc-nodechange",
+                    ["path"] = "User/TestUser/test-doc-nodechange",
                     ["fields"] = fieldsJson
                 });
             return Task.FromResult(new ChatResponse(
@@ -515,7 +515,7 @@ public class NodeChangePropagationSiloConfigurator : ISiloConfigurator, IHostCon
             .AddAI()
             .AddRowLevelSecurity()
             .AddMeshNodes(
-                new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
+                new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
             .AddMeshNodes(PublicEditorAccess())
             .ConfigureServices(services =>
                 services.AddSingleton<IChatClientFactory>(new NodeChangeTestChatClientFactory()))
@@ -532,7 +532,8 @@ public class NodeChangePropagationSiloConfigurator : ISiloConfigurator, IHostCon
         };
         return
         [
-            new("Public_Access", "User")
+            // Namespace must end in "/_Access" — see SecurityService.ComputeScopeRoles.
+            new("Public_Access", "User/_Access")
             {
                 NodeType = "AccessAssignment",
                 Name = "Public Access",

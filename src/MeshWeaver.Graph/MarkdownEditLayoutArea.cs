@@ -29,15 +29,11 @@ public static class MarkdownEditLayoutArea
         var hubPath = host.Hub.Address.ToString();
         var hubAddress = host.Hub.Address;
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-            ?? Observable.Return<MeshNode[]?>(null);
-
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("height: calc(100vh - 100px); display: flex; flex-direction: column;")
-            .WithView((h, ctx) => nodeStream.Take(1).Select(nodes =>
+            .WithView((h, ctx) => host.Workspace.GetMeshNodeStream().Take(1).Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
                 var content = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
                 return BuildEditContent(host, node, hubPath, hubAddress, content, trackChanges);
             }));

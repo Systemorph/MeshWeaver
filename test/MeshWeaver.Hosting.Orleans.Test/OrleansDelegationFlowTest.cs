@@ -82,9 +82,9 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
         {
-            ObjectId = "Roland",
-            Name = "Roland Buergi",
-            Email = "rbuergi@systemorph.com"
+            ObjectId = "TestUser",
+            Name = "Test User",
+            Email = "testuser@meshweaver.io"
         });
         await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
             .RegisterStreamAsync(client.Address, client.DeliverMessage);
@@ -111,8 +111,8 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
         var client = await GetClientAsync();
 
         // Create a thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Delegation flow test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Delegation flow test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
         Output.WriteLine($"Thread: {threadPath}");
 
         // Subscribe to thread messages
@@ -135,7 +135,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(outp
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Please delegate this task",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("AppendUserMessageRequest succeeded");
@@ -298,27 +298,32 @@ public class DelegationSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigurePortalMesh()
             .AddRowLevelSecurity()
             .AddMeshNodes(
-                new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
-            .AddMeshNodes(PublicEditorAccess())
+                new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
+            .AddMeshNodes(TestUserAdminAccess())
             .ConfigureServices(services =>
                 services.AddSingleton<IChatClientFactory>(new DelegationToolFakeChatClientFactory()))
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    private static MeshNode[] PublicEditorAccess()
+    // SecurityService.ComputeScopeRoles requires AccessAssignment nodes to live
+    // in a namespace ending in "/_Access" — anything else is silently dropped.
+    // Grants Admin to "TestUser" specifically (not Public) so that negative tests
+    // using a different user identity still observe denials (Public→Admin would
+    // be union-merged into every authenticated user's effective permissions).
+    private static MeshNode[] TestUserAdminAccess()
     {
         var assignment = new AccessAssignment
         {
-            AccessObject = "Public",
-            DisplayName = "Public",
+            AccessObject = "TestUser",
+            DisplayName = "Test User",
             Roles = [new RoleAssignment { Role = "Admin" }]
         };
         return
         [
-            new("Public_Access", "User")
+            new("TestUser_Access", "User/_Access")
             {
                 NodeType = "AccessAssignment",
-                Name = "Public Access",
+                Name = "TestUser Access",
                 Content = assignment,
                 MainNode = "User",
             }

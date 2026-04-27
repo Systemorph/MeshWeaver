@@ -83,7 +83,7 @@ public class SharedOrleansFixture : IAsyncLifetime
     /// at test teardown so its routing registrations on the shared cluster
     /// (client + silo mesh) and the hub itself are released.
     /// </summary>
-    public async Task<IMessageHub> GetClientAsync(string clientId, string userId = "Roland")
+    public async Task<IMessageHub> GetClientAsync(string clientId, string userId = "TestUser")
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", clientId),
@@ -231,7 +231,7 @@ internal class SwappableChatClientFactory : IChatClientFactory
 
 /// <summary>
 /// Production-like silo: Graph + AI + RLS + memory persistence.
-/// Pre-seeds Roland user, public access policy and chat history via
+/// Pre-seeds TestUser user, public access policy and chat history via
 /// <see cref="OrleansTestSeedProvider"/> (an <see cref="IStaticNodeProvider"/>)
 /// so the seeds are an immutable activation fallback rather than an initial
 /// snapshot that tests could mutate or rewrite via persistence.

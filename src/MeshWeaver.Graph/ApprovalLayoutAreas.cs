@@ -39,18 +39,11 @@ public static class ApprovalLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.ObjectId ?? "";
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildOverview(host, node, currentUser);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => (UiControl?)BuildOverview(host, node, currentUser));
     }
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string currentUser)
@@ -205,12 +198,9 @@ public static class ApprovalLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.ObjectId ?? "";
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return Controls.Stack.WithView((h, c) => nodeStream.Select(nodes =>
+        return Controls.Stack.WithView((h, c) => host.Workspace.GetMeshNodeStream()
+            .Select(node =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             if (node?.Content is Approval approval)
             {
                 var card = Controls.Stack.WithStyle("padding: 8px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; gap: 4px;");

@@ -41,7 +41,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"autoexec-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"autoexec-{name}-{Guid.NewGuid():N}", "TestUser");
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
@@ -74,13 +74,13 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
 
             // Build thread with pre-populated messages (auto-execute on activation)
             var (threadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-                "User/Roland", "Hello Orleans auto-execute!",
-                createdBy: "Roland", agentName: "Orchestrator");
+                "User/TestUser", "Hello Orleans auto-execute!",
+                createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
             Output.WriteLine($"Thread: {threadPath}, user={userMsgId}, response={responseMsgId}");
 
             // Create the thread â€” AutoExecutePendingMessage should fire on grain activation
-            var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
+            var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
             createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
             Output.WriteLine("Thread created, waiting for execution...");
 
@@ -134,12 +134,12 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
             var client = await GetClientAsync();
 
             var (threadNode, _, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-                "User/Roland", "Test routing to response grain",
-                createdBy: "Roland", agentName: "Orchestrator");
+                "User/TestUser", "Test routing to response grain",
+                createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
             var responsePath = $"{threadPath}/{responseMsgId}";
 
-            await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
+            await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
 
             // Poll for response cell to have final text (not empty, not "Allocating agent...")
             for (var i = 0; i < 60; i++)
