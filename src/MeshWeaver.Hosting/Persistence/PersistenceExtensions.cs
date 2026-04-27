@@ -273,7 +273,12 @@ public static class PersistenceExtensions
         services.AddSingleton(persistenceServiceCore);
         services.TryAddSingleton<InMemoryMeshQuery>();
         services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
-        services.TryAddSingleton<IMeshQueryCore>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
+        // IMeshQueryCore is the unsecured surface used by infrastructure
+        // (login, NodeTypeService, SecurityService's own AccessAssignment seed
+        // reads). Resolves to InMemoryMeshQueryCore — a class that does NOT
+        // depend on ISecurityService, so requesting IMeshQueryCore can never
+        // re-enter SecurityService and create a DI cycle.
+        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
         services.AddSingleton<IMeshQueryProvider>(sp =>

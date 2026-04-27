@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -133,13 +134,35 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         IReadOnlyList<string> queries,
         BehaviorSubject<ImmutableHashSet<string>> pathSet)
     {
-        var provider = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQueryProvider>();
+        // Iterate over IEnumerable<IMeshQueryProvider> — GetRequiredService<>
+        // returns only the last-registered provider (typically
+        // StaticNodeQueryProvider, which completes after Initial), so runtime
+        // CreateNode / DeleteNode events never reach the synced collection.
+        // Unioning every provider gives us static seeds AND the
+        // changeNotifier-driven InMemoryMeshQuery / FileSystemMeshQuery /
+        // PostgreSqlMeshQuery surfaces required for runtime mutation
+        // propagation.
+        //
+        // UserId = WellKnownUsers.System bypasses the RLS read-validator chain
+        // so the synced query stays infrastructure-level. Without this, a
+        // SecurityService-driven synced query for `nodeType:AccessAssignment`
+        // would recurse: the per-node read validator calls SecurityService
+        // which subscribes back to this same stream → deadlock waiting for
+        // its own Initial emission.
+        var providers = workspace.Hub.ServiceProvider
+            .GetServices<IMeshQueryProvider>()
+            .ToList();
+        var options = workspace.Hub.JsonSerializerOptions;
 
-        // Merge all per-query observables into a single change stream.
+        IObservable<QueryResultChange<MeshNode>> ObserveOne(string query) =>
+            providers
+                .Select(p => p.ObserveQuery<MeshNode>(
+                    MeshQueryRequest.FromQuery(query, WellKnownUsers.System),
+                    options))
+                .Merge();
+
         var changes = queries
-            .Select(query => provider.ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery(query),
-                workspace.Hub.JsonSerializerOptions))
+            .Select(ObserveOne)
             .Merge();
 
         // Fold change deltas into a path → MeshNode dictionary.

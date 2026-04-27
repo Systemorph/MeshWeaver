@@ -10,6 +10,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Xunit;
@@ -262,5 +263,53 @@ public class SyncedQueryTest(ITestOutputHelper output)
         var observableB = Mesh.GetWorkspace().GetQuery("$share-test");
         ReferenceEquals(observableA, observableB).Should().BeTrue(
             "registry hands back the same observable for the same name");
+    }
+
+    /// <summary>
+    /// AccessAssignment-specific delete behaviour: a synced collection
+    /// scoped to <c>nodeType:AccessAssignment</c> must surface the Removed
+    /// event when an AccessAssignment <see cref="MeshNode"/> is deleted via
+    /// <see cref="IMeshService.DeleteNode"/>.
+    ///
+    /// <para>This is the exact pipeline that
+    /// <see cref="MeshWeaver.Hosting.Security.SecurityService"/> rides for
+    /// permission evaluation; the in-memory test base wires the same
+    /// <see cref="MeshWeaver.Hosting.Persistence.InMemoryPersistenceService"/>
+    /// + change-notifier setup that production uses for runtime CreateNode /
+    /// DeleteNode of access assignments.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task DeleteAccessAssignment_RemovesFromSyncedCollection()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Synced query that mirrors SecurityService.ObserveAllMeshNodes:
+        // global subtree scope, filtered by NodeType=AccessAssignment.
+        var observable = Mesh.GetWorkspace().GetQuery(
+            "$access-assignment-delete-test",
+            $"nodeType:{SecurityCollections.AccessAssignmentNodeType} scope:subtree");
+
+        var collection = observable.Replay(1).RefCount();
+        using var keepAlive = collection.Subscribe();
+
+        // Create the assignment via the runtime CreateNode path — same path
+        // the AccessAssignmentTests deny tests exercise.
+        var assignment = AssignmentNodeFactory.UserRole(
+            "DeleteTestUser", "Editor", "DeleteTestScope");
+        await NodeFactory.CreateNode(assignment).FirstAsync().ToTask(ct);
+
+        var assignmentPath = assignment.Path;
+
+        // Wait for the Added event to surface.
+        await collection
+            .Where(arr => arr.Any(n => n.Path == assignmentPath))
+            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
+
+        // Delete it and assert the synced collection drops the path.
+        await NodeFactory.DeleteNode(assignmentPath).FirstAsync().ToTask(ct);
+
+        await collection
+            .Where(arr => arr.All(n => n.Path != assignmentPath))
+            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
     }
 }

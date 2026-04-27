@@ -52,9 +52,9 @@ internal class SecurityService : ISecurityService
     // Static policies from IStaticNodeProvider (e.g., Doc, Agent, Role namespaces are read-only)
     private readonly Dictionary<string, PartitionAccessPolicy> _staticPolicies;
 
-    // (AccessAssignments are no longer captured here — the synced workspace
-    // query in ObserveAllMeshNodes() folds in static seeds AND runtime
-    // CreateNode / UpdateNode / DeleteNode events.)
+    // Static access assignments from IStaticNodeProvider and MeshConfiguration
+    // Keyed by namespace (scope), value is list of AccessAssignment nodes at that scope
+    private readonly Dictionary<string, List<MeshNode>> _staticAccessAssignments;
 
     public SecurityService(
         AccessService accessService,
@@ -71,12 +71,25 @@ internal class SecurityService : ISecurityService
             .SelectMany(p => p.GetStaticNodes())
             .ToList();
 
-        // PartitionAccessPolicy stays a constructor-captured snapshot — there's
-        // no runtime mutation surface for it yet. Last-wins on duplicate namespaces.
+        // Also include AccessAssignment nodes from MeshConfiguration (e.g., PublicAdminAccess)
+        if (meshConfiguration != null)
+        {
+            allStaticNodes.AddRange(
+                meshConfiguration.Nodes.Values
+                    .Where(n => n.NodeType == "AccessAssignment"));
+        }
+
+        // Collect PartitionAccessPolicy nodes from static providers (last-wins for duplicate namespaces)
         _staticPolicies = allStaticNodes
             .Where(n => n.NodeType == "PartitionAccessPolicy" && n.Id == "_Policy" && n.Content is PartitionAccessPolicy)
             .GroupBy(n => n.Namespace ?? "")
             .ToDictionary(g => g.Key, g => (PartitionAccessPolicy)g.Last().Content!);
+
+        // Collect AccessAssignment nodes keyed by their parent namespace (scope)
+        _staticAccessAssignments = allStaticNodes
+            .Where(n => n.NodeType == "AccessAssignment" && n.Content != null)
+            .GroupBy(n => n.Namespace ?? "")
+            .ToDictionary(g => g.Key, g => g.ToList());
     }
 
     private JsonSerializerOptions Options => _hub.JsonSerializerOptions;
@@ -156,6 +169,9 @@ internal class SecurityService : ISecurityService
 
                 foreach (var node in allNodes)
                     Consume(node);
+                foreach (var (_, list) in _staticAccessAssignments)
+                    foreach (var node in list)
+                        Consume(node);
 
                 // Add claim-based roles from AccessContext.
                 var context = _accessService.Context ?? _accessService.CircuitContext;
@@ -202,13 +218,21 @@ internal class SecurityService : ISecurityService
 
     /// <summary>
     /// Live AccessAssignment <see cref="MeshNode"/> collection backed by the
-    /// workspace's synced mesh-query
-    /// (<see cref="SyncedQueryDataSourceExtensions.GetQuery(IWorkspace, object, string[])"/>).
-    /// Get-or-create on first call; subsequent reads on this hub share the
-    /// cached observable via the per-workspace registry. Static seeds AND
-    /// runtime CreateNode / UpdateNode / DeleteNode of an AccessAssignment
-    /// surface here automatically (Initial / Added / Updated / Removed
-    /// folded into a path → MeshNode dictionary upstream).
+    /// workspace's synced mesh-query (auto-registered on first read via
+    /// <see cref="SyncedQueryDataSourceExtensions.GetQuery(IWorkspace, object, string)"/>).
+    /// Hot, replayed observable — every subscriber sees the current snapshot
+    /// on subscribe and every subsequent <c>Initial</c> / <c>Added</c> /
+    /// <c>Updated</c> / <c>Removed</c> delta as the underlying query
+    /// result-set evolves. Static seeds folded in separately via
+    /// <c>_staticAccessAssignments</c>.
+    ///
+    /// <para>The recursion that previously made this dangerous (synced query
+    /// → IMeshQueryProvider → InMemoryMeshQuery's QueryAsync → RlsNodeValidator
+    /// → SecurityService → here) is now broken at the validator: SyncedQueryMeshNodes
+    /// runs the upstream <see cref="IMeshQueryProvider.ObserveQuery"/> call
+    /// with <see cref="WellKnownUsers.System"/>, and
+    /// <c>RlsNodeValidator.Validate</c> short-circuits to <c>Valid</c> for
+    /// that identity. No re-entrant call back into this method.</para>
     /// </summary>
     private IObservable<MeshNode[]> ObserveAllMeshNodes()
     {
@@ -217,6 +241,47 @@ internal class SecurityService : ISecurityService
             .GetQuery(AccessAssignmentQueryId,
                 $"nodeType:{SecurityCollections.AccessAssignmentNodeType} scope:subtree")
             .Select(arr => arr.ToArray());
+    }
+
+    /// <summary>
+    /// Walks the scope hierarchy and gathers every role ID assigned to
+    /// <paramref name="userId"/> in the in-memory static collections, plus the
+    /// accumulated permission cap from static policies. Synchronous over
+    /// in-memory state — no I/O. Dynamic assignments need synced collections
+    /// (separate refactor).
+    /// </summary>
+    private (System.Collections.Immutable.ImmutableHashSet<string> RoleIds, Permission Cap)
+        CollectStaticRoleIds(string nodePath, string userId)
+    {
+        var roleIds = System.Collections.Immutable.ImmutableHashSet<string>.Empty;
+        var cap = Permission.All;
+
+        foreach (var scope in GetScopeHierarchy(nodePath))
+        {
+            if (_staticPolicies.TryGetValue(scope, out var staticPolicy))
+            {
+                if (staticPolicy.BreaksInheritance)
+                    roleIds = System.Collections.Immutable.ImmutableHashSet<string>.Empty;
+                cap &= staticPolicy.GetPermissionCap();
+            }
+
+            if (_staticAccessAssignments.TryGetValue(scope, out var staticAssignmentNodes))
+            {
+                foreach (var staticNode in staticAssignmentNodes)
+                {
+                    var staticAssignment = DeserializeAssignment(staticNode);
+                    if (staticAssignment == null || staticAssignment.AccessObject != userId)
+                        continue;
+                    foreach (var ra in staticAssignment.Roles)
+                    {
+                        if (string.IsNullOrEmpty(ra.Role) || ra.Denied)
+                            continue;
+                        roleIds = roleIds.Add(ra.Role);
+                    }
+                }
+            }
+        }
+        return (roleIds, cap);
     }
 
     /// <summary>
