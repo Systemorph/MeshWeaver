@@ -125,13 +125,10 @@ public static class ThreadLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        // Node stream — drives the observable title and chat control context
-        var stream = host.Workspace.GetStream<MeshNode>();
-
+        // OWN MeshNode stream — drives the observable title and chat control context.
         // Push ThreadViewModel to data section — contains all thread state for the Blazor view.
-        var vmStream = stream!.Select(nodes =>
+        var vmStream = host.Workspace.GetMeshNodeStream().Select(node =>
         {
-            var node = nodes!.First(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
             var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
             var contextDisplayName = node?.MainNode != node?.Path
@@ -152,12 +149,10 @@ public static class ThreadLayoutAreas
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
-        // Push title to data section — data-bound, no observable control rebuild
-        var titleStream = stream!.Select(nodes =>
-        {
-            var node = nodes!.First(n => n.Path == hubPath);
-            return GetThreadTitle(node);
-        }).DistinctUntilChanged();
+        // Push title to data section — data-bound, no observable control rebuild.
+        var titleStream = host.Workspace.GetMeshNodeStream()
+            .Select(GetThreadTitle)
+            .DistinctUntilChanged();
         host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
 
         // Push context link HTML to data section
@@ -205,11 +200,10 @@ public static class ThreadLayoutAreas
     public static UiControl? ThreadChatView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var stream = host.Workspace.GetStream<MeshNode>();
+        var ownNodeStream = host.Workspace.GetMeshNodeStream();
 
-        var vmStream = stream!.Select(nodes =>
+        var vmStream = ownNodeStream.Select(node =>
         {
-            var node = nodes!.First(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
             var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
             var contextDisplayName = node?.MainNode != node?.Path
@@ -230,12 +224,10 @@ public static class ThreadLayoutAreas
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
-        // Push title to data section so the side panel header can read it
-        var titleStream = stream!.Select(nodes =>
-        {
-            var node = nodes!.First(n => n.Path == hubPath);
-            return GetThreadTitle(node);
-        }).DistinctUntilChanged();
+        // Push title to data section so the side panel header can read it.
+        var titleStream = ownNodeStream
+            .Select(GetThreadTitle)
+            .DistinctUntilChanged();
         host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
 
         return new ThreadChatControl()
@@ -252,12 +244,9 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> ThreadProgressView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var stream = host.Workspace.GetStream<MeshNode>();
-
-        return stream!
-            .Select(nodes =>
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node =>
             {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
                 var thread = node?.Content as MeshThread;
                 if (thread == null) return (UiControl?)null;
 
@@ -286,15 +275,13 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> StreamingView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var stream = host.Workspace.GetStream<MeshNode>();
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.StreamingView");
-        logger?.LogDebug("[StreamingView] SUBSCRIBE hub={Hub} streamNull={StreamNull}", hubPath, stream is null);
+        logger?.LogDebug("[StreamingView] SUBSCRIBE hub={Hub}", hubPath);
 
-        return stream!
-            .Select(nodes =>
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node =>
             {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
                 var thread = node?.Content as MeshThread;
                 return (IsExecuting: thread?.IsExecuting ?? false, thread?.ActiveMessageId);
             })
