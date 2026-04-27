@@ -106,6 +106,11 @@ public static class AccessControlPipeline
                     .Select(check => (string.IsNullOrEmpty(userId)
                             ? securityService.HasPermission(check.Path, check.Permission)
                             : securityService.HasPermission(check.Path, userId, check.Permission))
+                        // HasPermission rides the live AccessAssignment synced
+                        // stream — a hot, never-completing observable. Take(1)
+                        // closes each inner so Concat below actually advances
+                        // through the check list and OnCompleted fires.
+                        .Take(1)
                         .Select(ok => (Check: check, Ok: ok)))
                     .Concat()
                     .Subscribe(
