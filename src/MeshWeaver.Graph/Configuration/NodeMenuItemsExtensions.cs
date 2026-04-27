@@ -160,27 +160,35 @@ public static class NodeMenuItemsExtensions
 
     /// <summary>
     /// Shared node lookup: resolves the effective menu node (satellite → main), its name,
-    /// and the user's permissions. Pure reactive — composes the workspace MeshNode
-    /// stream with the live permission stream via <see cref="Observable.CombineLatest"/>.
+    /// and the user's permissions. Reads the OWN MeshNode via the canonical
+    /// <c>MeshNodeReference</c> reducer (per <c>Doc/Architecture/AsynchronousCalls.md</c> —
+    /// never <c>GetStream&lt;MeshNode&gt;().FirstOrDefault</c>); if the own node is a
+    /// satellite, fetches the main node via <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace,string)"/>
+    /// (which routes to the owning hub's reducer remotely).
     /// </summary>
     private static IObservable<(string menuPath, string nodeName, MeshNode? menuNode, Permission perms)>
         GetMenuContext(LayoutAreaHost host)
     {
         var hubPath = host.Hub.Address.ToString();
-        var nodeStream = host.Workspace.GetStream<MeshNode>()
-                ?.Select(n => n ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
+        var ownNodeStream = host.Workspace.GetMeshNodeStream();
 
-        return nodeStream
-            .Select(nodes =>
+        var menuContext = ownNodeStream
+            .SelectMany(own =>
             {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                // For satellite nodes (threads, comments, etc.), the menu should refer to the main node
-                var menuPath = node != null && node.MainNode != node.Path ? node.MainNode : hubPath;
-                var menuNode = menuPath != hubPath ? nodes.FirstOrDefault(n => n.Path == menuPath) : node;
-                var nodeName = menuNode?.Name ?? node?.Name ?? "";
-                return (menuPath, nodeName, menuNode);
-            })
+                var isSatellite = own != null && own.MainNode != own.Path;
+                var menuPath = isSatellite ? own!.MainNode : hubPath;
+                if (!isSatellite || string.Equals(menuPath, hubPath, StringComparison.Ordinal))
+                {
+                    return Observable.Return((menuPath: menuPath, nodeName: own?.Name ?? "", menuNode: own));
+                }
+                // Satellite: resolve main node via the standard remote-stream path.
+                return host.Workspace.GetMeshNodeStream(menuPath)
+                    .Select(main => (menuPath: menuPath, nodeName: main?.Name ?? own?.Name ?? "", menuNode: (MeshNode?)main))
+                    .Catch<(string menuPath, string nodeName, MeshNode? menuNode), Exception>(_ =>
+                        Observable.Return((menuPath: menuPath, nodeName: own?.Name ?? "", menuNode: (MeshNode?)null)));
+            });
+
+        return menuContext
             .CombineLatest(PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
                 (ctx, perms) => (ctx.menuPath, ctx.nodeName, ctx.menuNode, perms));
     }
