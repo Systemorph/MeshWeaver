@@ -13,7 +13,8 @@ public class NonfileRouteConstraint : IRouteConstraint
     private static readonly HashSet<string> ExcludedPrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
         "_framework", "_content", "_blazor", "favicon.ico",
-        "auth", "dev", "mcp"
+        "auth", "dev", "mcp",
+        "signin-microsoft", "signin-google", "signin-linkedin", "signin-apple"
     };
 
     public bool Match(

@@ -374,87 +374,101 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void SubmitMessageCore()
     {
-        if (_isDisposed)
-            return;
-
-        // Use MessageText (updated via Monaco ValueChanged binding) — no blocking Monaco read.
-        var userMessageText = MessageText;
-
-        // Attempt to begin submission — rejects empty text and concurrent submissions
-        if (!submissionHandler.TryBeginSubmit(userMessageText))
-            return;
-
-        // Disable input and clear the editor immediately — flush render so spinner shows
-        MessageText = null;
-        StateHasChanged();
-
-        // Fire-and-forget Monaco clear — no await in the submit path.
-        if (monacoEditor != null)
+        try
         {
-            _ = ClearMonacoAsync();
-        }
+            if (_isDisposed)
+                return;
 
-        var accessService = Hub.ServiceProvider.GetService<AccessService>();
-        var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        var authorName = accessService?.Context?.Name ?? "You";
-        var isCompact = ViewModel.HideEmptyState;
-        var capturedAttachments = attachments.Select(a => a.Path).ToList();
+            // Use MessageText (updated via Monaco ValueChanged binding) — no blocking Monaco read.
+            var userMessageText = MessageText;
 
-        var ctx = new SubmitContext
-        {
-            Hub = Hub,
-            ThreadPath = threadPath,
-            Namespace = NavigationService.CurrentNamespace ?? initialContext
-                        ?? (!string.IsNullOrEmpty(createdBy) ? $"User/{createdBy}" : "User"),
-            UserText = userMessageText!,
-            AgentName = selectedAgentInfo?.Name,
-            ModelName = selectedModelInfo?.Name,
-            ContextPath = initialContext,
-            Attachments = capturedAttachments,
-            CreatedBy = createdBy,
-            AuthorName = authorName,
-            OnError = err => InvokeAsync(() =>
+            // Attempt to begin submission — rejects empty text and concurrent submissions
+            if (!submissionHandler.TryBeginSubmit(userMessageText))
+                return;
+
+            // Disable input and clear the editor immediately — flush render so spinner shows
+            MessageText = null;
+            StateHasChanged();
+
+            // Fire-and-forget Monaco clear — no await in the submit path.
+            if (monacoEditor != null)
             {
-                if (_isDisposed) return;
-                Logger.LogWarning("[ThreadChat:{InstanceId}] Submit failed: {Error}", _instanceId, err);
-                showSubmissionProgress = false;
-                submissionHandler.ForceRelease();
-                StateHasChanged();
-            }),
-            OnThreadCreated = node => InvokeAsync(() =>
+                _ = ClearMonacoAsync();
+            }
+
+            var accessService = Hub.ServiceProvider.GetService<AccessService>();
+            var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+            var authorName = accessService?.Context?.Name ?? "You";
+            var isCompact = ViewModel.HideEmptyState;
+            var capturedAttachments = attachments.Select(a => a.Path).ToList();
+
+            var ns = !string.IsNullOrEmpty(NavigationService.CurrentNamespace)
+                ? NavigationService.CurrentNamespace
+                : !string.IsNullOrEmpty(initialContext)
+                    ? initialContext
+                    : !string.IsNullOrEmpty(createdBy)
+                        ? $"User/{createdBy}"
+                        : "User";
+
+            var ctx = new SubmitContext
             {
-                if (_isDisposed) return;
-                threadPath = node.Path;
-                threadName = node.Name;
-                UpdateSidePanelTitle();
-                if (isCompact && !string.IsNullOrEmpty(node.Path))
+                Hub = Hub,
+                ThreadPath = string.IsNullOrEmpty(threadPath) ? null : threadPath,
+                Namespace = ns,
+                UserText = userMessageText!,
+                AgentName = selectedAgentInfo?.Name,
+                ModelName = selectedModelInfo?.Name,
+                ContextPath = initialContext,
+                Attachments = capturedAttachments,
+                CreatedBy = createdBy,
+                AuthorName = authorName,
+                OnError = err => InvokeAsync(() =>
                 {
-                    NavigationManager.NavigateTo($"/{node.Path}");
-                }
-                else if (!string.IsNullOrEmpty(node.Path))
+                    if (_isDisposed) return;
+                    Logger.LogWarning("[ThreadChat:{InstanceId}] Submit failed: {Error}", _instanceId, err);
+                    showSubmissionProgress = false;
+                    submissionHandler.ForceRelease();
+                    StateHasChanged();
+                }),
+                OnThreadCreated = node => InvokeAsync(() =>
                 {
-                    SidePanelState.SetContentPath(node.Path);
-                }
-                showSubmissionProgress = false;
-                StateHasChanged();
-            })
-        };
+                    if (_isDisposed) return;
+                    threadPath = node.Path;
+                    threadName = node.Name;
+                    UpdateSidePanelTitle();
+                    if (isCompact && !string.IsNullOrEmpty(node.Path))
+                    {
+                        NavigationManager.NavigateTo($"/{node.Path}");
+                    }
+                    else if (!string.IsNullOrEmpty(node.Path))
+                    {
+                        SidePanelState.SetContentPath(node.Path);
+                    }
+                    showSubmissionProgress = false;
+                    StateHasChanged();
+                })
+            };
 
-        if (string.IsNullOrEmpty(threadPath))
-        {
-            showSubmissionProgress = isCompact;
-            ThreadSubmission.CreateThreadAndSubmit(ctx);
-        }
-        else
-        {
-            ThreadSubmission.Submit(ctx);
-        }
+            if (string.IsNullOrEmpty(threadPath))
+            {
+                showSubmissionProgress = isCompact;
+                ThreadSubmission.CreateThreadAndSubmit(ctx);
+            }
+            else
+            {
+                ThreadSubmission.Submit(ctx);
+            }
 
-        // Claude-Code-style queue: input stays enabled so the user can keep typing while
-        // previous submissions are being processed by the thread. The server watcher
-        // batches unprocessed user messages into a single round.
-        submissionHandler.ForceRelease();
-        StateHasChanged();
+            // Claude-Code-style queue: input stays enabled so the user can keep typing while
+            // previous submissions are being processed by the thread. The server watcher
+            // batches unprocessed user messages into a single round.
+            submissionHandler.ForceRelease();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[ThreadChat:{InstanceId}] SubmitMessageCore failed", _instanceId);
+        }
     }
 
     private async Task ClearMonacoAsync()

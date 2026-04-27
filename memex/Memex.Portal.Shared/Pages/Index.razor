@@ -13,13 +13,15 @@
 }
 
 @code {
-    private bool IsRealUser =>
-        AccessService?.Context != null
-        && !string.IsNullOrEmpty(AccessService.Context.ObjectId)
-        && !AccessService.Context.IsVirtual
-        && !string.Equals(AccessService.Context.ObjectId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase);
+    private AccessContext? UserContext => AccessService?.Context ?? AccessService?.CircuitContext;
 
-    private string UserAddress => $"User/{AccessService?.Context?.ObjectId}";
+    private bool IsRealUser =>
+        UserContext != null
+        && !string.IsNullOrEmpty(UserContext.ObjectId)
+        && !UserContext.IsVirtual
+        && !string.Equals(UserContext.ObjectId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase);
+
+    private string UserAddress => $"User/{UserContext?.ObjectId}";
 
     protected override void OnInitialized()
     {

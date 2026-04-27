@@ -42,8 +42,9 @@ logger.LogInformation("Running database migration...");
 // (portal, migration) can create per-organization schemas at runtime.
 if (connectionString.Contains("database.azure.com"))
 {
+    var dbName = new NpgsqlConnectionStringBuilder(connectionString).Database;
     await using var grantCmd = dataSource.CreateCommand(
-        "GRANT CREATE ON DATABASE memex TO azure_pg_admin");
+        $"GRANT CREATE ON DATABASE \"{dbName}\" TO azure_pg_admin");
     await grantCmd.ExecuteNonQueryAsync();
     logger.LogInformation("Granted CREATE ON DATABASE to azure_pg_admin.");
 }
@@ -494,6 +495,49 @@ if (currentVersion < 7)
     logger.LogInformation("Repair v7 completed.");
 }
 
+// ── Data repair v8: Fix ThreadMessage MainNode ──
+// Thread message nodes created from the UI may have MainNode set to the thread path
+// (e.g., "Org/_Thread/thread-id") instead of the thread's content node (e.g., "Org").
+// This causes "Access denied" because SatelliteAccessRule delegates to MainNode.
+// Fix: set MainNode = the part before "/_Thread/" for all ThreadMessage nodes.
+if (currentVersion < 8)
+{
+    logger.LogInformation("Running repair v8: Fix ThreadMessage MainNode...");
+    var totalFixed = 0;
+
+    var schemas = new List<string>();
+    await using (var listCmd = dataSource.CreateCommand("""
+        SELECT schema_name FROM information_schema.schemata s
+        WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes')
+        AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast', 'admin')
+        AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+        ORDER BY s.schema_name
+        """))
+    {
+        await using var rdr = await listCmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync()) schemas.Add(rdr.GetString(0));
+    }
+
+    foreach (var schema in schemas)
+    {
+        await using var fixCmd = dataSource.CreateCommand($"""
+            UPDATE "{schema}".mesh_nodes
+            SET main_node = split_part(main_node, '/_Thread/', 1)
+            WHERE node_type = 'ThreadMessage'
+              AND main_node LIKE '%/_Thread/%'
+            """);
+        var affected = await fixCmd.ExecuteNonQueryAsync();
+        if (affected > 0)
+        {
+            logger.LogInformation("Repair v8: Fixed {Count} ThreadMessage MainNode(s) in schema {Schema}", affected, schema);
+            totalFixed += affected;
+        }
+    }
+
+    currentVersion = 8;
+    logger.LogInformation("Repair v8 completed — fixed {Total} ThreadMessage MainNode(s)", totalFixed);
+}
+
 // ── Always: populate searchable_schemas from remaining content partitions ──
 // This runs every time (not versioned) since it's idempotent and schemas may change.
 {
@@ -538,49 +582,6 @@ if (currentVersion < 7)
     }
 
     logger.LogInformation("Searchable schemas: [{Schemas}]", string.Join(", ", contentSchemas));
-}
-
-// ── Data repair v8: Fix ThreadMessage MainNode ──
-// Thread message nodes created from the UI may have MainNode set to the thread path
-// (e.g., "Org/_Thread/thread-id") instead of the thread's content node (e.g., "Org").
-// This causes "Access denied" because SatelliteAccessRule delegates to MainNode.
-// Fix: set MainNode = the part before "/_Thread/" for all ThreadMessage nodes.
-if (currentVersion < 8)
-{
-    logger.LogInformation("Running repair v8: Fix ThreadMessage MainNode...");
-    var totalFixed = 0;
-
-    var schemas = new List<string>();
-    await using (var listCmd = dataSource.CreateCommand("""
-        SELECT schema_name FROM information_schema.schemata s
-        WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes')
-        AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast', 'admin')
-        AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
-        ORDER BY s.schema_name
-        """))
-    {
-        await using var rdr = await listCmd.ExecuteReaderAsync();
-        while (await rdr.ReadAsync()) schemas.Add(rdr.GetString(0));
-    }
-
-    foreach (var schema in schemas)
-    {
-        await using var fixCmd = dataSource.CreateCommand($"""
-            UPDATE "{schema}".mesh_nodes
-            SET main_node = split_part(main_node, '/_Thread/', 1)
-            WHERE node_type = 'ThreadMessage'
-              AND main_node LIKE '%/_Thread/%'
-            """);
-        var affected = await fixCmd.ExecuteNonQueryAsync();
-        if (affected > 0)
-        {
-            logger.LogInformation("Repair v8: Fixed {Count} ThreadMessage MainNode(s) in schema {Schema}", affected, schema);
-            totalFixed += affected;
-        }
-    }
-
-    currentVersion = 8;
-    logger.LogInformation("Repair v8 completed — fixed {Total} ThreadMessage MainNode(s)", totalFixed);
 }
 
 // Save current version
