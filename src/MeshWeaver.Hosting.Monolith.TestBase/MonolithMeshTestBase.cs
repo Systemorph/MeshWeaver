@@ -313,6 +313,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             if (e is DeliveryFailureException dfe)
             {
                 var msg = dfe.Message;
+                // Routing's no-fallback failure message (current format).
+                if (msg.StartsWith("No node found at ", StringComparison.Ordinal))
+                    return true;
+                // Older "No node found for address ..." prefix kept for back-compat
+                // with tests that still match the previous routing wording.
                 if (msg.StartsWith("No node found for address ", StringComparison.Ordinal))
                     return true;
                 if (msg.StartsWith("No handler found for message type GetDataRequest", StringComparison.Ordinal))
