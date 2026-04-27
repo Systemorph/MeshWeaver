@@ -61,24 +61,20 @@ public static class CommentLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
         var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
         var initialized = new[] { false, false }; // [0]=editState, [1]=repliesExpanded
 
-        // Permissions checked once via Observable (no await, no blocking)
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
         var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, parentPath);
 
-        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-            var canDelete = perms.HasFlag(Permission.Delete);
-            return (UiControl?)BuildOverview(host, node, hubPath, editStateId, initialized,
-                currentUser, canComment, canDelete);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(permissionsStream, (node, perms) =>
+            {
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                var canDelete = perms.HasFlag(Permission.Delete);
+                return (UiControl?)BuildOverview(host, node, hubPath, editStateId, initialized,
+                    currentUser, canComment, canDelete);
+            });
     }
 
     /// <summary>
@@ -92,17 +88,14 @@ public static class CommentLayoutAreas
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
         var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
-        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-            return (UiControl?)BuildEditContent(host, node, hubPath, currentUser, canComment);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(permissionsStream, (node, perms) =>
+            {
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                return (UiControl?)BuildEditContent(host, node, hubPath, currentUser, canComment);
+            });
     }
 
     internal static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string hubPath,
@@ -389,8 +382,7 @@ public static class CommentLayoutAreas
                         {
                             var text = data?.GetValueOrDefault("text")?.ToString() ?? "";
 
-                            host.Workspace.GetStream<MeshNode>()!
-                                .Select(nodes => nodes?.FirstOrDefault(n => n.Path == replyPath))
+                            host.Workspace.GetMeshNodeStream(replyPath)
                                 .Where(n => n != null)
                                 .Take(1)
                                 .Subscribe(node =>
@@ -459,9 +451,8 @@ public static class CommentLayoutAreas
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #4ade80;\" title=\"Resolve\">✓</span>")
             .WithClickAction(_ =>
             {
-                // Resolve comment — resolve the node via the workspace stream, not QueryAsync.
-                host.Workspace.GetStream<MeshNode>()!
-                    .Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
+                // Resolve comment — read OWN node via the canonical reducer.
+                host.Workspace.GetMeshNodeStream()
                     .Where(n => n != null)
                     .Take(1)
                     .Subscribe(node =>
@@ -605,16 +596,8 @@ public static class CommentLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThumbnail(node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildThumbnail(node));
     }
 
     internal static UiControl BuildThumbnail(MeshNode? node)
