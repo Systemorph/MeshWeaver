@@ -138,6 +138,15 @@ public class Workspace : IWorkspace
         var collection = DataContext.GetTypeSource(typeof(T));
         if (collection == null)
             return null;
+        // Hub already past Started → SynchronizationStream..ctor would throw
+        // ObjectDisposedException synchronously and the exception would
+        // propagate as a DeliveryFailure for any layout-area handler currently
+        // composing menu items / etc. against this workspace. Match the existing
+        // "return null" contract for unknown collections; callers (e.g.
+        // NodeMenuItemsExtensions.GetMenuContext) already handle null with
+        // `?? Observable.Return(empty)`.
+        if (Hub.RunLevel > MessageHubRunLevel.Started)
+            return null;
         return GetStream(typeof(T))
             .Synchronize()
             .Select(x => x.Value?.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());

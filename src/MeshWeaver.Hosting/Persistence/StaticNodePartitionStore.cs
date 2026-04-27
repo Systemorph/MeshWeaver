@@ -42,7 +42,6 @@ internal sealed class StaticNodePartitionStore : IStorageService
     /// <summary>
     /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>.
     /// </summary>
-    [System.Obsolete("Use GetNode(path, options) which returns IObservable<MeshNode?>.")]
     public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
         => Task.FromResult(_nodes.TryGetValue(path, out var node) ? node : null);
 

@@ -40,7 +40,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = await GetClientAsync();
-        var meshAddress = fixture.ClientMesh.Address;
+        var meshAddress = Fixture.ClientMesh.Address;
 
         // Generate token hash
         var rawToken = $"mw_{Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant()}";

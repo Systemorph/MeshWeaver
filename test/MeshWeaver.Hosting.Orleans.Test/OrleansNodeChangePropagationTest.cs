@@ -89,10 +89,10 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(fixture.ClientMesh.JsonSerializerOptions);
+            node = je.Deserialize<MeshNode>(Fixture.ClientMesh.JsonSerializerOptions);
         if (node?.Content is T typed) return typed;
         if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(fixture.ClientMesh.JsonSerializerOptions);
+            return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
         return null;
     }
 
@@ -170,7 +170,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         Output.WriteLine($"Delegation: path={delegateCall.DelegationPath}, success={delegateCall.IsSuccess}");
 
         // 7. Verify the Markdown node was created by the Create tool
-        var meshService = fixture.Cluster.Client.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshService = Fixture.Cluster.Client.ServiceProvider.GetRequiredService<IMeshService>();
         var createdNodes = await meshService
             .QueryAsync<MeshNode>("path:User/Roland/test-doc-nodechange", ct: ct)
             .ToListAsync(ct);
