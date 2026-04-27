@@ -52,6 +52,18 @@ internal class SecurityService : ISecurityService
     // Keyed by namespace (scope), value is list of AccessAssignment nodes at that scope
     private readonly Dictionary<string, List<MeshNode>> _staticAccessAssignments;
 
+    // Per-user scope-to-roles stream cache. Each entry is a hot
+    // Replay(1).RefCount observable backed by an internal keep-alive
+    // subscription. Multiple permission checks for the same user share a
+    // single computation per synced-query emission. Idle users evict after
+    // SlidingExpiration.
+    private readonly IMemoryCache _userScopeRolesCache = new MemoryCache(new MemoryCacheOptions());
+    private static readonly TimeSpan UserCacheTtl = TimeSpan.FromMinutes(5);
+
+    // Shared synced-query stream: subscribe ONCE; per-user caches map off it.
+    private IObservable<MeshNode[]>? _allNodesShared;
+    private readonly object _allNodesLock = new();
+
     public SecurityService(
         AccessService accessService,
         IMessageHub hub,
@@ -127,47 +139,22 @@ internal class SecurityService : ISecurityService
         if (userId == WellKnownUsers.System)
             return Observable.Return(Permission.All);
 
-        // Read role IDs from the live workspace MeshNodes (when present) AND
-        // from the static MeshConfiguration / IStaticNodeProvider snapshot the
-        // constructor captured. The synced cross-hub query is intentionally
-        // disabled (it caused infinite NodeType-hub-construction recursion);
-        // SecurityService relies on static seeds + the local workspace's
-        // AccessAssignments only.
-        return ObserveAllMeshNodes()
-            .Select(allNodes =>
+        // Build the user's complete scope→roles map ONCE from the synced
+        // AccessAssignment query (cached + refcounted, refreshed on each
+        // assignment change). All permission checks for this user share the
+        // same subscription/computation per synced-query emission.
+        return GetUserScopeRolesStream(userId)
+            .Select(scopeToRoles =>
             {
-                var roleIds = System.Collections.Immutable.ImmutableHashSet<string>.Empty;
+                var roleIds = ImmutableHashSet<string>.Empty;
                 var permissionCap = Permission.All;
-
-                var scopeSet = GetScopeHierarchy(nodePath).ToHashSet();
-
-                void Consume(MeshNode node)
+                foreach (var scope in GetScopeHierarchy(nodePath))
                 {
-                    if (node.NodeType != SecurityCollections.AccessAssignmentNodeType)
-                        return;
-                    var ns = node.Namespace ?? "";
-                    var scope = ns.EndsWith("/_Access", StringComparison.Ordinal)
-                        ? ns[..^"/_Access".Length]
-                        : (ns == "_Access" ? "" : null);
-                    if (scope is null || !scopeSet.Contains(scope))
-                        return;
-
-                    var assignment = DeserializeAssignment(node);
-                    if (assignment == null || assignment.AccessObject != userId)
-                        return;
-                    foreach (var ra in assignment.Roles)
-                    {
-                        if (string.IsNullOrEmpty(ra.Role) || ra.Denied)
-                            continue;
-                        roleIds = roleIds.Add(ra.Role);
-                    }
+                    if (scopeToRoles.TryGetValue(scope, out var roles))
+                        roleIds = roleIds.Union(roles);
+                    if (_staticPolicies.TryGetValue(scope, out var policy))
+                        permissionCap &= policy.GetPermissionCap();
                 }
-
-                foreach (var node in allNodes)
-                    Consume(node);
-                foreach (var (_, list) in _staticAccessAssignments)
-                    foreach (var node in list)
-                        Consume(node);
 
                 // Add claim-based roles from AccessContext.
                 var context = _accessService.Context ?? _accessService.CircuitContext;
@@ -210,6 +197,73 @@ internal class SecurityService : ISecurityService
             });
     }
 
+    /// <summary>
+    /// Per-user scope-to-roles cache. First subscribe per user computes the
+    /// complete scope→roles map by walking the synced AccessAssignment
+    /// collection + static seeds; subsequent permission checks for the same
+    /// user (within sliding TTL) get the cached snapshot immediately. The
+    /// cache entry holds an internal Subscribe to keep the
+    /// <c>Replay(1).RefCount</c> warm even when no external consumer is
+    /// listening; eviction (sliding 5 min) disposes the keep-alive.
+    /// </summary>
+    private IObservable<ImmutableDictionary<string, ImmutableHashSet<string>>> GetUserScopeRolesStream(string userId)
+    {
+        return _userScopeRolesCache.GetOrCreate(userId, entry =>
+        {
+            entry.SlidingExpiration = UserCacheTtl;
+            var stream = ObserveAllMeshNodes()
+                .Select(allNodes => ComputeScopeRoles(userId, allNodes))
+                .DistinctUntilChanged()
+                .Replay(1)
+                .RefCount();
+            // Keep-alive subscription so RefCount doesn't tear down when
+            // no external subscribers are connected; disposed on cache eviction.
+            var keepAlive = stream.Subscribe(_ => { }, _ => { });
+            entry.RegisterPostEvictionCallback((_, _, _, _) => keepAlive.Dispose());
+            return stream;
+        })!;
+    }
+
+    private ImmutableDictionary<string, ImmutableHashSet<string>> ComputeScopeRoles(
+        string userId, IEnumerable<MeshNode> allNodes)
+    {
+        var result = ImmutableDictionary<string, ImmutableHashSet<string>>.Empty;
+
+        void Consume(MeshNode node)
+        {
+            if (node.NodeType != SecurityCollections.AccessAssignmentNodeType)
+                return;
+            var ns = node.Namespace ?? "";
+            var scope = ns.EndsWith("/_Access", StringComparison.Ordinal)
+                ? ns[..^"/_Access".Length]
+                : (ns == "_Access" ? "" : null);
+            if (scope is null)
+                return;
+
+            var assignment = DeserializeAssignment(node);
+            if (assignment == null || assignment.AccessObject != userId)
+                return;
+
+            foreach (var ra in assignment.Roles)
+            {
+                if (string.IsNullOrEmpty(ra.Role) || ra.Denied)
+                    continue;
+                var existing = result.TryGetValue(scope, out var roles)
+                    ? roles
+                    : ImmutableHashSet<string>.Empty;
+                result = result.SetItem(scope, existing.Add(ra.Role));
+            }
+        }
+
+        foreach (var node in allNodes)
+            Consume(node);
+        foreach (var (_, list) in _staticAccessAssignments)
+            foreach (var node in list)
+                Consume(node);
+
+        return result;
+    }
+
     private const string AccessAssignmentQueryId = "$security-access-assignments";
     private const string RoleQueryId = "$security-roles";
 
@@ -233,11 +287,21 @@ internal class SecurityService : ISecurityService
     /// </summary>
     private IObservable<MeshNode[]> ObserveAllMeshNodes()
     {
-        var workspace = _hub.GetWorkspace();
-        return workspace
-            .GetQuery(AccessAssignmentQueryId,
-                $"nodeType:{SecurityCollections.AccessAssignmentNodeType} scope:subtree")
-            .Select(arr => arr.ToArray());
+        if (_allNodesShared != null)
+            return _allNodesShared;
+        lock (_allNodesLock)
+        {
+            if (_allNodesShared != null)
+                return _allNodesShared;
+            var workspace = _hub.GetWorkspace();
+            _allNodesShared = workspace
+                .GetQuery(AccessAssignmentQueryId,
+                    $"nodeType:{SecurityCollections.AccessAssignmentNodeType} scope:subtree")
+                .Select(arr => arr.ToArray())
+                .Replay(1)
+                .RefCount();
+            return _allNodesShared;
+        }
     }
 
     /// <summary>
