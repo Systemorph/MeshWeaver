@@ -316,21 +316,15 @@ public static class ThreadLayoutAreas
             return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Query service not available.</p>"));
         }
 
-        // Get the node from the workspace stream
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
         // Live observable of child Thread nodes (delegations) — auto-updates on add/remove.
         var childrenStream = meshQuery.ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}"))
             .Select(change => (IReadOnlyList<MeshNode>)change.Items)
             .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
-        return nodeStream.CombineLatest(childrenStream, (nodes, children) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildHistoryView(host, node, hubPath, children ?? Array.Empty<MeshNode>());
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(childrenStream, (node, children) =>
+                BuildHistoryView(host, node, hubPath, children ?? Array.Empty<MeshNode>()));
     }
 
     private static UiControl BuildHistoryView(LayoutAreaHost _, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
@@ -408,9 +402,6 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
         // Live observable of child ThreadMessage nodes — auto-updates on add/edit/remove.
         var messagesStream = meshQuery == null
             ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
@@ -419,11 +410,9 @@ public static class ThreadLayoutAreas
                 .Select(change => (IReadOnlyList<MeshNode>)change.Items)
                 .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
 
-        return nodeStream.CombineLatest(messagesStream, (nodes, messageNodes) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThumbnail(node, hubPath, messageNodes ?? Array.Empty<MeshNode>());
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(messagesStream, (node, messageNodes) =>
+                BuildThumbnail(node, hubPath, messageNodes ?? Array.Empty<MeshNode>()));
     }
 
     private static UiControl BuildThumbnail(MeshNode? node, string hubPath, IReadOnlyList<MeshNode> messageNodes)

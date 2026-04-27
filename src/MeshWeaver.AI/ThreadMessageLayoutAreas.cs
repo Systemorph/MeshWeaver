@@ -677,16 +677,8 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThumbnail(node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildThumbnail(node));
     }
 
     private static UiControl BuildThumbnail(MeshNode? node)
