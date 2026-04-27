@@ -29,7 +29,11 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     /// <summary>
     /// Use ConfigureMeshBase (RLS enabled, NO PublicAdminAccess) so access control is real.
-    /// Seed test nodes via AddMeshNodes (bypasses RLS validators).
+    /// Seed test nodes AND Alice's role assignments statically — the previous
+    /// SetupAccessRightsAsync used <c>meshService.CreateNode(AccessAssignment)</c>
+    /// at runtime, which is racy because SecurityService's synced
+    /// AccessAssignment query has a 100ms debounce window so the read in the
+    /// same test method can miss the just-created assignment.
     /// </summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
@@ -62,19 +66,12 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
                     NodeType = "Markdown",
                     State = MeshNodeState.Active,
                     MainNode = "ACME",
-                }
+                },
+                // Static AccessAssignment seeds (replaces SetupAccessRightsAsync's
+                // runtime CreateNode for the AccessAssignments below).
+                AssignmentNodeFactory.UserRole("Alice", Role.Admin.Id, "User/Alice"),
+                AssignmentNodeFactory.UserRole("Alice", Role.Viewer.Id, "ACME")
             );
-
-    protected override async Task SetupAccessRightsAsync()
-    {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        // Grant Alice Admin role on her user scope (simulating UserScopeGrantHandler)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", Role.Admin.Id, "User/Alice"))
-            .FirstAsync().ToTask(Ct);
-        // Grant Alice Viewer role on ACME organization
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", Role.Viewer.Id, "ACME"))
-            .FirstAsync().ToTask(Ct);
-    }
 
     private async Task<Permission> GetPermissionsAsync(string path, string userId)
     {
