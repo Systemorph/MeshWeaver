@@ -340,23 +340,16 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Subscribes to the workspace stream, takes the current node at <paramref name="path"/>,
-    /// invokes <paramref name="onNode"/> exactly once. Errors propagate to the layout host's
-    /// log via OnError; no swallowed exceptions, no await.
+    /// Subscribes to the OWN node's <c>MeshNodeReference</c> reducer, takes the
+    /// current value, invokes <paramref name="onNode"/> exactly once. Used by
+    /// click handlers that need the latest content before mutating it. Errors
+    /// propagate to the layout host's log via OnError; no swallowed exceptions,
+    /// no await.
     /// </summary>
     private static void SubscribeOnceToCurrentNode(
         LayoutAreaHost host, string path, Action<MeshNode> onNode)
     {
-        var stream = host.Workspace.GetStream<MeshNode>();
-        if (stream == null)
-        {
-            host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger(typeof(AccessAssignmentLayoutAreas))
-                .LogWarning("No MeshNode workspace stream for {Path}", path);
-            return;
-        }
-        stream.Select(n => n ?? [])
-            .Select(nodes => nodes.FirstOrDefault(n => n.Path == path))
+        host.Workspace.GetMeshNodeStream()
             .Where(n => n != null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
