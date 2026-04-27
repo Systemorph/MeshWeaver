@@ -44,35 +44,44 @@ jobs:
         # broke after the loop completes. Without this, pipefail propagates a
         # single hang into a hard SIGTERM that kills sibling test projects and
         # the artifact-upload step has nothing to publish.
+        #
+        # Disk hygiene: previous "verbose normal | tee -a test-results.log"
+        # form was bloating one log file with every test's structured trace
+        # output. With ~30 csproj × 100s of tests × verbose Trace logs from
+        # MessageHub, the file grew faster than the 14 GB ephemeral disk could
+        # absorb and the runner sent SIGTERM (exit 143) mid-run. Switch to
+        # `--verbosity minimal`, drop the tee, and only persist the per-project
+        # exit markers — trx files still capture full per-test results.
         set +e
+        : > test/test-results.log
         echo "::group::Per-project test runs"
         for csproj in $(find test -name '*.csproj' ! -path '*Cosmos*' | sort); do
           name=$(basename "$csproj" .csproj)
           echo "::endgroup::"
           echo "::group::$name"
-          dotnet test "$csproj" --no-build --verbosity normal -l:trx \
-              --blame-hang-timeout 90s --blame-hang-dump-type mini \
-              2>&1 | tee -a test/test-results.log
+          dotnet test "$csproj" --no-build --verbosity minimal -l:trx \
+              --blame-hang-timeout 90s --blame-hang-dump-type mini
           rc=$?
-          echo "[CI] $name exit=$rc" | tee -a test/test-results.log
+          marker="[CI] $name exit=$rc"
+          echo "$marker"
+          echo "$marker" >> test/test-results.log
         done
         echo "::endgroup::"
         exit 0
     - name: Fail on hang / aborted test run
-      # `dotnet test --blame-hang-timeout 90s` aborts the test host on hang and
-      # writes "Test Run Aborted" + "Total tests: Unknown" to stdout. The trx
-      # produced has no Failed records, so Publish Test Results below sees only
-      # what completed and reports green — masking the hang. This step makes the
-      # masking explicit: if any "Total tests: Unknown" or hang-dump line is
-      # present in the log, fail the job AND list the project that hung
-      # (the "[CI] $name exit=$rc" markers from Run Tests pinpoint it).
+      # blame-hang aborts the test host and writes a minidump (blame-*.dmp).
+      # Test *failures* are surfaced separately by Publish Test Results below;
+      # this step's only job is to fail loudly on a HANG so it doesn't get
+      # masked behind a "test results published" green checkmark when the trx
+      # contains only what completed before the abort.
       run: |
-        if grep -qE "Total tests: Unknown|Test host process crashed|Collecting hang dumps" test/test-results.log; then
-          echo "::error::A test process hung or crashed during the run."
-          echo "--- Hang/crash markers ---"
-          grep -E "Total tests: Unknown|Test host process crashed|Collecting hang dumps|Test Run Aborted" test/test-results.log || true
-          echo "--- Per-project exit codes (look for non-zero) ---"
-          grep -E '^\[CI\] ' test/test-results.log || true
+        hang_dumps=$(find test -name 'blame-*.dmp' 2>/dev/null | wc -l)
+        if [ "$hang_dumps" -gt 0 ]; then
+          echo "::error::A test process hung — blame-*.dmp files were written."
+          echo "--- Hang dumps ---"
+          find test -name 'blame-*.dmp' 2>/dev/null
+          echo "--- Per-project exit codes (non-zero indicates the hung project) ---"
+          cat test/test-results.log
           exit 1
         fi
     - name: Collect test logs for artifact
