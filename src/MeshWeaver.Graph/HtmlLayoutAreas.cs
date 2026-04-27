@@ -25,16 +25,8 @@ public static class HtmlLayoutAreas
 
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildOverview(host, node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => (UiControl?)BuildOverview(host, node));
     }
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node)
@@ -65,16 +57,9 @@ public static class HtmlLayoutAreas
     private static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
         return Controls.Stack
-            .WithView((h, c) => nodeStream.Select(nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return MeshNodeThumbnailControl.FromNode(node, hubPath);
-            }));
+            .WithView((h, c) => host.Workspace.GetMeshNodeStream()
+                .Select(node => MeshNodeThumbnailControl.FromNode(node, hubPath)));
     }
 
     internal static string GetHtmlContent(MeshNode? node)

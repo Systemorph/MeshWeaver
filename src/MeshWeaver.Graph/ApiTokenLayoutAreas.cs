@@ -24,11 +24,9 @@ public static class ApiTokenLayoutAreas
 
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-        return host.Workspace.GetStream<MeshNode>()!
-            .Select(nodes =>
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
                 if (node?.Content is not ApiToken token)
                     return (UiControl?)Controls.Html("<div>No API token data.</div>");
 
@@ -58,11 +56,9 @@ public static class ApiTokenLayoutAreas
 
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-        return host.Workspace.GetStream<MeshNode>()!
-            .Select(nodes =>
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node =>
             {
-                var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
                 if (node?.Content is not ApiToken token)
                     return (UiControl?)Controls.Html("<span>API Token</span>");
 
