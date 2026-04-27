@@ -19,7 +19,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansMeshTests(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"mesh-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"mesh-{name}-{Guid.NewGuid():N}", "TestUser");
 
     [Fact(Timeout = 30000)]
     public async Task PingPong()

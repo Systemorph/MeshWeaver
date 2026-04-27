@@ -37,7 +37,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"deleg-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"deleg-{name}-{Guid.NewGuid():N}", "TestUser");
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
@@ -67,8 +67,8 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
             var client = await GetClientAsync();
 
             // Create a parent thread first (delegations live under a response message)
-            var parentNode = ThreadNodeType.BuildThreadNode("User/Roland", "Parent for delegation test", "Roland");
-            var parentResp = await client.Observe(new CreateNodeRequest(parentNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
+            var parentNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Parent for delegation test", "TestUser");
+            var parentResp = await client.Observe(new CreateNodeRequest(parentNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
             parentResp.Message.Success.Should().BeTrue(parentResp.Message.Error);
             var parentPath = parentResp.Message.Node!.Path!;
             Output.WriteLine($"Parent thread: {parentPath}");
@@ -77,15 +77,15 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
             var parentResponseId = Guid.NewGuid().ToString("N")[..8];
             await client.Observe(new CreateNodeRequest(new MeshNode(parentResponseId, parentPath)
             {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
                 Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
             }), o => o.WithTarget(new Address(parentPath))).FirstAsync().ToTask(ct);
             var parentMsgPath = $"{parentPath}/{parentResponseId}";
 
             // Now simulate delegation: create cells, then thread (exact ChatClientAgentFactory flow)
             var (subThreadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-                parentMsgPath, "Delegation task: do something", createdBy: "Roland", agentName: "Worker");
-            subThreadNode = subThreadNode with { MainNode = "User/Roland" };
+                parentMsgPath, "Delegation task: do something", createdBy: "TestUser", agentName: "Worker");
+            subThreadNode = subThreadNode with { MainNode = "User/TestUser" };
             var subThreadPath = subThreadNode.Path!;
             var responsePath = $"{subThreadPath}/{responseMsgId}";
             Output.WriteLine($"Sub-thread: {subThreadPath}, user={userMsgId}, response={responseMsgId}");
@@ -93,11 +93,11 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
             // Step 1: Create user cell
             var userCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, subThreadPath)
             {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
                 Content = new ThreadMessage
                 {
                     Role = "user", Text = "Delegation task: do something", Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.ExecutedInput, CreatedBy = "Roland"
+                    Type = ThreadMessageType.ExecutedInput, CreatedBy = "TestUser"
                 }
             }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
             Output.WriteLine($"User cell created: success={userCellResp.Message.Success}");
@@ -105,7 +105,7 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
             // Step 2: Create response cell
             var responseCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, subThreadPath)
             {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/Roland",
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
                 Content = new ThreadMessage
                 {
                     Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,

@@ -49,7 +49,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"completion-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"completion-{name}-{Guid.NewGuid():N}", "TestUser");
 
     /// <summary>
     /// Verifies that SubmitMessageRequest produces two responses:
@@ -67,7 +67,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
         var client = await GetClientAsync();
 
         // Create thread
-        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("User/Roland", "Completion test", "Roland")), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("User/TestUser", "Completion test", "TestUser")), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -81,7 +81,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Test completion notification",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             },
             o => o.WithTarget(new Address(threadPath)));
         delivery.Should().NotBeNull("Post should return delivery");

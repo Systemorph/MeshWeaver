@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Static node provider that seeds the Orleans shared cluster with the
-/// fixed test data the suite depends on (Roland user, public access policy,
+/// fixed test data the suite depends on (TestUser user, public access policy,
 /// pre-baked chat history). Registered as <see cref="IStaticNodeProvider"/>
 /// instead of via <c>builder.AddMeshNodes(...)</c> so that:
 ///
@@ -33,21 +33,28 @@ public sealed class OrleansTestSeedProvider : IStaticNodeProvider
 {
     public IEnumerable<MeshNode> GetStaticNodes()
     {
-        // Roland user node — owner of the per-user partition that almost every
-        // test in the collection writes under.
-        yield return new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" };
+        // TestUser user node — owner of the per-user partition that almost every
+        // test in the collection writes under. Mirrors samples/Graph/Data/User/TestUser.json.
+        yield return new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" };
 
-        // Public Admin access on the User partition — gives every authenticated
-        // user the right to create / manage nodes the tests need.
-        yield return new MeshNode("Public_Access", "User")
+        // TestUser Admin access on User/_Access — mirrors
+        // samples/Graph/Data/User/_Access/TestUser_Access.json. The namespace
+        // MUST end in "/_Access"; SecurityService.ComputeScopeRoles silently
+        // drops any AccessAssignment whose parent namespace doesn't match that
+        // pattern. Granting Admin to AccessObject="TestUser" specifically (not
+        // "Public") so negative-permission tests that switch to a different
+        // user (e.g. SubmitChat_WithoutThreadPermission_ReturnsError) still
+        // observe denials — Public→Admin would be union-merged into every
+        // authenticated user's effective permissions and bypass the test.
+        yield return new MeshNode("TestUser_Access", "User/_Access")
         {
             NodeType = "AccessAssignment",
-            Name = "Public Access",
+            Name = "TestUser Access",
             MainNode = "User",
             Content = new AccessAssignment
             {
-                AccessObject = "Public",
-                DisplayName = "Public",
+                AccessObject = "TestUser",
+                DisplayName = "Test User",
                 Roles = [new RoleAssignment { Role = "Admin" }]
             }
         };
@@ -55,15 +62,15 @@ public sealed class OrleansTestSeedProvider : IStaticNodeProvider
         // Pre-seeded thread + 4 messages for OrleansChatHistoryTest cold-start
         // scenario. The agent must observe all 4 prior turns when the third user
         // message is appended; this seed is the "history" it should retrieve.
-        const string threadPath = "User/Roland/_Thread/history-cold-start";
-        yield return new MeshNode("history-cold-start", "User/Roland/_Thread")
+        const string threadPath = "User/TestUser/_Thread/history-cold-start";
+        yield return new MeshNode("history-cold-start", "User/TestUser/_Thread")
         {
             Name = "History cold start test",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = "User/Roland",
+            MainNode = "User/TestUser",
             Content = new MeshThread
             {
-                CreatedBy = "Roland",
+                CreatedBy = "TestUser",
                 Messages = ImmutableList.Create(
                     "msg1-user", "msg1-assistant", "msg2-user", "msg2-assistant")
             }
@@ -71,25 +78,25 @@ public sealed class OrleansTestSeedProvider : IStaticNodeProvider
         yield return new MeshNode("msg1-user", threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = "User/Roland",
+            MainNode = "User/TestUser",
             Content = new ThreadMessage { Role = "user", Text = "First question", Type = ThreadMessageType.ExecutedInput }
         };
         yield return new MeshNode("msg1-assistant", threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = "User/Roland",
+            MainNode = "User/TestUser",
             Content = new ThreadMessage { Role = "assistant", Text = "First answer.", Type = ThreadMessageType.AgentResponse }
         };
         yield return new MeshNode("msg2-user", threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = "User/Roland",
+            MainNode = "User/TestUser",
             Content = new ThreadMessage { Role = "user", Text = "Second question", Type = ThreadMessageType.ExecutedInput }
         };
         yield return new MeshNode("msg2-assistant", threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = "User/Roland",
+            MainNode = "User/TestUser",
             Content = new ThreadMessage { Role = "assistant", Text = "Second answer.", Type = ThreadMessageType.AgentResponse }
         };
     }

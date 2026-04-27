@@ -304,35 +304,49 @@ public static class ThreadSubmission
                 Type = ThreadMessageType.AgentResponse
             }
         };
-        hub.Post(new CreateNodeRequest(errorCell), o => o.WithTarget(hub.Address));
 
-        // Update thread state: link user message (if missing) + error response + mark ingested.
-        hub.GetWorkspace().UpdateMeshNode(node =>
-        {
-            var t = node.Content as MeshThread ?? new MeshThread();
-            var msgs = t.Messages;
-            if (!msgs.Contains(req.UserMessageId)) msgs = msgs.Add(req.UserMessageId);
-            if (!msgs.Contains(errorResponseId)) msgs = msgs.Add(errorResponseId);
-            var userIds = t.UserMessageIds.Contains(req.UserMessageId)
-                ? t.UserMessageIds
-                : t.UserMessageIds.Add(req.UserMessageId);
-            var ingested = t.IngestedMessageIds.Contains(req.UserMessageId)
-                ? t.IngestedMessageIds
-                : t.IngestedMessageIds.Add(req.UserMessageId);
-            return node with
+        // Canonical satellite-creation pattern (see SatelliteEntityPatterns.md):
+        // create the child node first, and only update the parent's Messages list +
+        // post the response inside the Subscribe(onNext) callback. The previous
+        // fire-and-forget hub.Post + immediate state update raced the watcher: tests
+        // saw the new id on the thread before the cell was actually persisted, then
+        // ReadNode at {threadPath}/{errorResponseId} returned null.
+        var workspace = hub.GetWorkspace();
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        meshService.CreateNode(errorCell).Subscribe(
+            _ =>
             {
-                Content = t with
+                workspace.UpdateMeshNode(node =>
                 {
-                    Messages = msgs,
-                    UserMessageIds = userIds,
-                    IngestedMessageIds = ingested,
-                    // Clear any pending text for this message so the watcher doesn't dispatch it again.
-                    PendingUserMessage = null
-                }
-            };
-        });
+                    var t = node.Content as MeshThread ?? new MeshThread();
+                    var msgs = t.Messages;
+                    if (!msgs.Contains(req.UserMessageId)) msgs = msgs.Add(req.UserMessageId);
+                    if (!msgs.Contains(errorResponseId)) msgs = msgs.Add(errorResponseId);
+                    var userIds = t.UserMessageIds.Contains(req.UserMessageId)
+                        ? t.UserMessageIds
+                        : t.UserMessageIds.Add(req.UserMessageId);
+                    var ingested = t.IngestedMessageIds.Contains(req.UserMessageId)
+                        ? t.IngestedMessageIds
+                        : t.IngestedMessageIds.Add(req.UserMessageId);
+                    return node with
+                    {
+                        Content = t with
+                        {
+                            Messages = msgs,
+                            UserMessageIds = userIds,
+                            IngestedMessageIds = ingested,
+                            // Clear any pending text for this message so the watcher doesn't dispatch it again.
+                            PendingUserMessage = null
+                        }
+                    };
+                });
 
-        hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+                hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+            },
+            ex => hub.Post(
+                new AppendUserMessageResponse { Success = false, Error = ex.Message },
+                o => o.ResponseFor(delivery)));
+
         return delivery.Processed();
     }
 

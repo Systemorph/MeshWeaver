@@ -82,7 +82,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
         {
-            ObjectId = "Roland", Name = "Roland", Email = "rbuergi@test.com"
+            ObjectId = "TestUser", Name = "TestUser", Email = "testuser@meshweaver.io"
         });
         await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
             .RegisterStreamAsync(client.Address, client.DeliverMessage);
@@ -115,8 +115,8 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         var client = await GetClientAsync($"reent-{suffix}");
 
         // Create thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Reentrancy test", "Roland");
-        var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/Roland"))).FirstAsync().ToTask(ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Reentrancy test", "TestUser");
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -140,7 +140,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Call a tool please",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
         Output.WriteLine("Submitted");
@@ -195,7 +195,7 @@ internal class ToolCallingReentrancyClient : IChatClient
         if (options?.Tools?.Any(t => t.Name == "Get") == true)
         {
             var call = new FunctionCallContent("test-get", "Get",
-                new Dictionary<string, object?> { ["path"] = "@User/Roland" });
+                new Dictionary<string, object?> { ["path"] = "@User/TestUser" });
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, [call])));
         }
 
@@ -272,7 +272,7 @@ public class ReentrancyTestSiloConfigurator : ISiloConfigurator, IHostConfigurat
             .AddGraph()
             .AddAI()
             .AddRowLevelSecurity()
-            .AddMeshNodes(new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
+            .AddMeshNodes(new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
             .AddMeshNodes(PublicEditorAccess())
             .ConfigureServices(services =>
                 services.AddSingleton<IChatClientFactory>(new ReentrancyTestChatClientFactory()))
@@ -287,7 +287,8 @@ public class ReentrancyTestSiloConfigurator : ISiloConfigurator, IHostConfigurat
             DisplayName = "Public",
             Roles = [new RoleAssignment { Role = "Admin" }]
         };
-        return [new("Public_Access", "User")
+        // Namespace must end in "/_Access" — see SecurityService.ComputeScopeRoles.
+        return [new("Public_Access", "User/_Access")
         {
             NodeType = "AccessAssignment",
             Name = "Public Access",

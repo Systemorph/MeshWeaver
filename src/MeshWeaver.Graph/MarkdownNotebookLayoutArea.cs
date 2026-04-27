@@ -16,16 +16,8 @@ public static class MarkdownNotebookLayoutArea
 {
     public static IObservable<UiControl?> Notebook(LayoutAreaHost host, RenderingContext _)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildNotebookView(host, node);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => BuildNotebookView(host, node));
     }
 
     private static UiControl BuildNotebookView(LayoutAreaHost host, MeshNode? node)

@@ -17,20 +17,15 @@ public static class MarkdownOverviewLayoutArea
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        // Permissions checked once via Observable (no await, no blocking)
         var permissionsStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
-        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-            var canEdit = perms.HasFlag(Permission.Update);
-            return (UiControl?)BuildOverview(host, node, canComment, canEdit);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(permissionsStream, (node, perms) =>
+            {
+                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+                var canEdit = perms.HasFlag(Permission.Update);
+                return (UiControl?)BuildOverview(host, node, canComment, canEdit);
+            });
     }
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit)
@@ -93,16 +88,9 @@ public static class MarkdownOverviewLayoutArea
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
         return Controls.Stack
-            .WithView((h, c) => nodeStream.Select(nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return MeshNodeThumbnailControl.FromNode(node, hubPath);
-            }));
+            .WithView((h, c) => host.Workspace.GetMeshNodeStream()
+                .Select(node => MeshNodeThumbnailControl.FromNode(node, hubPath)));
     }
 
     /// <summary>

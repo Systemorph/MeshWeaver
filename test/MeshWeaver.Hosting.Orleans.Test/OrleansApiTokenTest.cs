@@ -28,7 +28,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
 {
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
     {
-        var client = await base.GetClientAsync($"apitoken-{name}-{Guid.NewGuid():N}", "Roland");
+        var client = await base.GetClientAsync($"apitoken-{name}-{Guid.NewGuid():N}", "TestUser");
         client.TypeRegistry
             .WithType(typeof(ValidateTokenRequest), nameof(ValidateTokenRequest))
             .WithType(typeof(ValidateTokenResponse), nameof(ValidateTokenResponse));
@@ -48,7 +48,7 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
         var hashPrefix = hash[..12];
 
         // Create token as satellite of User node â€” same pattern as Thread
-        var userId = "Roland";
+        var userId = "TestUser";
         var tokenNode = new MeshNode(hashPrefix, $"User/{userId}/_Api")
         {
             Name = "Orleans Test Token",
@@ -57,8 +57,8 @@ public class OrleansApiTokenTest(SharedOrleansFixture fixture, ITestOutputHelper
             Content = new ApiToken
             {
                 UserId = userId,
-                UserName = "Roland",
-                UserEmail = "rbuergi@systemorph.com",
+                UserName = "TestUser",
+                UserEmail = "testuser@meshweaver.io",
                 TokenHash = hash,
                 Label = "Orleans Test Token",
                 CreatedAt = DateTimeOffset.UtcNow,

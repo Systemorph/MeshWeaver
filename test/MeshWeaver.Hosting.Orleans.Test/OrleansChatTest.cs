@@ -39,7 +39,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
 {
-    private const string ContextPath = "User/Roland";
+    private const string ContextPath = "User/TestUser";
     private TestCluster Cluster { get; set; } = null!;
     private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
 

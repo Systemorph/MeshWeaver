@@ -34,10 +34,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 [Collection(nameof(OrleansClusterCollection))]
 public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHelper output) : OrleansSharedTestBase(fixture, output)
 {
-    private const string ThreadPath = "User/Roland/_Thread/history-cold-start";
+    private const string ThreadPath = "User/TestUser/_Thread/history-cold-start";
 
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
-        => await base.GetClientAsync($"hist-{name}-{Guid.NewGuid():N}", "Roland");
+        => await base.GetClientAsync($"hist-{name}-{Guid.NewGuid():N}", "TestUser");
 
     [Fact]
     public async Task ColdStart_AgentSeesAllPreviousMessages()
@@ -75,7 +75,7 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
                 ThreadPath = ThreadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Third question â€” can you see history?",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(ThreadPath))).FirstAsync().ToTask(ct);
             submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
             Output.WriteLine($"Append accepted: success={submitResp.Message.Success}");

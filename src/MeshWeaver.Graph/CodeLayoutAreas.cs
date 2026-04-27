@@ -57,20 +57,13 @@ public static class CodeLayoutAreas
     public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        // Combine node data + caller's effective permissions so the Run button
-        // only renders when the caller has Execute. Permission stream is the
-        // live SecurityService observable — re-emits whenever assignments change.
+        // Caller's effective permissions: the Run button only renders when
+        // Execute is granted. Live SecurityService observable — re-emits when
+        // assignments change.
         var permissionStream = PermissionHelper.GetEffectivePermissions(host.Hub, hubPath);
 
-        return nodeStream.CombineLatest(permissionStream, (nodes, perms) =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildContent(host, node, perms);
-        });
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(permissionStream, (node, perms) => (UiControl?)BuildContent(host, node, perms));
     }
 
     private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, Permission callerPermissions = Permission.All)
@@ -177,9 +170,8 @@ public static class CodeLayoutAreas
             ? string.Join("/", segments.Take(segments.Length - 2))
             : hubPath;
 
-        // Get current node stream for the NavMenu highlight
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
+        // OWN node stream for the NavMenu highlight (canonical MeshNodeReference reducer).
+        var ownNodeStream = host.Workspace.GetMeshNodeStream();
 
         // Observe sibling Code nodes reactively
         host.UpdateData(SiblingNodesDataId, Array.Empty<MeshNode>());
@@ -216,11 +208,10 @@ public static class CodeLayoutAreas
             .WithView(
                 // Left pane: NavMenu listing sibling Code nodes
                 (h, c) => siblingStream
-                    .CombineLatest(nodeStream)
+                    .CombineLatest(ownNodeStream)
                     .Select(tuple =>
                     {
-                        var (siblings, nodes) = tuple;
-                        var currentNode = nodes?.FirstOrDefault(n => n.Path == hubPath);
+                        var (siblings, currentNode) = tuple;
                         return BuildCodeNavMenu(hubAddress, hubPath, currentNode, siblings);
                     }),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)

@@ -82,9 +82,9 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
         {
-            ObjectId = "Roland",
-            Name = "Roland Buergi",
-            Email = "rbuergi@systemorph.com"
+            ObjectId = "TestUser",
+            Name = "Test User",
+            Email = "testuser@meshweaver.io"
         });
         await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
             .RegisterStreamAsync(client.Address, client.DeliverMessage);
@@ -128,8 +128,8 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         var workspace = client.GetWorkspace();
 
         // 1. Create thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Delegation tool call test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Delegation tool call test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
         Output.WriteLine($"1. Thread: {threadPath}");
 
         // 2. Subscribe to messages
@@ -149,7 +149,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Please delegate this research task",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("2. Message submitted");
@@ -213,8 +213,8 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         var workspace = client.GetWorkspace();
 
         // 1. Create thread and submit
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Resubmit delegation test", "Roland");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Resubmit delegation test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
 
         var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)?.Messages ?? [])
@@ -226,7 +226,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Delegate something",
-                ContextPath = "User/Roland"
+                ContextPath = "User/TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var msgIds = await twoMessages;
@@ -391,27 +391,29 @@ public class DelegationProductionSiloConfigurator : ISiloConfigurator, IHostConf
             .ConfigurePortalMesh()
             .AddRowLevelSecurity()
             .AddMeshNodes(
-                new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
-            .AddMeshNodes(PublicEditorAccess())
+                new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
+            .AddMeshNodes(TestUserAdminAccess())
             .ConfigureServices(services =>
                 services.AddSingleton<IChatClientFactory, DelegationTestAgentFactory>())
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    private static MeshNode[] PublicEditorAccess()
+    // TestUser-specific Admin (mirrors samples/Graph/Data/User/_Access/TestUser_Access.json).
+    // Namespace MUST end in "/_Access" — see SecurityService.ComputeScopeRoles.
+    private static MeshNode[] TestUserAdminAccess()
     {
         var assignment = new AccessAssignment
         {
-            AccessObject = "Public",
-            DisplayName = "Public",
+            AccessObject = "TestUser",
+            DisplayName = "Test User",
             Roles = [new RoleAssignment { Role = "Admin" }]
         };
         return
         [
-            new("Public_Access", "User")
+            new("TestUser_Access", "User/_Access")
             {
                 NodeType = "AccessAssignment",
-                Name = "Public Access",
+                Name = "TestUser Access",
                 Content = assignment,
                 MainNode = "User",
             }
