@@ -733,12 +733,17 @@ public static class MeshExtensions
 
         // Compose: per-node permission check via the (now reactive) security
         // service; collect deny list as we observe each emission.
+        // Take(1) closes each inner observable — GetEffectivePermissions
+        // rides the live AccessAssignment synced query and is hot, so without
+        // Take(1) the outer .ToList() never completes and the delete handler
+        // hangs until the caller times out.
         return nodes
             .ToObservable()
             .SelectMany(node =>
             {
                 var pathToCheck = node.MainNode ?? node.Path;
                 return securityService.GetEffectivePermissions(pathToCheck, userId)
+                    .Take(1)
                     .Select(perms => (Node: node, Perms: perms));
             })
             .Where(x =>
