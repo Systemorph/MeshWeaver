@@ -1286,6 +1286,18 @@ public static class MeshExtensions
                     // read-after-write is consistent.
                     workspace.UpdateMeshNode(_ => savedNode, nodePath: savedNode.Path);
 
+                    // Explicitly persist to the underlying IMeshStorage so a
+                    // subsequent ObserveQuery / persistence read sees the new
+                    // value immediately. Without this the workspace stream is
+                    // updated but persistence lags (debounced flush), causing
+                    // ObserveQueryFreshnessTest-style stale reads.
+                    var updatePersistence = hub.ServiceProvider.GetService<IMeshStorage>();
+                    updatePersistence?.SaveNode(savedNode)
+                        .Subscribe(
+                            _ => { },
+                            persistEx => logger.LogWarning(persistEx,
+                                "[UpdateNode] persistence flush failed at {Path}", savedNode.Path));
+
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()
                         ?.Publish(MeshChangeEvent.Updated(savedNode));
 
