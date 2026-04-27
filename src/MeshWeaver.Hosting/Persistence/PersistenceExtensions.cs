@@ -415,6 +415,13 @@ public static class PersistenceExtensions
                 logger);
         });
 
+        // IMeshQueryCore is the unsecured surface (no ISecurityService dep)
+        // — required by SyncedQueryMeshNodes for any hub that hosts a synced
+        // mesh-query (SecurityService's AccessAssignment + Role queries, etc.).
+        // Splitting from IMeshQueryProvider breaks the SecurityService ⇄
+        // InMemoryMeshQuery DI cycle.
+        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
+
         // Register the routing version query
         services.AddSingleton<IVersionQuery>(sp =>
         {

@@ -419,11 +419,15 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         // When the path resolves to mesh_nodes but nodeType maps to a satellite table,
         // use the satellite table instead. Satellite tables are the source of truth.
+        var satelliteRedirect = false;
         if (rawTable == "mesh_nodes" && _partitionDefinition != null)
         {
             var satelliteTable = _partitionDefinition.ResolveTableByNodeType(query.ExtractNodeType());
             if (satelliteTable != null && satelliteTable != "mesh_nodes")
+            {
                 rawTable = satelliteTable;
+                satelliteRedirect = true;
+            }
         }
         var tableName = QualifyTable(rawTable);
         // Resolve satellite table names for source:activity and source:accessed JOINs.
@@ -439,7 +443,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         if (!string.IsNullOrEmpty(effectivePath))
         {
             var (scopeClause, scopeParams) = generator.GenerateScopeClause(
-                effectivePath, query.Scope);
+                effectivePath, query.Scope, useMainNode: satelliteRedirect);
 
             if (!string.IsNullOrEmpty(scopeClause))
             {

@@ -49,6 +49,24 @@ public class CrossPartitionSatelliteFanOutTests
                 TableMappings = PartitionDefinition.StandardTableMappings,
             };
             var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(schema, partitionDef, ct);
+
+            // CleanDataAsync only truncates the public schema. Per-test fan-out
+            // schemas use CREATE SCHEMA IF NOT EXISTS, so satellite-table rows
+            // from prior tests in the same xUnit run leak in (e.g. the Thread
+            // test counting Org-rooted threads picks up the NoNs test's
+            // leftovers and fails HaveCount(2)). Truncate every table in this
+            // schema before the test seeds its own data.
+            await using (var truncateCmd = ds.CreateCommand($"""
+                DO $$
+                DECLARE r record;
+                BEGIN
+                  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = '{schema}' LOOP
+                    EXECUTE 'TRUNCATE TABLE "{schema}"."' || r.tablename || '" CASCADE';
+                  END LOOP;
+                END$$;
+                """))
+                await truncateCmd.ExecuteNonQueryAsync(ct);
+
             partitions[org] = (ds, adapter);
 
             // Root node

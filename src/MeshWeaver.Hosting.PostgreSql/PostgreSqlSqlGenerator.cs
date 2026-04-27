@@ -228,7 +228,7 @@ public class PostgreSqlSqlGenerator
     }
 
     public (string Clause, Dictionary<string, object> Parameters) GenerateScopeClause(
-        string? basePath, QueryScope scope)
+        string? basePath, QueryScope scope, bool useMainNode = false)
     {
         var parameters = new Dictionary<string, object>();
 
@@ -237,12 +237,29 @@ public class PostgreSqlSqlGenerator
 
         var normalizedPath = basePath.Trim('/');
 
+        // For satellite-table queries, the scope filter targets `main_node` (the
+        // path of the parent the satellite is attached to) instead of `namespace`
+        // / `path`, because satellite namespaces include the satellite suffix
+        // (e.g. "OrgAlpha/_Thread") while the user's `namespace:X` qualifier
+        // expresses an attachment-scoped predicate ("satellites attached to
+        // nodes within X"). Children semantics (the default for `namespace:X`)
+        // therefore map to Subtree-on-main_node — a thread at
+        // `Org/doc/_Thread` with `main_node=Org/doc` is conceptually "in Org"
+        // for partition-fan-out purposes.
         var clause = scope switch
         {
-            QueryScope.Exact => GenerateExactClause(normalizedPath, parameters),
-            QueryScope.Children => GenerateChildrenClause(normalizedPath, parameters),
-            QueryScope.Descendants => GenerateDescendantsClause(normalizedPath, parameters),
-            QueryScope.Subtree => GenerateSubtreeClause(normalizedPath, parameters),
+            QueryScope.Exact => useMainNode
+                ? GenerateMainNodeExactClause(normalizedPath, parameters)
+                : GenerateExactClause(normalizedPath, parameters),
+            QueryScope.Children => useMainNode
+                ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
+                : GenerateChildrenClause(normalizedPath, parameters),
+            QueryScope.Descendants => useMainNode
+                ? GenerateMainNodeDescendantsClause(normalizedPath, parameters)
+                : GenerateDescendantsClause(normalizedPath, parameters),
+            QueryScope.Subtree => useMainNode
+                ? GenerateMainNodeSubtreeClause(normalizedPath, parameters)
+                : GenerateSubtreeClause(normalizedPath, parameters),
             QueryScope.Ancestors => GenerateAncestorsClause(normalizedPath, parameters),
             QueryScope.AncestorsAndSelf => GenerateAncestorsAndSelfClause(normalizedPath, parameters),
             QueryScope.Hierarchy => GenerateHierarchyClause(normalizedPath, parameters),
@@ -250,6 +267,25 @@ public class PostgreSqlSqlGenerator
         };
 
         return (clause, parameters);
+    }
+
+    private static string GenerateMainNodeExactClause(string path, Dictionary<string, object> parameters)
+    {
+        parameters["@scopeMain"] = path;
+        return "n.main_node = @scopeMain";
+    }
+
+    private static string GenerateMainNodeDescendantsClause(string path, Dictionary<string, object> parameters)
+    {
+        parameters["@scopeMainPrefix"] = $"{path}/";
+        return "n.main_node LIKE @scopeMainPrefix || '%'";
+    }
+
+    private static string GenerateMainNodeSubtreeClause(string path, Dictionary<string, object> parameters)
+    {
+        parameters["@scopeMain"] = path;
+        parameters["@scopeMainPrefix"] = $"{path}/";
+        return "(n.main_node = @scopeMain OR n.main_node LIKE @scopeMainPrefix || '%')";
     }
 
     /// <summary>
