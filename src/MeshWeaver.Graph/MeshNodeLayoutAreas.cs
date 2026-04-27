@@ -1134,16 +1134,11 @@ public static class MeshNodeLayoutAreas
 
         if (string.IsNullOrEmpty(dataPath))
         {
-            // Self-reference: show the current MeshNode data as JSON
-            var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-                ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-            return nodeStream.Select(nodes =>
+            // Self-reference: show the current MeshNode data as JSON.
+            return host.Workspace.GetMeshNodeStream().Select(node =>
             {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 if (node == null)
                     return (UiControl?)Controls.Markdown($"*Node not found: {hubPath}*");
-
                 return (UiControl?)RenderMeshNodeData(node, host.Hub.JsonSerializerOptions);
             });
         }
@@ -1214,16 +1209,10 @@ public static class MeshNodeLayoutAreas
 
         if (string.IsNullOrEmpty(typeName))
         {
-            // Self-reference: show MeshNode schema and content type schema
+            // Self-reference: show MeshNode schema and content type schema.
             var jsonOptions = host.Hub.JsonSerializerOptions;
-            var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-                ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-            return nodeStream.Select(nodes =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return (UiControl?)RenderNodeSchema(node, hubPath, jsonOptions);
-            });
+            return host.Workspace.GetMeshNodeStream()
+                .Select(node => (UiControl?)RenderNodeSchema(node, hubPath, jsonOptions));
         }
 
         // Try to get the type from the registry
@@ -1406,18 +1395,12 @@ public static class MeshNodeLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return(Array.Empty<MeshNode>());
-
-        return nodeStream.CombineLatest(
+        return host.Workspace.GetMeshNodeStream().CombineLatest(
             PermissionHelper.GetEffectivePermissions(host.Hub, hubPath),
-            (nodes, permissions) =>
+            (node, permissions) =>
             {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-
                 if (!permissions.HasFlag(Permission.Update))
                     return (UiControl?)BuildAccessDenied(hubPath);
-
                 return (UiControl?)BuildEditNodeContent(host, node);
             });
     }
