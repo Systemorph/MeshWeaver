@@ -65,7 +65,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         var expectedTodoAgentPath = "ACME/Project/TodoAgent";
 
         // Static node read — no write before, catalog read is correct (no CQRS lag).
-        var productLaunchNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}").FirstOrDefaultAsync();
+        var productLaunchNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist in test data");
 
         // CRITICAL: Verify the node has the expected NodeType
@@ -112,7 +112,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         var contextPath = "ACME";
 
         // Static node read — no write before, catalog read is correct (no CQRS lag).
-        var acmeNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}").FirstOrDefaultAsync();
+        var acmeNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         acmeNode.Should().NotBeNull("ACME node should exist in test data");
 
         // Act

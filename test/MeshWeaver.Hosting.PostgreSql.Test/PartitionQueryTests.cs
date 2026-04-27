@@ -77,7 +77,7 @@ public class PartitionQueryTests
         await SeedPartitionDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options);
+        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
         node!.NodeType.Should().Be("Partition");
@@ -102,7 +102,7 @@ public class PartitionQueryTests
             $"namespace:Admin/Partition nodeType:Partition", userId: "alice");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             results.Add(item);
         }
@@ -125,7 +125,7 @@ public class PartitionQueryTests
             $"namespace:Admin/Partition nodeType:Partition", userId: WellKnownUsers.Anonymous);
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             results.Add(item);
         }
@@ -139,7 +139,7 @@ public class PartitionQueryTests
         await SeedPartitionDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/Documentation", _options);
+        var node = await adapter.ReadAsync("Admin/Partition/Documentation", _options, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
         var def = DeserializeContent<PartitionDefinition>(node.Content);
@@ -155,7 +155,7 @@ public class PartitionQueryTests
         await SeedPartitionDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options);
+        var node = await adapter.ReadAsync("Admin/Partition/ACME", _options, TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
         var def = DeserializeContent<PartitionDefinition>(node.Content);

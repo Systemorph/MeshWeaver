@@ -134,7 +134,7 @@ public class FirstUserOnboardingTests
         // Create admin schema with global admin
         var (adminDs, adminAdapter) = await _fixture.CreateSchemaAdapterAsync(
             "admin",
-            partitionDef with { Namespace = "Admin", Schema = "admin" });
+            partitionDef with { Namespace = "Admin", Schema = "admin" }, ct);
 
         const string username = "globaladmin";
         await adminAdapter.WriteAsync(new MeshNode($"{username}_Access", "Admin/_Access")
@@ -160,7 +160,7 @@ public class FirstUserOnboardingTests
         {
             var schemaName = org.ToLowerInvariant();
             var (ds, adapter) = await _fixture.CreateSchemaAdapterAsync(
-                schemaName, partitionDef with { Namespace = org, Schema = schemaName });
+                schemaName, partitionDef with { Namespace = org, Schema = schemaName }, ct);
 
             await adapter.WriteAsync(new MeshNode(org)
             {

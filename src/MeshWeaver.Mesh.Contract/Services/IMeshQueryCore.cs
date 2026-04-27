@@ -13,7 +13,7 @@ namespace MeshWeaver.Mesh.Services;
 /// without user context. Must not be exposed to application code.
 ///
 /// <para>Decouples consumers from <see cref="IMeshQueryProvider"/> which
-/// pulls in <see cref="ISecurityService"/> as a constructor dependency
+/// pulls in <see cref="MeshWeaver.Mesh.Security.ISecurityService"/> as a constructor dependency
 /// — the cycle source for SecurityService → workspace.GetQuery →
 /// SyncedQueryMeshNodes → IMeshQueryProvider → InMemoryMeshQuery →
 /// ISecurityService.</para>

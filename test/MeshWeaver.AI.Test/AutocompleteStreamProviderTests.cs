@@ -42,7 +42,7 @@ public class AutocompleteStreamProviderTests
         provider.Emit(new AutocompleteItem("c", "c", Priority: 10));
         provider.Complete();
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Initial empty snapshot + one per item = 4
         snapshots.Should().HaveCount(4);
@@ -66,7 +66,7 @@ public class AutocompleteStreamProviderTests
         provider.Emit(new AutocompleteItem("mid", "mid", Priority: 50));
         provider.Complete();
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         snapshots[^1].Select(i => i.Label).Should().Equal("high", "mid", "low");
     }
@@ -102,7 +102,7 @@ public class AutocompleteStreamProviderTests
         slow.Emit(new AutocompleteItem("remote-a", "remote-a", Priority: 70));
         slow.Emit(new AutocompleteItem("remote-b", "remote-b", Priority: 60));
         slow.Complete();
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         snapshots[^1].Select(i => i.Label).Should()
             .Equal("local-a", "local-b", "remote-a", "remote-b");
@@ -138,7 +138,7 @@ public class AutocompleteStreamProviderTests
         ok.Emit(new AutocompleteItem("b", "b", Priority: 5));
         ok.Complete();
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         errors.Should().BeEmpty("provider exceptions are swallowed by Catch(Empty)");
         snapshots[^1].Select(i => i.Label).Should().Equal("a", "b");
@@ -163,7 +163,7 @@ public class AutocompleteStreamProviderTests
         provider.Emit(new AutocompleteItem("d", "d", Priority: 100));  // displaces 'a'
         provider.Complete();
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         snapshots[^1].Should().HaveCount(2);
         snapshots[^1].Select(i => i.Label).Should().Equal("d", "b");
@@ -191,7 +191,7 @@ public class AutocompleteStreamProviderTests
             using var sub = sut.Stream(query, null).Subscribe(snapshots.Add, () => done.TrySetResult());
 
             // The provider produces (query.Length) items, each labelled with the query
-            await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await done.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             collected[query] = snapshots;
         }
 
@@ -223,7 +223,7 @@ public class AutocompleteStreamProviderTests
         catch { /* downstream queue may be closed — that's the disposal signal */ }
 
         // Allow any in-flight scheduled work to drain
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         snapshots.Count.Should().Be(countBeforeDispose,
             "after disposal, no further snapshots reach the (now disposed) observer");

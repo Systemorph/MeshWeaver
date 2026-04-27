@@ -742,7 +742,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         try
         {
             await nodeTypeService.EnrichWithNodeTypeAsync(
-                new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath });
+                new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath },
+                ct: TestContext.Current.CancellationToken);
         }
         catch
         {
@@ -793,7 +794,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         try
         {
             await nodeTypeService.EnrichWithNodeTypeAsync(
-                new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath });
+                new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath },
+                ct: TestContext.Current.CancellationToken);
         }
         catch { /* expected */ }
 

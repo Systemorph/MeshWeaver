@@ -173,7 +173,7 @@ public class PartitionedSchemaTests
         await router.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
 
         // Delete from Eta
-        await router.DeleteNodeAsync("Eta/Item1");
+        await router.DeleteNodeAsync("Eta/Item1", ct: TestContext.Current.CancellationToken);
 
         // Eta item should be gone
         var readA = await router.GetNodeAsync("Eta/Item1", _options, TestContext.Current.CancellationToken);

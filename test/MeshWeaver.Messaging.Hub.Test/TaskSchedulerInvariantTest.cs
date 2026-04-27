@@ -123,7 +123,7 @@ public class TaskSchedulerInvariantTest(ITestOutputHelper output) : HubTestBase(
         // Trigger parent â†’ which creates sub-hub + posts to it.
         await parent.Observe(new WhereAmIRequest(), o => o.WithTarget(parent.Address)).FirstAsync().ToTask(new CancellationTokenSource(10.Seconds()).Token);
 
-        var observed = await subDone.Task.WaitAsync(10.Seconds());
+        var observed = await subDone.Task.WaitAsync(10.Seconds(), TestContext.Current.CancellationToken);
 
         observed.TaskSchedulerId.Should().Be(TaskScheduler.Default.Id,
             because: "hosted sub-hubs must default to TaskScheduler.Default even when created from a parent that uses a custom scheduler");

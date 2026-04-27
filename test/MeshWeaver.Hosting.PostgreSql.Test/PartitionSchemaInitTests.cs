@@ -77,7 +77,7 @@ public class PartitionSchemaInitTests
     public async Task DefaultSchemas_CreatedDuringInit()
     {
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         // Verify all 4 default schemas exist
         foreach (var schema in new[] { "admin", "user", "portal", "kernel" })
@@ -93,7 +93,7 @@ public class PartitionSchemaInitTests
     public async Task DefaultSchemas_HaveVersionsSchemas()
     {
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         foreach (var schema in new[] { "admin_versions", "user_versions", "portal_versions", "kernel_versions" })
         {
@@ -108,7 +108,7 @@ public class PartitionSchemaInitTests
     public async Task EachDefaultSchema_HasMeshNodesTable()
     {
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         foreach (var schema in new[] { "admin", "user", "portal", "kernel" })
         {
@@ -123,7 +123,7 @@ public class PartitionSchemaInitTests
     public async Task UserSchema_HasSatelliteTables()
     {
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         var expectedTables = PartitionDefinition.StandardTableMappings.Values.ToList();
 
@@ -140,7 +140,7 @@ public class PartitionSchemaInitTests
     public async Task AdminSchema_HasSatelliteTables()
     {
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         // All partitions now have StandardTableMappings — same schema everywhere
         var satelliteTables = PartitionDefinition.StandardTableMappings.Values.Distinct().ToList();
@@ -158,7 +158,7 @@ public class PartitionSchemaInitTests
     public async Task SatelliteTables_HaveCorrectColumns()
     {
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         // Check that the activities table has the expected columns (same as mesh_nodes)
         var expectedColumns = new HashSet<string>
@@ -183,7 +183,7 @@ public class PartitionSchemaInitTests
     public async Task SatelliteTables_HaveMainNodeIndex()
     {
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         // Check that the activities table has an index on main_node
         await using var cmd = _fixture.DataSource.CreateCommand(
@@ -206,7 +206,7 @@ public class PartitionSchemaInitTests
         };
 
         var factory = CreateFactory(permissions);
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         foreach (var schema in new[] { "admin", "user", "portal", "kernel" })
         {
@@ -232,7 +232,7 @@ public class PartitionSchemaInitTests
         };
 
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync([orgPartition]);
+        await factory.InitializeDefaultPartitionsAsync([orgPartition], TestContext.Current.CancellationToken);
 
         // Verify schema exists
         await using var schemaCmd = _fixture.DataSource.CreateCommand(
@@ -261,7 +261,7 @@ public class PartitionSchemaInitTests
     public async Task DiscoverPartitions_FindsDefaultSchemas()
     {
         var factory = CreateFactory();
-        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions());
+        await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(), TestContext.Current.CancellationToken);
 
         // Verify schemas were created (admin, portal, kernel are excluded from DiscoverPartitionsAsync
         // because they are infrastructure partitions, not searchable content).

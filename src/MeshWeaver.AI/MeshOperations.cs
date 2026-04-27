@@ -51,16 +51,24 @@ public class MeshOperations
 
     /// <summary>
     /// Looks up the cached compilation error for the owning NodeType of <paramref name="node"/>.
-    /// - If <paramref name="node"/> is a NodeType definition, checks its own path.
+    /// - If <paramref name="node"/> is a NodeType definition (Content is
+    ///   <see cref="Graph.Configuration.NodeTypeDefinition"/> OR <c>NodeType</c>
+    ///   field equals the meta-type marker <see cref="MeshNode.NodeTypePath"/>),
+    ///   checks its own path.
     /// - Otherwise checks the NodeType's path.
     /// Returns <c>null</c> if no error is recorded.
     /// </summary>
     private string? LookupCompilationError(MeshNode node)
     {
         if (nodeTypeService == null) return null;
-        var nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
-            ? node.Path
-            : node.NodeType;
+        // NodeType==MeshNode.NodeTypePath catches the case where Content arrived
+        // as a JsonElement (per-node hub didn't have NodeTypeDefinition in its
+        // TypeRegistry, so polymorphic deserialisation fell back) — without
+        // this check, we'd look up the meta-NodeType "NodeType" and miss the
+        // actual broken-type error cached against the node's own path.
+        var isNodeTypeDef = node.Content is Graph.Configuration.NodeTypeDefinition
+            || string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
+        var nodeTypePath = isNodeTypeDef ? node.Path : node.NodeType;
         return !string.IsNullOrEmpty(nodeTypePath)
             ? nodeTypeService.GetCompilationError(nodeTypePath)
             : null;
@@ -1269,9 +1277,12 @@ public class MeshOperations
         // Content read via GetDataRequest + MeshNodeReference — queries are set-only.
         return FetchNode(resolvedPath).Select(node =>
             {
-                var nodeTypePath = node?.Content is Graph.Configuration.NodeTypeDefinition
-                    ? node.Path
-                    : node?.NodeType;
+                // Match LookupCompilationError: node.Content arrives as JsonElement
+                // when the per-node hub doesn't have NodeTypeDefinition in its
+                // TypeRegistry, so check NodeType==MeshNode.NodeTypePath as fallback.
+                var isNodeTypeDef = node?.Content is Graph.Configuration.NodeTypeDefinition
+                    || (node is not null && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal));
+                var nodeTypePath = isNodeTypeDef ? node!.Path : node?.NodeType;
 
                 if (string.IsNullOrEmpty(nodeTypePath))
                     return JsonSerializer.Serialize(

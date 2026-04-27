@@ -288,7 +288,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Directory.CreateDirectory(contentDir);
         const string SpacedFile = "Diskussion Thomas Final Report.txt";
         const string Body = "agent-shape tolerance body";
-        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile), Body);
+        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile), Body, TestContext.Current.CancellationToken);
 
         await NodeFactory.CreateNode(
             new MeshNode(nodePath) { Name = "Tolerance", NodeType = "Markdown" });
@@ -348,7 +348,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Directory.CreateDirectory(contentDir);
         const string SpacedFile = "Input Markus Apr 15.txt";
         const string FileContent = "the input markus body";
-        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile), FileContent);
+        await File.WriteAllTextAsync(Path.Combine(contentDir, SpacedFile), FileContent, TestContext.Current.CancellationToken);
 
         await NodeFactory.CreateNode(
             new MeshNode(nodePath) { Name = "Round Trip", NodeType = "Markdown" });
