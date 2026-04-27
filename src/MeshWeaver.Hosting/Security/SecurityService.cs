@@ -232,6 +232,24 @@ internal class SecurityService : ISecurityService
             }
         }
 
+        // Built-in invariant: a user always has Admin on their own User/{userId} scope.
+        // UserScopeGrantHandler materializes this into the DB for PostgreSQL's materialized view,
+        // but the in-memory permission check should not depend solely on that materialization.
+        if (!string.IsNullOrEmpty(userId)
+            && userId != WellKnownUsers.Anonymous
+            && userId != WellKnownUsers.Public)
+        {
+            var userScopePath = $"User/{userId}";
+            if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
+                || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!roleAssignments.ContainsKey("Admin"))
+                {
+                    roleAssignments["Admin"] = (Denied: false, Depth: scopes.Count);
+                }
+            }
+        }
+
         // Check Admin scope for PlatformAdmin assignments (global reach).
         // PlatformAdmin stored at Admin/{userId}_Access should grant access to ALL paths.
         if (!scopes.Contains("Admin"))
