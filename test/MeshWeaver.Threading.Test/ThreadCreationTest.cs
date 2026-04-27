@@ -249,13 +249,20 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Act - Send GetDataRequest to non-existent node.
         // The key property: routing completes within the timeout, not spinning forever.
+        // Either we get a response OR a DeliveryFailureException — both are "completed"
+        // outcomes; the bug we're guarding against is the request never returning at all.
         var cts = new CancellationTokenSource(3.Seconds());
 
-        var response = await hub.Observe(new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)), o => o.WithTarget(address)).FirstAsync().ToTask(cts.Token);
-
-        // Assert - Completed without endless loop. Response may contain data or error,
-        // but the important thing is that it returned within the timeout.
-        Output.WriteLine($"Response completed: {response.Message?.GetType().Name}");
+        try
+        {
+            var response = await hub.Observe(new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)), o => o.WithTarget(address)).FirstAsync().ToTask(cts.Token);
+            Output.WriteLine($"Response completed: {response.Message?.GetType().Name}");
+        }
+        catch (Messaging.DeliveryFailureException ex)
+        {
+            // Expected — DeliveryFailure for a non-existent node is a valid "completed" outcome.
+            Output.WriteLine($"DeliveryFailure (expected): {ex.Message}");
+        }
     }
 
     [Fact(Timeout = 5000)]
@@ -268,13 +275,20 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Act - Send GetDataRequest to non-existent node.
         // The key property: routing completes within the timeout, not spinning forever.
+        // Either we get a response OR a DeliveryFailureException — both are "completed"
+        // outcomes; the bug we're guarding against is the request never returning at all.
         var cts = new CancellationTokenSource(3.Seconds());
 
-        var response = await hub.Observe(new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)), o => o.WithTarget(address)).FirstAsync().ToTask(cts.Token);
-
-        // Assert - Completed without endless loop. Response may contain data or error,
-        // but the important thing is that it returned within the timeout.
-        Output.WriteLine($"Response completed: {response.Message?.GetType().Name}");
+        try
+        {
+            var response = await hub.Observe(new Data.GetDataRequest(new Data.EntityReference(nameof(MeshNode), nonExistentPath)), o => o.WithTarget(address)).FirstAsync().ToTask(cts.Token);
+            Output.WriteLine($"Response completed: {response.Message?.GetType().Name}");
+        }
+        catch (Messaging.DeliveryFailureException ex)
+        {
+            // Expected — DeliveryFailure for a non-existent node is a valid "completed" outcome.
+            Output.WriteLine($"DeliveryFailure (expected): {ex.Message}");
+        }
     }
 
     [Fact]
