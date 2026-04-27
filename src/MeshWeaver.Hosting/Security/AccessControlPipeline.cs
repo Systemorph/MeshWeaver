@@ -35,22 +35,33 @@ public static class AccessControlPipeline
         => config.AddDeliveryPipeline(pipeline =>
         {
             var hub = pipeline.Hub;
-            var securityService = hub.ServiceProvider.GetService<ISecurityService>();
-            if (securityService == null)
-                return pipeline;
-
-            var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("MeshWeaver.AccessContext");
-
-            // Hub-level permission rules (e.g., WithPublicRead) — checked before ISecurityService
+            // Hub-level permission rules (e.g., WithPublicRead) read from the
+            // hub's configuration only — no DI resolution at registration time.
             var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
+
+            // CRITICAL: do NOT resolve ISecurityService / AccessService /
+            // ILoggerFactory at pipeline-registration time. This callback runs
+            // synchronously inside MessageService.ctor (which is itself being
+            // resolved by Autofac during MessageHub construction). Resolving
+            // any scoped service that transitively depends on IMessageHub here
+            // creates a circular DI resolution → stack overflow on hub
+            // creation. Instead, resolve lazily per-delivery via the closure
+            // below — by then the hub's DI scope is fully built.
+            ILogger? logger = null;
 
             return pipeline.AddPipeline((delivery, ct, next) =>
             {
                 var attr = GetAttribute(delivery.Message.GetType());
                 if (attr == null)
                     return next.Invoke(delivery, ct);
+
+                var securityService = hub.ServiceProvider.GetService<ISecurityService>();
+                if (securityService == null)
+                    return next.Invoke(delivery, ct);
+
+                var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+                logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.AccessContext");
 
                 var userId = ResolveIdentity(delivery, accessService);
 
