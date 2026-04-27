@@ -495,6 +495,29 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         if (string.IsNullOrEmpty(nodeType))
             return Observable.Return(ApplyDefaultConfig(node));
 
+        // SYNC FAST PATH for static NodeType definitions registered via
+        // AddMeshNodes: their MeshConfiguration entry carries both
+        // HubConfiguration AND AssemblyLocation (the NodeType MeshNode
+        // is fully self-describing). Apply them directly — no message
+        // round-trip, no GetCompilationPathRequest cycle.
+        // <para>This is what breaks the routing → ResolveHub →
+        // GetCompilationPathRequest → routing recursion that otherwise
+        // fires for every per-instance hub of a static NodeType
+        // (Markdown, AccessAssignment, …).</para>
+        if (meshConfiguration.Nodes.TryGetValue(nodeType, out var staticTypeNode)
+            && staticTypeNode.HubConfiguration != null
+            && !string.IsNullOrEmpty(staticTypeNode.AssemblyLocation))
+        {
+            _hubConfigurations[nodeType] = staticTypeNode.HubConfiguration;
+            return Observable.Return(ApplyEntry(
+                node,
+                new PathCacheEntry(
+                    staticTypeNode.AssemblyLocation,
+                    Collection: null,
+                    staticTypeNode.HubConfiguration),
+                nodeType));
+        }
+
         // (a) issue request to NodeType hub. (b) apply the AssemblyLocation +
         // HubConfiguration delegate the response carries. No request-level cache —
         // the disk-level CompilationCacheService is source-aware and the NodeType
