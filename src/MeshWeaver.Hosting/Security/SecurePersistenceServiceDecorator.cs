@@ -82,7 +82,11 @@ internal class SecurePersistenceServiceDecorator : IStorageService
             {
                 if (node == null)
                     return Observable.Return<MeshNode?>(null);
+                // Take(1): HasReadAccess rides the live AccessAssignment synced
+                // query and is hot — without bounding it the surrounding
+                // SelectMany never completes for the single-node case.
                 return HasReadAccess(node, userId)
+                    .Take(1)
                     .Select(ok =>
                     {
                         if (ok)
@@ -95,6 +99,7 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     public IObservable<MeshNode> GetChildrenSecure(string? parentPath, string? userId, JsonSerializerOptions options)
         => ObservableTopNExtensions.ToObservableSequence(_inner.GetChildrenAsync(parentPath, options))
             .SelectMany(node => HasReadAccess(node, userId)
+                .Take(1)
                 .Do(ok =>
                 {
                     if (!ok)
@@ -106,6 +111,7 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     public IObservable<MeshNode> GetDescendantsSecure(string? parentPath, string? userId, JsonSerializerOptions options)
         => ObservableTopNExtensions.ToObservableSequence(_inner.GetDescendantsAsync(parentPath, options))
             .SelectMany(node => HasReadAccess(node, userId)
+                .Take(1)
                 .Do(ok =>
                 {
                     if (!ok)
@@ -124,7 +130,6 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     /// <summary>
     /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>.
     /// </summary>
-    [Obsolete("Use GetNode(path, options) which returns IObservable<MeshNode?>.")]
     public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
         => _inner.GetNode(path, options).FirstAsync().ToTask(ct);
 
