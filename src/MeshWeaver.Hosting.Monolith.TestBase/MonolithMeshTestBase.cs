@@ -91,17 +91,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     {
         var meshConfig = Mesh.ServiceProvider.GetService<MeshConfiguration>();
         if (meshConfig is null) return;
-        // Pre-warm every statically-registered NodeType hub: any NodeType whose
-        // MeshConfiguration entry already carries both AssemblyLocation +
-        // HubConfiguration (i.e. is fully self-describing) is safe to warm and
-        // breaks the routing → ResolveHub → GetCompilationPathRequest → routing
-        // recursion the first runtime CreateNode of an instance would trigger.
-        foreach (var (path, typeNode) in meshConfig.Nodes)
+        foreach (var nodeTypePath in new[] { "AccessAssignment", "PartitionAccessPolicy" })
         {
-            if (typeNode.HubConfiguration is { } config
-                && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
+            if (meshConfig.Nodes.TryGetValue(nodeTypePath, out var typeNode)
+                && typeNode.HubConfiguration is { } config)
             {
-                _ = Mesh.GetHostedHub(new Address(path), config);
+                _ = Mesh.GetHostedHub(new Address(nodeTypePath), config);
             }
         }
     }
