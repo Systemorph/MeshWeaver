@@ -72,19 +72,24 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
             });
     }
 
-    private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
+    /// <summary>
+    /// Reactive single-node content read via <see cref="MeshNodeStreamExtensions.GetMeshNodeStream(IWorkspace, string)"/>
+    /// — the canonical CQRS path. The stream filters out pre-load empty snapshots
+    /// (it is `Where(change => change.Value != null).Select(...)` internally), so
+    /// the first emission always carries content. No GetDataRequest single-shot,
+    /// no FirstAsync trap on a transient empty initial snapshot.
+    /// </summary>
+    private IObservable<T?> GetHubContent<T>(IMessageHub client, string path) where T : class
     {
-        // Canonical CQRS-correct read: target the per-node hub's MeshNodeReference
-        // reducer, not an EntityCollection lookup. The owning hub is the source of
-        // truth for MeshNode content; this avoids any catalog / index lag.
-        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
-        var node = response.Message.Data as MeshNode;
-        if (node == null && response.Message.Data is JsonElement je)
-            node = je.Deserialize<MeshNode>(Fixture.ClientMesh.JsonSerializerOptions);
-        if (node?.Content is T typed) return typed;
-        if (node?.Content is JsonElement contentJe)
-            return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
-        return null;
+        var workspace = client.GetWorkspace();
+        return workspace.GetMeshNodeStream(path)
+            .Select(node =>
+            {
+                if (node?.Content is T typed) return typed;
+                if (node?.Content is JsonElement contentJe)
+                    return contentJe.Deserialize<T>(Fixture.ClientMesh.JsonSerializerOptions);
+                return null;
+            });
     }
 
     /// <summary>
@@ -125,7 +130,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         threadPath.Should().Contain("_Thread/", "thread should be in _Thread satellite partition");
 
         // 4. Verify Thread content
-        var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+        var threadContent = await GetHubContent<MeshThread>(client, threadPath).Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
         threadContent.Should().NotBeNull("Thread hub should return Thread content");
         Output.WriteLine($"Thread verified: Messages={threadContent!.Messages.Count}");
     }
@@ -146,7 +151,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         threadPath.Should().StartWith("User/TestUser/_Thread/");
         Output.WriteLine($"Thread under user partition: {threadPath}");
 
-        var content = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+        var content = await GetHubContent<MeshThread>(client, threadPath).Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
         content.Should().NotBeNull();
         content!.CreatedBy.Should().Be("TestUser");
     }
@@ -190,7 +195,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
         // 5. Verify user message cell content
-        var userMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}", ct);
+        var userMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}").Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
         userMsg.Should().NotBeNull("user message cell should exist");
         userMsg!.Role.Should().Be("user");
         userMsg.Text.Should().Be("Hello from side panel test");
@@ -203,7 +208,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var stable = 0;
         for (var i = 0; i < 50; i++)
         {
-            responseMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
+            responseMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}").Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
             var len = responseMsg?.Text?.Length ?? 0;
             if (len > 0 && len == prevLen && ++stable >= 2) break;
             else stable = 0;
@@ -218,7 +223,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         Output.WriteLine($"Response cell: '{responseMsg.Text}' ({responseMsg.Text.Length} chars)");
 
         // 7. Verify Thread.Messages list is updated
-        var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+        var threadContent = await GetHubContent<MeshThread>(client, threadPath).Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
         threadContent.Should().NotBeNull();
         threadContent!.Messages.Should().HaveCount(2);
         threadContent.Messages[0].Should().Be(msgIds[0]);
@@ -308,7 +313,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
         // 7. Verify user message cell content
-        var userMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}", ct);
+        var userMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}").Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
         userMsg.Should().NotBeNull("user message cell should exist");
         userMsg!.Role.Should().Be("user");
         userMsg.Text.Should().Be("Hello with identity");
@@ -320,7 +325,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         var stable = 0;
         for (var i = 0; i < 50; i++)
         {
-            responseMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
+            responseMsg = await GetHubContent<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}").Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
             var len = responseMsg?.Text?.Length ?? 0;
             if (len > 0 && len == prevLen && ++stable >= 2) break;
             else stable = 0;
@@ -440,7 +445,7 @@ public class OrleansThreadAccessTest(SharedOrleansFixture fixture, ITestOutputHe
         foreach (var msgId in msgIds)
         {
             var fullPath = $"{threadPath}/{msgId}";
-            var msg = await GetHubContentAsync<ThreadMessage>(client, fullPath, ct);
+            var msg = await GetHubContent<ThreadMessage>(client, fullPath).Where(c => c is not null).Take(1).Timeout(30.Seconds()).FirstAsync().ToTask(ct);
             msg.Should().NotBeNull($"ThreadMessage at {fullPath} should exist");
             Output.WriteLine($"Child node verified: {fullPath} => role={msg.Role}, type={msg.Type}");
         }
