@@ -22,6 +22,7 @@ public class MeshOperations
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
     private readonly IMeshService mesh;
+    private readonly INodeTypeService? nodeTypeService;
 
     /// <summary>
     /// Callback invoked when a node is created, updated, or patched.
@@ -34,23 +35,129 @@ public class MeshOperations
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
         this.mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        this.nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
     }
 
     /// <summary>
-    /// Resolves @ prefix to full path. Example: @graph/org1 -> graph/org1
+    /// Looks up the cached compilation error for the owning NodeType of <paramref name="node"/>.
+    /// - If <paramref name="node"/> is a NodeType definition, checks its own path.
+    /// - Otherwise checks the NodeType's path.
+    /// Returns <c>null</c> if no error is recorded.
+    /// </summary>
+    private string? LookupCompilationError(MeshNode node)
+    {
+        if (nodeTypeService == null) return null;
+        var nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
+            ? node.Path
+            : node.NodeType;
+        return !string.IsNullOrEmpty(nodeTypePath)
+            ? nodeTypeService.GetCompilationError(nodeTypePath)
+            : null;
+    }
+
+    /// <summary>
+    /// Resolves @ prefix and normalises agent-emitted formatting noise.
+    /// Models / autocomplete frequently wrap spaced filenames in quotes ("foo bar.docx",
+    /// 'foo bar.docx'), put quotes around different segments, or include surrounding
+    /// whitespace. None of those characters are legal mesh-path content, so we strip
+    /// them regardless of position. Examples:
+    ///   @graph/org1                                  → graph/org1
+    ///   "@content/My File.md"                        → content/My File.md
+    ///   @/Org/content/"My File.docx"                 → /Org/content/My File.docx
+    ///   @/Org/"content/My File.docx"                 → /Org/content/My File.docx
+    ///   @"/Org/content/My File.docx"                 → /Org/content/My File.docx
+    ///   @/Org/content/'My File.docx'                 → /Org/content/My File.docx
+    ///   "   @/Org/content/My File.docx   "           → /Org/content/My File.docx
     /// </summary>
     public static string ResolvePath(string path)
     {
+        if (string.IsNullOrEmpty(path))
+            return path;
+
+        // Strip surrounding/inner whitespace and quote characters in one pass.
+        path = path.Trim();
+        if (path.IndexOfAny(['"', '\'']) >= 0)
+            path = path.Replace("\"", string.Empty).Replace("'", string.Empty);
+
         if (path.StartsWith("@"))
             return path[1..];
         return path;
+    }
+
+    /// <summary>
+    /// Resolves a path relative to the current chat context.
+    /// Absolute paths (starting with @/ or /) are returned as-is.
+    /// Relative paths (e.g., @content:file.docx, @MyChild) are prepended with the chat's context path.
+    /// Call this before <see cref="ResolvePath"/> whenever a tool accepts a user-supplied path
+    /// — otherwise relative paths or bare names get shipped to the mesh unchanged and fail to route.
+    /// </summary>
+    public static string ResolveContextPath(IAgentChat chat, string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return path;
+
+        // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
+        if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
+            path = path[1..^1];
+
+        var raw = path.StartsWith("@") ? path[1..] : path;
+
+        // Absolute path — starts with /
+        if (raw.StartsWith("/"))
+            return "@" + raw[1..]; // strip the leading / and re-add @
+
+        // Already looks absolute (contains a colon with address before it, like OrgA/content:file)
+        var colonIndex = raw.IndexOf(':');
+        if (colonIndex > 0)
+        {
+            var beforeColon = raw[..colonIndex];
+            if (beforeColon.Contains('/'))
+                return path; // already absolute
+        }
+        else if (raw.Contains('/'))
+        {
+            // No colon, has slashes — check if it starts with a UCR prefix (content/file.md)
+            var firstSlash = raw.IndexOf('/');
+            if (firstSlash > 0)
+            {
+                var firstSegment = raw[..firstSlash];
+                if (Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(firstSegment))
+                {
+                    // Relative unified path like "content/My Report.md" — prepend context
+                    var contextPath = chat.Context?.Context;
+                    if (!string.IsNullOrEmpty(contextPath))
+                        return $"@{contextPath}/{raw}";
+                    return path;
+                }
+            }
+
+            // Multi-segment path like "OrgA/Doc" — likely absolute already
+            return path;
+        }
+
+        // Relative path — prepend context
+        var contextPath2 = chat.Context?.Context;
+        if (string.IsNullOrEmpty(contextPath2))
+            return path; // no context, return as-is
+
+        // For unified refs like "content:file.docx", prepend context as address
+        if (colonIndex > 0)
+            return $"@{contextPath2}/{raw}";
+
+        // For simple names like "MyChild", prepend context
+        return $"@{contextPath2}/{raw}";
     }
 
     public async Task<string> Get(string path)
     {
         logger.LogInformation("Get called with path={Path}", path);
 
+        if (string.IsNullOrWhiteSpace(path))
+            return "Error: path is required.";
+
         var resolvedPath = ResolvePath(path);
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return "Error: path is required.";
 
         try
         {
@@ -82,6 +189,11 @@ public class MeshOperations
             await foreach (var node in mesh.QueryAsync<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
             {
+                var compileError = LookupCompilationError(node);
+                if (compileError != null)
+                    return JsonSerializer.Serialize(
+                        new { node, compilationError = compileError },
+                        hub.JsonSerializerOptions);
                 return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
             }
 
@@ -95,27 +207,69 @@ public class MeshOperations
     }
 
     /// <summary>
-    /// Tries to resolve a path as a Unified Path with prefix (schema:, model:, data:).
-    /// Parses the path to find the colon separator, splits into address and remainder,
+    /// Tries to resolve a path as a Unified Path with prefix (schema/, model/, data/, content/).
+    /// Supports both legacy colon format (address/prefix:path) and new slash format (address/prefix/path).
+    /// Parses the path to find the prefix, splits into address and remainder,
     /// then routes data request to the resolved address.
     /// Returns null if the path is not a Unified Path.
     /// </summary>
     private async Task<string?> TryResolveUnifiedPathAsync(string resolvedPath)
     {
+        string? addressPart = null;
+        string? remainder = null;
+
+        // Try legacy colon format first: address/prefix:path
         var colonIndex = resolvedPath.IndexOf(':');
-        if (colonIndex < 0)
+        if (colonIndex > 0)
+        {
+            var slashBeforeColon = resolvedPath.LastIndexOf('/', colonIndex);
+            if (slashBeforeColon >= 0)
+            {
+                addressPart = resolvedPath[..slashBeforeColon];
+                remainder = resolvedPath[(slashBeforeColon + 1)..];
+            }
+        }
+
+        // Try new slash format: address/prefix/path where prefix is a known UCR keyword
+        if (addressPart == null)
+        {
+            var segments = resolvedPath.Split('/');
+            for (var i = 0; i < segments.Length; i++)
+            {
+                if (UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segments[i]))
+                {
+                    // Found a UCR prefix at segment i — everything before is address, everything from i onwards is remainder
+                    if (i > 0)
+                    {
+                        addressPart = string.Join("/", segments.Take(i));
+                        remainder = string.Join("/", segments.Skip(i));
+                    }
+                    else
+                    {
+                        // Prefix at the start (e.g., "content/file.md") — relative path, no address
+                        addressPart = null;
+                        remainder = resolvedPath;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (remainder == null)
             return null;
 
-        // Find the last '/' before the colon — separates address from prefix:path
-        var slashBeforeColon = resolvedPath.LastIndexOf('/', colonIndex);
-        if (slashBeforeColon < 0)
-            return null; // No address part
-
-        var addressPart = resolvedPath[..slashBeforeColon];
-        var remainder = resolvedPath[(slashBeforeColon + 1)..];
-
         var reference = new UnifiedReference(remainder);
-        var address = new Address(addressPart);
+        Address address;
+        if (!string.IsNullOrEmpty(addressPart))
+        {
+            address = new Address(addressPart);
+        }
+        else
+        {
+            // No address — route to the current hub
+            address = hub.Address;
+        }
+
         logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
             addressPart, remainder);
 
@@ -206,7 +360,7 @@ public class MeshOperations
             // Validate content against schema if both nodeType and content are provided
             if (!string.IsNullOrEmpty(meshNode.NodeType) && meshNode.Content != null)
             {
-                var validationError = await ValidateContentAgainstSchemaAsync(meshNode);
+                var validationError = await ValidateContentWithSchemaAsync(meshNode);
                 if (validationError != null)
                     return validationError;
             }
@@ -255,14 +409,53 @@ public class MeshOperations
             var results = ImmutableList<string>.Empty;
             foreach (var rawNode in nodeList)
             {
+                if (rawNode == null)
+                {
+                    results = results.Add("Error: array contained a null entry. " +
+                                "Each array element must be a complete MeshNode JSON object.");
+                    continue;
+                }
+
                 var meshNode = SanitizeNodeId(rawNode);
+
+                // Reject empty identity — without id we cannot address the node.
+                if (string.IsNullOrWhiteSpace(meshNode.Id))
+                {
+                    results = results.Add("Error: node is missing 'id'. " +
+                                "Every node requires an id — fetch with Get first if unsure.");
+                    continue;
+                }
+
+                // Reject empty name — downstream UI and streams key off Name.
+                if (string.IsNullOrWhiteSpace(meshNode.Name))
+                {
+                    results = results.Add($"Error: node at {meshNode.Path} has empty 'name'. " +
+                                "Provide a non-empty human-readable display name.");
+                    continue;
+                }
 
                 // Reject partial nodes — Update does full replacement.
                 // Use Patch for partial changes instead.
                 if (string.IsNullOrEmpty(meshNode.NodeType))
                 {
-                    results = results.Add($"Error: node at {meshNode.Path} is missing nodeType. " +
+                    results = results.Add($"Error: node at {meshNode.Path} is missing 'nodeType'. " +
                                 "Update requires the complete node (from Get). Use Patch for partial updates.");
+                    continue;
+                }
+
+                // Reject updates that would blank out content — agents must always send the
+                // full content payload. Returning the schema lets the agent reconstruct it.
+                if (meshNode.Content == null)
+                {
+                    results = results.Add(await BuildNullContentErrorAsync(meshNode.Path, meshNode.NodeType!));
+                    continue;
+                }
+
+                // Validate the content against the registered content type for this NodeType.
+                var validationError = await ValidateContentWithSchemaAsync(meshNode);
+                if (validationError != null)
+                {
+                    results = results.Add(validationError);
                     continue;
                 }
 
@@ -303,9 +496,17 @@ public class MeshOperations
     {
         logger.LogInformation("Patch called for path={Path}", path);
 
+        // Fail-fast on empty/garbage path — without this, QueryAsync on "path:" or "path:<garbage>"
+        // can hang forever (seen in AgentWriteFailureTests.NoTool_EverReturnsEmpty_OnAnyInput).
+        if (string.IsNullOrWhiteSpace(path))
+            return "Error: path is required.";
+
         try
         {
             var resolvedPath = ResolvePath(path);
+            if (string.IsNullOrWhiteSpace(resolvedPath))
+                return "Error: path is required.";
+
             var existing = await mesh.QueryAsync<MeshNode>($"path:{resolvedPath}").FirstOrDefaultAsync();
             if (existing == null)
                 return $"Error: node not found at {resolvedPath}";
@@ -314,6 +515,11 @@ public class MeshOperations
             var jsonObj = JsonNode.Parse(sanitized) as JsonObject;
             if (jsonObj == null)
                 return "Error: fields must be a JSON object";
+
+            // Reject patches that explicitly blank out content (key present, value null).
+            // Omitting the key entirely is fine — that preserves existing content.
+            if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
+                return await BuildNullContentErrorAsync(existing.Path, existing.NodeType!);
 
             // Deserialize to get typed values using the hub's serializer options
             var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
@@ -329,6 +535,21 @@ public class MeshOperations
                 PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
             };
 
+            // If the patch touches content, validate the merged content against the node's schema.
+            // This protects downstream consumers (sync streams, persistence) from shape-broken writes.
+            if (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
+            {
+                var validationError = await ValidateContentWithSchemaAsync(merged);
+                if (validationError != null)
+                    return validationError;
+            }
+
+            // Reject empty or effectively-empty names — empty string names corrupt UI
+            // and downstream streams that key off Name.
+            if (jsonObj.ContainsKey("name") && string.IsNullOrWhiteSpace(merged.Name))
+                return $"Error: cannot patch {existing.Path}: 'name' is empty. " +
+                       "Provide a non-empty human-readable display name, or omit the 'name' key to keep the current name.";
+
             var versionBefore = existing.Version;
             var patchTcs = new TaskCompletionSource<string>();
             mesh.UpdateNode(merged).Subscribe(
@@ -343,7 +564,22 @@ public class MeshOperations
                         NodeType = updated.NodeType,
                         NodeName = updated.Name
                     });
-                    patchTcs.TrySetResult($"Patched: {updated.Path}");
+
+                    // Silent-failure guard: if the version did not increment, the write did
+                    // not commit (likely a stale snapshot read or a routing-layer no-op).
+                    // The agent must see this and retry/refresh — never report success on a no-op.
+                    if (updated.Version == versionBefore)
+                    {
+                        logger.LogWarning(
+                            "Patch silent-failure on {Path}: version unchanged ({Version}) — write did not commit",
+                            updated.Path, versionBefore);
+                        patchTcs.TrySetResult(
+                            $"Error: patch on {updated.Path} did not commit (version stayed at {versionBefore}). " +
+                            "This usually means a stale snapshot — retry after re-fetching the node.");
+                        return;
+                    }
+
+                    patchTcs.TrySetResult($"Patched: {updated.Path} (v{versionBefore} → v{updated.Version})");
                 },
                 ex => patchTcs.TrySetResult($"Error patching {merged.Path}: {ex.Message}"));
             return await patchTcs.Task;
@@ -365,7 +601,7 @@ public class MeshOperations
     /// </summary>
     private MeshNode SanitizeNodeId(MeshNode node)
     {
-        if (!node.Id.Contains('/'))
+        if (string.IsNullOrEmpty(node.Id) || !node.Id.Contains('/'))
             return node;
 
         // Split full path into namespace + id
@@ -426,37 +662,162 @@ public class MeshOperations
         return json; // Return original if repair fails
     }
 
-    public async Task<string> Delete(string paths)
+    public Task<string> Delete(string paths)
     {
         logger.LogInformation("Delete called");
 
+        List<string>? pathList;
         try
         {
-            var pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
-            if (pathList == null || pathList.Count == 0)
-                return "No paths provided.";
-
-            var results = ImmutableList<string>.Empty;
-            foreach (var path in pathList)
-            {
-                var resolvedPath = ResolvePath(path);
-                var deleteTcs = new TaskCompletionSource<string>();
-                mesh.DeleteNode(resolvedPath).Subscribe(
-                    _ => deleteTcs.TrySetResult($"Deleted: {resolvedPath}"),
-                    ex => deleteTcs.TrySetResult($"Error deleting {resolvedPath}: {ex.Message}"));
-                results = results.Add(await deleteTcs.Task);
-            }
-
-            return string.Join("\n", results);
+            pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
         }
         catch (JsonException ex)
         {
-            return $"Invalid JSON: {ex.Message}";
+            return Task.FromResult($"Invalid JSON: {ex.Message}");
+        }
+        if (pathList == null || pathList.Count == 0)
+            return Task.FromResult("No paths provided.");
+
+        // Subscribe to each IMeshService.DeleteNode observable and aggregate the per-path
+        // outcome into a single result string once all complete. No `await` on a Task — the
+        // TaskCompletionSource is resolved from the Subscribe callbacks, which run off the
+        // hub scheduler. This lets the caller rely on "Deleted: ..." meaning the delete
+        // actually finished (matches what tests and agent follow-up Gets expect).
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new object();
+        var lines = new string[pathList.Count];
+        var remaining = pathList.Count;
+
+        for (var i = 0; i < pathList.Count; i++)
+        {
+            var index = i;
+            var rawPath = pathList[i];
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                lock (gate)
+                {
+                    lines[index] = "Error deleting: empty path";
+                    if (--remaining == 0)
+                        tcs.TrySetResult(string.Join("\n", lines));
+                }
+                continue;
+            }
+
+            string resolvedPath;
+            try
+            {
+                resolvedPath = ResolvePath(rawPath);
+            }
+            catch (Exception ex)
+            {
+                lock (gate)
+                {
+                    lines[index] = $"Error deleting '{rawPath}': {ex.Message}";
+                    if (--remaining == 0)
+                        tcs.TrySetResult(string.Join("\n", lines));
+                }
+                continue;
+            }
+
+            mesh.DeleteNode(resolvedPath).Subscribe(
+                _ =>
+                {
+                    lock (gate)
+                    {
+                        lines[index] = $"Deleted: {resolvedPath}";
+                        if (--remaining == 0)
+                            tcs.TrySetResult(string.Join("\n", lines));
+                    }
+                },
+                ex =>
+                {
+                    logger.LogWarning(ex, "Error deleting {Path}", resolvedPath);
+                    lock (gate)
+                    {
+                        lines[index] = $"Error deleting {resolvedPath}: {ex.Message}";
+                        if (--remaining == 0)
+                            tcs.TrySetResult(string.Join("\n", lines));
+                    }
+                });
+        }
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Builds the standard "content is null" rejection message for Update/Patch,
+    /// embedding the JSON schema for the node's content type when available so the
+    /// agent can fill content correctly on the next call.
+    /// </summary>
+    internal async Task<string> BuildNullContentErrorAsync(string path, string nodeType)
+    {
+        var msg = $"Error: cannot write {path}: 'content' is null. " +
+                  "Fetch the node first with Get, modify the returned content in-place, " +
+                  "and resend the complete node. Never send null content.";
+        var schema = await GetContentSchemaAsync(nodeType);
+        if (schema != null)
+            msg += $" Expected content schema for NodeType '{nodeType}': {schema}";
+        return msg;
+    }
+
+    /// <summary>
+    /// Runs schema validation for <paramref name="meshNode"/> and, when invalid,
+    /// appends the expected JSON schema to the error so the agent can recover.
+    /// Returns null when content is valid (or when no schema is available).
+    /// </summary>
+    internal async Task<string?> ValidateContentWithSchemaAsync(MeshNode meshNode)
+    {
+        var validationError = await ValidateContentAgainstSchemaAsync(meshNode);
+        if (validationError == null)
+            return null;
+
+        if (!string.IsNullOrEmpty(meshNode.NodeType))
+        {
+            var schema = await GetContentSchemaAsync(meshNode.NodeType);
+            if (schema != null)
+                validationError += $" Expected content schema for NodeType '{meshNode.NodeType}': {schema}";
+        }
+        return validationError;
+    }
+
+    /// <summary>
+    /// Returns the JSON schema string for the content type registered against
+    /// <paramref name="nodeType"/>, or null if no schema can be derived.
+    /// </summary>
+    internal Task<string?> GetContentSchemaAsync(string nodeType)
+    {
+        try
+        {
+            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+            if (nodeTypeService == null)
+                return Task.FromResult<string?>(null);
+
+            var hubConfig = nodeTypeService.GetCachedHubConfiguration(nodeType);
+            if (hubConfig == null)
+                return Task.FromResult<string?>(null);
+
+            var tempAddress = new Address($"_schema_lookup/{Guid.NewGuid():N}");
+            var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
+            if (tempHub == null)
+                return Task.FromResult<string?>(null);
+
+            try
+            {
+                var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
+                if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
+                    return Task.FromResult<string?>(null);
+
+                var schemaNode = hub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
+                return Task.FromResult<string?>(schemaNode.ToJsonString());
+            }
+            finally
+            {
+                tempHub.Dispose();
+            }
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Error deleting nodes");
-            return $"Error: {ex.Message}";
+            logger.LogDebug(ex, "Schema retrieval skipped for NodeType {NodeType}", nodeType);
+            return Task.FromResult<string?>(null);
         }
     }
 
@@ -518,5 +879,137 @@ public class MeshOperations
             logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
             return Task.FromResult<string?>(null);
         }
+    }
+
+    /// <summary>
+    /// Recycles the hub at <paramref name="path"/> by posting a
+    /// <see cref="DisposeRequest"/>. The next access re-initialises the hub — which
+    /// means a fresh NodeType compile and fresh data loads. Useful after fixing a
+    /// broken NodeType or when something is stuck in an inconsistent cached state.
+    /// Returns a JSON <c>{status, path}</c> envelope. The caller should wait ~100ms
+    /// before re-accessing so the grain teardown completes.
+    /// </summary>
+    public Task<string> Recycle(string path)
+    {
+        logger.LogInformation("Recycle called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        var resolvedPath = ResolvePath(path);
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        try
+        {
+            // 1. Flush LOCAL NodeTypeService caches so a fresh compile runs on next access.
+            //    Disposing the hub alone is not enough — NodeTypeService._compilationErrors
+            //    and _compilationTasks survive hub teardown and would keep serving stale
+            //    errors.
+            nodeTypeService?.InvalidateCache(resolvedPath);
+
+            // 2. Broadcast the invalidation across silos via IMeshChangeFeed. Every silo's
+            //    NodeTypeService subscribes to this feed and calls InvalidateCache locally
+            //    when it sees an event for a tracked NodeType path.
+            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+            if (changeFeed != null)
+            {
+                var segments = resolvedPath.Split('/');
+                var id = segments.Length > 0 ? segments[^1] : resolvedPath;
+                var ns = segments.Length > 1 ? string.Join("/", segments[..^1]) : "";
+                changeFeed.Publish(new MeshChangeEvent(
+                    Namespace: ns,
+                    Id: id,
+                    Path: resolvedPath,
+                    Kind: MeshChangeKind.Updated,
+                    NodeType: MeshNode.NodeTypePath,
+                    Version: 0,
+                    Timestamp: DateTimeOffset.UtcNow));
+            }
+
+            // 3. Dispose the hub so the next request re-initialises with fresh config.
+            hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(resolvedPath)));
+            return Task.FromResult(JsonSerializer.Serialize(
+                new
+                {
+                    status = "Recycled",
+                    path = resolvedPath,
+                    message = "DisposeRequest posted + cache invalidation broadcast via MeshChangeFeed. Wait ~100ms before the next access."
+                },
+                hub.JsonSerializerOptions));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error recycling {Path}", resolvedPath);
+            return Task.FromResult(JsonSerializer.Serialize(
+                new { status = "Error", path = resolvedPath, message = ex.Message },
+                hub.JsonSerializerOptions));
+        }
+    }
+
+    /// <summary>
+    /// Returns compilation diagnostics for a NodeType or an instance of one.
+    /// The response is JSON with <c>status</c> (<c>Error</c> / <c>Ok</c> /
+    /// <c>Unknown</c>) and, when relevant, the error text from the last compile.
+    /// Used by the Coder agent's self-verification loop after creating / updating
+    /// a NodeType.
+    /// </summary>
+    public async Task<string> GetDiagnostics(string path)
+    {
+        logger.LogInformation("GetDiagnostics called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions);
+
+        var resolvedPath = ResolvePath(path);
+        if (nodeTypeService == null)
+            return JsonSerializer.Serialize(
+                new { status = "Unknown", message = "INodeTypeService not registered on this hub" },
+                hub.JsonSerializerOptions);
+
+        // Resolve the owning NodeType path: either the path itself (if it IS a NodeType)
+        // or the NodeType of the instance at that path.
+        string? nodeTypePath = null;
+        await foreach (var node in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
+        {
+            nodeTypePath = node.Content is Graph.Configuration.NodeTypeDefinition
+                ? node.Path
+                : node.NodeType;
+            break;
+        }
+
+        if (string.IsNullOrEmpty(nodeTypePath))
+            return JsonSerializer.Serialize(
+                new { status = "Unknown", message = $"Not found: {resolvedPath}" },
+                hub.JsonSerializerOptions);
+
+        // Compiling has priority over any prior error — the error we're seeing is stale
+        // and a fresh result is on its way. Tell the caller to wait and retry.
+        if (nodeTypeService.IsCompiling(nodeTypePath))
+        {
+            var startedAt = nodeTypeService.GetCompilationStartedAt(nodeTypePath);
+            var elapsedMs = startedAt is null
+                ? (long?)null
+                : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
+            return JsonSerializer.Serialize(
+                new { status = "Compiling", nodeTypePath, elapsedMs },
+                hub.JsonSerializerOptions);
+        }
+
+        var err = nodeTypeService.GetCompilationError(nodeTypePath);
+        if (string.IsNullOrEmpty(err))
+            return JsonSerializer.Serialize(
+                new { status = "Ok", nodeTypePath },
+                hub.JsonSerializerOptions);
+
+        return JsonSerializer.Serialize(
+            new { status = "Error", nodeTypePath, error = err },
+            hub.JsonSerializerOptions);
     }
 }

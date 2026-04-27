@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.Application.Styles;
@@ -43,8 +44,10 @@ public static class CreateLayoutArea
     }
     /// <summary>
     /// Main entry point for the Create layout area.
-    /// - If current node is Transient: shows Create editor (own content type).
-    /// - Otherwise: shows unified Create New form with type autocomplete.
+    /// - If current node is Transient: renders the Create editor inline (same UI as Edit).
+    ///   The user confirms via Save, which flips state to Active. No auto-redirect to Edit
+    ///   (that would race with workspace replication and report "node does not exist").
+    /// - Otherwise: shows the unified Create New form with type picker.
     /// </summary>
     public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext _)
     {
@@ -53,22 +56,13 @@ public static class CreateLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.Take(1).SelectMany(async nodes =>
+        return nodeStream.Take(1).Select(nodes =>
         {
             var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
 
-            // If current node is Transient, confirm it (set Active) and redirect to Edit
             if (currentNode?.State == MeshNodeState.Transient)
-            {
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                var activeNode = currentNode with { State = MeshNodeState.Active };
-                await nodeFactory.UpdateNodeAsync(activeNode);
+                return (UiControl?)BuildCreateEditor(host, currentNode);
 
-                var editUrl = MeshNodeLayoutAreas.BuildUrl(currentPath, MeshNodeLayoutAreas.EditArea);
-                return (UiControl?)Controls.Redirect(editUrl);
-            }
-
-            // Not transient — show the Create New form inline
             return (UiControl?)BuildCreateNewForm(host, nodes, currentPath);
         });
     }
@@ -504,11 +498,22 @@ public static class CreateLayoutArea
             ["namespace"] = defaultNamespace,
             ["type"] = defaultType,
             ["name"] = "",
-            ["id"] = ""
+            ["id"] = "",
+            ["description"] = ""
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
 
-        // 4. Name field (required)
+        // 4. Description — free-text seed for future AI-assisted Name/Id/Icon generation.
+        // Stored on the final node so Settings can display / re-generate from it.
+        stack = stack.WithView(new TextAreaControl(new JsonPointerReference("description"))
+        {
+            Label = "Description",
+            Placeholder = "Briefly describe what you're creating. Used to seed Name/Id/Icon generation.",
+            Immediate = true,
+            DataContext = dataContext
+        }.WithRows(3).WithStyle("width: 100%; margin-bottom: 16px;"));
+
+        // 5. Name field (required)
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("name"))
         {
             Label = "Name *",
@@ -635,6 +640,7 @@ public static class CreateLayoutArea
                 var selectedType = formValues.GetValueOrDefault("type")?.ToString()?.Trim();
                 var name = formValues.GetValueOrDefault("name")?.ToString()?.Trim();
                 var id = formValues.GetValueOrDefault("id")?.ToString()?.Trim();
+                var description = formValues.GetValueOrDefault("description")?.ToString()?.Trim();
 
                 if (string.IsNullOrWhiteSpace(selectedType))
                 {
@@ -682,10 +688,18 @@ public static class CreateLayoutArea
                         return;
                     }
 
+                    // Pull Icon/Category from the registered NodeType definition so the transient
+                    // has a usable appearance immediately (before ConfigResolver enrichment kicks in).
+                    var typeRegistration = meshConfiguration.Nodes.Values
+                        .FirstOrDefault(n => n.Path == selectedType);
+
                     var newNode = MeshNode.FromPath(nodePath) with
                     {
                         Name = name.Trim(),
+                        Description = string.IsNullOrEmpty(description) ? null : description,
                         NodeType = selectedType,
+                        Icon = typeRegistration?.Icon,
+                        Category = typeRegistration?.Category,
                         DesiredId = id,
                         State = MeshNodeState.Transient
                     };
@@ -693,6 +707,21 @@ public static class CreateLayoutArea
                     logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, selectedType);
                     await nodeFactory.CreateTransientAsync(newNode, CancellationToken.None);
                     logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
+
+                    // Wait for the workspace stream to observe the new node before navigating,
+                    // otherwise /{nodePath}/Create races replication and renders an empty form.
+                    try
+                    {
+                        await host.Workspace.GetStream<MeshNode>()!
+                            .Where(ns => ns?.Any(n => n.Path == nodePath) == true)
+                            .Take(1)
+                            .Timeout(TimeSpan.FromSeconds(5))
+                            .ToTask();
+                    }
+                    catch (TimeoutException)
+                    {
+                        logger?.LogWarning("Timed out waiting for workspace to observe {NodePath}", nodePath);
+                    }
 
                     var createUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
                     actx.NavigateTo(createUrl);
@@ -719,10 +748,11 @@ public static class CreateLayoutArea
         if (string.IsNullOrWhiteSpace(name))
             return "";
 
-        // Split by spaces and other separators
+        // Split by spaces and other separators; preserve case within each word,
+        // only ensure the first character is uppercase.
         var words = Regex.Split(name, @"[\s\-_]+")
             .Where(w => !string.IsNullOrEmpty(w))
-            .Select(w => char.ToUpperInvariant(w[0]) + w.Substring(1).ToLowerInvariant());
+            .Select(w => char.ToUpperInvariant(w[0]) + w.Substring(1));
 
         var pascalCase = string.Join("", words);
 

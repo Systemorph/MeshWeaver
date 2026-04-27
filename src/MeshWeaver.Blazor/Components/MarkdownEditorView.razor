@@ -12,56 +12,6 @@
 @namespace MeshWeaver.Blazor.Components
 @inherits BlazorView<MarkdownEditorControl, MarkdownEditorView>
 
-<style>
-    :root {
-        --annotation-comment-bg: #fff8c5;
-        --annotation-comment-border: #d4a72c;
-        --annotation-comment-dot: #bf8700;
-        --annotation-insert-bg: #dafbe1;
-        --annotation-insert-border: #22863a;
-        --annotation-insert-color: #22863a;
-        --annotation-delete-bg: #ffebe9;
-        --annotation-delete-border: #cf222e;
-        --annotation-delete-color: #cf222e;
-        --annotation-delete-text: #656d76;
-        --annotation-active-border: #0969da;
-        --annotation-active-bg: rgba(9, 105, 218, 0.08);
-        --annotation-border-separator: rgba(0, 0, 0, 0.1);
-    }
-    [data-theme="dark"] {
-        --annotation-comment-bg: rgba(187, 128, 9, 0.15);
-        --annotation-comment-border: #d29922;
-        --annotation-comment-dot: #d29922;
-        --annotation-insert-bg: rgba(46, 160, 67, 0.15);
-        --annotation-insert-border: #3fb950;
-        --annotation-insert-color: #3fb950;
-        --annotation-delete-bg: rgba(248, 81, 73, 0.15);
-        --annotation-delete-border: #f85149;
-        --annotation-delete-color: #f85149;
-        --annotation-delete-text: #8b949e;
-        --annotation-active-border: #58a6ff;
-        --annotation-active-bg: rgba(56, 139, 253, 0.15);
-        --annotation-border-separator: rgba(255, 255, 255, 0.1);
-    }
-    @@media (prefers-color-scheme: dark) {
-        :root:not([data-theme="light"]) {
-            --annotation-comment-bg: rgba(187, 128, 9, 0.15);
-            --annotation-comment-border: #d29922;
-            --annotation-comment-dot: #d29922;
-            --annotation-insert-bg: rgba(46, 160, 67, 0.15);
-            --annotation-insert-border: #3fb950;
-            --annotation-insert-color: #3fb950;
-            --annotation-delete-bg: rgba(248, 81, 73, 0.15);
-            --annotation-delete-border: #f85149;
-            --annotation-delete-color: #f85149;
-            --annotation-delete-text: #8b949e;
-            --annotation-active-border: #58a6ff;
-            --annotation-active-bg: rgba(56, 139, 253, 0.15);
-            --annotation-border-separator: rgba(255, 255, 255, 0.1);
-        }
-    }
-</style>
-
 <div class="collaborative-editor-container">
     @* Suggest mode indicator stripe *@
     @if (TrackChangesActive)
@@ -457,7 +407,7 @@
         _ = AutoSaveContentAsync(content);
     }
 
-    private async Task<bool> AutoSaveContentAsync(string content)
+    private Task<bool> AutoSaveContentAsync(string content)
     {
         if (ValuePointer != null)
         {
@@ -465,35 +415,25 @@
         }
 
         if (string.IsNullOrEmpty(BoundAutoSaveAddress) || string.IsNullOrEmpty(BoundNodePath))
-            return true;
+            return Task.FromResult(true);
 
         try
         {
-            var nodeUpdate = new MeshWeaver.Mesh.MeshNode(BoundNodePath)
-            {
-                NodeType = "Markdown",
-                Content = new MarkdownContent { Content = content }
-            };
-
-            var response = await Hub.AwaitResponse(
-                new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
-                o => o.WithTarget(new Address(BoundAutoSaveAddress)),
-                default);
-
-            if (response.Message is DataChangeResponse dcr && dcr.Status != DataChangeStatus.Committed)
-            {
-                Logger.LogWarning("Auto-save rejected for node {Path}: {Message}",
-                    BoundNodePath, dcr.Log.Messages.LastOrDefault()?.Message);
-                return false;
-            }
-
+            // Sync the full MeshNode via the remote stream and patch Content only —
+            // preserves Name/Icon/Description and avoids the key-mapping failure that
+            // DataChangeRequest + partial MeshNode triggers on the hosting hub.
+            var workspace = Hub.ServiceProvider.GetRequiredService<IWorkspace>();
+            workspace.UpdateMeshNode(
+                node => node with { Content = new MarkdownContent { Content = content } },
+                new Address(BoundAutoSaveAddress),
+                BoundNodePath);
             Logger.LogDebug("Auto-saved content to {Address} for node {Path}", BoundAutoSaveAddress, BoundNodePath);
-            return true;
+            return Task.FromResult(true);
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to auto-save content to {Address}", BoundAutoSaveAddress);
-            return false;
+            return Task.FromResult(false);
         }
     }
 

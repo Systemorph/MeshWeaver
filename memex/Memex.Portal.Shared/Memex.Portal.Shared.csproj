@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     <!-- AI Services -->
     <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Export\MeshWeaver.Markdown.Export.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureFoundry\MeshWeaver.AI.AzureFoundry.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
@@ -30,6 +31,7 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Identity" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
     <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
     <PackageReference Include="Microsoft.Identity.Web" />

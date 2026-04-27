@@ -15,6 +15,7 @@ using MeshWeaver.Layout.Serialization;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
@@ -63,9 +64,12 @@ public static class LayoutExtensions
             var typeRegistry = config.TypeRegistry;
             config = config
                 .WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>())
-                .WithServices(services => services
-                    .AddScoped<IUiControlService, UiControlService>()
-                    .AddScoped<IAutocompleteProvider, LayoutAreaAutocompleteProvider>())
+                .WithServices(services =>
+                {
+                    services.AddScoped<IUiControlService, UiControlService>();
+                    services.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, LayoutAreaAutocompleteProvider>());
+                    return services;
+                })
                 .WithHandler<GetDataRequest>(HandleLayoutAreasRequest)
                 .AddData(data =>
                 {
@@ -205,8 +209,33 @@ public static class LayoutExtensions
                     first = false;
                     var evaluated = referencePointer
                         .Evaluate(i.Value);
-                    return evaluated is null ? default!
-                        : evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!;
+                    if (evaluated is null) return default!;
+                    try
+                    {
+                        return evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!;
+                    }
+                    catch (Exception ex) when (ex is NotSupportedException || ex is JsonException)
+                    {
+                        // Most common cause: the incoming JSON carries a polymorphic $type
+                        // discriminator the local hub's TypeRegistry doesn't know about. Surface
+                        // the failure via the hub logger and yield default(T) so the observable
+                        // pipeline keeps flowing instead of crashing the circuit on decode.
+                        var logger = stream.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger("LayoutExtensions.GetStream");
+                        var rawPreview = evaluated.Value.ValueKind == JsonValueKind.Undefined
+                            ? "<undefined>"
+                            : evaluated.Value.GetRawText().Length > 200
+                                ? evaluated.Value.GetRawText()[..200] + "…"
+                                : evaluated.Value.GetRawText();
+                        logger?.LogError(ex,
+                            "Failed to deserialize layout-stream entry as {Type} at pointer {Pointer}. " +
+                            "ValueKind={ValueKind}, Length={Length}, Preview: {Raw}",
+                            typeof(T).Name, referencePointer,
+                            evaluated.Value.ValueKind,
+                            evaluated.Value.ValueKind == JsonValueKind.Undefined ? 0 : evaluated.Value.GetRawText().Length,
+                            rawPreview);
+                        return default!;
+                    }
                 }
             );
     }

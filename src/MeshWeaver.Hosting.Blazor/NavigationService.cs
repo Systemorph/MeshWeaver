@@ -191,7 +191,10 @@ internal class NavigationService : INavigationService
         };
 
         _context = context;
-        CurrentNamespace = context.Namespace;
+        // On satellite pages (thread/comment/activity), CurrentNamespace points at the
+        // main node — callers that resolve relative paths, autocomplete, attachments,
+        // and chat context all need the primary node, not the `_Thread/...` sub-address.
+        CurrentNamespace = context.PrimaryPath;
 
         // Track navigation activity for "Recently Viewed"
         if (node != null)
@@ -200,7 +203,7 @@ internal class NavigationService : INavigationService
         OnNavigationContextChanged?.Invoke(context);
 
         // Load creatable types in background when namespace changes
-        var currentNodePath = context.Namespace ?? "";
+        var currentNodePath = context.PrimaryPath ?? "";
         if (currentNodePath != _lastLoadedNodePath)
         {
             _ = LoadCreatableTypesAsync(currentNodePath);

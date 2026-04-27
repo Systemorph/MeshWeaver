@@ -135,8 +135,8 @@ public class ToolStatusFormatterTest
         method.Should().NotBeNull();
 
         var result = (string)method!.Invoke(null, ["Check out @User/rbuergi/agents-comparison for details"])!;
-        // Should produce markdown link with @prefix in href for LinkUrlCleanupExtension to resolve
-        result.Should().Contain("[`@User/rbuergi/agents-comparison`](@User/rbuergi/agents-comparison)");
+        // Should produce markdown link with absolute href (leading /)
+        result.Should().Contain("[`@User/rbuergi/agents-comparison`](/User/rbuergi/agents-comparison)");
     }
 
     [Fact]

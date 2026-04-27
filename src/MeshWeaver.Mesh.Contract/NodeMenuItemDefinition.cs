@@ -32,6 +32,28 @@ public delegate IAsyncEnumerable<NodeMenuItemDefinition> NodeMenuItemProvider(
     LayoutAreaHost host, RenderingContext context);
 
 /// <summary>
+/// DI-registered contributor to the node / mesh menus. Each implementation type is registered
+/// once per hub via <c>TryAddEnumerable</c> (same pattern as <c>IAutocompleteProvider</c>) — the
+/// renderer resolves all instances from DI, groups them by <see cref="Context"/>, and sorts the
+/// resulting items by <see cref="NodeMenuItemDefinition.Order"/>.
+/// </summary>
+public interface INodeMenuProvider
+{
+    /// <summary>
+    /// Menu context this provider contributes to. Defaults to the "Node" menu. Override to
+    /// contribute to another named context (e.g. "Mesh", "SidePanel").
+    /// </summary>
+    string Context => "Node";
+
+    /// <summary>
+    /// Yields menu items. Providers may check node type / permissions before yielding — the
+    /// renderer passes them no filter, so any early-exit (e.g. for the wrong node type) must
+    /// happen inside the implementation.
+    /// </summary>
+    IAsyncEnumerable<NodeMenuItemDefinition> GetItemsAsync(LayoutAreaHost host, RenderingContext context);
+}
+
+/// <summary>
 /// Wraps menu items for storage at $Menu in the entity store.
 /// Same pattern as DialogControl at $Dialog.
 /// </summary>

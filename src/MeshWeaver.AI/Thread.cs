@@ -77,6 +77,21 @@ public record Thread
     public ImmutableList<string> Messages { get; init; } = [];
 
     /// <summary>
+    /// All user-message ids in <see cref="Messages"/>, in order. The client appends to both
+    /// <see cref="Messages"/> and this list on submit, so the server watcher can identify
+    /// user messages without cross-hub child-cell lookups.
+    /// </summary>
+    public ImmutableList<string> UserMessageIds { get; init; } = [];
+
+    /// <summary>
+    /// Ids of user messages already committed to an execution round (past or current).
+    /// A user message id appearing in <see cref="UserMessageIds"/> but NOT in this set is "queued"
+    /// and will be ingested by the server watcher when the next round opens.
+    /// Multiple queued messages are ingested together into a single round / single output cell.
+    /// </summary>
+    public ImmutableList<string> IngestedMessageIds { get; init; } = [];
+
+    /// <summary>
     /// Azure AI Foundry persistent thread ID. When set, conversation history is server-managed.
     /// </summary>
     public string? PersistentThreadId { get; init; }
@@ -121,15 +136,24 @@ public record Thread
     public DateTime? ExecutionStartedAt { get; init; }
 
     /// <summary>
-    /// Streaming text buffer — transient, never persisted.
-    /// Used only in-memory during active execution for the status bar preview.
-    /// </summary>
-    /// <summary>
     /// Pending user message text — set at thread creation to auto-start execution.
     /// When the thread grain activates and sees this, it immediately starts streaming.
     /// Cleared after execution starts.
+    /// Legacy: still used by the auto-execute-on-creation path. New submissions
+    /// from the GUI populate <see cref="PendingUserMessages"/> instead.
     /// </summary>
     public string? PendingUserMessage { get; init; }
+
+    /// <summary>
+    /// User messages submitted by the client but not yet ingested into a round.
+    /// Keyed by user message id. The server-side submission watcher creates
+    /// satellite ThreadMessage cells from these entries and clears them once
+    /// the round is dispatched. Lets us do the entire submission as a single
+    /// atomic <c>stream.Update</c> on this thread node — no separate
+    /// CreateNodeRequest, no AppendUserMessageRequest.
+    /// </summary>
+    public ImmutableDictionary<string, ThreadMessage> PendingUserMessages { get; init; }
+        = ImmutableDictionary<string, ThreadMessage>.Empty;
 
     /// <summary>Agent name for pending execution.</summary>
     public string? PendingAgentName { get; init; }
@@ -231,4 +255,39 @@ public record ThreadMessage
     /// which documents were written and the version delta.
     /// </summary>
     public ImmutableList<NodeChangeEntry> UpdatedNodes { get; init; } = [];
+
+    /// <summary>
+    /// For user messages: the context path (e.g. the current nav context) to pass to the agent.
+    /// Null for assistant messages.
+    /// </summary>
+    public string? ContextPath { get; init; }
+
+    /// <summary>
+    /// For user messages: paths referenced as @-attachments.
+    /// Null/empty for assistant messages.
+    /// </summary>
+    public IReadOnlyList<string>? Attachments { get; init; }
+
+    /// <summary>
+    /// Signals that this user cell was updated as a resubmit.
+    /// The server watcher truncates the thread after this id and re-ingests.
+    /// </summary>
+    public bool IsResubmit { get; init; }
+
+    /// <summary>
+    /// Token usage reported by the model provider. Populated for AgentResponse cells
+    /// when the streaming finishes. Null while streaming or when the provider didn't
+    /// report usage (e.g., some local models). Sum of <see cref="InputTokens"/> +
+    /// <see cref="OutputTokens"/> may differ from <see cref="TotalTokens"/> if the
+    /// provider includes cached / reasoning tokens.
+    /// </summary>
+    public int? InputTokens { get; init; }
+    public int? OutputTokens { get; init; }
+    public int? TotalTokens { get; init; }
+
+    /// <summary>
+    /// Wall-clock time when the assistant response finished streaming. Null while
+    /// streaming. <c>CompletedAt - Timestamp</c> is the per-message duration.
+    /// </summary>
+    public DateTime? CompletedAt { get; init; }
 }

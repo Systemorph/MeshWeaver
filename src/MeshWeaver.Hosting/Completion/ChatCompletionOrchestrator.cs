@@ -124,7 +124,13 @@ internal sealed class ChatCompletionOrchestrator(
             }
         }
 
-        await foreach (var batch in channel.Reader.ReadAllAsync(CancellationToken.None))
+        // Honour the caller's cancellation token AND make sure a stuck producer can never
+        // hang the iterator: if ct fires before all producers complete the channel writer,
+        // force-complete it so ReadAllAsync exits cleanly. Without this, a producer that
+        // never reaches its `finally { tracker.OnProducerDone(); }` block (e.g. a deadlocked
+        // mesh query) would hold the test process forever — exactly the CI symptom we hit.
+        await using var registration = ct.Register(() => channel.Writer.TryComplete());
+        await foreach (var batch in channel.Reader.ReadAllAsync(ct))
         {
             yield return batch;
         }
@@ -219,8 +225,11 @@ internal sealed class ChatCompletionOrchestrator(
 
             if (!string.IsNullOrEmpty(currentNamespace))
             {
+                // Resolve to parent node for satellite contexts (threads, comments, activity).
+                // Content collections, layout areas, data live on the parent node — not on satellites.
+                var targetNamespace = ResolveParentNodeNamespace(currentNamespace);
                 var response = await SendAutocompleteRequestAsync(
-                    $"@{reference}", currentNamespace, new Address(currentNamespace), ct);
+                    $"@{reference}", currentNamespace, new Address(targetNamespace), ct);
 
                 if (response?.Items != null)
                 {
@@ -418,8 +427,8 @@ internal sealed class ChatCompletionOrchestrator(
     #region TagQuery
 
     /// <summary>
-    /// Handles tag queries (e.g., @path/content:readme) by sending AutocompleteRequest
-    /// to the resolved node hub address via Post+RegisterCallback.
+    /// Handles tag queries by sending AutocompleteRequest to the resolved node hub.
+    /// Supports both colon format (@path/content:readme) and slash format (@path/content/readme, @content/file).
     /// </summary>
     private async Task ProduceTagCompletionsAsync(
         string reference,
@@ -432,16 +441,37 @@ internal sealed class ChatCompletionOrchestrator(
         {
             var items = new List<AutocompleteItem>();
 
-            // Resolve the node hub for the address portion before the colon tag
+            // Find the node address by locating the UCR prefix segment
+            string? nodeAddress = null;
+
+            // Try colon format first: "Org/Sub/content:readme" → nodeAddress="Org/Sub"
             var colonIndex = reference.IndexOf(':');
-            if (colonIndex < 0)
-                return;
+            if (colonIndex > 0)
+            {
+                var addressPart = reference[..colonIndex];
+                var lastSlash = addressPart.LastIndexOf('/');
+                nodeAddress = lastSlash >= 0 ? addressPart[..lastSlash] : currentNamespace;
+            }
+            else
+            {
+                // Slash format: find the UCR prefix segment
+                // "Org/Sub/content/readme" → nodeAddress="Org/Sub"
+                // "content/readme" → nodeAddress=currentNamespace
+                var segments = reference.TrimStart('/').Split('/');
+                for (var i = 0; i < segments.Length; i++)
+                {
+                    if (Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segments[i]))
+                    {
+                        nodeAddress = i > 0 ? string.Join("/", segments.Take(i)) : currentNamespace;
+                        break;
+                    }
+                }
+            }
 
-            var addressPart = reference[..colonIndex];
-
-            // The address may be nested: "Org/Sub/content" → nodeAddress="Org/Sub", tag="content"
-            var lastSlash = addressPart.LastIndexOf('/');
-            var nodeAddress = lastSlash >= 0 ? addressPart[..lastSlash] : currentNamespace ?? "";
+            nodeAddress ??= currentNamespace;
+            // Resolve satellite contexts (threads, comments) to their parent node.
+            // ResolveParentNodeNamespace wants a non-null string — an empty slot means "no scope".
+            nodeAddress = ResolveParentNodeNamespace(nodeAddress ?? string.Empty);
 
             if (!string.IsNullOrEmpty(nodeAddress))
             {
@@ -542,6 +572,11 @@ internal sealed class ChatCompletionOrchestrator(
         if (reference.Contains(':'))
             return new ParsedMode(CompletionMode.TagQuery, null, reference);
 
+        // Tag query with / format: starts with or contains a known UCR prefix segment
+        // e.g., "content/file.md" or "Org/content/file.md"
+        if (IsUcrPrefixPath(reference))
+            return new ParsedMode(CompletionMode.TagQuery, null, reference);
+
         // Absolute reference: starts with /
         if (reference.StartsWith("/"))
         {
@@ -552,6 +587,10 @@ internal sealed class ChatCompletionOrchestrator(
                 // Just "@/" → partition list
                 return new ParsedMode(CompletionMode.PartitionList, null, "");
             }
+
+            // Check if absolute path contains a UCR prefix (e.g., "/Org/content/file")
+            if (IsUcrPrefixPath(absolutePath))
+                return new ParsedMode(CompletionMode.TagQuery, null, reference);
 
             // Check if we have a completed partition segment: "Partition/" or "Partition/sub"
             var slashIndex = absolutePath.IndexOf('/');
@@ -568,6 +607,15 @@ internal sealed class ChatCompletionOrchestrator(
 
         // Regular: @text → current node + global
         return new ParsedMode(CompletionMode.CurrentNodeAndGlobal, null, reference);
+    }
+
+    /// <summary>
+    /// Checks if a path contains a known UCR prefix segment (content, data, schema, model, menu).
+    /// </summary>
+    private static bool IsUcrPrefixPath(string path)
+    {
+        var segments = path.Split('/');
+        return segments.Any(s => Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(s));
     }
 
     private static AutocompleteItem SuggestionToItem(
@@ -592,28 +640,31 @@ internal sealed class ChatCompletionOrchestrator(
             Path: suggestion.Path);
     }
 
+    /// <summary>
+    /// Pass through the provider's insert text. Providers are expected to produce relative
+    /// paths (e.g., "@content/file.md") when in context, since chat messages resolve
+    /// references relative to the current chat context.
+    /// </summary>
     private static string EnsureAbsoluteInsertText(string insertText, string currentNamespace)
+        => insertText;
+
+    /// <summary>
+    /// For satellite contexts (threads, comments, activity), returns the parent node's namespace.
+    /// E.g., "User/rbuergi/_Thread/abc123" → "User/rbuergi". Content collections, layout areas,
+    /// and data live on the parent node, not on satellite sub-namespaces.
+    /// Satellite segments start with underscore (e.g., _Thread, _Comment, _Activity).
+    /// </summary>
+    private static string ResolveParentNodeNamespace(string ns)
     {
-        if (string.IsNullOrEmpty(insertText))
-            return insertText;
+        if (string.IsNullOrEmpty(ns)) return ns;
 
-        // Already absolute
-        if (insertText.StartsWith("@/"))
-            return insertText;
-
-        // Strip @ if present, then make absolute
-        var path = insertText.StartsWith("@") ? insertText[1..] : insertText;
-
-        // If the path doesn't start with the namespace, prepend it
-        if (!string.IsNullOrEmpty(currentNamespace) &&
-            !path.StartsWith(currentNamespace + "/", StringComparison.OrdinalIgnoreCase) &&
-            !path.StartsWith(currentNamespace + ":", StringComparison.OrdinalIgnoreCase) &&
-            !path.Equals(currentNamespace, StringComparison.OrdinalIgnoreCase))
+        var segments = ns.Split('/');
+        for (var i = 0; i < segments.Length; i++)
         {
-            path = $"{currentNamespace}/{path}";
+            if (segments[i].StartsWith('_'))
+                return string.Join("/", segments.Take(i));
         }
-
-        return $"@/{path}";
+        return ns;
     }
 
     /// <summary>
@@ -629,9 +680,9 @@ internal sealed class ChatCompletionOrchestrator(
 
     private static readonly (string Tag, string Description)[] TagKeywords =
     [
-        ("content:", "Content files"),
-        ("data:", "Data collections"),
-        ("schema:", "JSON schemas"),
+        ("content/", "Content files"),
+        ("data/", "Data collections"),
+        ("schema/", "JSON schemas"),
     ];
 
     private static List<AutocompleteItem> GetTagKeywords(string address, string filter)

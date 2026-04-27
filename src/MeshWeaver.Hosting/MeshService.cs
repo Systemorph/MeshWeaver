@@ -153,13 +153,10 @@ internal sealed class MeshService(
         if (persistence == null)
             return CreateNode(node);
 
-        return Observable.FromAsync(async ct =>
-        {
-            // Persist directly with Transient state — bypasses the CreateNodeRequest handler
-            // which would force Active state.
-            var transientNode = node with { State = MeshNodeState.Transient };
-            return await persistence.SaveNodeAsync(transientNode, ct);
-        });
+        // Persist directly with Transient state — bypasses the CreateNodeRequest handler
+        // which would force Active state.
+        var transientNode = node with { State = MeshNodeState.Transient };
+        return persistence.SaveNode(transientNode);
     }
 
     // === Query (delegated to MeshQuery) ===

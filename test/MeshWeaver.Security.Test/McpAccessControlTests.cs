@@ -83,7 +83,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetCircuitContext(new AccessContext
         {
-            ObjectId = response.UserEmail!,
+            ObjectId = response.UserId ?? response.UserEmail!,
             Name = response.UserName ?? "",
             Email = response.UserEmail!,
         });
@@ -115,12 +115,14 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         {
             Name = "Public Project",
             NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Public\nInitial content." },
         }, ct: TestTimeout);
 
         await NodeFactory.CreateNodeAsync(new MeshNode("Confidential", "SharedOrg")
         {
             Name = "Confidential Project",
             NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Confidential" },
         }, ct: TestTimeout);
 
         await NodeFactory.CreateNodeAsync(new MeshNode("PrivateOrg")
@@ -133,6 +135,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         {
             Name = "Secret Data",
             NodeType = "Markdown",
+            Content = new MeshWeaver.Markdown.MarkdownContent { Content = "# Secret" },
         }, ct: TestTimeout);
 
         // Create API tokens for test users (while admin context is active)

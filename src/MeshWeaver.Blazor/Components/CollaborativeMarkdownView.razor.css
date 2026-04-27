@@ -1,9 +1,78 @@
 /* ==========================================================================
    CollaborativeMarkdownView — Modern Google Docs / Word-style
    Uses Fluent design tokens (var(--neutral-*)) for theme support.
-   CSS custom properties defined in <style> block in .razor file.
    All annotation styles use ::deep to target MarkupString HTML content.
    ========================================================================== */
+
+/* --- Annotation Theme (CSS Custom Properties) --- */
+
+.collab-md-container {
+    --annotation-comment-bg: #fff8c5;
+    --annotation-comment-border: #d4a72c;
+    --annotation-comment-dot: #bf8700;
+    --annotation-insert-bg: #dafbe1;
+    --annotation-insert-border: #22863a;
+    --annotation-insert-color: #22863a;
+    --annotation-delete-bg: #ffebe9;
+    --annotation-delete-border: #cf222e;
+    --annotation-delete-color: #cf222e;
+    --annotation-delete-text: #656d76;
+    --annotation-active-border: #0969da;
+    --annotation-active-bg: rgba(9, 105, 218, 0.08);
+    --annotation-comment-label-bg: #fffbeb;
+    --annotation-comment-label-color: #78350f;
+    --annotation-insert-label-bg: #ecfdf5;
+    --annotation-insert-label-color: #064e3b;
+    --annotation-delete-label-bg: #fef2f2;
+    --annotation-delete-label-color: #7f1d1d;
+    --annotation-border-separator: rgba(0, 0, 0, 0.1);
+}
+
+.collab-md-container[data-theme="dark"] {
+    --annotation-comment-bg: rgba(187, 128, 9, 0.15);
+    --annotation-comment-border: #d29922;
+    --annotation-comment-dot: #d29922;
+    --annotation-insert-bg: rgba(46, 160, 67, 0.15);
+    --annotation-insert-border: #3fb950;
+    --annotation-insert-color: #3fb950;
+    --annotation-delete-bg: rgba(248, 81, 73, 0.15);
+    --annotation-delete-border: #f85149;
+    --annotation-delete-color: #f85149;
+    --annotation-delete-text: #8b949e;
+    --annotation-active-border: #58a6ff;
+    --annotation-active-bg: rgba(56, 139, 253, 0.15);
+    --annotation-comment-label-bg: #451a03;
+    --annotation-comment-label-color: #fef3c7;
+    --annotation-insert-label-bg: #064e3b;
+    --annotation-insert-label-color: #d1fae5;
+    --annotation-delete-label-bg: #7f1d1d;
+    --annotation-delete-label-color: #fee2e2;
+    --annotation-border-separator: rgba(255, 255, 255, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+    .collab-md-container:not([data-theme="light"]) {
+        --annotation-comment-bg: rgba(187, 128, 9, 0.15);
+        --annotation-comment-border: #d29922;
+        --annotation-comment-dot: #d29922;
+        --annotation-insert-bg: rgba(46, 160, 67, 0.15);
+        --annotation-insert-border: #3fb950;
+        --annotation-insert-color: #3fb950;
+        --annotation-delete-bg: rgba(248, 81, 73, 0.15);
+        --annotation-delete-border: #f85149;
+        --annotation-delete-color: #f85149;
+        --annotation-delete-text: #8b949e;
+        --annotation-active-border: #58a6ff;
+        --annotation-active-bg: rgba(56, 139, 253, 0.15);
+        --annotation-comment-label-bg: #451a03;
+        --annotation-comment-label-color: #fef3c7;
+        --annotation-insert-label-bg: #064e3b;
+        --annotation-insert-label-color: #d1fae5;
+        --annotation-delete-label-bg: #7f1d1d;
+        --annotation-delete-label-color: #fee2e2;
+        --annotation-border-separator: rgba(255, 255, 255, 0.1);
+    }
+}
 
 /* --- Container & Layout --- */
 

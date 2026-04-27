@@ -50,17 +50,17 @@ public static class UserActivityLayoutAreas
             var isOwner = string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase);
 
             if (isOwner)
-                return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName, nodeOwnerId);
+                return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName, nodeOwnerId, ownerNode);
             else
                 return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
         });
     }
 
     /// <summary>
-    /// Personal dashboard shown to the node owner — welcome banner, chat, threads,
-    /// activity feed, recently viewed, and child items.
+    /// Personal dashboard shown to the node owner — welcome banner, pinned items, threads,
+    /// child items, activity feed, recently viewed, and the chat input pinned to the bottom.
     /// </summary>
-    private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName, string nodeOwnerId)
+    private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName, string nodeOwnerId, MeshNode? ownerNode)
     {
         // Outer shell: flex column, fills the available main area (height managed by CSS grid)
         var dashboard = Controls.Stack
@@ -75,18 +75,20 @@ public static class UserActivityLayoutAreas
             $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
             "</div>"));
 
-        // Chat — full width
-        dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
-
         // Scrollable content area — full-width layout grid
         var content = Controls.LayoutGrid
             .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; gap: 24px; width: 100%; " + ThinScrollbar);
 
-        // Latest Threads — full width, above My Items
+        // Pinned items — compact, first section
+        var pinnedSection = BuildPinnedItems(ownerNode);
+        if (pinnedSection != null)
+            content = content.WithView(pinnedSection, skin => skin.WithXs(12));
+
+        // Latest Threads — full width
         content = content.WithView(BuildLatestThreads(nodePath, nodeOwnerId),
             skin => skin.WithXs(12));
 
-        // My Items — full width, below Latest Threads
+        // My Items — full width
         content = content.WithView(BuildChildren(nodePath),
             skin => skin.WithXs(12));
 
@@ -101,6 +103,9 @@ public static class UserActivityLayoutAreas
             skin => skin.WithXs(12).WithSm(4));
 
         dashboard = dashboard.WithView(content);
+
+        // Chat input — pinned to the bottom of the dashboard column
+        dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
 
         return dashboard;
     }
@@ -154,7 +159,8 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(false)
             .WithMaxColumns(4)
             .WithItemLimit(50)
-            .WithMaxRows(2));
+            .WithMaxRows(2)
+            .WithReactiveMode(true));
 
         // Visible child nodes — security service automatically filters to viewer-visible nodes
         content = content.WithView(Controls.MeshSearch
@@ -166,7 +172,8 @@ public static class UserActivityLayoutAreas
             .WithItemLimit(50)
             .WithMaxRows(3)
             .WithMaxColumns(4)
-            .WithCollapsibleSections(true));
+            .WithCollapsibleSections(true)
+            .WithReactiveMode(true));
 
         profile = profile.WithView(content);
         return profile;
@@ -192,18 +199,12 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Activity timeline — shows main content nodes with recent changes, plus a pinned docs card.
+    /// Activity timeline — shows main content nodes with recent changes.
     /// source:activity JOINs with Activity satellites and orders by most recent activity.
     /// </summary>
     private static UiControl BuildActivityFeed()
     {
-        var section = Controls.Stack;
-
-        // Pinned documentation card
-        section = section.WithView(BuildDocumentationCard());
-
-        // Activity feed
-        section = section.WithView(Controls.MeshSearch
+        return Controls.MeshSearch
             .WithTitle("Activity Feed")
             .WithHiddenQuery("source:activity scope:subtree is:main sort:LastModified-desc")
             .WithShowSearchBox(false)
@@ -212,46 +213,35 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(false)
             .WithMaxColumns(2)
             .WithItemLimit(50)
-            .WithMaxRows(4));
-
-        return section;
+            .WithMaxRows(4)
+            .WithReactiveMode(true);
     }
 
     /// <summary>
-    /// Pinned welcome card linking to the documentation — styled like a social feed post.
+    /// Pinned items — compact cards of everything in the owner's <see cref="User.PinnedPaths"/>.
+    /// Each card is rendered via <see cref="PinLayoutArea.PinnedThumbnailArea"/>, which overlays
+    /// an unpin icon so owners can remove items inline. Returns <c>null</c> when nothing is pinned.
     /// </summary>
-    private static UiControl BuildDocumentationCard()
+    private static UiControl? BuildPinnedItems(MeshNode? ownerNode)
     {
-        return Controls.Html(
-            "<a href=\"/Doc\" style=\"text-decoration: none; color: inherit; display: block;\">" +
-            "<div style=\"display: flex; gap: 14px; padding: 14px 16px; border-radius: 12px; " +
-            "background: var(--neutral-layer-2); border-left: 3px solid var(--accent-fill-rest); " +
-            "transition: transform 0.15s ease, box-shadow 0.15s ease;\" " +
-            "onmouseenter=\"this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 16px rgba(0,0,0,0.12)'\" " +
-            "onmouseleave=\"this.style.transform='none'; this.style.boxShadow='none'\">" +
+        var pinnedPaths = (ownerNode?.Content as User)?.PinnedPaths;
+        if (pinnedPaths == null || pinnedPaths.Count == 0)
+            return null;
 
-            // Logo avatar
-            "<div style=\"flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; " +
-            "background: var(--neutral-layer-3); " +
-            "display: flex; align-items: center; justify-content: center;\">" +
-            "<img src=\"/static/storage/content/MeshWeaver/logo.svg\" alt=\"\" style=\"width: 24px; height: 24px;\" />" +
-            "</div>" +
-
-            // Content
-            "<div style=\"flex: 1; min-width: 0;\">" +
-            "<div style=\"display: flex; align-items: center; gap: 8px;\">" +
-            "<span style=\"font-weight: 600; font-size: 0.9rem;\">MeshWeaver</span>" +
-            "<span style=\"font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; " +
-            "background: rgba(100,100,100,0.12); color: var(--accent-fill-rest); font-weight: 500;\">Pinned</span>" +
-            "</div>" +
-            "<div style=\"font-size: 0.9rem; margin-top: 6px; line-height: 1.5;\">" +
-            "Explore the documentation, try the use cases, or just <strong>open the chat below</strong> and ask anything.</div>" +
-            "<div style=\"display: inline-flex; align-items: center; gap: 4px; " +
-            "margin-top: 8px; padding: 4px 12px; border-radius: 6px; " +
-            "background: var(--neutral-layer-3); " +
-            "color: var(--accent-foreground-rest); font-size: 0.8rem; font-weight: 500;\">" +
-            "&#8594; Documentation</div>" +
-            "</div></div></a>");
+        var pathsClause = string.Join(" OR ", pinnedPaths);
+        return Controls.MeshSearch
+            .WithTitle("Pinned")
+            .WithHiddenQuery($"path:({pathsClause}) sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemArea(PinLayoutArea.PinnedThumbnailArea)
+            .WithMaxColumns(6)
+            .WithItemLimit(24)
+            .WithMaxRows(1)
+            .WithReactiveMode(true);
     }
 
     /// <summary>
@@ -270,7 +260,8 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(false)
             .WithMaxColumns(1)
             .WithItemLimit(20)
-            .WithMaxRows(4);
+            .WithMaxRows(4)
+            .WithReactiveMode(true);
     }
 
     /// <summary>
@@ -281,13 +272,14 @@ public static class UserActivityLayoutAreas
     {
         return Controls.MeshSearch
             .WithTitle("Latest Threads")
-            .WithHiddenQuery($"nodeType:Thread namespace:*/_Thread sort:LastModified-desc")
+            .WithHiddenQuery($"nodeType:Thread namespace:*/_Thread content.createdBy:{nodeOwnerId} sort:LastModified-desc")
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithItemLimit(50)
             .WithMaxRows(2)
             .WithMaxColumns(4)
+            .WithReactiveMode(true)
             .WithCreateNodeType("Thread")
             .WithCreateNamespace(nodePath);
     }
@@ -308,6 +300,7 @@ public static class UserActivityLayoutAreas
             .WithMaxRows(3)
             .WithMaxColumns(4)
             .WithCollapsibleSections(true)
+            .WithReactiveMode(true)
             .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodePath)}");
     }
 

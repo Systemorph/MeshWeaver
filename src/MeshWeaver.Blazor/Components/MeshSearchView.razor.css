@@ -163,7 +163,8 @@
 }
 
 .mesh-search-show-more {
-    margin-top: 8px;
+    margin-top: 16px;
+    padding-top: 8px;
 }
 
 .mesh-search-show-more a {

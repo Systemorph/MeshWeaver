@@ -45,6 +45,7 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.ThreadChatArea, ThreadChatView)
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
+                .WithView(ThreadNodeType.HeaderArea, HeaderView)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
 
@@ -517,5 +518,302 @@ public static class ThreadLayoutAreas
             .WithNamespace(nodePath)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCreateNodeType("Thread");
+    }
+
+    /// <summary>
+    /// Header area shown above the chat. Renders, when applicable:
+    ///   • A back-link to the parent thread (if this is a delegation sub-thread —
+    ///     detected by path nesting under another thread's response message id).
+    ///   • A summary of nodes modified during this thread's runs, aggregated across
+    ///     every <see cref="ThreadMessage.UpdatedNodes"/> entry, with version-before/
+    ///     version-after. Each entry links to the node's Versions area where the
+    ///     existing compare/restore UI lives.
+    /// Pure subscription on the thread MeshNode; no awaits, no QueryAsync.
+    /// </summary>
+    public static IObservable<UiControl?> HeaderView(LayoutAreaHost host, RenderingContext _)
+    {
+        var threadPath = host.Hub.Address.ToString();
+        var parentLink = TryBuildParentLink(threadPath);
+
+        var stream = host.Workspace.GetStream(new MeshNodeReference());
+        if (stream is null)
+            return Observable.Return<UiControl?>(parentLink);
+
+        // Emit an immediate starting value so the LayoutAreaView never shows a skeleton
+        // for this area — the header is ancillary and should never block the chat view.
+        // Subsequent emissions fold in the aggregated UpdatedNodes summary.
+        var initial = Observable.Return<UiControl?>(BuildHeader(parentLink, ImmutableList<NodeChangeEntry>.Empty, threadPath));
+
+        var aggregated = stream
+            .Select(change => (change.Value?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty)
+            .Where(ids => ids.Count > 0)
+            .Select(ids => (ids, key: string.Join("|", ids)))
+            .DistinctUntilChanged(p => p.key)
+            .Select(p => CollectUpdatedNodes(host.Hub, threadPath, p.ids))
+            .Switch()
+            .Select(updates => BuildHeader(parentLink, updates, threadPath));
+
+        return initial.Concat(aggregated);
+    }
+
+    /// <summary>
+    /// Walks <paramref name="messageIds"/>, requests each satellite ThreadMessage via
+    /// GetDataRequest (Post + RegisterCallback wrapped as an Observable), accumulates
+    /// their UpdatedNodes, and emits the aggregated list once all responses arrive.
+    /// </summary>
+    private static IObservable<ImmutableList<NodeChangeEntry>> CollectUpdatedNodes(
+        IMessageHub hub, string threadPath, ImmutableList<string> messageIds)
+    {
+        if (messageIds.IsEmpty) return Observable.Return(ImmutableList<NodeChangeEntry>.Empty);
+
+        var subjects = messageIds.Select(id =>
+        {
+            var subject = new System.Reactive.Subjects.AsyncSubject<ImmutableList<NodeChangeEntry>>();
+            var del = hub.Post(new GetDataRequest(new MeshNodeReference()),
+                o => o.WithTarget(new Address($"{threadPath}/{id}")));
+            if (del is null)
+            {
+                subject.OnNext(ImmutableList<NodeChangeEntry>.Empty);
+                subject.OnCompleted();
+            }
+            else
+            {
+                hub.RegisterCallback((IMessageDelivery)del, resp =>
+                {
+                    var msg = resp is IMessageDelivery<GetDataResponse> gdr
+                        ? (gdr.Message.Data as MeshNode)?.Content as ThreadMessage
+                        : null;
+                    subject.OnNext(msg?.UpdatedNodes ?? ImmutableList<NodeChangeEntry>.Empty);
+                    subject.OnCompleted();
+                    return resp;
+                });
+            }
+            return subject.AsObservable();
+        }).ToList();
+
+        return Observable.CombineLatest(subjects)
+            .Select(parts => ThreadExecution.AggregateNodeChanges(
+                parts.SelectMany(p => p).ToImmutableList()))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<ImmutableList<NodeChangeEntry>, Exception>(_ =>
+                Observable.Return(ImmutableList<NodeChangeEntry>.Empty));
+    }
+
+    private static UiControl? TryBuildParentLink(string threadPath)
+    {
+        // Sub-thread paths nest under a parent response message:
+        //   {parentThreadPath}/{parentResponseMsgId}/{thisThreadId}
+        // If we can find a ".../<8-hex-id>/<id>" pattern we treat this as a delegation.
+        var segments = threadPath.Split('/');
+        if (segments.Length < 3) return null;
+        var parentMsgId = segments[^2];
+        if (parentMsgId.Length != 8) return null;
+        var parentThreadPath = string.Join('/', segments[..^2]);
+        if (string.IsNullOrEmpty(parentThreadPath)) return null;
+
+        var encoded = System.Web.HttpUtility.HtmlEncode(parentThreadPath);
+        var html =
+            $"<a href=\"/{encoded}\" style=\"display:inline-flex; align-items:center; gap:6px; " +
+            $"font-size:0.78rem; color:var(--accent-fill-rest); text-decoration:none; " +
+            $"padding:4px 10px; border:1px solid var(--neutral-stroke-rest); border-radius:14px;\">" +
+            $"<span>&#8592;</span> Delegated from <code style=\"font-size:0.72rem;\">{encoded}</code></a>";
+        return Controls.Html(html);
+    }
+
+    private static UiControl? BuildHeader(UiControl? parentLink, ImmutableList<NodeChangeEntry> updates, string threadPath)
+    {
+        if (parentLink is null && updates.IsEmpty) return null;
+
+        var stack = Controls.Stack
+            .WithStyle("gap:6px; padding:8px 12px; margin-bottom:8px; " +
+                       "background:var(--neutral-layer-1); border:1px solid var(--neutral-stroke-rest); " +
+                       "border-radius:8px;");
+
+        if (parentLink is not null)
+            stack = stack.WithView(parentLink);
+
+        if (!updates.IsEmpty)
+            stack = stack.WithView(Controls.Html(BuildModifiedNodesHtml(updates, threadPath)));
+
+        return stack;
+    }
+
+    /// <summary>
+    /// Git-like panel for the aggregated UpdatedNodes list:
+    /// - Tabular layout (CSS grid): path · old-ver · → · new-ver · Diff · Restore v{old} · Restore v{new}.
+    /// - All action links visible inline on each row (no hidden ⋯ menu).
+    /// - Theme-safe colours that work in dark + light mode (no white-on-light-blue).
+    /// - Paths rendered relative to the thread's parent namespace so the most
+    ///   interesting segment (leaf) stays visible when the table narrows.
+    /// - On screens &lt; 720 px the whole section collapses behind a summary row.
+    /// </summary>
+    private static string BuildModifiedNodesHtml(ImmutableList<NodeChangeEntry> updates, string threadPath)
+    {
+        // Derive the ancestor prefix we can strip from each node path to produce a
+        // shorter display form. For a thread at "Org/_Thread/abc", the interesting
+        // prefix to strip is "Org/" (the thread's root namespace, above _Thread).
+        var threadIdx = threadPath.IndexOf("/_Thread/", StringComparison.Ordinal);
+        var shortenPrefix = threadIdx > 0 ? threadPath[..(threadIdx + 1)] : null;
+
+        static string Shorten(string path, string? prefix) =>
+            prefix is not null && path.StartsWith(prefix, StringComparison.Ordinal)
+                ? path[prefix.Length..]
+                : path;
+
+        var sb = new System.Text.StringBuilder();
+
+        // Inline <style> block scoped by a unique class so the grid + media-query
+        // rules apply to the rendered HTML. Lives inside the injected markdown; Blazor
+        // passes it through untouched.
+        sb.Append("""
+            <style>
+            .thread-mod-nodes { width:100%; }
+            .thread-mod-nodes > summary {
+                list-style:none; cursor:pointer;
+                font-size:0.8rem; font-weight:600;
+                color:var(--neutral-foreground-hint);
+                padding:4px 0;
+            }
+            .thread-mod-nodes > summary::-webkit-details-marker { display:none; }
+            .thread-mod-grid {
+                display:grid;
+                grid-template-columns: minmax(0,1fr) auto auto auto auto auto auto;
+                align-items:center;
+                gap:6px 10px;
+                margin-top:6px;
+                font-size:0.78rem;
+                color:var(--neutral-foreground-rest);
+            }
+            .thread-mod-grid a {
+                text-decoration:none;
+                color:var(--accent-fill-rest);
+            }
+            .thread-mod-grid a:hover { text-decoration:underline; }
+            .thread-mod-row {
+                display:contents;
+            }
+            .thread-mod-path {
+                min-width:0;
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                padding:4px 6px;
+                border-radius:4px;
+            }
+            .thread-mod-path:hover { background:var(--neutral-layer-2); }
+            .thread-mod-chip {
+                padding:1px 6px; border-radius:10px;
+                background:var(--neutral-layer-3);
+                color:var(--neutral-foreground-rest) !important;
+                font-family:monospace; font-size:0.72rem;
+                border:1px solid var(--neutral-stroke-rest);
+            }
+            .thread-mod-chip-new {
+                color:var(--accent-fill-rest) !important;
+                border-color:var(--accent-fill-rest);
+                font-weight:600;
+            }
+            .thread-mod-arrow { color:var(--neutral-foreground-hint); }
+            .thread-mod-action {
+                padding:2px 8px; border-radius:4px;
+                font-size:0.74rem;
+                color:var(--accent-fill-rest) !important;
+                white-space:nowrap;
+            }
+            .thread-mod-action:hover { background:var(--neutral-layer-2); }
+            .thread-mod-action-muted {
+                color:var(--neutral-foreground-hint) !important;
+            }
+            .thread-mod-marker {
+                font-size:0.72rem; color:var(--neutral-foreground-hint); font-style:italic;
+            }
+            /* Small-screen: collapse the whole section under its summary. */
+            @media (max-width: 720px) {
+                .thread-mod-nodes[data-wide-inline="true"] > .thread-mod-grid { display:none; }
+                .thread-mod-nodes[data-wide-inline="true"][open] > .thread-mod-grid { display:grid; }
+                .thread-mod-grid {
+                    grid-template-columns: minmax(0,1fr) auto auto;
+                }
+                .thread-mod-action-mobile-hide { display:none; }
+            }
+            /* Wide-screen: the <details> is always open (summary acts as header). */
+            @media (min-width: 721px) {
+                .thread-mod-nodes[data-wide-inline="true"] > .thread-mod-grid { display:grid; }
+                .thread-mod-nodes[data-wide-inline="true"] > summary { pointer-events:none; }
+            }
+            </style>
+            """);
+
+        sb.Append("<details class=\"thread-mod-nodes\" data-wide-inline=\"true\" open>");
+        sb.Append($"<summary><span style=\"display:inline-block; width:10px;\">&#9656;</span> Modified nodes ({updates.Count})</summary>");
+
+        sb.Append("<div class=\"thread-mod-grid\">");
+
+        foreach (var entry in updates)
+        {
+            var path = entry.Path;
+            var pathEnc = System.Web.HttpUtility.HtmlEncode(path);
+            var displayEnc = System.Web.HttpUtility.HtmlEncode(Shorten(path, shortenPrefix));
+            var op = entry.Operation ?? "";
+
+            sb.Append("<div class=\"thread-mod-row\">");
+
+            // Column 1: path (truncates on narrow layouts)
+            sb.Append(
+                $"<a href=\"/{pathEnc}\" title=\"{pathEnc}\" class=\"thread-mod-path\">{displayEnc}</a>");
+
+            // Column 2: old version chip or "new" marker
+            if (entry.VersionBefore is { } vb)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/Versions?version={vb}\" class=\"thread-mod-chip\" title=\"View v{vb}\">v{vb}</a>");
+            else if (op.Equals("Created", StringComparison.OrdinalIgnoreCase))
+                sb.Append("<span class=\"thread-mod-marker\">new</span>");
+            else
+                sb.Append("<span></span>");
+
+            // Column 3: arrow
+            sb.Append("<span class=\"thread-mod-arrow\">&#8594;</span>");
+
+            // Column 4: new version chip or "deleted" marker
+            if (entry.VersionAfter is { } va)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/Versions?version={va}\" class=\"thread-mod-chip thread-mod-chip-new\" title=\"View v{va}\">v{va}</a>");
+            else if (op.Equals("Deleted", StringComparison.OrdinalIgnoreCase))
+                sb.Append("<span class=\"thread-mod-marker\">deleted</span>");
+            else
+                sb.Append("<span></span>");
+
+            // Column 5: Diff (old ↔ new) — points to VersionDiff with from/to params.
+            if (entry.VersionBefore.HasValue && entry.VersionAfter.HasValue)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/VersionDiff?from={entry.VersionBefore.Value}&to={entry.VersionAfter.Value}\" " +
+                    $"class=\"thread-mod-action thread-mod-action-mobile-hide\" " +
+                    $"title=\"Compare v{entry.VersionBefore.Value} to v{entry.VersionAfter.Value}\">Diff</a>");
+            else
+                sb.Append("<span class=\"thread-mod-action-mobile-hide\"></span>");
+
+            // Column 6: Restore to old — opens VersionDiff (which has the Restore button).
+            if (entry.VersionBefore.HasValue)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/VersionDiff?version={entry.VersionBefore.Value}\" " +
+                    $"class=\"thread-mod-action thread-mod-action-muted thread-mod-action-mobile-hide\" " +
+                    $"title=\"Revert to v{entry.VersionBefore.Value}\">Restore v{entry.VersionBefore.Value}</a>");
+            else
+                sb.Append("<span class=\"thread-mod-action-mobile-hide\"></span>");
+
+            // Column 7: Restore to new — opens VersionDiff (which has the Restore button).
+            if (entry.VersionAfter.HasValue)
+                sb.Append(
+                    $"<a href=\"/{pathEnc}/VersionDiff?version={entry.VersionAfter.Value}\" " +
+                    $"class=\"thread-mod-action thread-mod-action-muted thread-mod-action-mobile-hide\" " +
+                    $"title=\"Restore v{entry.VersionAfter.Value}\">Restore v{entry.VersionAfter.Value}</a>");
+            else
+                sb.Append("<span class=\"thread-mod-action-mobile-hide\"></span>");
+
+            sb.Append("</div>");
+        }
+
+        sb.Append("</div>");
+        sb.Append("</details>");
+        return sb.ToString();
     }
 }

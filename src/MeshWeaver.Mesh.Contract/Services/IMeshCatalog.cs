@@ -44,14 +44,6 @@ internal interface IMeshCatalog : IPathResolver
     Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default);
 
     /// <summary>
-    /// Deletes a node from the catalog.
-    /// </summary>
-    /// <param name="path">The path of the node to delete</param>
-    /// <param name="recursive">If true, also delete all descendant nodes</param>
-    /// <param name="ct">Cancellation token</param>
-    Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default);
-
-    /// <summary>
     /// Resolves a full URL path to an address using score-based matching.
     /// Returns the best matching node's address and the remaining path segments.
     /// Score is the number of matching segments from the path start.

@@ -61,8 +61,18 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected List<IDisposable> Disposables { get; } = new();
 
+    private bool _viewDisposed;
+
+    /// <summary>True after <see cref="DisposeAsync"/> has been entered. Subscription callbacks
+    /// can check this to avoid invoking <see cref="StateHasChanged"/> on a dead renderer.</summary>
+    protected bool IsViewDisposed => _viewDisposed;
+
     public virtual ValueTask DisposeAsync()
     {
+        // Set the flag BEFORE disposing subscriptions so any in-flight callbacks
+        // queued by Subscribe(...) onto the synchronization context can short-circuit
+        // on IsViewDisposed instead of touching a torn-down renderer.
+        _viewDisposed = true;
         Logger.LogDebug("Disposing area {Area}", Area);
         DisposeBindings();
         foreach (var d in Disposables)
@@ -108,18 +118,32 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                         bindings.Add(Stream.DataBind(reference, DataContext, conversion, defaultValue)
                             .Subscribe(v =>
                                 {
+                                    if (_viewDisposed) return;
                                     try
                                     {
                                         Logger.LogTrace("Binding property in Area {area}", Area);
                                         InvokeAsync(() =>
                                         {
-                                            setter(v);
-                                            RequestStateChange();
+                                            // Re-check after dispatch — the renderer may have
+                                            // been torn down between Subscribe.OnNext and the
+                                            // synchronization-context callback firing.
+                                            if (_viewDisposed) return;
+                                            try
+                                            {
+                                                setter(v);
+                                                RequestStateChange();
+                                            }
+                                            catch (ObjectDisposedException) { /* renderer gone */ }
+                                            catch (Exception ex)
+                                            {
+                                                Logger.LogError(ex, "Error setting bound property value in Area {area}", Area);
+                                            }
                                         });
                                     }
+                                    catch (ObjectDisposedException) { /* renderer gone */ }
                                     catch (Exception ex)
                                     {
-                                        Logger.LogError(ex, "Error setting bound property value in Area {area}", Area);
+                                        Logger.LogError(ex, "Error scheduling bound property update in Area {area}", Area);
                                     }
                                 }
                             )

@@ -45,7 +45,7 @@ You have ALL tools: Get, Search, NavigateTo, Create, Update, Delete, SearchWeb, 
 **Paths are relative to the current context by default.** Absolute paths start with `/`.
 
 **In tool calls**, use relative paths when referring to things in the current context:
-- `Get('@content:report.docx')` — file in current node's collection
+- `Get('@content/report.docx')` — file in current node's collection
 - `Get('@MyChild/*')` — children of a child node
 - `Get('@/OrgA/Doc')` — absolute path (starts with `/`)
 
@@ -105,6 +105,14 @@ Nodes can have satellite data stored in dedicated sub-namespaces:
 | `_Tracking` | Track changes | `org/Doc/_Tracking/change-id` |
 
 Satellite nodes live at `{parentPath}/{_Prefix}/{nodeId}` and are persisted in separate database tables per partition.
+
+# Markdown Node Creation Rules
+
+When creating Markdown nodes (directly or via delegation):
+- **Always set `icon`** to a unique inline SVG (starting with `<svg`) that visually represents the content. Never omit the icon.
+- **Never use emoji** in the `name` field. The SVG icon provides visual identity.
+- **Never start content with a heading** (`# Title`). The `name` field is displayed as the page title — repeating it in content duplicates the heading.
+- Content should begin directly with the first paragraph of text.
 
 # Guidelines
 

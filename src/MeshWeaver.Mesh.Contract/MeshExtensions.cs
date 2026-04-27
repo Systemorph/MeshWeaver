@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -64,6 +65,17 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Registers only the <see cref="HeartBeatEvent"/> handler. Use on hubs that
+    /// should swallow heartbeats silently (e.g. per-node hubs spawned from a
+    /// NodeType's configuration) without pulling in the full node-operation
+    /// handler set. Without this handler the message service logs a warning per
+    /// heartbeat, so targets that receive heartbeats but don't need to keep an
+    /// Orleans grain alive should still register it as a no-op.
+    /// </summary>
+    public static MessageHubConfiguration WithHeartBeatHandler(this MessageHubConfiguration config)
+        => config.WithHandler<HeartBeatEvent>(HandleHeartBeat);
+
+    /// <summary>
     /// Handles HeartBeatEvent: signals the Orleans grain to delay deactivation.
     /// Walks up the parent hub chain because GrainKeepAliveCallback is set on the
     /// grain's top-level hub, not on child hubs (threads, messages, _Exec).
@@ -91,10 +103,16 @@ public static class MeshExtensions
         return delivery.Processed();
     }
 
-    private static async Task<IMessageDelivery> HandleCreateNodeRequest(
+    /// <summary>
+    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
+    /// All async work is wrapped in <c>Observable.FromAsync</c> and composed via Subscribe; the
+    /// terminal response is posted from inside the deepest callback. The handler itself returns
+    /// <c>request.Processed()</c> immediately so the hub scheduler is never blocked.
+    /// See <c>Doc/Architecture/AsynchronousCalls</c>.
+    /// </summary>
+    private static IMessageDelivery HandleCreateNodeRequest(
         IMessageHub hub,
-        IMessageDelivery<CreateNodeRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<CreateNodeRequest> request)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
         var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
@@ -108,338 +126,413 @@ public static class MeshExtensions
             return request.Processed();
         }
 
-        try
-        {
-            var createRequest = request.Message;
+        var createRequest = request.Message;
 
-            // Identity resolution: if no explicit CreatedBy, use the sender's
-            // AccessContext identity from the authenticated pipeline.
-            if (string.IsNullOrEmpty(createRequest.CreatedBy)
-                && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
-                createRequest = createRequest with { CreatedBy = senderId };
+        // Identity resolution: if no explicit CreatedBy, use the sender's AccessContext identity.
+        if (string.IsNullOrEmpty(createRequest.CreatedBy)
+            && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
+            createRequest = createRequest with { CreatedBy = senderId };
 
-            var node = createRequest.Node;
+        var capturedRequest = createRequest;
+        var node = createRequest.Node;
 
-            // 0. Validate path is not empty or whitespace
-            if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
-            {
-                hub.Post(
-                    CreateNodeResponse.Fail("Node path and Id must not be empty", NodeCreationRejectionReason.ValidationFailed),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 1. Check if node already exists
-            // Use persistence directly (not catalog.GetNodeAsync which auto-creates from templates)
-            var existingNode = persistence != null
-                ? await persistence.GetNodeAsync(node.Path, ct)
-                : null;
-            // Also check in-memory configuration for statically registered nodes
-            if (existingNode == null && catalog.Configuration.Nodes.TryGetValue(node.Path, out var configNode))
-                existingNode = configNode;
-            if (existingNode != null)
-            {
-                // If existing node is Transient and request wants Active, this is a "confirm" operation
-                if (existingNode.State == MeshNodeState.Transient && node.State == MeshNodeState.Active)
-                {
-                    // Merge request node with existing node (preserve NodeType, update content/properties)
-                    var confirmedNode = existingNode with
-                    {
-                        State = MeshNodeState.Active,
-                        Name = node.Name ?? existingNode.Name,
-                        Icon = node.Icon ?? existingNode.Icon,
-                        Category = node.Category ?? existingNode.Category,
-                        Content = node.Content ?? existingNode.Content
-                    };
-
-                    // Save via persistence
-                    if (persistence != null)
-                    {
-                        await persistence.SaveNodeAsync(confirmedNode, ct);
-                    }
-
-                    // Update workspace stream via DataChangeRequest — target the node's hub so subscribed views refresh
-                    hub.Post(DataChangeRequest.Update([confirmedNode]), o => o.WithTarget(new Address(confirmedNode.Path)));
-
-                    // Run post-creation handlers (e.g. grant creator Admin role)
-                    await RunPostCreationHandlersAsync(hub, confirmedNode, createRequest.CreatedBy, logger, ct);
-
-                    hub.Post(CreateNodeResponse.Ok(confirmedNode), o => o.ResponseFor(request));
-                    logger.LogInformation("Confirmed transient node at {Path}", confirmedNode.Path);
-                    return request.Processed();
-                }
-
-                // Node exists and is not a Transient->Active confirmation
-                hub.Post(
-                    CreateNodeResponse.Fail(
-                        $"Node already exists at path: {node.Path}",
-                        NodeCreationRejectionReason.NodeAlreadyExists),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 1b. Auto-set MainNode for satellite types before validation
-            // so that SatelliteAccessRule can delegate to the parent node.
-            if (!string.IsNullOrEmpty(node.NodeType)
-                && !string.IsNullOrEmpty(node.Namespace)
-                && catalog.Configuration.IsSatelliteNodeType(node.NodeType)
-                && node.MainNode == node.Path) // still at default (self-referencing)
-            {
-                node = node with { MainNode = node.Namespace };
-            }
-
-            // 2. Run validators (global + NodeType-specific)
-            var validationError = await RunCreationValidatorsAsync(hub, catalog, node, createRequest, ct);
-            if (validationError != null)
-            {
-                logger.LogWarning("Validator rejected node creation at {Path}: {Error}",
-                    node.Path, validationError.Value.ErrorMessage);
-
-                hub.Post(
-                    CreateNodeResponse.Fail(
-                        validationError.Value.ErrorMessage ?? "Validation failed",
-                        validationError.Value.Reason),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 3. Validate NodeType exists (if specified)
-            if (!string.IsNullOrEmpty(node.NodeType))
-            {
-                var nodeTypeExists = catalog.Configuration.Nodes.ContainsKey(node.NodeType)
-                    || (persistence != null && await persistence.ExistsAsync(node.NodeType, ct));
-                if (!nodeTypeExists)
-                {
-                    hub.Post(
-                        CreateNodeResponse.Fail($"NodeType '{node.NodeType}' is not registered", NodeCreationRejectionReason.InvalidNodeType),
-                        o => o.ResponseFor(request));
-                    return request.Processed();
-                }
-            }
-
-            // 4. Create node with Active state (validated, ready to persist)
-            var newNode = node with { State = MeshNodeState.Active };
-
-            // 4a. MainNode already set in step 1b (before validation)
-
-            // 5. Enrich with HubConfiguration based on NodeType
-            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-            if (nodeTypeService != null)
-            {
-                newNode = await nodeTypeService.EnrichWithNodeTypeAsync(newNode, ct);
-            }
-
-            // 6. Save to persistence
-            if (persistence != null)
-            {
-                newNode = await persistence.SaveNodeAsync(newNode, ct);
-            }
-
-            // 6a. Notify infrastructure of the new node (cache invalidation, query updates)
-            hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                ?.Publish(MeshChangeEvent.Created(newNode));
-
-
-            // 7. Write version history snapshot (non-critical, skip satellite types like threads/comments)
-            if (!catalog.Configuration.IsSatelliteNodeType(newNode.NodeType))
-            {
-                var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                if (versionQuery != null)
-                {
-                    try { await versionQuery.WriteVersionAsync(newNode, hub.JsonSerializerOptions, ct); }
-                    catch { /* version write failure is non-critical */ }
-                }
-            }
-
-            logger.LogInformation("Node created at {Path} by {CreatedBy}", newNode.Path, createRequest.CreatedBy ?? "system");
-
-            // 8. Run post-creation handlers (e.g. grant creator Admin role)
-            await RunPostCreationHandlersAsync(hub, newNode, createRequest.CreatedBy, logger, ct);
-
-            // 9. Return success response
-            hub.Post(CreateNodeResponse.Ok(newNode), o => o.ResponseFor(request));
-
-            return request.Processed();
-        }
-        catch (InvalidOperationException ex)
-        {
-            logger.LogWarning(ex, "Node creation failed for path {Path}", request.Message.Node.Path);
-            hub.Post(
-                CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error during node creation at {Path}", request.Message.Node.Path);
-            hub.Post(
-                CreateNodeResponse.Fail($"Unexpected error: {ex.Message}"),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
-    }
-
-    private static async Task<IMessageDelivery> HandleDeleteNodeRequest(
-        IMessageHub hub,
-        IMessageDelivery<DeleteNodeRequest> request,
-        CancellationToken ct)
-    {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
-        var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-
-        if (catalog == null)
+        // 0. Path validation (sync — fail-fast).
+        if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
         {
             hub.Post(
-                DeleteNodeResponse.Fail("IMeshCatalog not available", NodeDeletionRejectionReason.Unknown),
+                CreateNodeResponse.Fail("Node path and Id must not be empty",
+                    NodeCreationRejectionReason.ValidationFailed),
                 o => o.ResponseFor(request));
             return request.Processed();
         }
 
-        try
-        {
-            var deleteRequest = request.Message;
+        // 1. Read existing — persistence first (catalog.GetNodeAsync auto-creates from templates),
+        //    then fall back to the in-memory config. Wrap in Observable.FromAsync so no `await`.
+        var existingObs = persistence != null
+            ? Observable.FromAsync(token => persistence.GetNodeAsync(node.Path, token))
+            : Observable.Return<MeshNode?>(null);
 
-            // Identity resolution: if no explicit DeletedBy, use AccessContext identity
-            if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
-                && request.AccessContext?.ObjectId is { Length: > 0 } deleteSenderId)
-                deleteRequest = deleteRequest with { DeletedBy = deleteSenderId };
-
-            var path = deleteRequest.Path;
-
-            // 1. Check if node exists
-            var existingNode = await catalog.GetNodeAsync(new Address(path));
-            if (existingNode == null)
+        existingObs
+            .Select(existing =>
             {
-                hub.Post(
-                    DeleteNodeResponse.Fail(
-                        $"Node not found at path: {path}",
-                        NodeDeletionRejectionReason.NodeNotFound),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 2. Run validators on this node (global + NodeType-specific)
-            var validationError = await RunDeletionValidatorsAsync(hub, catalog, existingNode, deleteRequest, ct);
-            if (validationError != null)
+                if (existing == null && catalog.Configuration.Nodes.TryGetValue(node.Path, out var configNode))
+                    return configNode;
+                return existing;
+            })
+            .SelectMany(existingNode =>
             {
-                logger.LogWarning("Validator rejected node deletion at {Path}: {Error}",
-                    path, validationError.Value.ErrorMessage);
-
-                hub.Post(
-                    DeleteNodeResponse.Fail(
-                        validationError.Value.ErrorMessage ?? "Validation failed",
-                        validationError.Value.Reason),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 3. Get direct children
-            var children = new List<MeshNode>();
-            await foreach (var child in catalog.QueryAsync(path, maxResults: int.MaxValue, ct: ct))
-                children.Add(child);
-
-            if (children.Count == 0)
-            {
-                // Leaf node — delete immediately
-                await catalog.DeleteNodeAsync(path, recursive: false, ct);
-                hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                    ?.Publish(MeshChangeEvent.Deleted(path));
-                hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
-                logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
-                return request.Processed();
-            }
-
-            // Non-recursive delete with children — reject
-            if (!deleteRequest.Recursive)
-            {
-                hub.Post(
-                    DeleteNodeResponse.Fail(
-                        $"Node at '{path}' has children. Use recursive delete to remove it.",
-                        NodeDeletionRejectionReason.HasChildren),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 4. Has children — post DeleteNodeRequest for each child, do NOT await.
-            //    Use RegisterCallback to collect responses asynchronously.
-            //    When all children have responded, delete self and post response.
-            var childResponses = new DeleteNodeResponse[children.Count];
-            var remaining = children.Count;
-
-            for (var i = 0; i < children.Count; i++)
-            {
-                var idx = i;
-                var childRequest = new DeleteNodeRequest(children[i].Path) { DeletedBy = deleteRequest.DeletedBy, Recursive = true };
-                var delivery = hub.Post(childRequest, o => o.WithTarget(hub.Address))!;
-
-                _ = hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
+                if (existingNode != null)
                 {
-                    childResponses[idx] = response.Message;
-
-                    if (Interlocked.Decrement(ref remaining) == 0)
+                    // Transient → Active confirmation path.
+                    if (existingNode.State == MeshNodeState.Transient && node.State == MeshNodeState.Active)
                     {
-                        // All children responded — decide on parent deletion
-                        hub.InvokeAsync(async _ =>
+                        var confirmedNode = existingNode with
                         {
-                            var failed = childResponses.Where(r => !r.Success).Select(r => r.Error).ToList();
-                            if (failed.Count > 0)
+                            State = MeshNodeState.Active,
+                            Name = node.Name ?? existingNode.Name,
+                            Icon = node.Icon ?? existingNode.Icon,
+                            Category = node.Category ?? existingNode.Category,
+                            Content = node.Content ?? existingNode.Content
+                        };
+                        var saveObs = persistence != null
+                            ? persistence.SaveNode(confirmedNode)
+                            : Observable.Return(confirmedNode);
+                        return saveObs.Select(savedConfirmed => (mode: "confirm", node: savedConfirmed));
+                    }
+                    // Node exists & not a confirmation → fail.
+                    hub.Post(
+                        CreateNodeResponse.Fail(
+                            $"Node already exists at path: {node.Path}",
+                            NodeCreationRejectionReason.NodeAlreadyExists),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<(string mode, MeshNode node)>();
+                }
+
+                // 1b. Auto-set MainNode for satellite types before validation.
+                if (!string.IsNullOrEmpty(node.NodeType)
+                    && !string.IsNullOrEmpty(node.Namespace)
+                    && catalog.Configuration.IsSatelliteNodeType(node.NodeType)
+                    && node.MainNode == node.Path)
+                {
+                    node = node with { MainNode = node.Namespace };
+                }
+
+                // 2. Validators → 3. NodeType existence → 4-7. Enrich + save + change feed + version
+                return RunCreationValidatorsObs(hub, node, capturedRequest)
+                    .SelectMany(validationError =>
+                    {
+                        if (validationError != null)
+                        {
+                            logger.LogWarning(
+                                "Validator rejected node creation at {Path}: {Error}",
+                                node.Path, validationError.Value.ErrorMessage);
+                            hub.Post(
+                                CreateNodeResponse.Fail(
+                                    validationError.Value.ErrorMessage ?? "Validation failed",
+                                    validationError.Value.Reason),
+                                o => o.ResponseFor(request));
+                            return Observable.Empty<(string mode, MeshNode node)>();
+                        }
+
+                        // 3. NodeType existence check.
+                        IObservable<bool> typeExistsObs;
+                        if (string.IsNullOrEmpty(node.NodeType))
+                        {
+                            typeExistsObs = Observable.Return(true);
+                        }
+                        else if (catalog.Configuration.Nodes.ContainsKey(node.NodeType))
+                        {
+                            typeExistsObs = Observable.Return(true);
+                        }
+                        else if (persistence != null)
+                        {
+                            typeExistsObs = Observable.FromAsync(token =>
+                                persistence.ExistsAsync(node.NodeType, token));
+                        }
+                        else
+                        {
+                            typeExistsObs = Observable.Return(false);
+                        }
+
+                        return typeExistsObs.SelectMany(typeExists =>
+                        {
+                            if (!typeExists)
                             {
                                 hub.Post(
-                                    DeleteNodeResponse.Fail(
-                                        $"Cannot delete '{path}': {failed.Count} child deletion(s) failed: {string.Join("; ", failed)}",
-                                        NodeDeletionRejectionReason.ChildDeletionFailed),
+                                    CreateNodeResponse.Fail(
+                                        $"NodeType '{node.NodeType}' is not registered",
+                                        NodeCreationRejectionReason.InvalidNodeType),
                                     o => o.ResponseFor(request));
+                                return Observable.Empty<(string mode, MeshNode node)>();
                             }
-                            else
+
+                            // 4. Active state.
+                            var newNode = node with { State = MeshNodeState.Active };
+
+                            // 5. Enrich (optional service).
+                            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+                            var enrichedObs = nodeTypeService != null
+                                ? Observable.FromAsync(token => nodeTypeService.EnrichWithNodeTypeAsync(newNode, token))
+                                : Observable.Return(newNode);
+
+                            // 6. Persist.
+                            return enrichedObs.SelectMany(enriched =>
                             {
-                                await catalog.DeleteNodeAsync(path, recursive: false, ct);
-                                hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
-                                logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
-                            }
-                        }, ex =>
-                        {
-                            logger.LogError(ex, "Error completing deletion of {Path}", path);
-                            hub.Post(
-                                DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}"),
-                                o => o.ResponseFor(request));
-                            return Task.CompletedTask;
+                                var saveObs = persistence != null
+                                    ? persistence.SaveNode(enriched)
+                                    : Observable.Return(enriched);
+                                return saveObs.Select(saved => (mode: "create", node: saved));
+                            });
                         });
+                    });
+            })
+            .Subscribe(
+                tuple =>
+                {
+                    var resultNode = tuple.node;
+                    var mode = tuple.mode;
+
+                    // Notify change feed (sync side-effect).
+                    var changeEvent = mode == "create"
+                        ? MeshChangeEvent.Created(resultNode)
+                        : MeshChangeEvent.Updated(resultNode);
+                    hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(changeEvent);
+
+                    // Version history (non-critical, fire-and-forget Subscribe).
+                    if (mode == "create" && !catalog.Configuration.IsSatelliteNodeType(resultNode.NodeType))
+                    {
+                        var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                        if (versionQuery != null)
+                        {
+                            Observable.FromAsync(token =>
+                                    versionQuery.WriteVersionAsync(resultNode, hub.JsonSerializerOptions, token))
+                                .Subscribe(
+                                    _ => { },
+                                    ex => logger.LogWarning(ex,
+                                        "Version history write failed at {Path} (non-critical)",
+                                        resultNode.Path));
+                        }
                     }
 
-                    return response;
-                });
-            }
+                    if (mode == "confirm")
+                    {
+                        // Workspace fan-out for transient confirmation (fire-and-forget — same
+                        // semantics as the previous code).
+                        hub.Post(DataChangeRequest.Update([resultNode]),
+                            o => o.WithTarget(new Address(resultNode.Path)));
+                    }
 
-            // Return immediately — response will be posted from the callbacks above
-            return request.Processed();
-        }
-        catch (InvalidOperationException ex)
-        {
-            logger.LogWarning(ex, "Node deletion failed for path {Path}", request.Message.Path);
-            hub.Post(
-                DeleteNodeResponse.Fail(ex.Message, NodeDeletionRejectionReason.ValidationFailed),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error during node deletion at {Path}", request.Message.Path);
-            hub.Post(
-                DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}"),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                    logger.LogInformation(
+                        mode == "confirm" ? "Confirmed transient node at {Path}" : "Node created at {Path} by {CreatedBy}",
+                        resultNode.Path, capturedRequest.CreatedBy ?? "system");
+
+                    // Run post-creation handlers (Subscribe-based) and post Ok inside the
+                    // OnCompleted so the response only goes out after handlers have all run.
+                    RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
+                        .Subscribe(
+                            _ => { },
+                            ex => logger.LogWarning(ex,
+                                "Post-creation handler chain errored at {Path}", resultNode.Path),
+                            () => hub.Post(CreateNodeResponse.Ok(resultNode),
+                                o => o.ResponseFor(request)));
+                },
+                ex =>
+                {
+                    if (ex is InvalidOperationException)
+                    {
+                        logger.LogWarning(ex, "Node creation failed for path {Path}", node.Path);
+                        hub.Post(
+                            CreateNodeResponse.Fail(ex.Message, NodeCreationRejectionReason.ValidationFailed),
+                            o => o.ResponseFor(request));
+                    }
+                    else
+                    {
+                        logger.LogError(ex, "Unexpected error during node creation at {Path}", node.Path);
+                        hub.Post(
+                            CreateNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                                NodeCreationRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                    }
+                });
+
+        return request.Processed();
     }
 
     /// <summary>
-    /// Runs all creation validators from DI using the unified INodeValidator interface.
+    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
+    /// No <c>IMeshCatalog</c> usage:
+    /// <list type="bullet">
+    /// <item>Own-node read: <c>hub.GetWorkspace().GetStream&lt;MeshNode&gt;().Take(1)</c> — the
+    /// node-operation handlers run on the node's own hub (registered via MeshDataSource), so
+    /// the workspace already has the live MeshNode in its replay-cached BehaviorSubject.</item>
+    /// <item>Children listing: internal <see cref="IMeshQueryCore"/> with <c>namespace:{path}</c>
+    /// — bypasses access control because the caller has already passed RunDeletionValidatorsObs.</item>
+    /// <item>Self / child deletion: <see cref="IMeshService.DeleteNode"/>, which Posts
+    /// <see cref="DeleteNodeRequest"/> through the security pipeline and returns
+    /// <c>IObservable&lt;bool&gt;</c>. No <c>catalog.DeleteNodeAsync</c> call.</item>
+    /// </list>
+    /// Recursive child deletes are issued in parallel; on the FIRST failure observed, the
+    /// parent's Fail response is posted (in-flight child deletes are not aborted but the
+    /// parent will not be deleted).
     /// </summary>
-    private static async Task<(string? ErrorMessage, NodeCreationRejectionReason Reason)?> RunCreationValidatorsAsync(
+    private static IMessageDelivery HandleDeleteNodeRequest(
         IMessageHub hub,
-        IMeshCatalog _,
+        IMessageDelivery<DeleteNodeRequest> request)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var deleteRequest = request.Message;
+        if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
+            && request.AccessContext?.ObjectId is { Length: > 0 } deleteSenderId)
+            deleteRequest = deleteRequest with { DeletedBy = deleteSenderId };
+
+        var capturedRequest = deleteRequest;
+        var path = deleteRequest.Path;
+
+        var nodeStream = hub.GetWorkspace()?.GetStream<MeshNode>();
+        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+
+        // Read own node from the live workspace stream when the hub exposes one (BehaviorSubject —
+        // emits current value synchronously on subscribe). Fall back to persistence when not (some
+        // test/infra configurations don't materialize the stream). No catalog usage either way.
+        var existingNodeObs = nodeStream != null
+            ? nodeStream
+                .Take(1)
+                .Select(nodes => nodes?.FirstOrDefault(n => n.Path == path))
+            : Observable.FromAsync(token => persistence.GetNodeAsync(path, token));
+
+        existingNodeObs
+            .SelectMany(existingNode =>
+            {
+                if (existingNode == null)
+                {
+                    hub.Post(
+                        DeleteNodeResponse.Fail(
+                            $"Node not found at path: {path}",
+                            NodeDeletionRejectionReason.NodeNotFound),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<MeshNode>();
+                }
+
+                return RunDeletionValidatorsObs(hub, existingNode, capturedRequest)
+                    .SelectMany(validationError =>
+                    {
+                        if (validationError != null)
+                        {
+                            logger.LogWarning(
+                                "Validator rejected node deletion at {Path}: {Error}",
+                                path, validationError.Value.ErrorMessage);
+                            hub.Post(
+                                DeleteNodeResponse.Fail(
+                                    validationError.Value.ErrorMessage ?? "Validation failed",
+                                    validationError.Value.Reason),
+                                o => o.ResponseFor(request));
+                            return Observable.Empty<MeshNode>();
+                        }
+                        return Observable.Return(existingNode);
+                    });
+            })
+            .SelectMany(existingNode =>
+                // Collect direct children via IMeshStorage (no access control needed —
+                // the caller has already passed the deletion validator chain). Using
+                // persistence directly is more reliable than routing through query
+                // services whose scoping can vary across hub configurations.
+                Observable.FromAsync(async token =>
+                {
+                    var list = new List<MeshNode>();
+                    await foreach (var child in persistence.GetChildrenAsync(path).WithCancellation(token))
+                        list.Add(child);
+                    return list;
+                })
+                .Select(children => (existingNode, children: (IList<MeshNode>)children)))
+            .Subscribe(
+                tuple =>
+                {
+                    var children = tuple.children;
+
+                    if (children.Count == 0)
+                    {
+                        // Leaf — delete via IMeshStorage directly. We CANNOT use
+                        // IMeshService.DeleteNode here: that posts DeleteNodeRequest, which
+                        // routes back to this handler for the SAME path and recurses forever.
+                        DeleteSelfFromStorage(hub, path, capturedRequest, request, persistence, logger);
+                        return;
+                    }
+
+                    if (!capturedRequest.Recursive)
+                    {
+                        hub.Post(
+                            DeleteNodeResponse.Fail(
+                                $"Node at '{path}' has children. Use recursive delete to remove it.",
+                                NodeDeletionRejectionReason.HasChildren),
+                            o => o.ResponseFor(request));
+                        return;
+                    }
+
+                    // Recursive: delete children in parallel via IMeshService.DeleteNode.
+                    // Track outcome with an Interlocked counter; on FIRST failure, post the
+                    // parent's Fail response immediately. On ALL successes, delete self.
+                    var remaining = children.Count;
+                    var failureFlag = 0;
+                    string? firstFailedPath = null;
+
+                    foreach (var child in children)
+                    {
+                        var childPath = child.Path;
+                        meshService.DeleteNode(childPath).Subscribe(
+                            success =>
+                            {
+                                if (!success
+                                    && Interlocked.CompareExchange(ref failureFlag, 1, 0) == 0)
+                                {
+                                    Interlocked.CompareExchange(ref firstFailedPath, childPath, null);
+                                    hub.Post(
+                                        DeleteNodeResponse.Fail(
+                                            $"Cannot delete '{path}': child '{childPath}' deletion returned false.",
+                                            NodeDeletionRejectionReason.ChildDeletionFailed),
+                                        o => o.ResponseFor(request));
+                                }
+
+                                if (Interlocked.Decrement(ref remaining) == 0
+                                    && Interlocked.CompareExchange(ref failureFlag, 0, 0) == 0)
+                                {
+                                    // All children deleted successfully — now delete self via
+                                    // IMeshStorage (NOT IMeshService — that would re-trigger
+                                    // this handler for the same path and recurse forever).
+                                    DeleteSelfFromStorage(hub, path, capturedRequest, request, persistence, logger);
+                                }
+                            },
+                            ex =>
+                            {
+                                if (Interlocked.CompareExchange(ref failureFlag, 1, 0) == 0)
+                                {
+                                    Interlocked.CompareExchange(ref firstFailedPath, childPath, null);
+                                    logger.LogWarning(ex,
+                                        "Child deletion failed for {ChildPath} under {Path}",
+                                        childPath, path);
+                                    hub.Post(
+                                        DeleteNodeResponse.Fail(
+                                            $"Cannot delete '{path}': child '{childPath}' threw: {ex.Message}",
+                                            NodeDeletionRejectionReason.ChildDeletionFailed),
+                                        o => o.ResponseFor(request));
+                                }
+                                Interlocked.Decrement(ref remaining);
+                            });
+                    }
+                },
+                ex =>
+                {
+                    if (ex is InvalidOperationException)
+                    {
+                        logger.LogWarning(ex, "Node deletion failed for path {Path}", path);
+                        hub.Post(
+                            DeleteNodeResponse.Fail(ex.Message, NodeDeletionRejectionReason.ValidationFailed),
+                            o => o.ResponseFor(request));
+                    }
+                    else
+                    {
+                        logger.LogError(ex, "Unexpected error during node deletion at {Path}", path);
+                        hub.Post(
+                            DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                                NodeDeletionRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                    }
+                });
+
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Sync-friendly observable variant of the creation-validator runner. Iterates
+    /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
+    /// stops at the first failure), emits the first failure as a tuple or <c>null</c>
+    /// if all pass. Consumers compose via <c>SelectMany</c>; no <c>await</c>.
+    /// </summary>
+    private static IObservable<(string? ErrorMessage, NodeCreationRejectionReason Reason)?> RunCreationValidatorsObs(
+        IMessageHub hub,
         MeshNode node,
-        CreateNodeRequest request,
-        CancellationToken ct)
+        CreateNodeRequest request)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -450,19 +543,19 @@ public static class MeshExtensions
             AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
-        // Run unified validators from DI
-        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
-        foreach (var validator in validators)
-        {
-            // Check if validator handles Create operations
-            if (validator.SupportedOperations.Count > 0 &&
-                !validator.SupportedOperations.Contains(NodeOperation.Create))
-            {
-                continue;
-            }
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
+            .Where(v => v.SupportedOperations.Count == 0
+                        || v.SupportedOperations.Contains(NodeOperation.Create))
+            .ToList();
 
-            var result = await validator.ValidateAsync(context, ct);
-            if (!result.IsValid)
+        if (validators.Count == 0)
+            return Observable.Return<(string?, NodeCreationRejectionReason)?>(null);
+
+        return validators
+            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Concat()
+            .Where(result => !result.IsValid)
+            .Select(result =>
             {
                 var reason = result.Reason switch
                 {
@@ -472,79 +565,149 @@ public static class MeshExtensions
                     NodeRejectionReason.Unauthorized => NodeCreationRejectionReason.ValidationFailed,
                     _ => NodeCreationRejectionReason.ValidationFailed
                 };
-                return (result.ErrorMessage, reason);
-            }
-        }
-
-        return null; // All validators passed
+                return ((string?, NodeCreationRejectionReason)?)(result.ErrorMessage, reason);
+            })
+            .Take(1)
+            .DefaultIfEmpty(null);
     }
 
     /// <summary>
-    /// Runs DI-registered post-creation handlers for the given node type.
-    /// Failures are logged but do not affect the creation response.
-    /// Additional nodes returned by handlers are persisted directly via IMeshStorage
-    /// (bypassing the hub pipeline to avoid deadlocks).
+    /// Sync-friendly observable variant of the post-creation handler runner. Returns
+    /// an observable that emits no values and completes once all handlers have run.
+    /// Failures from individual handlers are logged but never break the chain — they
+    /// surface as <c>OnNext(false)</c> elements that the caller can ignore. Additional
+    /// nodes from each handler are persisted via <c>IMeshStorage</c> wrapped in
+    /// <c>Observable.FromAsync</c>; no <c>await</c> in handler code itself.
     /// </summary>
-    private static async Task RunPostCreationHandlersAsync(
+    private static IObservable<System.Reactive.Unit> RunPostCreationHandlersObs(
         IMessageHub hub,
         MeshNode node,
         string? createdBy,
-        ILogger logger,
-        CancellationToken ct)
+        ILogger logger)
     {
         if (string.IsNullOrEmpty(node.NodeType))
-            return;
+            return Observable.Empty<System.Reactive.Unit>();
 
         var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
-        var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>();
-        foreach (var handler in handlers)
-        {
-            if (!handler.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
-                continue;
+        var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>()
+            .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
-            try
-            {
-                await handler.HandleAsync(node, createdBy, ct);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex,
-                    "Post-creation handler {Handler} failed for node {Path}",
-                    handler.GetType().Name, node.Path);
-            }
+        if (handlers.Count == 0)
+            return Observable.Empty<System.Reactive.Unit>();
 
-            // Persist additional nodes directly (bypass hub pipeline to avoid deadlocks)
-            try
+        // For each matching handler: invoke HandleAsync (logged-and-swallowed), then
+        // persist any additional nodes it returns. Sequentially via Concat to preserve
+        // the original order's side-effect dependencies.
+        return handlers
+            .Select(handler =>
             {
-                var additionalNodes = handler.GetAdditionalNodes(node);
-                foreach (var additional in additionalNodes)
-                {
-                    if (persistence != null)
+                var handleObs = Observable.FromAsync(token => handler.HandleAsync(node, createdBy, token))
+                    .Catch<System.Reactive.Unit, Exception>(ex =>
                     {
-                        var saved = await persistence.SaveNodeAsync(additional with { State = MeshNodeState.Active }, ct);
-                        hub.Post(DataChangeRequest.Update([saved]), o => o.WithTarget(new Address(saved.Path)));
-                        logger.LogInformation("Post-creation handler created additional node at {Path}", saved.Path);
-                    }
+                        logger.LogWarning(ex,
+                            "Post-creation handler {Handler} failed for node {Path}",
+                            handler.GetType().Name, node.Path);
+                        return Observable.Return(System.Reactive.Unit.Default);
+                    });
+
+                IEnumerable<MeshNode> additional;
+                try
+                {
+                    additional = handler.GetAdditionalNodes(node) ?? Array.Empty<MeshNode>();
                 }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex,
-                    "Post-creation handler {Handler} failed to create additional nodes for {Path}",
-                    handler.GetType().Name, node.Path);
-            }
-        }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Post-creation handler {Handler}.GetAdditionalNodes threw for node {Path}",
+                        handler.GetType().Name, node.Path);
+                    additional = Array.Empty<MeshNode>();
+                }
+
+                if (persistence == null || !additional.Any())
+                    return handleObs;
+
+                var saveExtras = additional
+                    .Select(extra => persistence.SaveNode(extra with { State = MeshNodeState.Active })
+                        .Do(saved =>
+                        {
+                            hub.Post(DataChangeRequest.Update([saved]),
+                                o => o.WithTarget(new Address(saved.Path)));
+                            logger.LogInformation(
+                                "Post-creation handler created additional node at {Path}", saved.Path);
+                        })
+                        .Catch<MeshNode, Exception>(ex =>
+                        {
+                            logger.LogWarning(ex,
+                                "Failed to persist post-creation additional node from {Handler} for {Path}",
+                                handler.GetType().Name, node.Path);
+                            return Observable.Empty<MeshNode>();
+                        })
+                        .Select(_ => System.Reactive.Unit.Default))
+                    .Concat();
+
+                return handleObs.Concat(saveExtras);
+            })
+            .Concat();
     }
 
     /// <summary>
-    /// Runs all deletion validators from DI using the unified INodeValidator interface.
+    /// Issues a storage-level delete of the given path and posts the appropriate
+    /// DeleteNodeResponse on completion. Used by the leaf and "all children deleted"
+    /// branches of HandleDeleteNodeRequest. We CANNOT use IMeshService.DeleteNode here
+    /// because that posts DeleteNodeRequest which routes back to this same handler for
+    /// the same path and recurses forever. The storage-level call is fine because the
+    /// caller has already passed RunDeletionValidatorsObs.
     /// </summary>
-    private static async Task<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsAsync(
+    private static void DeleteSelfFromStorage(
         IMessageHub hub,
-        IMeshCatalog _,
+        string path,
+        DeleteNodeRequest capturedRequest,
+        IMessageDelivery<DeleteNodeRequest> request,
+        IMeshStorage persistence,
+        ILogger logger)
+    {
+        // Post the response AFTER the storage delete actually commits so callers see a
+        // consistent view: an awaited DeleteNode returns only once the node is gone from
+        // persistence. Without this, race conditions occur — e.g. tests (and UI flows)
+        // that query right after the delete can still observe the pre-delete node.
+        //
+        // The previous "reply first" approach guarded against Orleans/monolith hub
+        // teardown during self-deletion. HandleDeleteNodeRequest runs on the mesh hub,
+        // and a child-node delete does not tear down that hub — so the teardown concern
+        // does not apply here. If a true self-teardown case emerges we post Fail from
+        // OnError and the caller still unblocks.
+        persistence.DeleteNode(path, recursive: false)
+            .Subscribe(
+                _ =>
+                {
+                    hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                        ?.Publish(MeshChangeEvent.Deleted(path));
+                    logger.LogInformation(
+                        "Node deleted at {Path} by {DeletedBy}",
+                        path, capturedRequest.DeletedBy ?? "system");
+                },
+                ex =>
+                {
+                    logger.LogError(ex, "Storage delete failed for {Path}", path);
+                    hub.Post(
+                        DeleteNodeResponse.Fail($"Storage delete failed: {ex.Message}",
+                            NodeDeletionRejectionReason.Unknown),
+                        o => o.ResponseFor(request));
+                });
+    }
+
+    /// <summary>
+    /// Sync-friendly observable variant of the deletion-validator runner. Iterates
+    /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
+    /// stops at the first failure); emits the first failure as a tuple or <c>null</c>
+    /// if all pass. No <c>await</c>.
+    /// </summary>
+    private static IObservable<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsObs(
+        IMessageHub hub,
         MeshNode node,
-        DeleteNodeRequest request,
-        CancellationToken ct)
+        DeleteNodeRequest request)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -555,19 +718,19 @@ public static class MeshExtensions
             AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
-        // Run unified validators from DI
-        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
-        foreach (var validator in validators)
-        {
-            // Check if validator handles Delete operations
-            if (validator.SupportedOperations.Count > 0 &&
-                !validator.SupportedOperations.Contains(NodeOperation.Delete))
-            {
-                continue;
-            }
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
+            .Where(v => v.SupportedOperations.Count == 0
+                        || v.SupportedOperations.Contains(NodeOperation.Delete))
+            .ToList();
 
-            var result = await validator.ValidateAsync(context, ct);
-            if (!result.IsValid)
+        if (validators.Count == 0)
+            return Observable.Return<(string?, NodeDeletionRejectionReason)?>(null);
+
+        return validators
+            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Concat()
+            .Where(result => !result.IsValid)
+            .Select(result =>
             {
                 var reason = result.Reason switch
                 {
@@ -576,145 +739,179 @@ public static class MeshExtensions
                     NodeRejectionReason.Unauthorized => NodeDeletionRejectionReason.ValidationFailed,
                     _ => NodeDeletionRejectionReason.ValidationFailed
                 };
-                return (result.ErrorMessage, reason);
-            }
-        }
-
-        return null; // All validators passed
+                return ((string?, NodeDeletionRejectionReason)?)(result.ErrorMessage, reason);
+            })
+            .Take(1)
+            .DefaultIfEmpty(null);
     }
 
-    private static async Task<IMessageDelivery> HandleUpdateNodeRequest(
+    /// <summary>
+    /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
+    /// All hub-backed work goes through Post + RegisterCallback; non-hub async work (catalog reads,
+    /// persistence writes, validator runs) is wrapped in <c>Observable.FromAsync</c> and composed
+    /// via <c>Subscribe</c>. The handler returns <c>request.Processed()</c> immediately so the hub
+    /// scheduler is never blocked. See <c>Doc/Architecture/AsynchronousCalls</c>.
+    ///
+    /// The terminal step (sending UpdateNodeResponse.Ok / Fail) is performed inside the deepest
+    /// callback of the chain, so the response is only emitted once the workspace has acked the
+    /// underlying DataChangeRequest — fixes the 2026-04-14 cached-display bug where Ok went out
+    /// before the live workspace observed the change and Blazor views kept rendering stale content.
+    /// </summary>
+    private static IMessageDelivery HandleUpdateNodeRequest(
         IMessageHub hub,
-        IMessageDelivery<UpdateNodeRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<UpdateNodeRequest> request)
     {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
-        var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
 
-        if (catalog == null)
-        {
-            hub.Post(
-                UpdateNodeResponse.Fail("IMeshCatalog not available", NodeUpdateRejectionReason.Unknown),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+        var updateRequest = request.Message;
 
-        try
-        {
-            var updateRequest = request.Message;
+        // Identity resolution: if no explicit UpdatedBy, use AccessContext identity
+        if (string.IsNullOrEmpty(updateRequest.UpdatedBy)
+            && request.AccessContext?.ObjectId is { Length: > 0 } updateSenderId)
+            updateRequest = updateRequest with { UpdatedBy = updateSenderId };
 
-            // Identity resolution: if no explicit UpdatedBy, use AccessContext identity
-            if (string.IsNullOrEmpty(updateRequest.UpdatedBy)
-                && request.AccessContext?.ObjectId is { Length: > 0 } updateSenderId)
-                updateRequest = updateRequest with { UpdatedBy = updateSenderId };
+        var capturedRequest = updateRequest;
+        var updatedNode = updateRequest.Node;
+        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var meshConfig = hub.ServiceProvider.GetService<IMeshCatalog>()?.Configuration;
 
-            var updatedNode = updateRequest.Node;
+        // Read existing from our own workspace when the hub is backed by MeshDataSource —
+        // the workspace's replay-cached MeshNode stream already has the live node. Fall back
+        // to persistence when the hub doesn't expose the stream (some test/infra configs).
+        // No catalog usage either way.
+        var nodeStream = hub.GetWorkspace()?.GetStream<MeshNode>();
+        var existingNodeObs = nodeStream != null
+            ? nodeStream
+                .Take(1)
+                .Select(nodes => nodes?.FirstOrDefault(n => n.Path == updatedNode.Path))
+            : Observable.FromAsync(token => persistence.GetNodeAsync(updatedNode.Path, token));
 
-            // 1. Check if node exists
-            var existingNode = await catalog.GetNodeAsync(new Address(updatedNode.Path));
-            if (existingNode == null)
+        // Read existing → check NodeType → validate → persist → workspace ack → response.
+        // Each step lives in a Subscribe callback; the handler returns synchronously below.
+        existingNodeObs
+            .SelectMany(existingNode =>
             {
-                hub.Post(
-                    UpdateNodeResponse.Fail(
-                        $"Node not found at path: {updatedNode.Path}",
-                        NodeUpdateRejectionReason.NodeNotFound),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 2. Validate NodeType hasn't changed (if set)
-            if (!string.IsNullOrEmpty(existingNode.NodeType) &&
-                !string.IsNullOrEmpty(updatedNode.NodeType) &&
-                existingNode.NodeType != updatedNode.NodeType)
-            {
-                hub.Post(
-                    UpdateNodeResponse.Fail(
-                        $"Cannot change NodeType from '{existingNode.NodeType}' to '{updatedNode.NodeType}'",
-                        NodeUpdateRejectionReason.InvalidNodeType),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 3. Run validators (global + NodeType-specific)
-            var validationError = await RunUpdateValidatorsAsync(hub, catalog, existingNode, updatedNode, updateRequest, ct);
-            if (validationError != null)
-            {
-                logger.LogWarning("Validator rejected node update at {Path}: {Error}",
-                    updatedNode.Path, validationError.Value.ErrorMessage);
-
-                hub.Post(
-                    UpdateNodeResponse.Fail(
-                        validationError.Value.ErrorMessage ?? "Validation failed",
-                        validationError.Value.Reason),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-
-            // 4. Update the node - preserve HubConfiguration from existing; allow State changes
-            var nodeToSave = updatedNode with
-            {
-                State = updatedNode.State != default ? updatedNode.State : existingNode.State,
-                HubConfiguration = existingNode.HubConfiguration
-            };
-
-            // 5. Persist the validated node
-            var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
-            var savedNode = await persistence.SaveNodeAsync(nodeToSave, ct);
-            hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                ?.Publish(MeshChangeEvent.Updated(savedNode));
-
-            // 5b. Write version history snapshot (non-critical, skip satellite types like threads/comments)
-            if (!catalog.Configuration.IsSatelliteNodeType(savedNode.NodeType))
-            {
-                var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                if (versionQuery != null)
+                if (existingNode == null)
                 {
-                    try { await versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, ct); }
-                    catch { /* version write failure is non-critical */ }
+                    hub.Post(
+                        UpdateNodeResponse.Fail(
+                            $"Node not found at path: {updatedNode.Path}",
+                            NodeUpdateRejectionReason.NodeNotFound),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<MeshNode>();
                 }
-            }
 
-            // 6. Update workspace stream via DataChangeRequest — target the node's hub so subscribed views refresh
-            //    Do NOT await — posting to the same hub inside a handler would deadlock.
-            hub.Post(
-                DataChangeRequest.Update([nodeToSave]),
-                o => o.WithTarget(new Address(nodeToSave.Path)));
+                if (!string.IsNullOrEmpty(existingNode.NodeType)
+                    && !string.IsNullOrEmpty(updatedNode.NodeType)
+                    && existingNode.NodeType != updatedNode.NodeType)
+                {
+                    hub.Post(
+                        UpdateNodeResponse.Fail(
+                            $"Cannot change NodeType from '{existingNode.NodeType}' to '{updatedNode.NodeType}'",
+                            NodeUpdateRejectionReason.InvalidNodeType),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<MeshNode>();
+                }
 
-            // 7. Return success response immediately after persistence
-            hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
+                return RunUpdateValidatorsObs(hub, existingNode, updatedNode, capturedRequest)
+                    .SelectMany(validationError =>
+                    {
+                        if (validationError != null)
+                        {
+                            logger.LogWarning(
+                                "Validator rejected node update at {Path}: {Error}",
+                                updatedNode.Path, validationError.Value.ErrorMessage);
+                            hub.Post(
+                                UpdateNodeResponse.Fail(
+                                    validationError.Value.ErrorMessage ?? "Validation failed",
+                                    validationError.Value.Reason),
+                                o => o.ResponseFor(request));
+                            return Observable.Empty<MeshNode>();
+                        }
 
-            logger.LogInformation("Node updated successfully at {Path} by {UpdatedBy}",
-                nodeToSave.Path, updateRequest.UpdatedBy ?? "system");
-            return request.Processed();
-        }
-        catch (InvalidOperationException ex)
-        {
-            logger.LogWarning(ex, "Node update failed for path {Path}", request.Message.Node.Path);
-            hub.Post(
-                UpdateNodeResponse.Fail(ex.Message, NodeUpdateRejectionReason.ValidationFailed),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unexpected error during node update at {Path}", request.Message.Node.Path);
-            hub.Post(
-                UpdateNodeResponse.Fail($"Unexpected error: {ex.Message}"),
-                o => o.ResponseFor(request));
-            return request.Processed();
-        }
+                        var nodeToSave = updatedNode with
+                        {
+                            State = updatedNode.State != default ? updatedNode.State : existingNode.State,
+                            HubConfiguration = existingNode.HubConfiguration
+                        };
+
+                        return persistence.SaveNode(nodeToSave);
+                    });
+            })
+            .Subscribe(
+                savedNode =>
+                {
+                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                        ?.Publish(MeshChangeEvent.Updated(savedNode));
+
+                    // Version history — fire-and-forget Subscribe; failures are non-critical.
+                    if (meshConfig != null && !meshConfig.IsSatelliteNodeType(savedNode.NodeType))
+                    {
+                        var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                        if (versionQuery != null)
+                        {
+                            Observable.FromAsync(token =>
+                                    versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, token))
+                                .Subscribe(
+                                    _ => { },
+                                    ex => logger.LogWarning(ex,
+                                        "Version history write failed at {Path} (non-critical)",
+                                        savedNode.Path));
+                        }
+                    }
+
+                    logger.LogInformation(
+                        "Node persisted at {Path} by {UpdatedBy}",
+                        savedNode.Path, capturedRequest.UpdatedBy ?? "system");
+
+                    // Workspace fan-out is fire-and-forget — the target hub may or may not
+                    // have a MeshNode data source mapped, and in some topologies no handler
+                    // at all (returns DeliveryFailure). Either outcome is fine: persistence
+                    // already succeeded and the PathResolver cache was invalidated via the
+                    // MeshChangeFeed.Publish call above. Any subscribed workspace stream will
+                    // receive the update; the rest is best-effort.
+                    hub.Post(DataChangeRequest.Update([savedNode]),
+                        o => o.WithTarget(new Address(savedNode.Path)));
+
+                    hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
+                },
+                ex =>
+                {
+                    if (ex is InvalidOperationException)
+                    {
+                        logger.LogWarning(ex, "Node update failed for path {Path}", updatedNode.Path);
+                        hub.Post(
+                            UpdateNodeResponse.Fail(ex.Message, NodeUpdateRejectionReason.ValidationFailed),
+                            o => o.ResponseFor(request));
+                    }
+                    else
+                    {
+                        logger.LogError(ex, "Unexpected error during node update at {Path}", updatedNode.Path);
+                        hub.Post(
+                            UpdateNodeResponse.Fail($"Unexpected error: {ex.Message}",
+                                NodeUpdateRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                    }
+                });
+
+        return request.Processed();
     }
 
     /// <summary>
     /// Runs all update validators from DI using the unified INodeValidator interface.
     /// </summary>
-    private static async Task<(string? ErrorMessage, NodeUpdateRejectionReason Reason)?> RunUpdateValidatorsAsync(
+    /// <summary>
+    /// Sync-friendly observable variant of the unified update-validator runner.
+    /// Iterates validators in order via <c>Concat</c> (preserves short-circuit semantics —
+    /// the chain stops at the first failure) and returns either a tuple describing the
+    /// failure or <c>null</c> if all validators pass. No <c>await</c>; consumers compose
+    /// via <c>SelectMany</c> on a <c>Subscribe</c>-based chain.
+    /// </summary>
+    private static IObservable<(string? ErrorMessage, NodeUpdateRejectionReason Reason)?> RunUpdateValidatorsObs(
         IMessageHub hub,
-        IMeshCatalog _,
         MeshNode existingNode,
         MeshNode updatedNode,
-        UpdateNodeRequest request,
-        CancellationToken ct)
+        UpdateNodeRequest request)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -726,19 +923,20 @@ public static class MeshExtensions
             AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
-        // Run unified validators from DI
-        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
-        foreach (var validator in validators)
-        {
-            // Check if validator handles Update operations
-            if (validator.SupportedOperations.Count > 0 &&
-                !validator.SupportedOperations.Contains(NodeOperation.Update))
-            {
-                continue;
-            }
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>()
+            .Where(v => v.SupportedOperations.Count == 0
+                        || v.SupportedOperations.Contains(NodeOperation.Update))
+            .ToList();
 
-            var result = await validator.ValidateAsync(context, ct);
-            if (!result.IsValid)
+        if (validators.Count == 0)
+            return Observable.Return<(string?, NodeUpdateRejectionReason)?>(null);
+
+        // Run validators sequentially via Concat; emit the first failure (or null at the end).
+        return validators
+            .Select(v => Observable.FromAsync(token => v.ValidateAsync(context, token)))
+            .Concat()
+            .Where(result => !result.IsValid)
+            .Select(result =>
             {
                 var reason = result.Reason switch
                 {
@@ -748,11 +946,10 @@ public static class MeshExtensions
                     NodeRejectionReason.Unauthorized => NodeUpdateRejectionReason.ValidationFailed,
                     _ => NodeUpdateRejectionReason.ValidationFailed
                 };
-                return (result.ErrorMessage, reason);
-            }
-        }
-
-        return null; // All validators passed
+                return ((string?, NodeUpdateRejectionReason)?)(result.ErrorMessage, reason);
+            })
+            .Take(1)
+            .DefaultIfEmpty(null);
     }
 
     private static async Task<IMessageDelivery> HandleMoveNodeRequest(
@@ -813,17 +1010,27 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 4. Move the node
-            var movedNode = await persistence.MoveNodeAsync(moveRequest.SourcePath, moveRequest.TargetPath, ct);
-            var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-            changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
-            changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
+            // 4. Move the node — subscribe and post response in the callback.
+            persistence.MoveNode(moveRequest.SourcePath, moveRequest.TargetPath)
+                .Subscribe(
+                    movedNode =>
+                    {
+                        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+                        changeFeed?.Publish(MeshChangeEvent.Deleted(moveRequest.SourcePath));
+                        changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
+                        hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
+                        logger.LogInformation("Node moved from {Source} to {Target}",
+                            moveRequest.SourcePath, moveRequest.TargetPath);
+                    },
+                    ex =>
+                    {
+                        logger.LogError(ex, "Error moving node from {Source} to {Target}",
+                            moveRequest.SourcePath, moveRequest.TargetPath);
+                        hub.Post(
+                            MoveNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                            o => o.ResponseFor(request));
+                    });
 
-            // 5. Return success
-            hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
-
-            logger.LogInformation("Node moved from {Source} to {Target}",
-                moveRequest.SourcePath, moveRequest.TargetPath);
             return request.Processed();
         }
         catch (Exception ex)

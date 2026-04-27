@@ -57,6 +57,24 @@ public abstract record FormControlBase <TControl>(object Data)
     /// </summary>
     public object? Placeholder { get; init; }
 
+    /// <summary>
+    /// Explicit width for the control (CSS value, e.g. "240px", "100%").
+    /// Data-bindable. The Blazor view passes this to the underlying Fluent component.
+    /// </summary>
+    public object? Width { get; init; }
+
+    /// <summary>
+    /// Explicit height for the control (CSS value, e.g. "40px", "100%").
+    /// Data-bindable. The Blazor view composes this into the inline style.
+    /// </summary>
+    public object? Height { get; init; }
+
+    /// <summary>Sets the width of the control.</summary>
+    public TControl WithWidth(object width) => This with { Width = width };
+
+    /// <summary>Sets the height of the control.</summary>
+    public TControl WithHeight(object height) => This with { Height = height };
+
     private readonly Func<UiActionContext, Task>? blurAction;
 
     /// <summary>

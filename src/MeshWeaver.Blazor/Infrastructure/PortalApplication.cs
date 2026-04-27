@@ -1,6 +1,8 @@
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -30,11 +32,23 @@ public class PortalApplication : IDisposable
 
     public static MessageHubConfiguration DefaultPortalConfig(MessageHubConfiguration config,
         IRoutingService routingService, INavigationService navigationService)
-        => config.WithInitialization(async (hub, _) =>
+    {
+        // Every polymorphic UiControl subtype the portal may receive from a remote layout stream
+        // has to be visible to this hub's TypeRegistry so PolymorphicTypeInfoResolver can build
+        // the JsonDerivedType mapping for UiControl deserialization. Without this the sub-hub's
+        // own registry has only the base types and the stream decode throws:
+        //   "The JSON payload for polymorphic interface or abstract type 'UiControl' must
+        //    specify a type discriminator."
+        config.TypeRegistry.AddMarkdownExportTypes();
+        return config.WithInitialization(async (hub, _) =>
             {
                 var meshRegistry = await routingService.RegisterStreamAsync(hub);
                 hub.RegisterForDisposal(meshRegistry);
             })
+            // Route kernel addresses to local hosted hubs — never delegate to grains.
+            .WithRoutes(routes => routes.RouteAddressToHostedHub(
+                AddressExtensions.KernelType,
+                c => c.AddKernelSubHubHandlers()))
             .AddContentCollections()
             .WithHandler<NavigationRequest>((_, delivery) =>
             {
@@ -47,6 +61,7 @@ public class PortalApplication : IDisposable
                 });
                 return delivery.Processed();
             });
+    }
 
     public void Dispose()
     {

@@ -29,6 +29,7 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Export\MeshWeaver.Markdown.Export.csproj" />
     </ItemGroup>
 
     <ItemGroup>

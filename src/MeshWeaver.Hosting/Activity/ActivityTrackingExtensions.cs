@@ -4,6 +4,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Activity;
 
@@ -53,7 +54,11 @@ public static class ActivityTrackingExtensions
                         State = MeshNodeState.Active,
                         Content = log
                     };
-                    await persistence.SaveNodeAsync(node);
+                    persistence.SaveNode(node).Subscribe(
+                        _ => { },
+                        ex => hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger("ActivityLogBundler")
+                            ?.LogWarning(ex, "Failed to persist activity log for {Path}", node.Path));
                 });
             });
             return services;
