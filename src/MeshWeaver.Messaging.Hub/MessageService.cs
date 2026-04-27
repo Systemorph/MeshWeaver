@@ -527,6 +527,29 @@ public class MessageService : IMessageService
         var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
         if (deserializedMessage == null)
             return delivery.Failed("Deserialization returned null");
+
+        // Polymorphic deserialization fell back to JsonElement → the inbound
+        // message's $type isn't in this hub's TypeRegistry. Don't silently let
+        // the delivery proceed (no handler matches JsonElement → message gets
+        // dropped without anyone knowing); fail it so ReportFailure (downstream)
+        // posts a DeliveryFailure back to the sender with a clear hint.
+        if (deserializedMessage is JsonElement)
+        {
+            var jsonType = ExtractJsonType(rawJson.Content);
+            var failureMessage = $"Could not deserialize message in hub {Address} — " +
+                $"type '{jsonType}' is not registered in this hub's TypeRegistry.";
+            // Ping-pong guard: if the raw JSON itself was a DeliveryFailure (both
+            // ends missing the type registration), swallow without responding.
+            // ReportFailure's own guard checks delivery.Message.GetType() which
+            // is RawJson here, so we have to add this discriminator-level check.
+            if (string.Equals(jsonType, nameof(DeliveryFailure), StringComparison.Ordinal))
+            {
+                logger.LogWarning("Suppressing DeliveryFailure-on-DeliveryFailure ping-pong: {Message}", failureMessage);
+                return delivery.Failed(failureMessage);
+            }
+            return ReportFailure(delivery.Failed(failureMessage));
+        }
+
         return delivery.WithMessage(deserializedMessage);
     }
 

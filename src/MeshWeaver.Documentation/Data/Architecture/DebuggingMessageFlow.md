@@ -50,6 +50,7 @@ xUnit test logger captures everything that happened during that test method.
 | `Cancelling execution pipeline …` | `MessageService.cs:373` | Hub is shutting down — anything in flight gets cancelled |
 | `An exception occurred during the processing of MessageDelivery …` | `MessageHub.cs` | A handler threw — full delivery payload + stack are dumped here. **This is your prime suspect when a request seems to vanish.** |
 | `No handler found for request <T> in <Address>` | `MessageHub.cs:369` | Hub received the message, no handler matched — DeliveryFailure is sent back |
+| `DeserializeDelivery: Could not deserialize message in hub <addr> — type '<T>' is not registered in this hub's TypeRegistry.` | `MessageService.cs:DeserializeDelivery` | Receiving hub fell back to `JsonElement` because the inbound `$type` discriminator isn't registered. A `DeliveryFailure` is posted back to the sender with the same text. Fix: add `WithType(typeof(T), nameof(T))` to the receiving hub's config. |
 | `SYNC_STREAM …` | `JsonSynchronizationStream.cs` | Cross-hub workspace-stream traffic. Look here when a `GetRemoteStream<>` subscription seems to never emit. |
 
 ## Reading the trace
@@ -89,6 +90,36 @@ sends `DeliveryFailure` back instead of `SubscribeResponse`. The
 This is the smoking gun for the "remote read returns nothing" class of hang.
 The fix is on the owning side (register `SubscribeRequest` handler / register a
 `MeshDataSource` so the hub has the reducer), not on the caller side.
+
+## Type-registry mismatch (sender ≠ receiver)
+
+The handler is registered, but the message arrives at the receiving hub as
+`JsonElement` because the receiver's `ITypeRegistry` is missing
+`WithType(typeof(T), nameof(T))`. Symptom on the sender today is a clean
+`DeliveryFailureException`:
+
+```
+DeliveryFailureException: Could not deserialize message in hub <addr> —
+    type 'MyRequest' is not registered in this hub's TypeRegistry.
+```
+
+`MessageService.DeserializeDelivery` catches the JsonElement fallback and
+calls `ReportFailure(delivery.Failed(...))`, which posts the
+`DeliveryFailure` back via the standard `ResponseFor(delivery)` path — the
+sender's `hub.Observe(...)` surfaces it through `OnError`.
+
+**Fix:** add the type to the receiving hub's config, e.g.
+
+```csharp
+hub.WithTypes(typeof(MyRequest), typeof(MyResponse));
+```
+
+For Orleans deployments, register on **both** sides — the silo's hub config
+**and** any client/portal hub that posts the request.
+
+A discriminator-level ping-pong guard suppresses the `DeliveryFailure`
+response when the inbound `$type` itself was `DeliveryFailure` (both ends
+missing the type), so a misconfigured pair won't spin forever.
 
 ## Common gotchas
 
