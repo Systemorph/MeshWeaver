@@ -791,13 +791,8 @@ public static class MeshNodeLayoutAreas
             return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
         }
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        return nodeStream.SelectMany(nodes =>
+        return host.Workspace.GetMeshNodeStream().SelectMany(node =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-
             // NodeType children: ObserveQuery snapshot — listing observable, no await.
             var children = meshQuery.ObserveQuery<MeshNode>(
                     MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:NodeType"))
@@ -1017,15 +1012,10 @@ public static class MeshNodeLayoutAreas
         if (string.IsNullOrEmpty(contentPath))
         {
             // Self-reference: show the node's icon/logo
-            var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-                ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-            return nodeStream.Select(nodes =>
+            return host.Workspace.GetMeshNodeStream().Select(node =>
             {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
                 if (node == null)
                     return (UiControl?)Controls.Markdown($"*Node not found: {hubPath}*");
-
                 return (UiControl?)RenderNodeIcon(node, hubPath);
             });
         }
