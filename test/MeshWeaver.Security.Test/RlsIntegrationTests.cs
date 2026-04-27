@@ -36,9 +36,37 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var configured = ConfigureMeshBase(builder)
             .AddThreadType();
 
-        // Register additional node types
+        // Seed every per-test AccessAssignment statically (via AddMeshNodes →
+        // IStaticNodeProvider → SecurityService._staticAccessAssignments).
+        // Doing the same seeding through `meshService.CreateNode(AccessAssignment)`
+        // at runtime hangs the per-node-hub creation flow under the current
+        // SecurityService re-entry pattern, so the tests must declare their
+        // fixture data up-front rather than mutate via runtime CRUD.
         configured.AddMeshNodes(
-            new MeshNode("secure") { Name = "Secure Type" }
+            AssignmentNodeFactory.UserRole("creator", "Editor", "rls/create"),
+            AssignmentNodeFactory.UserRole("reader", "Viewer", "rls/readonly"),
+            AssignmentNodeFactory.UserRole("deletor", "Admin", "rls/delete"),
+            AssignmentNodeFactory.UserRole("admin", "Admin", "rls/nodelete"),
+            AssignmentNodeFactory.UserRole("viewer_nodelete", "Viewer", "rls/nodelete"),
+            AssignmentNodeFactory.UserRole("editor", "Editor", "rls/update"),
+            AssignmentNodeFactory.UserRole("admin_noupd", "Admin", "rls/noupdate"),
+            AssignmentNodeFactory.UserRole("viewer_noupd", "Viewer", "rls/noupdate"),
+            AssignmentNodeFactory.UserRole("hierarchyuser", "Admin", "rls"),
+            AssignmentNodeFactory.UserRole("globaladmin", "Admin", null!),
+            AssignmentNodeFactory.UserRole("multirole", "Viewer", "rls/multi/project1"),
+            AssignmentNodeFactory.UserRole("multirole", "Editor", "rls/multi/project2"),
+            AssignmentNodeFactory.UserRole("commenter", "Commenter", "rls/comments"),
+            AssignmentNodeFactory.UserRole("viewer_cmt", "Viewer", "rls/comments"),
+            AssignmentNodeFactory.UserRole("editor_thr", "Editor", "rls/threads"),
+            AssignmentNodeFactory.UserRole("commenter_thr", "Commenter", "rls/threads"),
+            AssignmentNodeFactory.UserRole("editor_commenter", "Editor", "rls/editor_comment"),
+            AssignmentNodeFactory.UserRole("admin_for_anon_delete", "Admin", "rls/anon_delete"),
+            AssignmentNodeFactory.UserRole("admin_for_anon_update", "Admin", "rls/anon_update"),
+            AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", "rls/public_viewer"),
+            AssignmentNodeFactory.UserRole("admin_setup", "Admin", "rls/nodel"),
+            AssignmentNodeFactory.UserRole("editor_nodel", "Editor", "rls/nodel"),
+            AssignmentNodeFactory.UserRole("strict_viewer", "Viewer", "rls/viewonly"),
+            AssignmentNodeFactory.UserRole("commenter_test", "Commenter", "rls/commenter_test")
         );
 
         return configured;
@@ -49,19 +77,16 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     {
         // Arrange
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "creator";
         const string parentPath = "rls/create";
 
-        // Assign Editor role (has Create permission) to the parent path
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Editor", parentPath)).FirstAsync().ToTask(TestTimeout);
-
-        // Create node with CreatedBy set to the authorized user
+        // Create node with CreatedBy set to the authorized user (Editor role
+        // assigned at parentPath via static seed in ConfigureMesh).
         var node = new MeshNode("NewNode", parentPath)
         {
             Name = "Created Node",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var request = new CreateNodeRequest(node) { CreatedBy = userId };
 
@@ -74,23 +99,48 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         response.Message.Node!.Name.Should().Be("Created Node");
     }
 
+    [Fact(Timeout = 10000)]
+    public async Task CreateNode_InvalidNodeType_ReturnsCleanError()
+    {
+        // Arrange — "creator" has Editor at "rls/create" via static seed, but
+        // the NodeType "this-type-does-not-exist" is not registered anywhere
+        // (no MeshConfiguration entry, no IStaticNodeProvider, no persistence).
+        // The handler must surface InvalidNodeType, not hang on a NodeType-hub
+        // round trip and time out the caller.
+        var client = GetClient();
+
+        const string userId = "creator";
+        const string parentPath = "rls/create";
+
+        var node = new MeshNode("BadType", parentPath)
+        {
+            Name = "Should Fail",
+            NodeType = "this-type-does-not-exist"
+        };
+        var request = new CreateNodeRequest(node) { CreatedBy = userId };
+
+        // Act
+        var response = await client.Observe(request, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
+
+        // Assert — clean rejection (NOT TimeoutException) with InvalidNodeType reason.
+        response.Message.Success.Should().BeFalse();
+        response.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.InvalidNodeType);
+        response.Message.Error.Should().Contain("this-type-does-not-exist");
+    }
+
     [Fact]
     public async Task CreateNode_WithoutPermission_Fails()
     {
-        // Arrange
+        // Arrange — "reader" gets Viewer (Read only) at parentPath via static seed.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "reader";
         const string parentPath = "rls/readonly";
 
-        // Assign Viewer role (only Read permission, no Create)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Viewer", parentPath)).FirstAsync().ToTask(TestTimeout);
-
         var node = new MeshNode("FailedNode", parentPath)
         {
             Name = "Should Fail",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var request = new CreateNodeRequest(node) { CreatedBy = userId };
 
@@ -112,7 +162,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var node = new MeshNode("UnauthorizedNode", "rls/noauth")
         {
             Name = "Unauthorized",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var request = new CreateNodeRequest(node) { CreatedBy = userId };
 
@@ -127,21 +177,17 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task DeleteNode_WithDeletePermission_Succeeds()
     {
-        // Arrange
+        // Arrange — "deletor" gets Admin at parentPath via static seed.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string adminId = "deletor";
         const string parentPath = "rls/delete";
-
-        // Assign Admin role (has all permissions including Delete)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(adminId, "Admin", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Create a node first
         var node = new MeshNode("ToDelete", parentPath)
         {
             Name = "To Be Deleted",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var createResponse = await client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createResponse.Message.Success.Should().BeTrue();
@@ -156,26 +202,20 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task DeleteNode_WithoutPermission_Fails()
     {
-        // Arrange
+        // Arrange — "admin" gets Admin and "viewer_nodelete" gets Viewer at parentPath via static seed.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string adminId = "admin";
-        const string viewerId = "viewer";
+        const string viewerId = "viewer_nodelete";
         const string parentPath = "rls/nodelete";
 
-        // Create node as admin
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(adminId, "Admin", parentPath)).FirstAsync().ToTask(TestTimeout);
         var node = new MeshNode("Protected", parentPath)
         {
             Name = "Protected Node",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var createResponse = await client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createResponse.Message.Success.Should().BeTrue();
-
-        // Assign Viewer role (no Delete permission)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(viewerId, "Viewer", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Act - viewer tries to delete
         var deleteResponse = await client.Observe(new DeleteNodeRequest("rls/nodelete/Protected") { DeletedBy = viewerId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
@@ -192,21 +232,17 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task UpdateNode_WithUpdatePermission_Succeeds()
     {
-        // Arrange
+        // Arrange — "editor" gets Editor at parentPath via static seed.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string editorId = "editor";
         const string parentPath = "rls/update";
-
-        // Assign Editor role (has Create and Update permissions)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(editorId, "Editor", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Create a node first
         var node = new MeshNode("ToUpdate", parentPath)
         {
             Name = "Original Name",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var createResponse = await client.Observe(new CreateNodeRequest(node) { CreatedBy = editorId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createResponse.Message.Success.Should().BeTrue();
@@ -223,26 +259,20 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task UpdateNode_WithoutPermission_Fails()
     {
-        // Arrange
+        // Arrange — "admin_noupd" gets Admin and "viewer_noupd" gets Viewer at parentPath via static seed.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        const string adminId = "admin";
-        const string viewerId = "viewer";
+        const string adminId = "admin_noupd";
+        const string viewerId = "viewer_noupd";
         const string parentPath = "rls/noupdate";
 
-        // Create node as admin
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(adminId, "Admin", parentPath)).FirstAsync().ToTask(TestTimeout);
         var node = new MeshNode("NoUpdate", parentPath)
         {
             Name = "Cannot Update",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var createResponse = await client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createResponse.Message.Success.Should().BeTrue();
-
-        // Assign Viewer role (no Update permission)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(viewerId, "Viewer", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Act - viewer tries to update
         var updatedNode = node with { Name = "Trying to Update" };
@@ -256,22 +286,18 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task HierarchicalPermission_InheritsFromParent()
     {
-        // Arrange
+        // Arrange — "hierarchyuser" gets Admin at "rls" via static seed (inherits to children).
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string userId = "hierarchyuser";
         const string topLevelPath = "rls";
         const string parentPath = "rls/parent";
 
-        // Assign Admin role at top level (rls) so user can create anywhere under rls/
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", topLevelPath)).FirstAsync().ToTask(TestTimeout);
-
         // Create parent node first
         var parentNode = new MeshNode("parent", topLevelPath)
         {
             Name = "Parent Node",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var parentResponse = await client.Observe(new CreateNodeRequest(parentNode) { CreatedBy = userId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         parentResponse.Message.Success.Should().BeTrue();
@@ -280,7 +306,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var childNode = new MeshNode("child", parentPath)
         {
             Name = "Child Node",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var childResponse = await client.Observe(new CreateNodeRequest(childNode) { CreatedBy = userId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
 
@@ -291,27 +317,23 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task GlobalAdmin_HasAccessEverywhere()
     {
-        // Arrange
+        // Arrange — "globaladmin" gets Admin at null (global) via static seed.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string globalAdminId = "globaladmin";
-
-        // Assign global Admin role (null path = applies everywhere)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(globalAdminId, "Admin", null!)).FirstAsync().ToTask(TestTimeout);
 
         // Act - create nodes in different paths
         var node1 = new MeshNode("GlobalTest1", "random/path")
         {
             Name = "Global Test 1",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var response1 = await client.Observe(new CreateNodeRequest(node1) { CreatedBy = globalAdminId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
 
         var node2 = new MeshNode("GlobalTest2", "another/random/path")
         {
             Name = "Global Test 2",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var response2 = await client.Observe(new CreateNodeRequest(node2) { CreatedBy = globalAdminId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
 
@@ -323,17 +345,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task MultipleRoles_CombinePermissions()
     {
-        // Arrange
-        var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        // Arrange — "multirole" gets Viewer at path1 and Editor at path2 via static seeds.
 
         const string userId = "multirole";
         const string path1 = "rls/multi/project1";
         const string path2 = "rls/multi/project2";
-
-        // Assign different roles at different paths
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Viewer", path1)).FirstAsync().ToTask(TestTimeout);
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Editor", path2)).FirstAsync().ToTask(TestTimeout);
 
         // Act - check permissions at each path
         var permissions1 = await Mesh.GetPermissionAsync(path1, userId, TestTimeout);
@@ -347,18 +363,12 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task CreateComment_RequiresCommentPermission()
     {
-        // Arrange
+        // Arrange — "commenter"/"viewer_cmt" seeded statically with Commenter/Viewer at parentPath.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string commenterId = "commenter";
-        const string viewerId = "viewer";
+        const string viewerId = "viewer_cmt";
         const string parentPath = "rls/comments";
-
-        // Assign Commenter role (has Read + Comment)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(commenterId, "Commenter", parentPath)).FirstAsync().ToTask(TestTimeout);
-        // Assign Viewer role (has Read only)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(viewerId, "Viewer", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Act - commenter creates a Comment node
         var commentNode = new MeshNode("Comment1", parentPath)
@@ -387,18 +397,12 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task CreateThread_RequiresUpdatePermission()
     {
-        // Arrange
+        // Arrange — "editor_thr"/"commenter_thr" seeded statically with Editor/Commenter at parentPath.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        const string editorId = "editor";
-        const string commenterId = "commenter";
+        const string editorId = "editor_thr";
+        const string commenterId = "commenter_thr";
         const string parentPath = "rls/threads";
-
-        // Editor has Update permission
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(editorId, "Editor", parentPath)).FirstAsync().ToTask(TestTimeout);
-        // Commenter has Read + Comment but NOT Update
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(commenterId, "Commenter", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Act - editor creates a Thread
         var threadNode = new MeshNode("Thread1", parentPath)
@@ -425,15 +429,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task EditorCanComment_UpdateImpliesComment()
     {
-        // Arrange
+        // Arrange — "editor_commenter" seeded statically with Editor at parentPath.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string editorId = "editor_commenter";
         const string parentPath = "rls/editor_comment";
-
-        // Editor has Update permission, which implies Comment
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(editorId, "Editor", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Act - editor creates a Comment node
         var commentNode = new MeshNode("Comment1", parentPath)
@@ -459,7 +459,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var node = new MeshNode("AnonCreate", "rls/anon")
         {
             Name = "Anonymous Create",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         // CreatedBy is null â€” anonymous request
         var request = new CreateNodeRequest(node);
@@ -483,11 +483,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string adminId = "admin_for_anon_delete";
         const string parentPath = "rls/anon_delete";
 
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(adminId, "Admin", parentPath)).FirstAsync().ToTask(TestTimeout);
+        // Admin assignment is seeded statically in ConfigureMesh.
         var node = new MeshNode("ToDeleteAnon", parentPath)
         {
             Name = "Delete Me",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var createResp = await client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createResp.Message.Success.Should().BeTrue();
@@ -520,11 +520,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         const string adminId = "admin_for_anon_update";
         const string parentPath = "rls/anon_update";
 
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(adminId, "Admin", parentPath)).FirstAsync().ToTask(TestTimeout);
+        // Admin assignment is seeded statically in ConfigureMesh.
         var node = new MeshNode("ToUpdateAnon", parentPath)
         {
             Name = "Original",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var createResp = await client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createResp.Message.Success.Should().BeTrue();
@@ -567,8 +567,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string parentPath = "rls/public_viewer";
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", parentPath))
-            .FirstAsync().ToTask(TestTimeout);
+        // Anonymous Viewer assignment is seeded statically in ConfigureMesh.
 
         // Verify permissions
         var permissions = await Mesh.GetPermissionAsync(parentPath, WellKnownUsers.Anonymous, TestTimeout);
@@ -578,7 +577,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var node = new MeshNode("PublicCreate", parentPath)
         {
             Name = "Public Create",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
 
@@ -590,26 +589,20 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task EditorRole_CannotDelete()
     {
-        // Arrange
+        // Arrange — "admin_setup"/"editor_nodel" seeded statically with Admin/Editor at parentPath.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string adminId = "admin_setup";
         const string editorId = "editor_nodel";
         const string parentPath = "rls/nodel";
 
-        // Admin creates a node
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(adminId, "Admin", parentPath)).FirstAsync().ToTask(TestTimeout);
         var node = new MeshNode("Protected", parentPath)
         {
             Name = "Protected Node",
-            NodeType = "secure"
+            NodeType = "Markdown"
         };
         var createResponse = await client.Observe(new CreateNodeRequest(node) { CreatedBy = adminId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createResponse.Message.Success.Should().BeTrue();
-
-        // Assign Editor role (no Delete permission)
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(editorId, "Editor", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Act - editor tries to delete
         var deleteResponse = await client.Observe(new DeleteNodeRequest("rls/nodel/Protected") { DeletedBy = editorId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
@@ -624,21 +617,18 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task ViewerRole_CannotCreateUpdateOrDelete()
     {
-        // Arrange
+        // Arrange — "strict_viewer" seeded statically with Viewer at parentPath.
         var client = GetClient();
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         const string viewerId = "strict_viewer";
         const string parentPath = "rls/viewonly";
-
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(viewerId, "Viewer", parentPath)).FirstAsync().ToTask(TestTimeout);
 
         // Check effective permissions
         var permissions = await Mesh.GetPermissionAsync(parentPath, viewerId, TestTimeout);
         permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "Viewer should only have Read + Execute + Api permission");
 
         // Verify cannot create
-        var node = new MeshNode("ViewerCreate", parentPath) { Name = "Viewer Create", NodeType = "secure" };
+        var node = new MeshNode("ViewerCreate", parentPath) { Name = "Viewer Create", NodeType = "Markdown" };
         var createResp = await client.Observe(new CreateNodeRequest(node) { CreatedBy = viewerId }, o => o.WithTarget(Mesh.Address)).FirstAsync().ToTask();
         createResp.Message.Success.Should().BeFalse("Viewer cannot create");
     }
@@ -646,13 +636,10 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task CommenterRole_CanReadAndComment()
     {
-        // Arrange
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        // Arrange — "commenter_test" seeded statically with Commenter at path.
 
         const string userId = "commenter_test";
         const string path = "rls/commenter_test";
-
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Commenter", path)).FirstAsync().ToTask(TestTimeout);
 
         // Act
         var permissions = await Mesh.GetPermissionAsync(path, userId, TestTimeout);

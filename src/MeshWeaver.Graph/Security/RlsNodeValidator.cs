@@ -78,13 +78,20 @@ public class RlsNodeValidator : INodeValidator
         // an observable; chain via SelectMany. A null result from one step means
         // "fall through" — re-emit by wrapping with Observable.Return; otherwise
         // pass to the next step in the chain.
+        //
+        // Take(1) closes the final stream: CheckPermission rides
+        // ISecurityService.HasPermission, which is hot and never completes
+        // (lives on the live AccessAssignment synced query). Without Take(1)
+        // the .Concat() in RunCreationValidatorsObs would wait forever on the
+        // first validator and the create handler would never post a response.
         return CheckHubRule(context, userId)
             .SelectMany(hubResult => hubResult != null
                 ? Observable.Return<NodeValidationResult?>(hubResult)
                 : CheckCustomRule(context, userId))
             .SelectMany(customResult => customResult != null
                 ? Observable.Return(customResult)
-                : CheckPermission(context, userId, requiredPermission));
+                : CheckPermission(context, userId, requiredPermission))
+            .Take(1);
     }
 
     private IObservable<NodeValidationResult?> CheckHubRule(NodeValidationContext context, string? userId)
