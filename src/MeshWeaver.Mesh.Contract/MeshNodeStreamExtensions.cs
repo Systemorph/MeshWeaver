@@ -20,16 +20,25 @@ public static class MeshNodeStreamExtensions
     /// Reactive handle to the current hub's own MeshNode. No query index, no await,
     /// no staleness, live updates on content changes. Compose with <c>.Take(1)</c>
     /// for one-shot reads or keep subscribed for live views.
+    /// <para>
+    /// Wrapped in <see cref="System.Reactive.Linq.Observable.Defer{TResult}(System.Func{System.IObservable{TResult}})"/>
+    /// so that hubs without the <see cref="MeshNodeReference"/> reducer (no
+    /// <c>MeshDataSource</c> registered, or hub past <c>Started</c> mid-disposal)
+    /// surface as <c>OnError</c> on the returned observable rather than throwing
+    /// synchronously out of the call site — layout-area handlers can <c>.Catch</c>
+    /// /<c>.OnErrorResumeNext</c> instead of crashing the whole render pipeline.
+    /// </para>
     /// </summary>
     public static IObservable<MeshNode> GetMeshNodeStream(this IWorkspace workspace)
-    {
-        var stream = workspace.GetStream(new MeshNodeReference())
-            ?? throw new InvalidOperationException(
-                "MeshNode stream is not available — the workspace has no MeshNodeReference reducer.");
-        return stream
-            .Where(change => change.Value != null)
-            .Select(change => change.Value!);
-    }
+        => System.Reactive.Linq.Observable.Defer(() =>
+        {
+            var stream = workspace.GetStream(new MeshNodeReference())
+                ?? throw new InvalidOperationException(
+                    "MeshNode stream is not available — the workspace has no MeshNodeReference reducer.");
+            return stream
+                .Where(change => change.Value != null)
+                .Select(change => change.Value!);
+        });
 
     /// <summary>
     /// Reactive handle to a MeshNode at <paramref name="path"/>. Two cases only:
