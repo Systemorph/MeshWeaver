@@ -559,7 +559,7 @@ public static class ThreadExecution
                         if (del != null)
                         {
                             logger.LogDebug("[ThreadExec] HISTORY_REQ: posted, delivery={Id} for {MsgId}", del.Id, msgId);
-                            _ = parentHub.RegisterCallback((IMessageDelivery)del, resp =>
+                            parentHub.RegisterCallback((IMessageDelivery)del, resp =>
                             {
                                 ThreadMessage? tmsg = null;
                                 if (resp is IMessageDelivery<GetDataResponse> gdr)
