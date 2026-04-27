@@ -98,7 +98,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
 
     #region Deny via AccessAssignment MeshNode
 
-    [Fact(Timeout = 20000, Skip = "In-memory ObserveQuery's Replay(1) caches the pre-create snapshot; the runtime Added event for a deny doesn't propagate fast enough to satisfy a post-CreateNode read. Verified end-to-end on PG via SyncedQueryPgTest.")]
+    [Fact(Timeout = 20000)]
     public async Task DenyAssignment_OverridesInheritedGrant()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -125,7 +125,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         permissions.Should().Be(Permission.None, "denied Editor role should yield no permissions at child");
     }
 
-    [Fact(Timeout = 20000, Skip = "In-memory ObserveQuery's Replay(1) caches the pre-create snapshot; the runtime Added event for a deny doesn't propagate fast enough to satisfy a post-CreateNode read. Verified end-to-end on PG via SyncedQueryPgTest.")]
+    [Fact(Timeout = 20000)]
     public async Task DenyAtMiddle_GrantAtChild_ChildOverridesDeny()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -155,7 +155,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         permProject.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "grant at child should override deny at parent");
     }
 
-    [Fact(Timeout = 20000, Skip = "In-memory ObserveQuery's Replay(1) caches the pre-create snapshot; the runtime Added event for a deny doesn't propagate fast enough to satisfy a post-CreateNode read. Verified end-to-end on PG via SyncedQueryPgTest.")]
+    [Fact(Timeout = 20000)]
     public async Task DenyOneRole_KeepsOtherRoles()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -192,7 +192,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
 
     #region RemoveUserRole
 
-    [Fact(Timeout = 20000, Skip = "In-memory CreateNode + DeleteNode runtime lifecycle has an AsyncSubject race against the synced query subscription that can leave CreateNode's response observable empty. Verified end-to-end on PG via SyncedQueryPgTest.")]
+    [Fact(Timeout = 20000)]
     public async Task RemoveUserRole_RevokesPermissions()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -207,11 +207,14 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
             ct: TestTimeout);
         permBefore.Should().HaveFlag(Permission.Update);
 
-        // In-memory CreateNode + DeleteNode runtime lifecycle has an
-        // AsyncSubject race against the synced query subscription that
-        // can leave CreateNode's response observable empty under load.
-        // Skip the delete-revoke leg in-memory; verified separately on PG.
-        // (Was: DeleteNode + assert permAfter == None.)
+        // Delete the assignment and assert the synced query drops the grant.
+        await meshService.DeleteNode(assignNode.Path).FirstAsync().ToTask(TestTimeout);
+
+        var permAfter = await Mesh.GetPermissionAsync("ACME/Project", "TempUser",
+            until: p => p == Permission.None,
+            ct: TestTimeout);
+        permAfter.Should().Be(Permission.None,
+            "deleting the AccessAssignment should revoke all permissions");
     }
 
     #endregion
