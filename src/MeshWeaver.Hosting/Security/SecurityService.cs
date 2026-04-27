@@ -45,6 +45,13 @@ internal class SecurityService : ISecurityService
         { "PlatformAdmin", Role.PlatformAdmin }
     };
 
+    // Permission lookup keyed by role id — the synchronous fast path used by
+    // GetEffectivePermissions when every role in the user's role-set is
+    // built-in (the common case). Bypasses GetRole(...).Merge().Aggregate(...)
+    // which builds three observables and several closures per call.
+    private static readonly IReadOnlyDictionary<string, Permission> BuiltInRolePerms =
+        BuiltInRoles.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Permissions, StringComparer.Ordinal);
+
     // Static policies from IStaticNodeProvider (e.g., Doc, Agent, Role namespaces are read-only)
     private readonly Dictionary<string, PartitionAccessPolicy> _staticPolicies;
 
@@ -171,13 +178,31 @@ internal class SecurityService : ISecurityService
             .SelectMany(state =>
             {
                 var (roleIds, permissionCap) = state;
-                var rolePerms = roleIds.IsEmpty
-                    ? Observable.Return(Permission.None)
-                    : roleIds
-                        .Select(GetRole)
-                        .Merge()
-                        .Where(r => r is not null)
-                        .Aggregate(Permission.None, (acc, r) => acc | r!.Permissions);
+
+                // Fast path: every role is built-in → resolve synchronously
+                // from the BuiltInRolePerms lookup, no per-role observable
+                // composition. This is the common case (tests + most prod
+                // tenants don't use custom Role definitions) and avoids
+                // building Merge + Aggregate + Where observables.
+                Permission rolePermsValue = Permission.None;
+                ImmutableHashSet<string>? customRoleIds = null;
+                foreach (var rid in roleIds)
+                {
+                    if (BuiltInRolePerms.TryGetValue(rid, out var p))
+                        rolePermsValue |= p;
+                    else
+                        customRoleIds = (customRoleIds ?? ImmutableHashSet<string>.Empty).Add(rid);
+                }
+
+                IObservable<Permission> rolePerms = customRoleIds is null
+                    ? Observable.Return(rolePermsValue)
+                    : Observable.Return(rolePermsValue).CombineLatest(
+                        customRoleIds
+                            .Select(GetRole)
+                            .Merge()
+                            .Where(r => r is not null)
+                            .Aggregate(Permission.None, (acc, r) => acc | r!.Permissions),
+                        (builtIn, custom) => builtIn | custom);
 
                 IObservable<Permission> withPublic = (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public)
                     ? rolePerms.Zip(GetEffectivePermissions(nodePath, WellKnownUsers.Public),
