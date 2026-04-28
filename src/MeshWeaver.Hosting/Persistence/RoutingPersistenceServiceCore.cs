@@ -18,6 +18,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
     private readonly IPartitionedStoreFactory _factory;
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly IEnumerable<IStaticNodeProvider> _staticNodeProviders;
+    private readonly IEnumerable<IPartitionStorageProvider> _partitionStorageProviders;
     private readonly ConcurrentDictionary<string, IStorageService> _stores = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IVersionQuery> _versionQueries = new(StringComparer.OrdinalIgnoreCase);
@@ -28,11 +29,13 @@ internal class RoutingPersistenceServiceCore : IStorageService
     public RoutingPersistenceServiceCore(
         IPartitionedStoreFactory factory,
         IDataChangeNotifier? changeNotifier = null,
-        IEnumerable<IStaticNodeProvider>? staticNodeProviders = null)
+        IEnumerable<IStaticNodeProvider>? staticNodeProviders = null,
+        IEnumerable<IPartitionStorageProvider>? partitionStorageProviders = null)
     {
         _factory = factory;
         _changeNotifier = changeNotifier;
         _staticNodeProviders = staticNodeProviders ?? [];
+        _partitionStorageProviders = partitionStorageProviders ?? [];
     }
 
     /// <summary>
@@ -110,6 +113,27 @@ internal class RoutingPersistenceServiceCore : IStorageService
             if (_stores.TryGetValue(firstSegment, out existing))
                 return existing;
 
+            // Sequential rule lookup: first IPartitionStorageProvider whose
+            // Matches() returns true wins. This is the new routing model —
+            // explicit rules in registration order, no DataSource string
+            // discriminators, no special-cases inside the routing core.
+            // See IPartitionStorageProvider.cs for the why.
+            foreach (var provider in _partitionStorageProviders)
+            {
+                if (!provider.Matches(firstSegment))
+                    continue;
+
+                var providerCore = new InMemoryPersistenceService(provider.Adapter, _changeNotifier);
+                await providerCore.InitializeAsync(System.Text.Json.JsonSerializerOptions.Default, ct);
+                _stores[firstSegment] = providerCore;
+                _queryProviders[firstSegment] =
+                    new Query.InMemoryMeshQuery(providerCore, changeNotifier: _changeNotifier);
+                return providerCore;
+            }
+
+            // No rule matched — fall through to the legacy partitioned-store
+            // factory (FileSystem / Postgres / Cosmos). This is the implicit
+            // catch-all until a wildcard provider is registered.
             var partition = await _factory.CreateStoreAsync(firstSegment, ct);
             var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
             _stores[firstSegment] = core;
@@ -163,6 +187,30 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
+        // 0. Pre-seed stores for IPartitionStorageProvider rules that have
+        //    a fixed PartitionDefinition (single-namespace rules like
+        //    EmbeddedResource). Wildcard / pattern rules don't surface here
+        //    — they'll be exercised lazily by GetOrCreateStoreAsync when
+        //    a new first-segment path arrives. This keeps single-namespace
+        //    partitions (e.g. Doc) visible to listings without forcing
+        //    wildcard rules to enumerate every possible namespace upfront.
+        foreach (var provider in _partitionStorageProviders)
+        {
+            var ns = provider.PartitionDefinition?.Namespace;
+            if (string.IsNullOrEmpty(ns))
+                continue;
+            if (_stores.ContainsKey(ns))
+                continue;
+
+            var core = new InMemoryPersistenceService(provider.Adapter, _changeNotifier);
+            await core.InitializeAsync(System.Text.Json.JsonSerializerOptions.Default, ct);
+            if (_stores.TryAdd(ns, core))
+            {
+                _queryProviders[ns] =
+                    new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+            }
+        }
+
         // 1. Collect every PartitionDefinition declared by any static-provider /
         //    config-time AddMeshNodes seed. These tell the routing layer which
         //    partitions exist and where they live. See `AddDocumentation` for the
