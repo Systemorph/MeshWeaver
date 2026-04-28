@@ -281,7 +281,8 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     /// <summary>
-    /// View that uses BuildPropertyOverview with a MeshNode that has PreRenderedHtml set.
+    /// View composing BuildPropertyOverview + BuildMarkdownBody, mirroring how
+    /// MeshNodeLayoutAreas.BuildDetailsContent assembles a node detail page.
     /// </summary>
     private static UiControl PreRenderedHtmlView(LayoutAreaHost host, RenderingContext ctx)
     {
@@ -293,11 +294,17 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
             PreRenderedHtml = "<h1>FutuRe Group</h1><pre class=\"mermaid\">graph TD\n    A-->B</pre>"
         };
 
-        return OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true);
+        var stack = Controls.Stack.WithWidth("100%")
+            .WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true));
+        var markdown = OverviewLayoutArea.BuildMarkdownBody(host, node);
+        if (markdown != null)
+            stack = stack.WithView(markdown);
+        return stack;
     }
 
     /// <summary>
-    /// View that uses BuildPropertyOverview with a MeshNode that has no PreRenderedHtml.
+    /// View composing BuildPropertyOverview + BuildMarkdownBody when PreRenderedHtml
+    /// is null — markdown body is omitted, leaving only the property overview.
     /// </summary>
     private static UiControl NoPreRenderedHtmlView(LayoutAreaHost host, RenderingContext ctx)
     {
@@ -309,7 +316,12 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
             PreRenderedHtml = null
         };
 
-        return OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true);
+        var stack = Controls.Stack.WithWidth("100%")
+            .WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true));
+        var markdown = OverviewLayoutArea.BuildMarkdownBody(host, node);
+        if (markdown != null)
+            stack = stack.WithView(markdown);
+        return stack;
     }
 }
 

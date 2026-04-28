@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh;
+﻿using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Hosting;
 
@@ -10,6 +11,7 @@ public record MeshHostApplicationBuilder : MeshBuilder
     {
         this.Host = Host;
         Host.ConfigureContainer(new MessageHubServiceProviderFactory(BuildHub));
+        this.RegisterMeshQueryCoreOnMeshHub();
     }
 
     public IHostApplicationBuilder Host { get; }
@@ -20,6 +22,7 @@ public record MeshHostBuilder : MeshBuilder
     {
         this.Host = Host;
         Host.UseServiceProviderFactory(new MessageHubServiceProviderFactory(BuildHub));
+        this.RegisterMeshQueryCoreOnMeshHub();
     }
 
 
