@@ -59,8 +59,12 @@ jobs:
           name=$(basename "$csproj" .csproj)
           echo "::endgroup::"
           echo "::group::$name"
+          # blame-hang-timeout 30s (was 90s): individual test [Fact(Timeout=N)]
+          # already kills slow tests, so blame's job is to catch the *next*
+          # frame after that — 30s is plenty. Lowering this drops the
+          # worst-case CI cost from 90s × N hung tests to 30s × N.
           dotnet test "$csproj" --no-build --verbosity minimal -l:trx \
-              --blame-hang-timeout 90s --blame-hang-dump-type mini
+              --blame-hang-timeout 30s --blame-hang-dump-type mini
           rc=$?
           marker="[CI] $name exit=$rc"
           echo "$marker"
