@@ -8,6 +8,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -313,11 +314,26 @@ public static class NodeMenuItemsExtensions
                 ? b
                 : buckets[key] = ImmutableSortedSet.CreateBuilder(MenuItemComparer);
 
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(NodeMenuItemsExtensions));
+
         async Task ConsumeAsync(string key, IAsyncEnumerable<NodeMenuItemDefinition> items)
         {
             var bucket = GetBucket(key);
-            await foreach (var item in items)
-                bucket.Add(item);  // sorted-set Add inserts in position, dedupes via comparer
+            // Each provider is best-effort: a single broken provider must not crash
+            // the whole menu render. The most common failure path is a transient
+            // GetMenuContext throw on disposing/uninitialised hubs (see related
+            // ObjectDisposedException pattern at SynchronizationStream..ctor).
+            try
+            {
+                await foreach (var item in items)
+                    bucket.Add(item);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex,
+                    "Menu provider for context '{Context}' faulted; items skipped", key);
+            }
         }
 
         // Legacy delegate-based providers — each context has its own provider collection.
