@@ -118,7 +118,9 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var model = new ModelParameter<JsonElement>(string.IsNullOrEmpty(jsonModel) ? default : JsonDocument.Parse(jsonModel).RootElement, (m,r)=>m.GetValueFromModel(r));
         model.Update(new JsonPatch(PatchOperation.Replace(JsonPointer.Parse("/displayName"), JsonNode.Parse($"\"{Universe}\""))));
 
-        var log = await stream.SubmitModel(model).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var log = await stream.SubmitModel(model)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
         value = await stream
