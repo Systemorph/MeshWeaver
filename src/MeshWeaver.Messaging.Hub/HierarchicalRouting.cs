@@ -115,10 +115,7 @@ internal class HierarchicalRouting
                         }, o => o.ResponseFor(delivery)
                     );
                 }
-                // Manual Post above (when not disposing) is the response — return
-                // Forwarded so OrleansRoutingService doesn't double-post on result.
-                // During disposal the caller will time out (acceptable; disposal is exceptional).
-                return delivery.Forwarded();
+                return isDisposing ? delivery.Failed("Hub disposing") : delivery.NotFound();
             }
         }
         else
@@ -158,8 +155,7 @@ internal class HierarchicalRouting
                     }, o => o.ResponseFor(delivery)
                 );
             }
-            // Manual Post above (when not disposing) is the response — see comment above.
-            return delivery.Forwarded();
+            return isDisposing ? delivery.Failed("Hub disposing") : delivery.NotFound();
         }
 
         // Check if parent hub is also disposing before routing up

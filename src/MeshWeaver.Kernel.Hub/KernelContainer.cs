@@ -195,9 +195,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 ExceptionType = e.GetType().Name,
                 Message = e.Message,
             }, o => o.ResponseFor(request));
-            // Manual Post above is the response — return Forwarded so cross-tier
-            // routing doesn't post a second DeliveryFailure.
-            return Task.FromResult(request.Forwarded());
+            return Task.FromResult(request.Failed(e.Message));
         }
     }
 
@@ -218,9 +216,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
     private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, DeliveryFailure deliveryFailure)
     {
         kernelHub.Post(deliveryFailure, o => o.ResponseFor(request));
-        // Manual Post above is the response — return Forwarded so cross-tier
-        // routing doesn't post a second DeliveryFailure.
-        return request.Forwarded();
+        return request.Failed(deliveryFailure.Message ?? string.Empty);
     }
 
     private void PublishEventToContext(IMessageHub hub, KernelEvent @event)
