@@ -192,12 +192,30 @@ public static class UserNodeType
             || !string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
             yield break;
 
-        // Check if the user has Admin permissions at root level
+        // Check if the user has Admin permissions at root level. Bridge the IObservable to
+        // an IAsyncEnumerable via a Channel — no .ToTask(), no await on a hub round-trip.
+        // See Doc/Architecture/AsynchronousCalls.md.
+        var permsChannel = System.Threading.Channels.Channel.CreateBounded<Permission>(
+            new System.Threading.Channels.BoundedChannelOptions(1) { FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest });
+
         var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
         if (securityService == null)
             yield break;
 
-        var rootPerms = await securityService.GetEffectivePermissions("", viewerId).FirstAsync().ToTask();
+        using var sub = securityService.GetEffectivePermissions("", viewerId)
+            .FirstAsync()
+            .Subscribe(
+                perm => { permsChannel.Writer.TryWrite(perm); permsChannel.Writer.TryComplete(); },
+                _ => permsChannel.Writer.TryComplete(),
+                () => permsChannel.Writer.TryComplete());
+
+        Permission rootPerms = Permission.None;
+        await foreach (var perm in permsChannel.Reader.ReadAllAsync())
+        {
+            rootPerms = perm;
+            break;
+        }
+
         if (!rootPerms.HasFlag(Permission.All))
             yield break;
 

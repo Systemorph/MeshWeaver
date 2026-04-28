@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Data.Completion;
@@ -475,7 +474,10 @@ internal class UnifiedReferenceAutocompleteProvider(
 
     /// <summary>
     /// Asks the node at the given path for its own completions (layout areas, data collections, content files)
-    /// by sending an AutocompleteRequest to that node's hub.
+    /// by sending an AutocompleteRequest to that node's hub. Fully observable composition — no
+    /// <c>await</c> on hub round-trips, no <c>.ToTask()</c> — bridged to <c>IAsyncEnumerable</c>
+    /// via a <c>Channel</c>. The <c>await foreach</c> is on the channel reader, not a hub Task.
+    /// See <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
     private async IAsyncEnumerable<AutocompleteItem> GetNodeDelegatedCompletions(
         string nodePath,
@@ -483,29 +485,27 @@ internal class UnifiedReferenceAutocompleteProvider(
         string currentSegment,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        AutocompleteResponse? response = null;
-        try
-        {
-            // Send AutocompleteRequest to the hub — the handler aggregates all local IAutocompleteProvider instances
-            var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
-            var delivery = await hub.Observe(request).FirstAsync().ToTask(ct);
-            response = delivery.Message;
-        }
-        catch
-        {
-            // Hub may not have an AutocompleteRequest handler, or node may not exist
-        }
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<AutocompleteItem>(
+            new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
 
-        if (response?.Items == null)
-            yield break;
+        using var sub = GetCompletionsViaHub(nodePath, currentSegment)
+            .SelectMany(response => response?.Items?.AsEnumerable() ?? Enumerable.Empty<AutocompleteItem>())
+            .Select(item => item with { Priority = item.Priority > 0 ? item.Priority : ItemPriority })
+            .Subscribe(
+                item => channel.Writer.TryWrite(item),
+                _ => channel.Writer.TryComplete(),
+                () => channel.Writer.TryComplete());
 
-        foreach (var item in response.Items)
-        {
-            // Re-map insert text to use the relative prefix if needed
-            yield return item with
-            {
-                Priority = item.Priority > 0 ? item.Priority : ItemPriority
-            };
-        }
+        await foreach (var item in channel.Reader.ReadAllAsync(ct))
+            yield return item;
+    }
+
+    private IObservable<AutocompleteResponse?> GetCompletionsViaHub(string nodePath, string currentSegment)
+    {
+        var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
+        return hub.Observe(request)
+            .FirstAsync()
+            .Select(d => d.Message as AutocompleteResponse)
+            .Catch<AutocompleteResponse?, Exception>(_ => Observable.Return<AutocompleteResponse?>(null));
     }
 }

@@ -245,12 +245,11 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
     /// <summary>
     /// Reactive token revocation — marks the token as revoked via
     /// <see cref="IMeshService.UpdateNode"/> and removes the index pointer.
-    /// No async/await. Emits true on success, false if token not found, errors on failure.
+    /// Uses <c>hub.GetMeshNode</c> for the authoritative current state — never
+    /// <c>QueryAsync</c>, which lags through the read-side index.
     /// </summary>
     public IObservable<bool> RevokeToken(string tokenNodePath) =>
-        Observable.FromAsync(() => meshQuery.QueryAsync<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{tokenNodePath}", WellKnownUsers.System))
-            .FirstOrDefaultAsync().AsTask())
+        hub.GetMeshNode(tokenNodePath, TimeSpan.FromSeconds(10))
             .SelectMany(node =>
             {
                 var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
@@ -275,12 +274,11 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
 
     /// <summary>
     /// Reactive hard-delete — removes both the primary token node and its index entry.
-    /// No async/await. Emits true on success, errors on failure.
+    /// Uses <c>hub.GetMeshNode</c> for the authoritative current state — never
+    /// <c>QueryAsync</c>, which lags through the read-side index.
     /// </summary>
     public IObservable<bool> DeleteToken(string tokenNodePath) =>
-        Observable.FromAsync(() => meshQuery.QueryAsync<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{tokenNodePath}", WellKnownUsers.System))
-            .FirstOrDefaultAsync().AsTask())
+        hub.GetMeshNode(tokenNodePath, TimeSpan.FromSeconds(10))
             .SelectMany(node =>
             {
                 var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);

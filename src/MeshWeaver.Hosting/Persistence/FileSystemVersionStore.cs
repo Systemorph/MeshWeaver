@@ -32,9 +32,14 @@ public class FileSystemVersionStore : IVersionQuery
     }
 
     /// <summary>
-    /// Writes a versioned snapshot. Deduplicates: emits the input unchanged
-    /// (without writing) when the content excluding version+timestamp matches
-    /// the last write for this path.
+    /// Writes a versioned snapshot. Every save gets its own snapshot file
+    /// keyed on the post-save Version — no dedup based on content. The
+    /// previous content-equality dedup interacted badly with the dual save
+    /// path (PersistenceService.SaveNode and MeshNodeTypeSource's persister)
+    /// where two saves with the same Name but different counter Versions
+    /// would race: the second save's WriteVersion saw the first's
+    /// _lastWrittenContent and skipped writing — leaving a version gap in
+    /// the snapshot history that <c>VersionQuery_GetVersionBefore</c> caught.
     /// </summary>
     public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
         => Observable.FromAsync(async ct =>
@@ -44,14 +49,6 @@ public class FileSystemVersionStore : IVersionQuery
             var writeOptions = _writeOptionsModifier != null
                 ? _writeOptionsModifier(options)
                 : options;
-
-            var normalizedNode = node with { Version = 0, LastModified = default };
-            var normalizedJson = JsonSerializer.Serialize(normalizedNode, writeOptions);
-            var nodePath = node.Path ?? "";
-
-            if (_lastWrittenContent.TryGetValue(nodePath, out var lastContent) && lastContent == normalizedJson)
-                return node;
-            _lastWrittenContent[nodePath] = normalizedJson;
 
             var ns = node.Namespace ?? "";
             var dir = string.IsNullOrEmpty(ns)

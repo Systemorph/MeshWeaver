@@ -1888,48 +1888,57 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
 
     /// <summary>
     /// Handles AutocompleteRequest by aggregating items from all registered IAutocompleteProvider services.
+    /// Sync handler — provider IAsyncEnumerables convert to Observables (Merge) and the response is
+    /// posted from the Subscribe callback once all providers complete. This keeps the hub ActionBlock
+    /// free while providers do their work, including any hub-to-hub round-trips inside their bodies
+    /// (see <c>UnifiedReferenceAutocompleteProvider.GetNodeDelegatedCompletions</c>).
     /// </summary>
-    private static async Task<IMessageDelivery> HandleAutocompleteRequest(
+    private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
-        IMessageDelivery<AutocompleteRequest> request,
-        CancellationToken ct)
+        IMessageDelivery<AutocompleteRequest> request)
     {
         var providers = hub.ServiceProvider.GetServices<IAutocompleteProvider>();
         var query = request.Message.Query;
         var contextPath = request.Message.Context;
 
-        var allItems = new List<AutocompleteItem>();
-        foreach (var provider in providers)
-        {
-            try
+        var perProvider = providers.Select(p =>
+            Observable.Create<AutocompleteItem>(async (observer, token) =>
             {
-                await foreach (var item in provider.GetItemsAsync(query, contextPath, ct))
+                try
                 {
-                    allItems.Add(item);
+                    await foreach (var item in p.GetItemsAsync(query, contextPath, token))
+                        observer.OnNext(item);
+                    observer.OnCompleted();
                 }
-            }
-            catch
+                catch
+                {
+                    // Skip providers that fail
+                    observer.OnCompleted();
+                }
+            }));
+
+        Observable.Merge(perProvider)
+            .ToList()
+            .Subscribe(allItems =>
             {
-                // Skip providers that fail
-            }
-        }
+                // Apply relevance filtering: boost items that match the query text,
+                // suppress items with zero priority that don't match
+                var searchText = ExtractAutocompleteSearchText(query);
+                IEnumerable<AutocompleteItem> result = allItems;
+                if (!string.IsNullOrEmpty(searchText))
+                {
+                    result = allItems
+                        .Select(item => item.Priority > 0
+                            ? item // Provider already scored this item
+                            : item with { Priority = ScoreAutocompleteItem(item, searchText) })
+                        .Where(item => item.Priority > 0)
+                        .OrderByDescending(item => item.Priority);
+                }
 
-        // Apply relevance filtering: boost items that match the query text,
-        // suppress items with zero priority that don't match
-        var searchText = ExtractAutocompleteSearchText(query);
-        if (!string.IsNullOrEmpty(searchText))
-        {
-            allItems = allItems
-                .Select(item => item.Priority > 0
-                    ? item // Provider already scored this item
-                    : item with { Priority = ScoreAutocompleteItem(item, searchText) })
-                .Where(item => item.Priority > 0)
-                .OrderByDescending(item => item.Priority)
-                .ToList();
-        }
+                hub.Post(new AutocompleteResponse(result.ToList()), o => o.ResponseFor(request));
+            },
+            _ => hub.Post(new AutocompleteResponse([]), o => o.ResponseFor(request)));
 
-        var response = new AutocompleteResponse(allItems);
-        hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
     }
 
