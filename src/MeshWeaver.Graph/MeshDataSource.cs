@@ -226,7 +226,16 @@ public static class MeshDataSourceExtensions
         var notifier = hub.ServiceProvider.GetService<IDataChangeNotifier>();
         if (notifier == null)
             return;
-        var ownPath = hub.Address.ToString();
+        // Use Address.Path (segments joined) instead of ToString() — ToString() on a
+        // hosted address appends "~<host>" (e.g. "ACME/CrudTest_xxx~mesh/<guid>"),
+        // which never matches the segment-only path that
+        // FileSystemPersistenceService.NormalizePath emits in the Deleted
+        // notification ("ACME/CrudTest_xxx"). With the mismatch, IsDeleted was never
+        // set and the per-node hub kept serving its cached MeshNode after delete —
+        // FullCrudWorkflow_CreateGetUpdateDelete saw the deleted node returned by
+        // a follow-up Get because the workspace MeshNodeReference reducer hadn't
+        // been short-circuited.
+        var ownPath = hub.Address.Path;
         var delSub = notifier.Subscribe(notification =>
         {
             if (notification.Kind != DataChangeKind.Deleted)
