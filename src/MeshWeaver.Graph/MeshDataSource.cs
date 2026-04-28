@@ -52,8 +52,12 @@ public static class MeshDataSourceExtensions
                                 // hub's own address — return the per-node remote stream from
                                 // the workspace's cache (opens one on first call, returns the
                                 // same instance thereafter — see Workspace._remoteStreamCache).
+                                // Compare against Address.Path (segments only): ToString() on a
+                                // hosted hub appends "~<host>" and would never match a caller-
+                                // supplied path, so own-hub reads would incorrectly be routed
+                                // remote.
                                 if (meshRef.Path is { Length: > 0 } targetPath
-                                    && !string.Equals(targetPath, workspace.Hub.Address.ToString(), StringComparison.Ordinal))
+                                    && !string.Equals(targetPath, workspace.Hub.Address.Path, StringComparison.Ordinal))
                                 {
                                     return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
                                         new Address(targetPath), new MeshNodeReference());
@@ -264,7 +268,9 @@ public static class MeshDataSourceExtensions
 
         var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
         var persistenceCore = hub.ServiceProvider.GetService<IStorageService>();
-        var hubPath = hub.Address.ToString();
+        // Address.Path (segments only) — ToString() on hosted hubs adds "~<host>",
+        // which never matches persistence keys / NodeTypeService paths (segment-only).
+        var hubPath = hub.Address.Path;
 
         if (nodeTypeService == null || persistenceCore == null)
             return request;
@@ -369,7 +375,13 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
         _persistenceCore = workspace.Hub.ServiceProvider.GetService<IStorageService>();
-        _hubPath = workspace.Hub.Address.ToString();
+        // Use Address.Path (segments only) — ToString() on a hosted address (Orleans
+        // per-node grain hubs) appends "~<host>" (e.g. ".../msg1-assistant~mesh/<guid>"),
+        // which never matches static-node Paths or persistence keys (both segment-only).
+        // With ToString(), static-node lookup falls through to persistence → empty
+        // InstanceCollection → GetDataRequest with MeshNodeReference returns null Data,
+        // breaking every history/response read on grains backed by IStaticNodeProvider.
+        _hubPath = workspace.Hub.Address.Path;
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshDataSource>>();
     }
 
@@ -388,11 +400,14 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // Register MeshNode in TypeRegistry for JSON serialization
         Workspace.Hub.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
 
+        _logger?.LogInformation("[DIAG-MeshDataSource] WithMeshNodes hubPath='{HubPath}'", _hubPath);
+
         // Check if this hub path corresponds to a built-in node (registered via AddMeshNodes).
         // Built-in nodes (NodeType, Markdown, Agent, etc.) are pre-loaded — no persistence needed.
         var meshConfig = Workspace.Hub.ServiceProvider.GetService<MeshConfiguration>();
         if (meshConfig != null && meshConfig.Nodes.TryGetValue(_hubPath, out var builtInNode))
         {
+            _logger?.LogInformation("[DIAG-MeshDataSource] BUILT-IN node for hubPath='{HubPath}'", _hubPath);
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts
                 .WithKey(n => n.Id)
@@ -400,9 +415,12 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         }
 
         // Check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
-        var staticNode = Workspace.Hub.ServiceProvider.GetServices<IStaticNodeProvider>()
-            .SelectMany(p => p.GetStaticNodes())
+        var allStatic = Workspace.Hub.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes()).ToList();
+        var staticNode = allStatic
             .FirstOrDefault(n => string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase));
+        _logger?.LogInformation("[DIAG-MeshDataSource] static lookup hubPath='{HubPath}', total={Total}, found={Found}",
+            _hubPath, allStatic.Count, staticNode != null);
         if (staticNode != null)
         {
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
