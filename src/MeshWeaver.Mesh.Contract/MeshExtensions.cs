@@ -81,12 +81,25 @@ public static class MeshExtensions
             return services;
         });
 
+    private sealed record NodeOperationHandlersMarker;
+
     /// <summary>
-    /// Registers handlers for mesh node operations.
+    /// Registers handlers for mesh node operations. Idempotent — calling twice on the
+    /// same configuration is a no-op on the second call. Without this guard, every
+    /// extra call would add a duplicate set of handlers; each delivery would invoke
+    /// HandleCreateNodeRequest/Update/etc. twice, producing two responses per request
+    /// (the second one observing the side-effects of the first → spurious
+    /// "Node already exists"/"Node not found" failures). Concrete trigger: any hub
+    /// that gets both <see cref="MeshBuilder"/>'s <c>AddMesh</c> and
+    /// <c>AddDefaultLayoutAreas</c> (which calls <c>AddMeshDataSource</c>, which
+    /// calls this).
     /// </summary>
     public static MessageHubConfiguration WithNodeOperationHandlers(this MessageHubConfiguration config)
     {
+        if (config.Get<NodeOperationHandlersMarker>() is not null)
+            return config;
         return config
+            .Set(new NodeOperationHandlersMarker())
             .AddMeshTypes()
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)

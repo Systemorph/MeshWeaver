@@ -218,8 +218,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             _workspace.Hub.SetInitialVersion(ownNode.Version);
         }
 
-        if (ownNode is { State: MeshNodeState.Active or MeshNodeState.Transient })
-            _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
+        // Open the MeshNodeInit gate once init is done — unconditionally.
+        // The gate exists to defer non-CreateNodeRequest traffic until persistence
+        // has been consulted; once we've awaited GetNode(...) above, that contract
+        // is satisfied whether or not a node was actually found. Hubs that are NOT
+        // backed by a persisted node (e.g. the top-level mesh hub at mesh/<guid>,
+        // hubs whose node was deleted, or fresh per-test fixtures) MUST still open
+        // the gate — otherwise every CreateNodeResponse / GetDataResponse routed
+        // back to them is deferred indefinitely and every test request times out.
+        _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
 
         var allNodes = new List<MeshNode>();
         if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
