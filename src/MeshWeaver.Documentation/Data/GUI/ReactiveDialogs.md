@@ -84,7 +84,7 @@ public record BasicInput
 
 # Layout Area Setup
 
-The reactive dialog wires together inputs, distribution selection, and results:
+The reactive dialog wires together inputs, distribution selection, and results. The simulation runs on a **hosted hub** so the dialog hub stays responsive — `await`-ing the work inside the click action would block the hub scheduler (see `Doc/Architecture/AsynchronousCalls.md`).
 
 ```csharp
 public static object DistributionStatistics(LayoutAreaHost host, RenderingContext context)
@@ -98,19 +98,47 @@ public static object DistributionStatistics(LayoutAreaHost host, RenderingContex
 
     var subject = new Subject<(double[] Samples, TimeSpan Time)>();
 
+    // Hosted hub owns the simulation work. The dialog hub posts a request,
+    // receives progress + completion notifications back, and never blocks.
+    var simHub = host.Hub.GetHostedHub(
+        new Address("simulation", Guid.NewGuid().ToString("N")),
+        c => c.WithHandler<RunSimulationRequest>((hub, delivery) =>
+        {
+            // Long-running work; run on a worker thread so the hosted hub's
+            // scheduler isn't blocked. Progress + result flow back via the
+            // PARENT hub — the hosted hub is busy until this returns.
+            _ = Task.Run(() =>
+            {
+                var result = Simulate(delivery.Message.Input, delivery.Message.Distribution);
+                host.Hub.Post(new SimulationProgress(1.0, result), o => o.WithTarget(host.Hub.Address));
+            });
+            return delivery.Processed();
+        }));
+
+    host.RegisterForDisposal(simHub);
+
+    // Funnel completion notifications back into the result subject.
+    host.RegisterForDisposal(host.Hub
+        .GetObservable<SimulationProgress>()
+        .Where(p => p.Progress >= 1.0)
+        .Subscribe(p => subject.OnNext(p.Result)));
+
     return Controls.Stack
         .WithView(host.Edit(new BasicInput(), nameof(BasicInput)), nameof(BasicInput))
         .WithView(host.GetDataStream<Distribution>(nameof(Distribution)).Select(x => x.GetType())
             .DistinctUntilChanged()
             .Select(t => host.Edit(t, nameof(Distribution))))
         .WithView(Controls.Button("Run Simulation")
-            .WithClickAction(
-                async _ =>
-                {
-                    var input = await host.Stream.GetDataAsync<BasicInput>(nameof(BasicInput));
-                    var distribution = await host.Stream.GetDataAsync<Distribution>(nameof(Distribution));
-                    subject.OnNext(Simulate(input, distribution));
-                }))
+            .WithClickAction(_ =>
+            {
+                // Sync click action. Read form state via Subscribe(...).Take(1)
+                // — never `await GetDataAsync(...)` from a click handler.
+                host.Stream.GetDataStream<BasicInput>(nameof(BasicInput))
+                    .CombineLatest(host.Stream.GetDataStream<Distribution>(nameof(Distribution)))
+                    .Take(1)
+                    .Subscribe(t => simHub.Post(new RunSimulationRequest(t.First, t.Second)));
+                return Task.CompletedTask;
+            }))
         .WithView(subject.Select(x => x.Statistics()).StartWith(Controls.Markdown("### Click to run simulation")));
 }
 ```
@@ -126,6 +154,15 @@ The host is an "island" where the layout area lives, synchronized with the view:
 1. **Initialize reference data** - `UpdateData` sets options for dropdowns
 2. **React to changes** - Subscribe to data streams with `GetDataStream<T>`
 3. **Use Subject for computation results** - Keeps large results server-side
+
+## Hosted hub for the work
+
+Long-running computations (simulations, file builds, anything > a few ms) belong on a **hosted hub**, not on the dialog hub. The dialog hub serves UI events; hosting the work on a side hub keeps clicks, edits, and re-renders responsive while the simulation runs.
+
+Two important rules for the hosted hub:
+
+- **Progress + completion notifications go via the PARENT hub**, not via the hosted hub itself. While the hosted hub is processing the request its own scheduler is busy, so emitting progress through it would queue behind the running work and deliver as one final batch. Posting through the parent hub keeps progress live.
+- **The click action stays sync**. `WithClickAction(ctx => { ...; return Task.CompletedTask; })` — never `async ctx => …`. Read form state via `Subscribe(...).Take(1)`, drive the request, return immediately.
 
 ## Subject (Publish-Subscribe)
 
@@ -151,7 +188,8 @@ No imperative specification needed:
 sequenceDiagram
     participant U as User
     participant UI as UI (Blazor/Razor Page)
-    participant APP as Application
+    participant APP as Dialog Hub
+    participant SIM as Hosted Sim Hub
     participant S as Subject
 
     U->>UI: Request DistributionStatistics Dialog
@@ -159,9 +197,12 @@ sequenceDiagram
     APP->>UI: Build dialog with defaults and initialize stream
     UI->>U: Render and display dialog
     U->>UI: Click "Run Simulation"
-    UI->>APP: Send click event to application
-    APP->>S: Perform calculation, emit result into Subject
-    S->>APP: Subject subscription triggers update of result view
+    UI->>APP: Send click event (sync, returns immediately)
+    APP->>SIM: Post RunSimulationRequest
+    Note over APP,SIM: Dialog hub stays responsive
+    SIM->>APP: Post SimulationProgress (via parent hub, not via SIM)
+    APP->>S: Subject.OnNext(result)
+    S->>APP: Subject subscription updates result view
     APP->>UI: Synchronize result view with UI
     UI->>U: Show result view
 ```
