@@ -76,7 +76,8 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
         var fileContentProvider = hub.ServiceProvider.GetRequiredService<IFileContentProvider>();
 
         // Act — requesting a .docx file should auto-convert to markdown
-        var result = await fileContentProvider.GetFileContentAsync("content", "sample.docx", ct: TestContext.Current.CancellationToken);
+        var result = await fileContentProvider.GetFileContent("content", "sample.docx")
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Content result:\n{result.Content}");
@@ -94,7 +95,8 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
         var fileContentProvider = hub.ServiceProvider.GetRequiredService<IFileContentProvider>();
 
         // Act — requesting a .md file should return as-is
-        var result = await fileContentProvider.GetFileContentAsync("content", "readme.md", ct: TestContext.Current.CancellationToken);
+        var result = await fileContentProvider.GetFileContent("content", "readme.md")
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         result.Success.Should().BeTrue();

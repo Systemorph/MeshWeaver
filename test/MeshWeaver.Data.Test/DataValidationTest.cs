@@ -34,15 +34,15 @@ public class ForbiddenNameValidator : IDataValidator
 {
     public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Create];
 
-    public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default)
+    public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         if (context.Entity is ValidatableData data && data.Name?.Contains("forbidden", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(DataValidationResult.Invalid(
+            return Observable.Return(DataValidationResult.Invalid(
                 $"Entity name '{data.Name}' contains forbidden word",
                 DataValidationRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(DataValidationResult.Valid());
+        return Observable.Return(DataValidationResult.Valid());
     }
 }
 
@@ -53,15 +53,15 @@ public class LockedCategoryValidator : IDataValidator
 {
     public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Update];
 
-    public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default)
+    public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         if (context.Entity is ValidatableData data && data.Category?.Equals("locked", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return Task.FromResult(DataValidationResult.Invalid(
+            return Observable.Return(DataValidationResult.Invalid(
                 "Cannot set category to 'locked'",
                 DataValidationRejectionReason.ValidationFailed));
         }
-        return Task.FromResult(DataValidationResult.Valid());
+        return Observable.Return(DataValidationResult.Valid());
     }
 }
 
@@ -72,15 +72,15 @@ public class ProtectedEntityValidator : IDataValidator
 {
     public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Delete];
 
-    public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default)
+    public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         if (context.Entity is ValidatableData data && data.IsProtected)
         {
-            return Task.FromResult(DataValidationResult.Invalid(
+            return Observable.Return(DataValidationResult.Invalid(
                 $"Entity '{data.Id}' is protected and cannot be deleted",
                 DataValidationRejectionReason.Unauthorized));
         }
-        return Task.FromResult(DataValidationResult.Valid());
+        return Observable.Return(DataValidationResult.Valid());
     }
 }
 
@@ -91,15 +91,15 @@ public class SecretCategoryReadValidator : IDataValidator
 {
     public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Read];
 
-    public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct = default)
+    public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         if (context.Entity is EntityReference entityRef && entityRef.Id is string id && id.Contains("secret", StringComparison.OrdinalIgnoreCase))
         {
-            return Task.FromResult(DataValidationResult.Invalid(
+            return Observable.Return(DataValidationResult.Invalid(
                 "Cannot read secret entities",
                 DataValidationRejectionReason.Unauthorized));
         }
-        return Task.FromResult(DataValidationResult.Valid());
+        return Observable.Return(DataValidationResult.Valid());
     }
 }
 

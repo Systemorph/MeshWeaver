@@ -310,17 +310,12 @@ public static class ContentCollectionsExtensions
             configuration ?? (c => c)
         );
 
-        // Create an observable that loads the file content
-        var observable = Observable.FromAsync(async ct =>
-        {
-            var result = await fileContentProvider.GetFileContentAsync(reference.Collection, reference.Path, null, ct);
-            return result.Success ? (object?)result.Content : null;
-        });
-
+        // Reactive file read — provider exposes IObservable<FileContentResult> directly.
         stream.RegisterForDisposal(
-            observable
+            fileContentProvider.GetFileContent(reference.Collection, reference.Path)
+                .Select(result => result.Success ? (object?)result.Content : null)
+                .Where(value => value != null)
                 .Select(value => new ChangeItem<object>(value!, stream.StreamId, workspace.Hub.Version))
-                .Where(x => x.Value != null)
                 .DistinctUntilChanged()
                 .Synchronize()
                 .Subscribe(stream)

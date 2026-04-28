@@ -346,9 +346,13 @@ public class MeshImportService : IMeshImportService
         var collection = await _contentService.GetCollectionAsync(collectionName, ct)
             ?? throw new InvalidOperationException($"Content collection '{collectionName}' not found");
 
-        var files = await collection.GetFilesAsync(folderPath);
-        var folders = await collection.GetFoldersAsync(folderPath);
-        var itemCount = files.Count + folders.Count;
+        var fileCount = 0;
+        await foreach (var _ in collection.GetFiles(folderPath, ct))
+            fileCount++;
+        var folderCount = 0;
+        await foreach (var _ in collection.GetFolders(folderPath, ct))
+            folderCount++;
+        var itemCount = fileCount + folderCount;
 
         await collection.DeleteFolderAsync(folderPath);
 

@@ -1,12 +1,15 @@
-﻿using MeshWeaver.Messaging;
+using System.Collections.Immutable;
+using System.Reactive.Linq;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Validation;
 
 /// <summary>
 /// Data validator that enforces Row-Level Security based on access restrictions.
-/// Evaluates global and type-specific access restrictions for data operations.
-/// Mirrors the RlsNodeValidator pattern from MeshWeaver.Hosting.Security.
+/// Reactive end-to-end: the validator surface returns <see cref="IObservable{T}"/>,
+/// each restriction call is wrapped with <see cref="Observable.FromAsync"/> at the
+/// inner edge, and the chain composes via recursive <c>SelectMany</c> with no <c>await</c>.
 /// </summary>
 public class RlsDataValidator : IDataValidator
 {
@@ -32,88 +35,81 @@ public class RlsDataValidator : IDataValidator
     public IReadOnlyCollection<DataOperation> SupportedOperations =>
         [DataOperation.Create, DataOperation.Update, DataOperation.Delete];
 
-    public async Task<DataValidationResult> ValidateAsync(
-        DataValidationContext context,
-        CancellationToken ct = default)
+    public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         var action = AccessAction.FromOperation(context.Operation);
         var dataContext = _workspace.DataContext;
 
-        // Build access restriction context
         var accessRestrictionContext = new AccessRestrictionContext
         {
             UserContext = context.AccessContext ?? _accessService.Context ?? _accessService.CircuitContext,
             ServiceProvider = _workspace.Hub.ServiceProvider
         };
 
-        // Get type-specific restrictions
         var typeSource = dataContext.GetTypeSource(context.EntityType);
         var typeRestrictions = typeSource?.AccessRestrictions
-            ?? System.Collections.Immutable.ImmutableList<AccessRestrictionEntry>.Empty;
+            ?? ImmutableList<AccessRestrictionEntry>.Empty;
 
-        // Combine global restrictions with type-specific (global first)
         var allRestrictions = dataContext.GlobalAccessRestrictions.AddRange(typeRestrictions);
 
-        // Evaluate all restrictions
-        foreach (var restriction in allRestrictions)
-        {
-            try
-            {
-                var allowed = await restriction.Restriction(action, context.Entity, accessRestrictionContext, ct);
-
-                if (!allowed)
-                {
-                    var userId = accessRestrictionContext.UserContext?.ObjectId ?? "(anonymous)";
-                    var restrictionName = restriction.Name ?? "unnamed";
-
-                    _logger.LogWarning(
-                        "RLS: Access denied for user {UserId} - {Operation} on {EntityType} (rule: {RuleName})",
-                        userId,
-                        context.Operation,
-                        context.EntityType.Name,
-                        restrictionName);
-
-                    return DataValidationResult.Invalid(
-                        $"Access denied: {context.Operation} operation not allowed for {context.EntityType.Name}" +
-                        (restriction.Name != null ? $" (rule: {restriction.Name})" : ""),
-                        DataValidationRejectionReason.Unauthorized);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "RLS: Access check failed for {Operation} on {EntityType} (rule: {RuleName})",
-                    context.Operation,
-                    context.EntityType.Name,
-                    restriction.Name ?? "unnamed");
-
-                return DataValidationResult.Invalid(
-                    $"Access check failed: {ex.Message}",
-                    DataValidationRejectionReason.ValidationFailed);
-            }
-        }
-
-        _logger.LogTrace(
-            "RLS: Access granted for user {UserId} - {Operation} on {EntityType}",
-            accessRestrictionContext.UserContext?.ObjectId ?? "(anonymous)",
-            context.Operation,
-            context.EntityType.Name);
-
-        return DataValidationResult.Valid();
+        return EvaluateRestrictions(allRestrictions, action, context, accessRestrictionContext);
     }
 
     /// <summary>
-    /// Checks if a type-level operation is allowed for the current user.
-    /// Used for filtering types in type: unified path queries.
+    /// Recursive observable composition over a list of access restrictions.
+    /// Stops at the first denial; otherwise advances to the next restriction.
     /// </summary>
-    /// <param name="type">The type to check access for</param>
-    /// <param name="action">The action to check (e.g., "Create")</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>True if the action is allowed for the type</returns>
-    public async Task<bool> CheckTypeAccessAsync(
-        Type type,
+    private IObservable<DataValidationResult> EvaluateRestrictions(
+        ImmutableList<AccessRestrictionEntry> restrictions,
         string action,
-        CancellationToken ct = default)
+        DataValidationContext context,
+        AccessRestrictionContext accessCtx)
+    {
+        if (restrictions.Count == 0)
+        {
+            _logger.LogTrace(
+                "RLS: Access granted for user {UserId} - {Operation} on {EntityType}",
+                accessCtx.UserContext?.ObjectId ?? "(anonymous)",
+                context.Operation,
+                context.EntityType.Name);
+            return Observable.Return(DataValidationResult.Valid());
+        }
+
+        var first = restrictions[0];
+        var rest = restrictions.RemoveAt(0);
+
+        return first.Restriction(action, context.Entity, accessCtx)
+            .Catch<bool, Exception>(ex =>
+            {
+                _logger.LogError(ex,
+                    "RLS: Access check failed for {Operation} on {EntityType} (rule: {RuleName})",
+                    context.Operation, context.EntityType.Name, first.Name ?? "unnamed");
+                return Observable.Return(false);
+            })
+            .SelectMany(allowed =>
+            {
+                if (!allowed)
+                {
+                    _logger.LogWarning(
+                        "RLS: Access denied for user {UserId} - {Operation} on {EntityType} (rule: {RuleName})",
+                        accessCtx.UserContext?.ObjectId ?? "(anonymous)",
+                        context.Operation,
+                        context.EntityType.Name,
+                        first.Name ?? "unnamed");
+
+                    return Observable.Return(DataValidationResult.Invalid(
+                        $"Access denied: {context.Operation} operation not allowed for {context.EntityType.Name}" +
+                        (first.Name != null ? $" (rule: {first.Name})" : ""),
+                        DataValidationRejectionReason.Unauthorized));
+                }
+                return EvaluateRestrictions(rest, action, context, accessCtx);
+            });
+    }
+
+    /// <summary>
+    /// Reactive type-level access check. Used for filtering types in <c>type:</c> unified-path queries.
+    /// </summary>
+    public IObservable<bool> CheckTypeAccess(Type type, string action)
     {
         var dataContext = _workspace.DataContext;
 
@@ -123,40 +119,44 @@ public class RlsDataValidator : IDataValidator
             ServiceProvider = _workspace.Hub.ServiceProvider
         };
 
-        // Get type-specific restrictions
         var typeSource = dataContext.GetTypeSource(type);
         var typeRestrictions = typeSource?.AccessRestrictions
-            ?? System.Collections.Immutable.ImmutableList<AccessRestrictionEntry>.Empty;
+            ?? ImmutableList<AccessRestrictionEntry>.Empty;
 
-        // Combine global restrictions with type-specific
         var allRestrictions = dataContext.GlobalAccessRestrictions.AddRange(typeRestrictions);
+        return EvaluateTypeRestrictions(allRestrictions, action, type, accessRestrictionContext);
+    }
 
-        // Evaluate all restrictions with Type as the operation context
-        foreach (var restriction in allRestrictions)
-        {
-            try
+    private IObservable<bool> EvaluateTypeRestrictions(
+        ImmutableList<AccessRestrictionEntry> restrictions,
+        string action,
+        Type type,
+        AccessRestrictionContext accessCtx)
+    {
+        if (restrictions.Count == 0)
+            return Observable.Return(true);
+
+        var first = restrictions[0];
+        var rest = restrictions.RemoveAt(0);
+
+        return first.Restriction(action, type, accessCtx)
+            .Catch<bool, Exception>(ex =>
             {
-                var allowed = await restriction.Restriction(action, type, accessRestrictionContext, ct);
+                _logger.LogError(ex,
+                    "RLS: Type-level access check failed for {Action} on {Type}",
+                    action, type.Name);
+                return Observable.Return(false);
+            })
+            .SelectMany(allowed =>
+            {
                 if (!allowed)
                 {
                     _logger.LogWarning(
                         "RLS: Type-level access denied - {Action} on {Type} (rule: {RuleName})",
-                        action,
-                        type.Name,
-                        restriction.Name ?? "unnamed");
-                    return false;
+                        action, type.Name, first.Name ?? "unnamed");
+                    return Observable.Return(false);
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "RLS: Type-level access check failed for {Action} on {Type}",
-                    action,
-                    type.Name);
-                return false;
-            }
-        }
-
-        return true;
+                return EvaluateTypeRestrictions(rest, action, type, accessCtx);
+            });
     }
 }

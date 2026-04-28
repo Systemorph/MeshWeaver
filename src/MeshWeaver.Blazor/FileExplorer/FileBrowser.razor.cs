@@ -52,7 +52,10 @@ public partial class FileBrowser
         if (Collection is null)
             return;
 
-        CollectionItems = await Collection.GetCollectionItemsAsync(CurrentPath!);
+        var items = new List<CollectionItem>();
+        await foreach (var item in Collection.GetCollectionItems(CurrentPath!))
+            items.Add(item);
+        CollectionItems = items;
         SelectedItems = [];
     }
 

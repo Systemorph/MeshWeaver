@@ -199,8 +199,8 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Read];
 
-        public Task<DataValidationResult> ValidateAsync(DataValidationContext context, CancellationToken ct)
-            => Task.FromResult(DataValidationResult.Invalid(
+        public IObservable<DataValidationResult> Validate(DataValidationContext context)
+            => Observable.Return(DataValidationResult.Invalid(
                 "Access denied: no read permissions",
                 DataValidationRejectionReason.Unauthorized));
     }

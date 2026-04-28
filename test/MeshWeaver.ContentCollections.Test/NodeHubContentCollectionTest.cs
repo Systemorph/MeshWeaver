@@ -102,7 +102,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         await collection!.SaveFileAsync("/", "test.txt", stream);
 
         // Verify it was saved
-        var items = await collection.GetCollectionItemsAsync("/");
+        var items = await collection.GetCollectionItems("/").ToListAsync(TestContext.Current.CancellationToken);
         items.Should().Contain(i => i.Name == "test.txt");
 
         // Clean up

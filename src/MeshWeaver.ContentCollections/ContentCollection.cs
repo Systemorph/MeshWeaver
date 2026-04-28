@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -88,23 +89,28 @@ public class ContentCollection : IDisposable
         markdownStream.Dispose();
     }
 
-    public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
-        => provider.GetFoldersAsync(path);
+    public IAsyncEnumerable<FolderItem> GetFolders(string path, CancellationToken ct = default)
+        => provider.GetFolders(path, ct);
 
-    public Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
-        => provider.GetFilesAsync(path);
+    public IAsyncEnumerable<FileItem> GetFiles(string path, CancellationToken ct = default)
+        => provider.GetFiles(path, ct);
 
     public Task SaveFileAsync(string path, string fileName, Stream openReadStream)
         => provider.SaveFileAsync(path, fileName, openReadStream);
 
-    public async Task<IReadOnlyCollection<CollectionItem>> GetCollectionItemsAsync(string currentPath)
+    /// <summary>
+    /// Streams folders + files at <paramref name="currentPath"/> as a single async enumerable.
+    /// Folders first, then files. Pure await foreach — no Task-bridging on the hot path.
+    /// </summary>
+    public async IAsyncEnumerable<CollectionItem> GetCollectionItems(
+        string currentPath,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var files = await GetFilesAsync(currentPath);
-        var folders = await GetFoldersAsync(currentPath);
-        return folders
-            .Cast<CollectionItem>()
-            .Concat(files)
-            .ToArray();
+        await foreach (var folder in provider.GetFolders(currentPath, ct))
+            yield return folder;
+
+        await foreach (var file in provider.GetFiles(currentPath, ct))
+            yield return file;
     }
 
     protected static bool MarkdownFilter(string name)

@@ -322,31 +322,6 @@ public static class LayoutExtensions
         .GetControlStream(area)
 ;
 
-    public static async Task<object?> GetLayoutAreaAsync(
-        this ISynchronizationStream<JsonElement> synchronizationItems,
-        string area
-    ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
-
-    public static async Task<object?> GetLayoutAreaAsync(
-        this ISynchronizationStream<EntityStore> synchronizationItems,
-        string area
-    ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
-
-    public static async Task<object?> GetDataAsync(
-        this ISynchronizationStream<EntityStore> synchronizationItems,
-        string id
-    ) => await synchronizationItems.GetDataStream(id).FirstAsync(x => x != null);
-    public static async Task<TData> GetDataAsync<TData>(
-        this ISynchronizationStream<EntityStore>? synchronizationItems,
-        string id
-    )
-    {
-        if (synchronizationItems == null)
-            throw new ArgumentNullException(nameof(synchronizationItems));
-
-        return await synchronizationItems.GetDataStream<TData>(id).FirstAsync(x => x != null);
-    }
-
     public static IObservable<object?> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
         JsonPointerReference reference

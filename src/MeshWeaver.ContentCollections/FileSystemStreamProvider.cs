@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
 
@@ -80,39 +81,36 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         return items.ToAsyncEnumerable();
     }
 
-    public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
+    public async IAsyncEnumerable<FolderItem> GetFolders(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
-
-        return Task.FromResult<IReadOnlyCollection<FolderItem>>(Directory.GetDirectories(fullPath)
-            .Select(dirPath =>
-            {
-                var itemCount = Directory.GetFileSystemEntries(dirPath).Length;
-                return new FolderItem(
-                    '/' + Path.GetRelativePath(basePath, dirPath),
-                    Path.GetFileName(dirPath),
-                    itemCount
-                );
-            })
-            .ToArray());
+        foreach (var dirPath in Directory.EnumerateDirectories(fullPath))
+        {
+            ct.ThrowIfCancellationRequested();
+            var itemCount = Directory.GetFileSystemEntries(dirPath).Length;
+            yield return new FolderItem(
+                '/' + Path.GetRelativePath(basePath, dirPath),
+                Path.GetFileName(dirPath),
+                itemCount);
+        }
     }
 
-    public Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
+    public async IAsyncEnumerable<FileItem> GetFiles(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var fullPath = Path.Combine(basePath, path.TrimStart('/'));
-
-        return Task.FromResult<IReadOnlyCollection<FileItem>>(Directory.GetFiles(fullPath)
-            .Select(filePath =>
-            {
-                var fileInfo = new FileInfo(filePath);
-
-                return new FileItem(
-                    '/' + Path.GetRelativePath(basePath, filePath),
-                    Path.GetFileName(filePath),
-                    fileInfo.LastWriteTime
-                );
-            })
-            .ToArray());
+        foreach (var filePath in Directory.EnumerateFiles(fullPath))
+        {
+            ct.ThrowIfCancellationRequested();
+            var fileInfo = new FileInfo(filePath);
+            yield return new FileItem(
+                '/' + Path.GetRelativePath(basePath, filePath),
+                Path.GetFileName(filePath),
+                fileInfo.LastWriteTime);
+        }
     }
 
     public async Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken cancellationToken = default)
