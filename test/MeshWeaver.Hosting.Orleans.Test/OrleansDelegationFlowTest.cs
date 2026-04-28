@@ -47,49 +47,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Uses a DelegationToolFakeChatClient that emits a FunctionCallContent
 /// on the first call, triggering the delegation tool.
 /// </summary>
-public class OrleansDelegationFlowTest(ITestOutputHelper output) : TestBase(output)
+public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBase<DelegationSiloConfigurator>(output)
 {
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
-
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.Options.InitialSilosCount = 1;
-        builder.AddSiloBuilderConfigurator<DelegationSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "delegation"),
-            config =>
-            {
-                config.TypeRegistry.AddAITypes();
-                return config.AddLayoutClient();
-            });
-        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
-        {
-            ObjectId = "TestUser",
-            Name = "Test User",
-            Email = "testuser@meshweaver.io"
-        });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
+    // Cluster lifecycle, ClientMesh accessor, GetClientAsync, ConfigureClient, and the
+    // standard mesh-node handler chain (AddMeshDataSource + AddAITypes + AddLayoutClient)
+    // are all inherited from OrleansTestBase<TSiloConfigurator>. To override e.g.
+    // type registrations, override ConfigureClient and chain through base.
 
     private async Task<string> CreateNodeAsync(IMessageHub client, MeshNode node, string targetAddress, CancellationToken ct)
     {
@@ -245,43 +208,36 @@ internal class DelegationToolFakeChatClient : IChatClient
 }
 
 /// <summary>
-/// Factory that uses DelegationToolFakeChatClient for the default agent
-/// and regular FakeChatClient for delegated agents (Executor).
+/// Factory that uses <see cref="DelegationToolFakeChatClient"/> for the default agent
+/// and a plain-text <see cref="FakeChatClient"/> for delegated sub-agents (Executor).
+///
+/// Inherits from <see cref="ChatClientAgentFactory"/> so the framework's tool-creation
+/// pipeline runs — most importantly <c>GetAgentTools</c> registers the
+/// <c>delegate_to_agent</c> AIFunction whenever <c>config.IsDefault</c> is true.
+/// Without this, the fake chat client emits a <c>FunctionCallContent("delegate_to_agent")</c>
+/// that <see cref="Microsoft.Extensions.AI.FunctionInvokingChatClient"/> can't resolve —
+/// it gets dropped silently and the test's <c>toolCalls=0</c> assertion fails.
+/// (Previously this factory implemented <see cref="IChatClientFactory"/> directly with
+/// <c>tools: []</c>, which was the root cause of the four Orleans delegation-test
+/// failures investigated 2026-04-29.)
 /// </summary>
-internal class DelegationToolFakeChatClientFactory : IChatClientFactory
+internal class DelegationToolFakeChatClientFactory(IMessageHub hub) : ChatClientAgentFactory(hub)
 {
-    public string Name => "DelegationToolFakeFactory";
-    public IReadOnlyList<string> Models => ["fake-model"];
-    public int Order => 0;
+    public override string Name => "DelegationToolFakeFactory";
+    public override IReadOnlyList<string> Models => ["fake-model"];
+    public override int Order => 0;
 
-    public ChatClientAgent CreateAgent(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Default agent gets the delegating client; others get plain text client
-        var isDefault = config.IsDefault || config.Id == "Navigator" || config.Id == "Planner";
-        IChatClient chatClient = isDefault
+        // Default / orchestrator-tier agents emit the delegate_to_agent function call;
+        // child agents (Executor, etc.) just stream plain text.
+        var isDefault = agentConfig.IsDefault
+            || agentConfig.Id == "Navigator"
+            || agentConfig.Id == "Planner";
+        return isDefault
             ? new DelegationToolFakeChatClient()
             : new FakeChatClient("Sub-thread response from delegated agent.");
-
-        return new ChatClientAgent(
-            chatClient: chatClient,
-            instructions: config.Instructions ?? "Test assistant.",
-            name: config.Id,
-            description: config.Description ?? config.Id,
-            tools: [],
-            loggerFactory: null,
-            services: null);
     }
-
-    public Task<ChatClientAgent> CreateAgentAsync(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
-        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
 }
 
 public class DelegationSiloConfigurator : ISiloConfigurator, IHostConfigurator
@@ -289,7 +245,13 @@ public class DelegationSiloConfigurator : ISiloConfigurator, IHostConfigurator
     public void Configure(ISiloBuilder siloBuilder)
     {
         siloBuilder.ConfigureMeshWeaverServer()
-            .AddMemoryGrainStorageAsDefault();
+            .AddMemoryGrainStorageAsDefault()
+            // Surface silo-side framework logs through ITestOutputHelper. Without this
+            // the silo's debug/error logs vanish into the void on a test crash, leaving
+            // only the test's own Output.WriteLine — which makes a stack overflow / hang
+            // diagnostically opaque (CI just shows "exit -1073741571"). Same wire-up as
+            // SharedSiloConfigurator.
+            .ConfigureLogging(logging => logging.AddXUnitLogger());
     }
 
     public void Configure(IHostBuilder hostBuilder)
@@ -301,7 +263,7 @@ public class DelegationSiloConfigurator : ISiloConfigurator, IHostConfigurator
                 new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
             .AddMeshNodes(TestUserAdminAccess())
             .ConfigureServices(services =>
-                services.AddSingleton<IChatClientFactory>(new DelegationToolFakeChatClientFactory()))
+                services.AddSingleton<IChatClientFactory, DelegationToolFakeChatClientFactory>())
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

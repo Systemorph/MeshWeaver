@@ -39,43 +39,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Verifies that in a distributed Orleans cluster:
 /// 1. Response text streams to the message node
 /// </summary>
-public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(output)
+public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestBase<StreamingSiloConfigurator>(output)
 {
     private const string ContextPath = "User/TestUser";
-    private TestCluster Cluster { get; set; } = null!;
-    private IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
 
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<StreamingSiloConfigurator>();
-        builder.AddClientBuilderConfigurator<TestClientConfigurator>();
-        Cluster = builder.Build();
-        await Cluster.DeployAsync();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (Cluster is not null)
-            await Cluster.DisposeAsync();
-        await base.DisposeAsync();
-    }
-
-    private async Task<IMessageHub> GetClientAsync()
-    {
-        MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
-        {
-            config.TypeRegistry.AddAITypes();
-            return config.AddLayoutClient();
-        }
-
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "streaming"), ConfigureClient);
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
-        return client;
-    }
+    // Cluster lifecycle, ClientMesh, GetClientAsync, ConfigureClient, and the standard
+    // mesh-node handler chain are inherited from OrleansTestBase<TSiloConfigurator>.
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {

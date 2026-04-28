@@ -177,16 +177,21 @@ public class MeshQuery(
         var boost = 0.0;
         var path = suggestion.Path;
 
-        // Direct child of context: highest boost
+        // Direct child of context: highest boost. Deeper descendants decay so they
+        // don't outrank the context node itself (or its siblings) — see
+        // LocalFirst_ChildrenOfContextScoreHigherThanDistant.
         if (path.StartsWith(contextPath + "/", StringComparison.OrdinalIgnoreCase))
         {
             var relative = path[(contextPath.Length + 1)..];
-            if (!relative.Contains('/'))
-                boost = 2000; // direct child
-            else
-                boost = 1500; // deeper descendant
+            var relativeDepth = relative.Count(c => c == '/'); // 0 = direct child
+            boost = relativeDepth switch
+            {
+                0 => 2000, // direct child
+                1 => 900,  // grandchild — below sibling boost so sibling wins on ties
+                _ => 600   // great-grandchild and deeper
+            };
         }
-        // Sibling: shares parent
+        // Sibling: shares parent (also covers `path == contextPath`, since path starts with parent+"/")
         else if (!string.IsNullOrEmpty(contextPath))
         {
             var contextParent = contextPath.LastIndexOf('/');
@@ -194,7 +199,7 @@ public class MeshQuery(
             {
                 var parent = contextPath[..contextParent];
                 if (path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase))
-                    boost = 1000; // sibling or cousin
+                    boost = 1000; // sibling or cousin (or the context node itself)
             }
         }
 

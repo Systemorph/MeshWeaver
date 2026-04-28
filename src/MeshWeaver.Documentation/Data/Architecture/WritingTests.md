@@ -89,6 +89,33 @@ var deleted = await ReadNodeAsync(orgId);
 deleted.Should().BeNull();
 ```
 
+## Orleans tests — clients must be mesh nodes
+
+> **A client that posts mesh requests must itself be a registered MeshNode.** Otherwise it is not a participant in mesh routing — responses targeted back at the client address can't be routed cleanly, type-registry lookups for the client's deliveries are missing, and the test's polling loops time out with `responseMsg=null` and no clear cause.
+
+When you build an Orleans test client via `ClientMesh.ServiceProvider.CreateMessageHub(new Address("client", "..."), config => ...)`, also register that address as a MeshNode on the silo, and register the data-layer types the client will post:
+
+```csharp
+// Silo configurator — make the client address a known MeshNode so routing
+// recognises it as a participant. Without this, the silo's response cell creation,
+// stream updates, and GetDataRequest replies targeting the client address may
+// silently fall through.
+hostBuilder
+    .AddMeshNodes(new MeshNode("client", "delegation") { Name = "Test Client", NodeType = "User" })
+    ...
+
+// Client config — register every type the client will SEND to or RECEIVE from
+// the silo. AddAITypes covers AI message types; you must also register the data
+// surface that maps to the workspace stream protocol:
+config.TypeRegistry.AddAITypes();
+config.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
+return config.AddLayoutClient();   // covers GetDataRequest/Response + sub/unsub
+```
+
+The symptom of getting this wrong: `client.Observe(GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr)).FirstAsync().ToTask()` returns observable that never emits — the request fails type-registry resolution at the client (or at the silo if the client's `MeshNodeReference` field can't deserialize back), gets dropped silently, and your polling loop spins for the full timeout window.
+
+Standalone Monolith tests don't hit this because `MonolithMeshTestBase` registers `MeshNodeReference` and the test's "client" is in-process — no serialization round-trip, no need to declare a separate participant. The Orleans serialization boundary makes the participant-registration explicit.
+
 ## What NOT to do in tests
 
 ### ❌ `QueryAsync` to read a just-written node

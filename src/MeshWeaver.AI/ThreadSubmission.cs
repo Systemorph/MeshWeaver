@@ -522,6 +522,29 @@ internal static class ThreadSubmissionServer
                 var threadNode = change.Value;
                 if (threadNode?.Content is not MeshThread thread) return;
 
+                // Identity assertion at the watcher tick — this is where the loss showed
+                // up in the Orleans delegation tests. The watcher subscription was
+                // installed during hub init at a point when AsyncLocal AccessContext
+                // had NOT yet been set by SetThreadHubIdentity (separate Subscribe
+                // branch), so Throttle's timer-scheduler delivers ticks with the
+                // captured-at-install context — not the user's identity. We expect
+                // the user identity (ideally thread.CreatedBy) here; log loudly when
+                // it's missing or wrong so the cascade isn't silent.
+                var accessService = threadHub.ServiceProvider.GetService<AccessService>();
+                var asyncLocalAtTick = accessService?.Context?.ObjectId;
+                var circuitAtTick = accessService?.CircuitContext?.ObjectId;
+                if (asyncLocalAtTick != thread.CreatedBy)
+                {
+                    logger?.LogWarning(
+                        "[ThreadSubmission] watcher tick IDENTITY_MISMATCH thread={ThreadPath} " +
+                        "asyncLocal={AsyncLocal} circuit={Circuit} expected={CreatedBy} — " +
+                        "AsyncLocal was lost across the GetStream Subscribe boundary; " +
+                        "DispatchRound will fall back to thread.CreatedBy.",
+                        threadPath, asyncLocalAtTick ?? "(null)",
+                        circuitAtTick ?? "(null)",
+                        thread.CreatedBy ?? "(null)");
+                }
+
                 logger?.LogDebug(
                     "[ThreadSubmission] watcher tick thread={ThreadPath} IsExecuting={IsExecuting} " +
                     "Messages=[{Messages}] Ingested=[{Ingested}] UserIds=[{UserIds}] dispatching={Dispatching}",
@@ -605,11 +628,29 @@ internal static class ThreadSubmissionServer
         var mainEntity = threadNode.MainNode ?? dispatch.ContextPath ?? threadPath;
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var userCtx = accessService?.Context ?? accessService?.CircuitContext;
+        var asyncLocalCtx = accessService?.Context;
+        var circuitCtx = accessService?.CircuitContext;
+        var userCtx = asyncLocalCtx ?? circuitCtx;
+        var fellBackToCreatedBy = false;
         if (userCtx is null && !string.IsNullOrEmpty(thread.CreatedBy))
         {
             userCtx = new AccessContext { ObjectId = thread.CreatedBy, Name = thread.CreatedBy };
+            fellBackToCreatedBy = true;
         }
+
+        // Identity-trace at the dispatch boundary. The watcher callback runs after
+        // Throttle(50ms) on a timer scheduler — AsyncLocal context from the original
+        // delivery is gone here, so we expect asyncLocal=null and fall back to either
+        // the persistent circuit context (Blazor) or thread.CreatedBy (Orleans).
+        logger?.LogInformation(
+            "[ThreadSubmission] DispatchRound identity thread={ThreadPath} responseId={ResponseId} " +
+            "asyncLocal={AsyncLocal} circuit={Circuit} createdBy={CreatedBy} fallbackToCreatedBy={FallbackToCreatedBy} effective={Effective}",
+            threadPath, responseMsgId,
+            asyncLocalCtx?.ObjectId ?? "(null)",
+            circuitCtx?.ObjectId ?? "(null)",
+            thread.CreatedBy ?? "(null)",
+            fellBackToCreatedBy,
+            userCtx?.ObjectId ?? "(null)");
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
