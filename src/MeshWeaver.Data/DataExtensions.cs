@@ -602,6 +602,22 @@ public static class DataExtensions
                     hub.GetWorkspace().RequestChange(
                         DataChangeRequest.Update([merged]), null, null);
 
+                    // RequestChange queues the update on the source stream's action
+                    // block — by the time we return from this method the reducer
+                    // hasn't necessarily emitted yet. Wait for the next stream
+                    // emission carrying the merged json (skip the current value)
+                    // before posting the response so the caller's subsequent Get
+                    // round-trip sees post-patch state. 5 s is generous; under load
+                    // this typically resolves in <50 ms.
+                    using var done = new System.Threading.ManualResetEventSlim(false);
+                    var sub = stream
+                        .Skip(1)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Subscribe(_ => done.Set(), _ => done.Set());
+                    done.Wait(TimeSpan.FromSeconds(5));
+                    sub.Dispose();
+
                     // Response posts AFTER the commit so caller's RegisterCallback
                     // fires on a state where a subsequent Get sees the patch.
                     hub.Post(new PatchDataResponse(true, hub.Version),
