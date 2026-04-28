@@ -65,7 +65,9 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
                     }, o => o.ResponseFor(delivery)
                 );
             }
-            return delivery.Failed(errorMessage);
+            // Manual Post above is the response — return Forwarded (return value is
+            // discarded by RouteInMesh anyway, but Forwarded is semantically truthful).
+            return delivery.Forwarded();
         }
 
         hub.DeliverMessage(delivery);

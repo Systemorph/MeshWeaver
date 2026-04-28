@@ -46,12 +46,10 @@ public static class VersionLayoutArea
                     .WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Version history is not available.</p>")));
         }
 
-        return Observable.FromAsync(async () =>
+        return versionQuery.GetVersions(hubPath)
+            .ToList()
+            .Select(versions =>
         {
-            var versions = new List<MeshNodeVersion>();
-            await foreach (var v in versionQuery.GetVersionsAsync(hubPath))
-                versions.Add(v);
-
             var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
             // Back button

@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -7,7 +7,9 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Routes IVersionQuery calls by first path segment to per-partition IVersionQuery instances.
+/// Routes <see cref="IVersionQuery"/> calls by first path segment to
+/// per-partition <see cref="IVersionQuery"/> instances. All operations are
+/// observable end-to-end.
 /// </summary>
 public class RoutingVersionQuery : IVersionQuery
 {
@@ -25,61 +27,31 @@ public class RoutingVersionQuery : IVersionQuery
         return _queries.TryGetValue(segment, out var q) ? q : null;
     }
 
-    public IAsyncEnumerable<MeshNodeVersion> GetVersionsAsync(
-        string path, CancellationToken ct = default)
-    {
-        var query = GetQuery(path);
-        return query?.GetVersionsAsync(path, ct) ?? EmptyAsyncEnumerable<MeshNodeVersion>.Instance;
-    }
+    public IObservable<MeshNodeVersion> GetVersions(string path)
+        => GetQuery(path)?.GetVersions(path) ?? Observable.Empty<MeshNodeVersion>();
 
-    public Task<MeshNode?> GetVersionAsync(
-        string path, long version, JsonSerializerOptions options,
-        CancellationToken ct = default)
-    {
-        var query = GetQuery(path);
-        return query?.GetVersionAsync(path, version, options, ct) ?? Task.FromResult<MeshNode?>(null);
-    }
+    public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
+        => GetQuery(path)?.GetVersion(path, version, options) ?? Observable.Return<MeshNode?>(null);
 
-    public Task<MeshNode?> GetVersionBeforeAsync(
-        string path, long beforeVersion, JsonSerializerOptions options,
-        CancellationToken ct = default)
-    {
-        var query = GetQuery(path);
-        return query?.GetVersionBeforeAsync(path, beforeVersion, options, ct) ?? Task.FromResult<MeshNode?>(null);
-    }
+    public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
+        => GetQuery(path)?.GetVersionBefore(path, beforeVersion, options) ?? Observable.Return<MeshNode?>(null);
 
-    public Task WriteVersionAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var query = GetQuery(node.Path);
-        return query?.WriteVersionAsync(node, options, ct) ?? Task.CompletedTask;
-    }
+    public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
+        => GetQuery(node.Path)?.WriteVersion(node, options) ?? Observable.Return(node);
 }
 
 /// <summary>
-/// No-op implementation of IVersionQuery for environments without version history support.
+/// No-op implementation of <see cref="IVersionQuery"/> for environments
+/// without version history support.
 /// </summary>
 public class NoOpVersionQuery : IVersionQuery
 {
-    public IAsyncEnumerable<MeshNodeVersion> GetVersionsAsync(string path, CancellationToken ct = default)
-        => EmptyAsyncEnumerable<MeshNodeVersion>.Instance;
+    public IObservable<MeshNodeVersion> GetVersions(string path)
+        => Observable.Empty<MeshNodeVersion>();
 
-    public Task<MeshNode?> GetVersionAsync(string path, long version, JsonSerializerOptions options, CancellationToken ct = default)
-        => Task.FromResult<MeshNode?>(null);
+    public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
+        => Observable.Return<MeshNode?>(null);
 
-    public Task<MeshNode?> GetVersionBeforeAsync(string path, long beforeVersion, JsonSerializerOptions options, CancellationToken ct = default)
-        => Task.FromResult<MeshNode?>(null);
-}
-
-/// <summary>
-/// Helper to provide an empty IAsyncEnumerable without requiring System.Linq.AsyncEnumerable.
-/// </summary>
-internal static class EmptyAsyncEnumerable<T>
-{
-    public static readonly IAsyncEnumerable<T> Instance = CreateEmpty();
-
-    private static async IAsyncEnumerable<T> CreateEmpty()
-    {
-        await Task.CompletedTask;
-        yield break;
-    }
+    public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
+        => Observable.Return<MeshNode?>(null);
 }

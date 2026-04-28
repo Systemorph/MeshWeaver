@@ -361,20 +361,17 @@ public static class MeshExtensions
                         : MeshChangeEvent.Updated(resultNode);
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(changeEvent);
 
-                    // Version history (non-critical, fire-and-forget Subscribe).
+                    // Version history (non-critical, fire-and-forget Subscribe). Pure
+                    // observable surface — no Task, no Observable.FromAsync bridge.
                     if (mode == "create" && !catalog.Configuration.IsSatelliteNodeType(resultNode.NodeType))
                     {
                         var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                        if (versionQuery != null)
-                        {
-                            Observable.FromAsync(token =>
-                                    versionQuery.WriteVersionAsync(resultNode, hub.JsonSerializerOptions, token))
-                                .Subscribe(
-                                    _ => { },
-                                    ex => logger.LogWarning(ex,
-                                        "Version history write failed at {Path} (non-critical)",
-                                        resultNode.Path));
-                        }
+                        versionQuery?.WriteVersion(resultNode, hub.JsonSerializerOptions)
+                            .Subscribe(
+                                _ => { },
+                                ex => logger.LogWarning(ex,
+                                    "Version history write failed at {Path} (non-critical)",
+                                    resultNode.Path));
                     }
 
                     if (mode == "confirm")
@@ -1288,7 +1285,7 @@ public static class MeshExtensions
                     });
             })
             .Subscribe(
-                savedNode =>
+                nodeToSave =>
                 {
                     // Direct workspace write — the data source's MeshNode partition
                     // stream is the source of truth for the per-node hub's
@@ -1297,44 +1294,58 @@ public static class MeshExtensions
                     // hub (including a GetDataRequest the caller sends after our
                     // UpdateNodeResponse.Ok) are processed AFTER the stream tick, so
                     // read-after-write is consistent.
-                    workspace.UpdateMeshNode(_ => savedNode, nodePath: savedNode.Path);
+                    workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path);
 
                     // Explicitly persist to the underlying IMeshStorage so a
                     // subsequent ObserveQuery / persistence read sees the new
                     // value immediately. Without this the workspace stream is
                     // updated but persistence lags (debounced flush), causing
                     // ObserveQueryFreshnessTest-style stale reads.
+                    //
+                    // Version history MUST chain off SaveNode's emission so that
+                    // WriteVersionAsync receives the post-save Version (the storage
+                    // layer assigns the new monotonic Version inside SaveNodeAsync).
+                    // Using the pre-save nodeToSave's stale Version would write the
+                    // updated content to the OLD version's filename, overwriting the
+                    // previous snapshot — exactly what
+                    // VersionQuery_GetVersionAsync_ReturnsCorrectSnapshot caught
+                    // (v1 file ended up with V2 content).
                     var updatePersistence = hub.ServiceProvider.GetService<IMeshStorage>();
-                    updatePersistence?.SaveNode(savedNode)
-                        .Subscribe(
+                    var updateChangeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+                    var updateVersionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                    var canVersion = meshConfig != null
+                        && !meshConfig.IsSatelliteNodeType(nodeToSave.NodeType)
+                        && updateVersionQuery != null;
+                    if (updatePersistence != null)
+                    {
+                        // Chain WriteVersion off SaveNode's emission so the
+                        // post-save Version is used. Pure IObservable composition
+                        // — no Observable.FromAsync, no Task bridge.
+                        var saveChain = canVersion
+                            ? updatePersistence.SaveNode(nodeToSave)
+                                .SelectMany(saved =>
+                                {
+                                    updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved));
+                                    return updateVersionQuery!.WriteVersion(saved, hub.JsonSerializerOptions);
+                                })
+                            : updatePersistence.SaveNode(nodeToSave)
+                                .Do(saved => updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved)));
+                        saveChain.Subscribe(
                             _ => { },
                             persistEx => logger.LogWarning(persistEx,
-                                "[UpdateNode] persistence flush failed at {Path}", savedNode.Path));
-
-                    hub.ServiceProvider.GetService<IMeshChangeFeed>()
-                        ?.Publish(MeshChangeEvent.Updated(savedNode));
-
-                    // Version history — fire-and-forget Subscribe; non-critical.
-                    if (meshConfig != null && !meshConfig.IsSatelliteNodeType(savedNode.NodeType))
+                                "[UpdateNode] persistence flush failed at {Path}", nodeToSave.Path));
+                    }
+                    else
                     {
-                        var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                        if (versionQuery != null)
-                        {
-                            Observable.FromAsync(token =>
-                                    versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, token))
-                                .Subscribe(
-                                    _ => { },
-                                    ex => logger.LogWarning(ex,
-                                        "Version history write failed at {Path} (non-critical)",
-                                        savedNode.Path));
-                        }
+                        // No persistence — no version assignment, no version history.
+                        updateChangeFeed?.Publish(MeshChangeEvent.Updated(nodeToSave));
                     }
 
                     logger.LogInformation(
                         "Node persisted at {Path} by {UpdatedBy}",
-                        savedNode.Path, capturedRequest.UpdatedBy ?? "system");
+                        nodeToSave.Path, capturedRequest.UpdatedBy ?? "system");
 
-                    hub.Post(UpdateNodeResponse.Ok(savedNode), o => o.ResponseFor(request));
+                    hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
                 },
                 ex =>
                 {
