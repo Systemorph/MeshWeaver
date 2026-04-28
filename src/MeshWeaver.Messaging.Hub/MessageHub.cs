@@ -416,7 +416,7 @@ public sealed class MessageHub : IMessageHub
     /// emission is triggered when <see cref="HandleCallbacks"/> matches the response.
     /// </summary>
     public IObservable<IMessageDelivery> Observe(IMessageDelivery delivery)
-        => ObserveById(delivery.Id);
+        => RestoreUserContextOnEmission(ObserveById(delivery.Id), delivery.AccessContext);
 
     /// <summary>
     /// Posts <paramref name="r"/> with a pre-generated message id and returns the
@@ -429,16 +429,40 @@ public sealed class MessageHub : IMessageHub
         if (r is IMessageDelivery existing)
             return Observe(existing);
 
+        // Capture the caller's AccessContext at observe-time. The response delivery
+        // arrives on the hub action block where AsyncLocal is the receiving hub's
+        // identity (impersonated). Without re-seeding here, every Subscribe callback
+        // would post under the wrong identity. See AsynchronousCalls.md.
+        var accessService = ServiceProvider.GetService<AccessService>();
+        var capturedCtx = accessService?.Context;
         var messageId = Guid.NewGuid().AsString();
         var subject = GetOrAddResponseSubject(messageId);
         Post(r, opts => options(opts).WithMessageId(messageId));
-        return ApplyTimeout(subject);
+        return RestoreUserContextOnEmission(ApplyTimeout(subject), capturedCtx);
     }
 
     private IObservable<IMessageDelivery> ObserveById(string messageId)
     {
         var subject = GetOrAddResponseSubject(messageId);
         return ApplyTimeout(subject);
+    }
+
+    /// <summary>
+    /// Wraps a response observable so each emission re-seeds <see cref="AccessService.Context"/>
+    /// on the dispatching thread before downstream Subscribe callbacks run. Without this,
+    /// the response arrives on the hub action block (identity = receiving-hub address as
+    /// hub-impersonation), and any post made from the Subscribe callback inherits the wrong
+    /// identity — surfaces as <c>Access denied: user '&lt;cell-hub-path&gt;' lacks ...</c>.
+    /// </summary>
+    private IObservable<IMessageDelivery> RestoreUserContextOnEmission(
+        IObservable<IMessageDelivery> source, AccessContext? capturedCtx)
+    {
+        if (capturedCtx is null)
+            return source;
+        return source.Do(_ =>
+        {
+            ServiceProvider.GetService<AccessService>()?.SetContext(capturedCtx);
+        });
     }
 
     private IObservable<IMessageDelivery> ApplyTimeout(IObservable<IMessageDelivery> source)
