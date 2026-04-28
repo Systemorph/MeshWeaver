@@ -322,8 +322,13 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         exception.Message.Should().NotBeEmpty();
         Output.WriteLine($"Exception message: {exception.Message}");
 
+        // The failure surfaces either as "no handler found" (post-deserialize)
+        // or "is not registered in this hub's TypeRegistry" (pre-deserialize)
+        // depending on which gate rejects first. Both indicate the message had
+        // nowhere to go — the contract under test.
         var message = exception.Message.ToLowerInvariant();
-        message.Should().Contain("no handler found");
+        message.Should().Match(m =>
+            m.Contains("no handler found") || m.Contains("not registered in this hub"));
     }
 }
 

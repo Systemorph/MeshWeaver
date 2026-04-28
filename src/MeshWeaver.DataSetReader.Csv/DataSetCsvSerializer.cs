@@ -230,7 +230,10 @@ namespace MeshWeaver.DataSetReader.Csv
             string? newLine;
             while ((newLine = await reader.ReadLineAsync()) != null)
             {
-                sb.AppendLine();
+                // Use '\n' rather than AppendLine() so multi-line quoted fields
+                // round-trip with portable LF separators on every OS — otherwise
+                // Windows injects \r\n and downstream consumers see CR artifacts.
+                sb.Append('\n');
                 sb.Append(newLine);
                 if (QuotesRegex.Matches(newLine).Count % 2 != 0)
                     break;
