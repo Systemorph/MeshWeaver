@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -21,7 +20,6 @@ public class FileSystemVersionStore : IVersionQuery
 {
     private readonly string _versionsDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
-    private readonly ConcurrentDictionary<string, string> _lastWrittenContent = new();
 
     public FileSystemVersionStore(
         string baseDirectory,
