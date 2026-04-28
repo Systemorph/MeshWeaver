@@ -36,9 +36,16 @@ namespace MeshWeaver.FutuRe.Test;
 /// </summary>
 public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Per-session cache directory keyed on Guid.NewGuid so a stale DLL pinned by a
+    // prior test process's AssemblyLoadContext (or a newer framework DLL invalidating
+    // the timestamp check) can't break compilation. The default bin/.mesh-cache and
+    // any stable temp directory are shared across runs, so InvalidateCache hits
+    // UnauthorizedAccessException → IOException("file is being used by another
+    // process") on Windows, after which dynamic NodeType DLLs (FutuRe_LocalAnalysis,
+    // FutuRe_GroupAnalysis) never compile and Overview falls back to an empty render.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        "MeshWeaverFutuReTests",
+        $"MeshWeaverFutuReTests-{Guid.NewGuid():N}",
         ".mesh-cache");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
