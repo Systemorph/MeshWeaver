@@ -17,6 +17,7 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
 {
     private readonly IStorageAdapter _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;
+    private readonly IVersionQuery? _versionQuery;
     private readonly IMemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions _cacheOptions = new()
     {
@@ -27,10 +28,12 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
 
     public FileSystemPersistenceService(
         IStorageAdapter storageAdapter,
-        IDataChangeNotifier? changeNotifier = null)
+        IDataChangeNotifier? changeNotifier = null,
+        IVersionQuery? versionQuery = null)
     {
         _storageAdapter = storageAdapter;
         _changeNotifier = changeNotifier;
+        _versionQuery = versionQuery;
 
         // Subscribe to external change notifications to invalidate cache
         _changeSubscription = _changeNotifier?.Subscribe(OnExternalChange);
@@ -152,6 +155,27 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
             if (isNew)
                 _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(key, savedNode));
             throw;
+        }
+
+        // Version snapshot — chained inside the storage layer so EVERY save path
+        // (PersistenceService.SaveNode, MeshNodeTypeSource.UpdateImpl persister,
+        // any future direct call to SaveNodeAsync) writes a snapshot keyed on the
+        // post-save Version. Doing this in the wrapper PersistenceService misses
+        // MeshNodeTypeSource's persister which calls _persistenceCore.SaveNodeAsync
+        // directly — the resulting counter race interleaves saves and snapshots
+        // such that some Versions never get a snapshot file (caught by
+        // VersionQuery_GetVersionBeforeAsync_FindsPreChangeState).
+        if (_versionQuery is not null)
+        {
+            try
+            {
+                await _versionQuery.WriteVersion(savedNode, options).FirstAsync().ToTask(ct);
+            }
+            catch
+            {
+                // Version snapshot is best-effort; primary save already succeeded.
+                // Surface failures via the version-history pipeline if needed.
+            }
         }
 
         return savedNode;
