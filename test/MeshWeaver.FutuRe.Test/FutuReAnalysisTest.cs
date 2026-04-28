@@ -665,9 +665,12 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         await InitializeChildAnalysisHubs();
 
-        // First, get ANY control (not waiting for data) to see what renders
+        // First, get ANY control (not waiting for data) to see what renders.
+        // Group-hub initialisation involves PartitionedHubDataSource fan-out across
+        // child BU hubs; under the full suite (after many other tests) that occasionally
+        // takes > 8 s, so we give it the same 15 s budget the other group tests use.
         var control = await GetControlAsync("FutuRe/Analysis", "KeyMetrics",
-            waitForData: false, timeoutSeconds: 8);
+            waitForData: false, timeoutSeconds: 15);
 
         Output.WriteLine($"Control type: {control?.GetType().Name}");
         if (control is MarkdownControl md)

@@ -31,7 +31,33 @@ public static class PersistenceExtensions
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddPersistenceFromConfig(configuration));
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
+    }
+
+    /// <summary>
+    /// Registers <see cref="IMeshQueryCore"/> as a singleton on the top-most
+    /// mesh hub's service container. Resolves to <see cref="InMemoryMeshQueryCore"/>,
+    /// the unsecured surface (no <c>ISecurityService</c> dep) used by
+    /// <see cref="SyncedQueryMeshNodes"/> and other infrastructure paths
+    /// (NavigationService, VUserHelper, etc.).
+    ///
+    /// <para>Per-node hubs inherit the registration through Autofac child-scope
+    /// resolution, so <c>hub.ServiceProvider.GetRequiredService&lt;IMeshQueryCore&gt;()</c>
+    /// works at every hub depth without walking the parent chain.</para>
+    ///
+    /// <para>This is the SINGLE registration point for <see cref="IMeshQueryCore"/>.
+    /// Do not also register it on the root service collection — keeping it on the
+    /// mesh hub avoids the AsiaRe-style "service has not been registered" failure
+    /// when a per-hub container couldn't see a root-level singleton.</para>
+    /// </summary>
+    public static TBuilder RegisterMeshQueryCoreOnMeshHub<TBuilder>(this TBuilder builder)
+        where TBuilder : MeshBuilder
+    {
+        return (TBuilder)builder.ConfigureHub(config => config.WithServices(services =>
+        {
+            services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
+            return services;
+        }));
     }
 
     /// <summary>
@@ -100,7 +126,7 @@ public static class PersistenceExtensions
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddFileSystemPersistence(baseDirectory, writeOptionsModifier));
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>
@@ -127,7 +153,7 @@ public static class PersistenceExtensions
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddInMemoryPersistence());
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>
@@ -208,7 +234,7 @@ public static class PersistenceExtensions
             services.AddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
             return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
         });
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>
@@ -241,7 +267,7 @@ public static class PersistenceExtensions
 
             return services.AddPartitionedCoreAndWrapperServices();
         });
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>
@@ -273,12 +299,13 @@ public static class PersistenceExtensions
         services.AddSingleton(persistenceServiceCore);
         services.TryAddSingleton<InMemoryMeshQuery>();
         services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
-        // IMeshQueryCore is the unsecured surface used by infrastructure
-        // (login, NodeTypeService, SecurityService's own AccessAssignment seed
-        // reads). Resolves to InMemoryMeshQueryCore — a class that does NOT
-        // depend on ISecurityService, so requesting IMeshQueryCore can never
-        // re-enter SecurityService and create a DI cycle.
-        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
+        // IMeshQueryCore is the unsecured infrastructure-query surface — it is
+        // registered ONCE on the top-most mesh hub via
+        // <see cref="RegisterMeshQueryCoreOnMeshHub{TBuilder}"/> so per-node
+        // hubs resolve it through Autofac's child-scope inheritance. Do NOT
+        // register it on the root service collection here; the FutuRe AsiaRe
+        // failure ("IMeshQueryCore has not been registered") came from a path
+        // where the per-hub container couldn't see a root-level singleton.
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
         services.AddSingleton<IMeshQueryProvider>(sp =>
@@ -324,7 +351,7 @@ public static class PersistenceExtensions
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services => services.AddPartitionedFileSystemPersistence(baseDirectory, writeOptionsModifier));
-        return builder;
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>
@@ -415,12 +442,9 @@ public static class PersistenceExtensions
                 logger);
         });
 
-        // IMeshQueryCore is the unsecured surface (no ISecurityService dep)
-        // — required by SyncedQueryMeshNodes for any hub that hosts a synced
-        // mesh-query (SecurityService's AccessAssignment + Role queries, etc.).
-        // Splitting from IMeshQueryProvider breaks the SecurityService ⇄
-        // InMemoryMeshQuery DI cycle.
-        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
+        // IMeshQueryCore registration moved to the top-most mesh hub via
+        // <see cref="RegisterMeshQueryCoreOnMeshHub{TBuilder}"/> — see the
+        // comment on <see cref="AddPersistence(IServiceCollection,IStorageService)"/>.
 
         // Register the routing version query
         services.AddSingleton<IVersionQuery>(sp =>
@@ -476,12 +500,9 @@ public static class PersistenceExtensions
         services.TryAddSingleton<InMemoryMeshQuery>();
         services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
 
-        // IMeshQueryCore is the unsecured surface (no ISecurityService dep)
-        // — required by SyncedQueryMeshNodes for any hub that hosts a synced
-        // mesh-query (SecurityService's AccessAssignment + Role queries, etc.).
-        // Splitting from IMeshQueryProvider breaks the SecurityService ⇄
-        // InMemoryMeshQuery DI cycle.
-        services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
+        // IMeshQueryCore registration moved to the top-most mesh hub via
+        // <see cref="RegisterMeshQueryCoreOnMeshHub{TBuilder}"/> — see the
+        // comment on <see cref="AddPersistence(IServiceCollection,IStorageService)"/>.
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
         services.AddSingleton<IMeshQueryProvider>(sp =>

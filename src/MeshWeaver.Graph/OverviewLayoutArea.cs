@@ -56,15 +56,45 @@ public static class OverviewLayoutArea
             IsToggleable = true  // Overview: click-to-edit, blur back to read-only
         }));
 
-        // Render markdown body from index.md if present (PreRenderedHtml is set by MarkdownFileParser)
-        if (!string.IsNullOrWhiteSpace(node.PreRenderedHtml))
-        {
-            container = container.WithView(
-                new MarkdownControl("") { Html = node.PreRenderedHtml }
-                    .WithStyle("padding: 0 0 48px 0;"));
-        }
+        // The markdown body (from index.md / a Markdown node's content) is intentionally
+        // NOT rendered here — BuildDetailsContent hoists it to a direct child of the
+        // outer stack via BuildMarkdownBody so callers (and tests) can locate it without
+        // walking through nested property-overview stacks.
 
         return container;
+    }
+
+    /// <summary>
+    /// Builds the markdown body control for a node whose content is a parsed
+    /// <see cref="MeshWeaver.Markdown.MarkdownContent"/> (or one carrying
+    /// <see cref="MeshNode.PreRenderedHtml"/>). Returns <c>null</c> when the
+    /// node has no markdown payload.
+    ///
+    /// <para>Both <c>Markdown</c> (raw source) and <c>Html</c> (pre-rendered)
+    /// are populated. The raw source is what tests / agent tools / @@() inline-
+    /// reference resolvers consume; the pre-rendered HTML is what the browser
+    /// displays. Keeping them in lockstep is what lets the markdown round-trip
+    /// through serialization without losing the @@() references.</para>
+    /// </summary>
+    public static UiControl? BuildMarkdownBody(LayoutAreaHost host, MeshNode? node)
+    {
+        if (node is null)
+            return null;
+        var rawMarkdown = node.Content switch
+        {
+            MeshWeaver.Markdown.MarkdownContent mc => mc.Content,
+            JsonElement je when je.ValueKind == JsonValueKind.Object && je.TryGetProperty("Content", out var c)
+                => c.GetString(),
+            JsonElement je when je.ValueKind == JsonValueKind.Object && je.TryGetProperty("content", out var c2)
+                => c2.GetString(),
+            _ => null
+        };
+        var hasHtml = !string.IsNullOrWhiteSpace(node.PreRenderedHtml);
+        var hasRaw = !string.IsNullOrWhiteSpace(rawMarkdown);
+        if (!hasHtml && !hasRaw)
+            return null;
+        return new MarkdownControl(rawMarkdown ?? "") { Html = node.PreRenderedHtml }
+            .WithStyle("padding: 0 0 48px 0;");
     }
 
     /// <summary>

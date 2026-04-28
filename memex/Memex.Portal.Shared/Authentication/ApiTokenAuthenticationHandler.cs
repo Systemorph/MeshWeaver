@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
@@ -32,7 +34,9 @@ public class ApiTokenAuthenticationHandler(
             return AuthenticateResult.NoResult();
 
         var tokenService = serviceProvider.GetRequiredService<ApiTokenService>();
-        var apiToken = await tokenService.ValidateTokenAsync(rawToken);
+        // HTTP boundary — bridge IObservable to Task once. The service exposes
+        // IObservable<ApiToken?> per the "no async in hub-reachable code" rule.
+        var apiToken = await tokenService.ValidateToken(rawToken).FirstAsync().ToTask();
         if (apiToken == null)
             return AuthenticateResult.Fail("Invalid or expired API token");
 

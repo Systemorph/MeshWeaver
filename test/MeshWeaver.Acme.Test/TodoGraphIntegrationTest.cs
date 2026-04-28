@@ -31,10 +31,11 @@ namespace MeshWeaver.Acme.Test;
 /// </summary>
 public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    // Shared cache directory for all tests - compiled assemblies are reused
+    // Per-session cache — Guid suffix prevents Windows file-lock collisions
+    // where a stale .dll from a prior test process is still loaded in memory.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        "MeshWeaverTodoGraphTests",
+        $"MeshWeaverTodoGraphTests-{Guid.NewGuid():N}",
         ".mesh-cache");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

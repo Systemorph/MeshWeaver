@@ -219,6 +219,15 @@ public static class MeshNodeLayoutAreas
 
         outer = outer.WithView(content);
 
+        // Markdown body (raw + pre-rendered). Hoisted out of BuildPropertyOverview
+        // so the markdown body is a DIRECT child of `outer` — agents and tests can
+        // locate it without walking through nested property-overview stacks, and
+        // the rendering surfaces the .md content even when the property summary is
+        // empty (e.g., a NodeType with only an `index.md`).
+        var markdownBody = OverviewLayoutArea.BuildMarkdownBody(host, node);
+        if (markdownBody != null)
+            outer = outer.WithView(markdownBody);
+
         // Children — full page width, outside the constrained container
         if (typeDef?.ShowChildrenInDetails ?? true)
         {
@@ -685,11 +694,21 @@ public static class MeshNodeLayoutAreas
                 var nodeTypePath = node.Path;
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
 
-                // Build query: always restrict to this nodeType.
-                // If DefaultNamespace is set, scope to that namespace; otherwise scope to current path descendants.
+                // Build query. If DefaultNamespace is set, scope to that namespace
+                // and filter by this NodeType (canonical group case — instances
+                // declare nodeType = path).
+                //
+                // Otherwise scope by namespace + descendants and exclude infrastructure
+                // node types (Code, NodeType, Markdown). The nodeType filter is dropped
+                // here because LOCAL NodeType nodes (e.g. FutuRe/EuropeRe/LineOfBusiness
+                // inside the FutuRe/LineOfBusiness root type) reuse the GROUP-level
+                // nodeType on their instances — filtering by the local NodeType node's
+                // own path matches zero instances. The namespace scope already restricts
+                // to children; the negative nodeType filters drop Source/index/Code
+                // satellites that would otherwise be included.
                 var hiddenQuery = nodeTypeDefinition?.DefaultNamespace != null
                     ? $"nodeType:{nodeTypePath} namespace:{nodeTypeDefinition.DefaultNamespace}"
-                    : $"nodeType:{nodeTypePath} namespace:{nodeTypePath} scope:descendants";
+                    : $"namespace:{nodeTypePath} scope:descendants -nodeType:Code -nodeType:NodeType -nodeType:Markdown";
                 var defaultNs = nodeTypeDefinition?.DefaultNamespace;
                 var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
 

@@ -26,7 +26,7 @@ internal class NavigationService : INavigationService
 {
     private readonly NavigationManager _navigationManager;
     private readonly IPathResolver _pathResolver;
-    private readonly IMeshService _meshQuery;
+    private readonly IMeshQueryCore _queryCore;
     private readonly IMessageHub _hub;
     private readonly ILogger<NavigationService>? _logger;
     private readonly int[] _retryDelays;
@@ -48,9 +48,9 @@ internal class NavigationService : INavigationService
     public NavigationService(
         NavigationManager navigationManager,
         IPathResolver pathResolver,
-        IMeshService meshQuery,
+        IMeshQueryCore queryCore,
         IMessageHub hub)
-        : this(navigationManager, pathResolver, meshQuery, hub, DefaultRetryDelays)
+        : this(navigationManager, pathResolver, queryCore, hub, DefaultRetryDelays)
     {
     }
 
@@ -61,13 +61,13 @@ internal class NavigationService : INavigationService
     internal NavigationService(
         NavigationManager navigationManager,
         IPathResolver pathResolver,
-        IMeshService meshQuery,
+        IMeshQueryCore queryCore,
         IMessageHub hub,
         int[] retryDelays)
     {
         _navigationManager = navigationManager;
         _pathResolver = pathResolver;
-        _meshQuery = meshQuery;
+        _queryCore = queryCore;
         _hub = hub;
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
         _retryDelays = retryDelays ?? DefaultRetryDelays;
@@ -290,9 +290,22 @@ internal class NavigationService : INavigationService
     /// on hub round-trips (100% deadlock; see Doc/Architecture/AsynchronousCalls.md).
     /// </summary>
     private IObservable<MeshNode?> LoadNodeWithPreRenderedHtml(AddressResolution resolution) =>
-        // Single-node-by-path read goes through hub.GetMeshNode (per-node MeshNodeReference
-        // reducer), NOT QueryAsync (lagged). See Doc/Architecture/AsynchronousCalls.md.
-        _hub.GetMeshNode(resolution.Prefix, TimeSpan.FromSeconds(10))
+        // Navigation startup uses IMeshQueryCore.ObserveQuery — infrastructure
+        // surface, no ISecurityService dep, no hub round-trip, no awaited Rx
+        // bridge. hub.GetMeshNode is the CQRS-correct primitive for application
+        // code, but it's an extension method over IMessageHub which NSubstitute
+        // can't proxy; IMeshQueryCore is a plain interface and is mockable.
+        // Staleness doesn't matter here — we read MainNode + PreRenderedHtml at
+        // navigation startup, not for CQRS-sensitive writes.
+        _queryCore
+            .ObserveQuery<MeshNode>(
+                // select: projects to only the routing-relevant fields — content
+                // is loaded only if we need to pre-render markdown below.
+                MeshQueryRequest.FromQuery(
+                    $"path:{resolution.Prefix} select:path,name,mainNode,nodeType,icon,preRenderedHtml,content"),
+                _hub.JsonSerializerOptions)
+            .Select(change => change.Items.Count > 0 ? change.Items[0] : null)
+            .Take(1)
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .Select(node =>
             {

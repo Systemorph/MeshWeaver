@@ -75,8 +75,8 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
 
         // Confirm the revoke actually took effect — ValidateToken must reject the now-revoked token.
         // ApiToken paths don't have a per-node hub, so we can't subscribe to MeshNodeReference;
-        // ValidateTokenAsync exercises the same authoritative read path used in production auth.
-        var validated = await service.ValidateTokenAsync(creation.RawToken);
+        // ValidateToken exercises the same authoritative read path used in production auth.
+        var validated = await service.ValidateToken(creation.RawToken).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         validated.Should().BeNull("revoked tokens must not validate");
     }
 
@@ -106,7 +106,7 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
 
         // The token must no longer validate — ValidateToken returns null when the index
         // pointer is gone (which DeleteToken removed alongside the user-namespace node).
-        var validated = await service.ValidateTokenAsync(creation.RawToken);
+        var validated = await service.ValidateToken(creation.RawToken).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         validated.Should().BeNull("DeleteToken should have removed the token's index pointer");
     }
 
@@ -153,7 +153,7 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
 
         // Confirm the token validates first (so the test failure mode below is
         // strictly "revoke didn't take effect" not "create never landed").
-        var beforeRevoke = await service.ValidateTokenAsync(creation.RawToken);
+        var beforeRevoke = await service.ValidateToken(creation.RawToken).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         beforeRevoke.Should().NotBeNull();
 
         var ok = await service.RevokeToken(creation.Node.Path)
@@ -161,7 +161,7 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
             .ToTask(TestContext.Current.CancellationToken);
         ok.Should().BeTrue();
 
-        var afterRevoke = await service.ValidateTokenAsync(creation.RawToken);
+        var afterRevoke = await service.ValidateToken(creation.RawToken).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         afterRevoke.Should().BeNull("revoked tokens must not validate");
     }
 }

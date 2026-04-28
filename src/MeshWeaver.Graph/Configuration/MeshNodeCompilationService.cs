@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
@@ -34,6 +35,17 @@ internal class MeshNodeCompilationService(
     private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
+
+    // Per-nodeName lock that serialises concurrent <see cref="CompileAsync"/> calls
+    // for the same NodeType. Without it, multiple instances activating in parallel
+    // (e.g. four FutuRe BusinessUnit hubs — EuropeRe, AmericasIns, AsiaRe, Group)
+    // race File.Create on the same .dll and the loser gets
+    // "The process cannot access the file because it is being used by another
+    // process". Roslyn's emit + the AssemblyLoadContext load hold the file open
+    // between the two, so the OS lock survives long enough for the second caller
+    // to hit it. Inside the lock we double-check the cache so the runner-up
+    // returns immediately instead of recompiling redundantly.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _compileLocks = new(StringComparer.Ordinal);
 
     // Query expansion lives in CodeQueryResolver now so the NodeType Configuration
     // side menu can evaluate the *same* queries the compiler uses — the Sources /
@@ -661,7 +673,38 @@ internal class MeshNodeCompilationService(
         CancellationToken ct)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
+        var sem = _compileLocks.GetOrAdd(nodeName, _ => new SemaphoreSlim(1, 1));
+        await sem.WaitAsync(ct);
+        try
+        {
+            // Double-check inside the lock: a concurrent caller may have just compiled.
+            // If the DLL is on disk now, return early — the caller will see the file
+            // through `File.Exists(dllPath)` in CompileCore and proceed normally.
+            if (cacheService.IsDiskCacheEnabled
+                && File.Exists(cacheService.GetDllPath(nodeName)))
+            {
+                logger.LogDebug(
+                    "Skipping compile for {NodePath}: a concurrent caller already wrote {DllPath}.",
+                    node.Path, cacheService.GetDllPath(nodeName));
+                return;
+            }
 
+            await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, ct);
+        }
+        finally
+        {
+            sem.Release();
+        }
+    }
+
+    private async Task CompileAsyncCore(
+        CodeConfiguration? codeFile,
+        string? hubConfiguration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections,
+        MeshNode node,
+        string nodeName,
+        CancellationToken ct)
+    {
         // Invalidate old cache and prepare for recompilation
         cacheService.InvalidateCache(nodeName);
 

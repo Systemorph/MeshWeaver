@@ -1,0 +1,75 @@
+# Failing tests as of 2026-04-28 13:50 (after Acme cache-dir fix + ValidateToken IObservable conversion).
+# 30 known failures across 13 projects (excluding FutuRe — owned by another agent).
+# Format: <project>|<TestClass.TestMethod>
+
+# ========== Markdown.Test (1) ==========
+MeshWeaver.Markdown.Test|InteractiveMarkdownExecutionTest.MultipleBlocks_ShareKernelState_ViaSharedAddress
+
+# ========== AccessControl.Test (2) ==========
+MeshWeaver.AccessControl.Test|AccessAssignmentThumbnailTest.Thumbnail_ClickRemoveRole_RemovesChip
+MeshWeaver.AccessControl.Test|AccessAssignmentThumbnailTest.UpdateAccessObject_ChangesSubject_ViaDataChange
+
+# ========== Insurance.Test (1) ==========
+MeshWeaver.Insurance.Test|PricingCatalogTests.GetPricingCatalog_UsingLayoutAreaReference_ShouldReturnPricingsControl
+
+# ========== Todo.Test (1) ==========
+MeshWeaver.Todo.Test|TodoDataChangeTest.Step1_SetupDataContext_WithTodoItems
+
+# ========== Content.Test (1) ==========
+MeshWeaver.Content.Test|VersionViewsTest.VersionsArea_SingleVersion_RendersWithoutError
+
+# ========== Persistence.Test (3) ==========
+MeshWeaver.Persistence.Test|MonolithKernelTest.InteractiveShowcaseMd_FullPipeline_AllBlocksExecute
+MeshWeaver.Persistence.Test|MonolithKernelTest.MultipleSubmissions_ShareKernelState
+MeshWeaver.Persistence.Test|PageLoadingTest.MarkdownNode_LoadsWithoutHanging
+
+# ========== Auth.Test (1) — pending verification of ValidateToken IObservable refactor ==========
+MeshWeaver.Auth.Test|ApiTokenServiceTests.ValidateToken_RevokedToken_ReturnsNull
+
+# ========== Security.Test (9) ==========
+MeshWeaver.Security.Test|AccessControlPipelineTest.SubscribeRequest_WithReadPermission_Succeeds
+MeshWeaver.Security.Test|AccessControlPipelineTest.SubscribeRequest_WithoutReadPermission_ReturnsDeliveryFailure
+MeshWeaver.Security.Test|McpAccessControlTests.McpSearch_User1SeesOnlyPermittedNodes
+MeshWeaver.Security.Test|McpAccessControlTests.McpUpdate_User1CannotUpdatePrivateOrg_User2Can
+MeshWeaver.Security.Test|McpAccessControlTests.McpGet_User1CanReadPublicNode
+MeshWeaver.Security.Test|McpAccessControlTests.McpSearch_User1CannotSearchPrivateOrg
+MeshWeaver.Security.Test|McpAccessControlTests.McpUpdate_User1CannotUpdate_User2Can
+MeshWeaver.Security.Test|McpAccessControlTests.McpGet_User1CannotReadPrivateOrg_User2Can
+MeshWeaver.Security.Test|McpAccessControlTests.McpGet_User1CannotReadConfidentialNode_User2Can
+
+# ========== Autocomplete.Test (4) ==========
+MeshWeaver.Autocomplete.Test|MeshNodeAutocompleteTest.CanCreateTypeAtPath_ReturnsTrueForValidType
+MeshWeaver.Autocomplete.Test|MeshNodeAutocompleteTest.GetCreatableTypes_DifferentNodesDifferentTypes
+MeshWeaver.Autocomplete.Test|MeshNodeAutocompleteTest.GetCreatableTypes_ReturnsTypesForNode
+MeshWeaver.Autocomplete.Test|AutocompleteMultiSourceTest.LocalFirst_ChildrenOfContextScoreHigherThanDistant
+
+# ========== Hosting.PostgreSql.Test (1) — likely infra-related (no Docker?) ==========
+MeshWeaver.Hosting.PostgreSql.Test|EffectivePermissionPostgresTest.CreateOrganization_HasPermission_ReturnsAdmin
+
+# ========== Query.Test (3) ==========
+MeshWeaver.Query.Test|ChatCompletionOrchestratorTest.AtText_ReturnsCurrentNodeAndGlobal
+MeshWeaver.Query.Test|RemoteStreamCacheTest.GetRemoteStream_AfterDispose_ReturnsFreshInstance
+MeshWeaver.Query.Test|SyncedQueryTest.PropertyChange_NoLongerMatchesQuery_RemovesFromCollection
+
+# ========== Acme.Test (4) — was 12, fixed 8 via per-session cache dir ==========
+MeshWeaver.Acme.Test|TodoDataChangeWorkflowTest.MultipleTodoHubs_CanBeAccessedIndependently
+MeshWeaver.Acme.Test|AcmeSearchTest.DescendantsSearch_FindsOrganizationRootNode
+MeshWeaver.Acme.Test|AcmeSearchTest.AcmeOrganization_IsAccessibleToAuthenticatedUser
+MeshWeaver.Acme.Test|AcmeSearchTest.SubtreeSearch_FindsOrganizationRootNode
+
+# ========== Hosting.Orleans.Test (3) — sub-agent owned ==========
+MeshWeaver.Hosting.Orleans.Test|OrleansReentrancyTest.ToolCall_DuringStreaming_DoesNotDeadlock
+MeshWeaver.Hosting.Orleans.Test|OrleansMarkdownExportTest.SubHub_WithExportTypesRegistered_DeserializesPolymorphicExportDocumentControl
+MeshWeaver.Hosting.Orleans.Test|OrleansMarkdownExportTest.ExportPdfArea_RendersExportDocumentControl_ClientDeserializes
+
+# ========== Fixed in this session (verified passing) ==========
+# Hosting.Blazor.Test|NavigationServiceTest.* (2) — IMeshQueryCore + ObserveQuery + select projection
+# Threading.Test (2) — pre-existing fix in dependency
+# NodeOperations.Test (3) — pre-existing fix in dependency
+# Persistence.Test|ResolvePathAsync_*, Move_LargeSubtree (3) — pre-existing fix
+# Content.Test|VersionsMenu_AppearsInNodeMenu, VersionsArea_RendersVersionList (2) — pre-existing fix
+# AccessControl.Test|Overview_RendersChangeSubjectButton (1) — pre-existing fix
+# Insurance.Test|GetPricingCatalog_ShouldReturnPricings (1) — pre-existing fix
+# Auth.Test|ValidateToken_ValidToken_ReturnsApiToken (1) — pre-existing fix
+# Query.Test (6 of 9) — pre-existing fix
+# Acme.Test (8 of 12) — per-session cache dir fix

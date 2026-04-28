@@ -38,8 +38,10 @@ public static class MarkdownOverviewLayoutArea
         // Standard header with title/icon
         container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
-        // Read-only markdown content
-        container = container.WithView(BuildReadOnlyView(host, nodePath, rawContent, canComment, canEdit));
+        // Read-only markdown content — the CollaborativeMarkdownControl is added as
+        // a DIRECT child of `container` so agents and tests can locate it without
+        // walking through an intermediate Stack wrapper.
+        container = container.WithView(BuildMarkdownReadView(host, nodePath, rawContent, canComment, canEdit));
 
         // Standard children section — separated from main content
         container = container.WithView(
@@ -61,28 +63,26 @@ public static class MarkdownOverviewLayoutArea
         return container;
     }
 
-    private static UiControl BuildReadOnlyView(
+    /// <summary>
+    /// Returns the actual markdown body control (a <see cref="CollaborativeMarkdownControl"/>
+    /// when there is content, an HTML placeholder when empty) — NOT wrapped in an extra
+    /// Stack. The caller is expected to add this directly to its container so consumers
+    /// can identify the markdown body via <c>OfType&lt;CollaborativeMarkdownControl&gt;</c>
+    /// without skipping a wrapper layer.
+    /// </summary>
+    private static UiControl BuildMarkdownReadView(
         LayoutAreaHost host, string nodePath, string rawContent, bool canComment, bool canEdit)
     {
-        var view = Controls.Stack.WithWidth("100%");
-
         if (!string.IsNullOrWhiteSpace(rawContent))
         {
-            view = view.WithView(
-                new CollaborativeMarkdownControl()
-                    .WithValue(rawContent)
-                    .WithNodePath(nodePath)
-                    .WithHubAddress(host.Hub.Address.ToString())
-                    .WithCanComment(canComment)
-                    .WithCanEdit(canEdit));
+            return new CollaborativeMarkdownControl()
+                .WithValue(rawContent)
+                .WithNodePath(nodePath)
+                .WithHubAddress(host.Hub.Address.ToString())
+                .WithCanComment(canComment)
+                .WithCanEdit(canEdit);
         }
-        else
-        {
-            view = view.WithView(
-                Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Use the menu to start editing.</p>"));
-        }
-
-        return view;
+        return Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No content yet. Use the menu to start editing.</p>");
     }
 
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)

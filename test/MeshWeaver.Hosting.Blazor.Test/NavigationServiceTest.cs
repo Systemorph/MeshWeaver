@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
@@ -26,7 +27,7 @@ public class NavigationServiceTest
 {
     private readonly MockNavigationManager _navigationManager;
     private readonly IPathResolver _pathResolver;
-    private readonly IMeshService _meshQuery;
+    private readonly IMeshQueryCore _meshQuery;
     private readonly IMessageHub _hub;
     private readonly IServiceProvider _hubServiceProvider;
     private readonly INodeTypeService _nodeTypeService;
@@ -35,7 +36,7 @@ public class NavigationServiceTest
     {
         _navigationManager = new MockNavigationManager();
         _pathResolver = Substitute.For<IPathResolver>();
-        _meshQuery = Substitute.For<IMeshService>();
+        _meshQuery = Substitute.For<IMeshQueryCore>();
         _hub = Substitute.For<IMessageHub>();
         _hubServiceProvider = Substitute.For<IServiceProvider>();
         _nodeTypeService = Substitute.For<INodeTypeService>();
@@ -544,8 +545,8 @@ public class NavigationServiceTest
             NodeType = "Thread",
             MainNode = MainNode
         };
-        _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
-            .Returns(ToAsyncObjects(threadNode));
+        _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+            .Returns(System.Reactive.Linq.Observable.Return(QueryChange(threadNode)));
 
         var ready = NextContext(service);
         await service.InitializeAsync();
@@ -572,8 +573,8 @@ public class NavigationServiceTest
             NodeType = "Group"
             // MainNode defaults to Path â†’ "PartnerRe/AIConsulting"
         };
-        _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
-            .Returns(ToAsyncObjects(mainNode));
+        _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+            .Returns(System.Reactive.Linq.Observable.Return(QueryChange(mainNode)));
 
         await service.InitializeAsync();
 
@@ -596,8 +597,8 @@ public class NavigationServiceTest
             NodeType = "Thread",
             MainNode = "PartnerRe/AIConsulting"
         };
-        _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
-            .Returns(ToAsyncObjects(threadNode));
+        _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+            .Returns(System.Reactive.Linq.Observable.Return(QueryChange(threadNode)));
 
         _nodeTypeService
             .GetCreatableTypesAsync("PartnerRe/AIConsulting", Arg.Any<CancellationToken>())
@@ -627,14 +628,14 @@ public class NavigationServiceTest
         await Task.CompletedTask;
     }
 
-    private static async IAsyncEnumerable<object> ToAsyncObjects(params object[] items)
-    {
-        foreach (var item in items)
+    private static QueryResultChange<MeshNode> QueryChange(params MeshNode[] items) =>
+        new()
         {
-            yield return item;
-        }
-        await Task.CompletedTask;
-    }
+            ChangeType = QueryChangeType.Initial,
+            Items = items,
+            Version = 1,
+            Timestamp = DateTimeOffset.UtcNow,
+        };
 
     private static async IAsyncEnumerable<CreatableTypeInfo> ToAsyncEnumerableWithDelay(
         params CreatableTypeInfo[] items)
