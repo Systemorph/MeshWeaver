@@ -106,6 +106,41 @@ Decision matrix for reading mesh state:
 
 Same rule, simpler form: **streams subscribe, requests fetch.** Don't `.Take(1)` a stream to fake a fetch.
 
+### When `.Take(N)` *is* the right primitive: read-modify-write inside `SelectMany`
+
+There's exactly one shape where `.Take(N)` on a workspace stream is correct: a **read-modify-write** chain inside a hub handler. The handler needs the current snapshot once to build a follow-up message (e.g. a `DataChangeRequest`); the stream keeps emitting after that, but the handler doesn't care about the rest. `.Take(N)` snapshots `N` values then completes — pure reactive composition, no `.ToTask()`, no `await`.
+
+The canonical example, lifted from the unified-reference delete path in `DataExtensions.DeleteDataPath`:
+
+```csharp
+// Read the current entity, then issue the deletion.
+return stream
+    .Timeout(TimeSpan.FromSeconds(30))   // bound the wait — handler must not hang
+    .Take(1)                             // one snapshot, then complete
+    .SelectMany(entityValue =>
+    {
+        if (entityValue.Value == null)
+            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(...));
+
+        var changeRequest = new DataChangeRequest { Deletions = [entityValue.Value], ... };
+        workspace.RequestChange(changeRequest, activity, null);
+
+        return Observable.Create<DeleteUnifiedReferenceResponse>(observer =>
+        {
+            activity.Complete(log => { observer.OnNext(...); observer.OnCompleted(); });
+            return Disposable.Empty;
+        });
+    });
+```
+
+Why this is fine — and why the rules above still apply:
+
+- The stream comes from `workspace.GetStream(entityRef, x => x.ReturnNullWhenNotPresent())`, **not** from `GetRemoteStream` / `GetMeshNodeStream`. Same workspace, no `SubscribeRequest` round-trip — `.Take(1)` is just "next emission".
+- `.Take(N)` is composed inside `SelectMany`. The chain is one observable — there is no `await`, no `Task`, no `ToTask`. The handler's `Subscribe(...)` consumes the whole pipeline.
+- It's read-modify-**write**. The point of the `.Take(1)` is to snapshot input for the next message, not to display anything. The "no `.Take(1)` on display streams" rule applies to *display* — chains rendered to the UI must stay subscribed.
+
+If you find yourself using `.Take(N)` outside a `SelectMany` that immediately produces a follow-up message, you're in the wrong shape — go back to the matrix above.
+
 MeshWeaver uses a **truly asynchronous** message-passing model. This is fundamentally different from C#'s `async/await` pattern, which is better described as "fake async" — you still block the calling context waiting for a result.
 
 ## 🚨 The absolute rules (no exceptions outside tests)
