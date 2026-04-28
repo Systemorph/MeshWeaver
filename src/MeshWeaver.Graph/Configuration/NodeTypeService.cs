@@ -545,6 +545,10 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 if (response.Success && !string.IsNullOrEmpty(response.AssemblyLocation))
                 {
+                    // Compile succeeded — clear any stale error state on this NodeType
+                    // so GetStatus flips back to Ok on the next read.
+                    _compilationErrors.TryRemove(nodeType, out _);
+                    _compilationSucceededAt[nodeType] = DateTimeOffset.UtcNow;
                     if (response.HubConfiguration != null)
                         _hubConfigurations[nodeType] = response.HubConfiguration;
                     return ApplyEntry(
@@ -556,7 +560,16 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                         nodeType);
                 }
 
-                // Last-resort: return default config + (if compile failed) an error overlay.
+                // Compile failed — cache the error so GetStatus / GetDiagnostics surface
+                // it on the next read. Without this the per-node-hub's NodeTypeContractHandler
+                // returns the failure response straight back to the caller, but the
+                // singleton NodeTypeService never learns about it, so callers polling
+                // GetStatus see "Unknown" instead of "Error".
+                if (!response.Success && !string.IsNullOrEmpty(response.Error))
+                {
+                    _compilationErrors[nodeType] = response.Error!;
+                    _compilationSucceededAt.TryRemove(nodeType, out _);
+                }
                 return WithCompilationErrorOverlay(node, nodeType, response.Error);
             });
     }
