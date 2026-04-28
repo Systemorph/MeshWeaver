@@ -456,6 +456,14 @@ public static class ThreadExecution
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
+        // [IDENTITY-TRACE] who is the request being executed for?
+        logger.LogInformation(
+            "[ThreadExec] ENTER ExecuteMessageAsync thread={ThreadPath} responsePath={ResponsePath} delivery.AccessContext={DeliveryUser}, hub.Address={HubAddress}, parentHub.Address={ParentAddress}",
+            threadPath, responsePath,
+            delivery.AccessContext?.ObjectId ?? "<null>",
+            hub.Address.ToString(),
+            parentHub.Address.ToString());
+
         // Long-lived per-message remote stream. Opened once at the start of
         // execution; every chunk-tick / tool-result / final write goes through
         // _responseStream.Update(...). Disposed in the Task.Run finally block.
@@ -559,6 +567,13 @@ public static class ThreadExecution
             .Take(1) // first emission = agents ready
             .Subscribe(client =>
             {
+                // [IDENTITY-TRACE] does this Subscribe callback still see the user context?
+                var initAccess = parentHub.ServiceProvider.GetService<AccessService>();
+                logger.LogInformation(
+                    "[ThreadExec] Subscribe(Initialize) thread={ThreadPath} ctx.ObjectId={CtxUser}, circuit.ObjectId={CircuitUser}",
+                    threadPath,
+                    initAccess?.Context?.ObjectId ?? "<null>",
+                    initAccess?.CircuitContext?.ObjectId ?? "<null>");
                 logger.LogInformation("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
 
                 // Set context from remote stream — must subscribe (Current is null on cold streams).
@@ -783,6 +798,16 @@ public static class ThreadExecution
 
                 _ = Task.Run(async () =>
                 {
+                    // Re-seed user AccessContext at the Task.Run boundary. Inside this lambda we
+                    // run the streaming loop + tool calls + responseStream.Update, all of which
+                    // post to other hubs. Task.Run is preceded by a chain of Subscribe callbacks
+                    // (Initialize, contextNodeObs, threadWorkspace.GetStream, history loaders) —
+                    // each fires on the upstream hub's pipeline where AsyncLocal Context flips
+                    // to the per-cell hub's impersonated address. Reseed here so every downstream
+                    // post goes out under the user's identity.
+                    if (delivery.AccessContext != null)
+                        parentHub.ServiceProvider.GetService<AccessService>()?.SetContext(delivery.AccessContext);
+
                     var ct = executionCts.Token;
                     var responseText = new StringBuilder();
                     capturedResponseText = responseText;
@@ -791,7 +816,13 @@ public static class ThreadExecution
                     int? totalTokens = null;
                     try
                     {
-                    logger.LogInformation("[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath} (on thread pool)", DateTime.UtcNow, threadPath);
+                    // [IDENTITY-TRACE] do we still see the user identity inside Task.Run on the thread pool?
+                    var streamAccess = parentHub.ServiceProvider.GetService<AccessService>();
+                    logger.LogInformation(
+                        "[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath} ctx.ObjectId={CtxUser}, circuit.ObjectId={CircuitUser}",
+                        DateTime.UtcNow, threadPath,
+                        streamAccess?.Context?.ObjectId ?? "<null>",
+                        streamAccess?.CircuitContext?.ObjectId ?? "<null>");
                     // Keep the grain alive during the entire execution — including tool calls
                     // and delegations where the streaming loop is blocked.
                     using var heartbeatSubscription = parentHub.BeginAsyncOperation();
@@ -808,8 +839,14 @@ public static class ThreadExecution
                 {
                     if (content is FunctionCallContent functionCall)
                     {
-                        logger.LogDebug("[ThreadExec] TOOL_START: {Time:HH:mm:ss.fff} {Name} callId={CallId} args={Args}",
+                        // [IDENTITY-TRACE] who is logged in when a tool call starts?
+                        var toolAccess = parentHub.ServiceProvider.GetService<AccessService>();
+                        logger.LogInformation(
+                            "[ThreadExec] TOOL_START: {Time:HH:mm:ss.fff} {Name} callId={CallId} ctx.ObjectId={CtxUser}, circuit.ObjectId={CircuitUser}",
                             DateTime.UtcNow, functionCall.Name, functionCall.CallId,
+                            toolAccess?.Context?.ObjectId ?? "<null>",
+                            toolAccess?.CircuitContext?.ObjectId ?? "<null>");
+                        logger.LogDebug("[ThreadExec] TOOL_START_args: {Args}",
                             SerializeArgs(functionCall.Arguments)?[..Math.Min(100, SerializeArgs(functionCall.Arguments)?.Length ?? 0)]);
                         var formatted = ToolStatusFormatter.Format(functionCall);
                         var argsDetail = SerializeArgs(functionCall.Arguments);

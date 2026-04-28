@@ -113,6 +113,15 @@ public static class JsonSynchronizationStream
         // link to deserialized world. Will also potentially link to workspace.
         var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
 
+        // Capture the caller's AccessContext at stream-creation time. The internal
+        // change-notification Subscribe (below) fires on the stream's emission scheduler,
+        // where AsyncLocal AccessContext does NOT match the user who created this stream
+        // — it would default to the per-cell hub's impersonated address and trigger
+        // "Access denied" on the owner. Stamping each post with the captured user
+        // context preserves authorship through the Update path.
+        var accessServiceForCapture = hub.ServiceProvider.GetService<AccessService>();
+        var capturedAccessContext = accessServiceForCapture?.Context;
+
         var reduced = new SynchronizationStream<TReduced>(
                 new(owner, partition),
                 hub,
@@ -133,7 +142,11 @@ public static class JsonSynchronizationStream
                     {
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
-                        hub.Post(e, o => o.WithTarget(reduced.Owner));
+                        hub.Post(e, o =>
+                        {
+                            var opts = o.WithTarget(reduced.Owner);
+                            return capturedAccessContext != null ? opts.WithAccessContext(capturedAccessContext) : opts;
+                        });
                     },
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
@@ -149,7 +162,11 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
                         e = e with { ClientId = reduced.StreamId };
-                        var delivery = hub.Post(e, o => o.WithTarget(reduced.Owner));
+                        var delivery = hub.Post(e, o =>
+                        {
+                            var opts = o.WithTarget(reduced.Owner);
+                            return capturedAccessContext != null ? opts.WithAccessContext(capturedAccessContext) : opts;
+                        });
                         if (delivery != null)
                         {
                             hub.Observe(delivery)
