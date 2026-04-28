@@ -62,7 +62,6 @@ public static class OrleansServerRegistryExtensions
         builder.ConfigureMeshWeaver();
         builder.ConfigureServices(services =>
             services.AddOrleansMeshServices());
-        builder.RegisterMeshQueryCoreOnMeshHub();
 
         return builder;
     }
@@ -74,7 +73,6 @@ public static class OrleansServerRegistryExtensions
         {
             services.AddOrleansMeshServices();
         });
-        builder.RegisterMeshQueryCoreOnMeshHub();
 
         return builder;
     }

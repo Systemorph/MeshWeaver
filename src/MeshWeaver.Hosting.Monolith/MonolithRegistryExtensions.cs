@@ -16,9 +16,10 @@ public static class MonolithRegistryExtensions
             services.TryAddSingleton<IRoutingService, MonolithRoutingService>();
             return services;
         });
-        return builder.ConfigureHub(conf =>
+        builder.ConfigureHub(conf =>
             conf
                 .AddMeshTypes()
             );
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 }
