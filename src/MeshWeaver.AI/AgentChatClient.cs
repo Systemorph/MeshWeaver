@@ -999,27 +999,30 @@ public class AgentChatClient : IAgentChat
 
         var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
 
-        // 1. Get NodeType of current node — single-node-by-path content read MUST go through
-        // the per-node MeshNodeReference reducer, NOT QueryAsync (which lags through the
-        // read-side index; see Doc/Architecture/AsynchronousCalls.md).
-        // One-shot read — GetDataRequest, not a subscription.
+        // 1. Get NodeType of current node — single-node-by-path content read goes through
+        // the per-node MeshNodeReference reducer (hub.GetMeshNode), NOT QueryAsync (lagged).
+        // Subscribe + TCS instead of .ToTask() to avoid bridging a hub round-trip via the
+        // calling scheduler — see Doc/Architecture/AsynchronousCalls.md.
         string? nodeTypePath = null;
         if (!string.IsNullOrEmpty(contextPath))
         {
-            try
-            {
-                var contextNode = await hub.GetMeshNode(contextPath, TimeSpan.FromSeconds(15))
-                    .ToTask();
-                if (!string.IsNullOrEmpty(contextNode?.NodeType)
-                    && contextNode.NodeType != "Agent" && contextNode.NodeType != "Markdown")
-                {
-                    nodeTypePath = contextNode.NodeType;
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Error getting NodeType for {ContextPath}", contextPath);
-            }
+            var nodeTypeTcs = new TaskCompletionSource<string?>();
+            hub.GetMeshNode(contextPath, TimeSpan.FromSeconds(15))
+                .Subscribe(
+                    node =>
+                    {
+                        var nt = !string.IsNullOrEmpty(node?.NodeType)
+                                 && node.NodeType != "Agent" && node.NodeType != "Markdown"
+                            ? node.NodeType
+                            : null;
+                        nodeTypeTcs.TrySetResult(nt);
+                    },
+                    ex =>
+                    {
+                        logger.LogWarning(ex, "Error getting NodeType for {ContextPath}", contextPath);
+                        nodeTypeTcs.TrySetResult(null);
+                    });
+            nodeTypePath = await nodeTypeTcs.Task;
         }
 
         // 2. Query agents from context path hierarchy (or root if no context)

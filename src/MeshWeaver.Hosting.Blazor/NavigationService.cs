@@ -290,16 +290,9 @@ internal class NavigationService : INavigationService
     /// on hub round-trips (100% deadlock; see Doc/Architecture/AsynchronousCalls.md).
     /// </summary>
     private IObservable<MeshNode?> LoadNodeWithPreRenderedHtml(AddressResolution resolution) =>
-        // App-level navigation startup — single-path lookup. Uses the already-injected
-        // IMeshService here (not hub.GetMeshNode) so the unit tests can mock the
-        // lookup via NSubstitute (IMessageHub has internal interface methods that
-        // Castle/NSubstitute can't proxy from outside the assembly). Production
-        // routing through QueryAsync is fine for this read-only startup case —
-        // we're not doing CQRS-sensitive content reads here.
-        Observable.FromAsync(async ct =>
-                await _meshQuery
-                    .QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolution.Prefix}"), null, ct)
-                    .FirstOrDefaultAsync(ct))
+        // Single-node-by-path read goes through hub.GetMeshNode (per-node MeshNodeReference
+        // reducer), NOT QueryAsync (lagged). See Doc/Architecture/AsynchronousCalls.md.
+        _hub.GetMeshNode(resolution.Prefix, TimeSpan.FromSeconds(10))
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .Select(node =>
             {

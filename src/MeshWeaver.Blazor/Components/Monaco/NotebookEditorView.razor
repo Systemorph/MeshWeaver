@@ -275,10 +275,13 @@
         }
     }
 
-    private async Task RunCell(int index)
+    private void RunCell(int index, Action? onComplete = null)
     {
         if (index < 0 || index >= cellControls.Count)
+        {
+            onComplete?.Invoke();
             return;
+        }
 
         var cellControl = cellControls[index];
         var skin = cellControl.Skins.OfType<NotebookCellSkin>().FirstOrDefault();
@@ -286,84 +289,81 @@
         var cellId = skin?.CellId as string ?? "";
 
         if (cellType != NotebookCellType.Code)
+        {
+            onComplete?.Invoke();
             return;
+        }
 
         executingCellIds.Add(cellId);
         StateHasChanged();
 
-        try
-        {
-            var content = cellControl.Content as string ?? "";
-            var language = skin?.Language as string ?? "csharp";
-            var output = await ExecuteCodeAsync(content, language);
-            executionCounter++;
+        var content = cellControl.Content as string ?? "";
+        var language = skin?.Language as string ?? "csharp";
 
-            cellControls[index] = cellControl
-                .WithOutput(output)
-                .WithExecutionCount(executionCounter)
-                .WithIsExecuting(false);
-        }
-        catch (Exception ex)
+        // Subscribe — no await on hub round-trip. Update state via InvokeAsync.
+        ExecuteCode(content, language).Subscribe(output =>
         {
-            cellControls[index] = cellControl
-                .WithOutput(new NotebookCellOutput
-                {
-                    Error = ex.Message,
-                    IsSuccess = false
-                })
-                .WithIsExecuting(false);
-        }
-        finally
-        {
-            executingCellIds.Remove(cellId);
-            NotifyCellsChanged();
-        }
+            InvokeAsync(() =>
+            {
+                executionCounter++;
+                cellControls[index] = cellControl
+                    .WithOutput(output)
+                    .WithExecutionCount(executionCounter)
+                    .WithIsExecuting(false);
+                executingCellIds.Remove(cellId);
+                NotifyCellsChanged();
+                onComplete?.Invoke();
+            });
+        });
     }
 
-    private async Task RunAndAddBelow(int index)
+    private void RunAndAddBelow(int index)
     {
-        await RunCell(index);
-        AddCellBelow(index, NotebookCellType.Code);
+        RunCell(index, () => AddCellBelow(index, NotebookCellType.Code));
     }
 
-    private async Task RunAndMoveNext(int index)
+    private void RunAndMoveNext(int index)
     {
-        await RunCell(index);
-        if (index < cellControls.Count - 1)
+        RunCell(index, () =>
         {
-            selectedCellIndex = index + 1;
-            StateHasChanged();
-        }
-        else
-        {
-            AddCellBelow(index, NotebookCellType.Code);
-        }
+            if (index < cellControls.Count - 1)
+            {
+                selectedCellIndex = index + 1;
+                StateHasChanged();
+            }
+            else
+            {
+                AddCellBelow(index, NotebookCellType.Code);
+            }
+        });
     }
 
-    private async Task RunAllCells()
+    private void RunAllCells()
     {
         isRunningAll = true;
         StateHasChanged();
+        RunNextCellInSequence(0);
+    }
 
-        try
+    private void RunNextCellInSequence(int startIndex)
+    {
+        for (int i = startIndex; i < cellControls.Count; i++)
         {
-            for (int i = 0; i < cellControls.Count; i++)
+            var skin = cellControls[i].Skins.OfType<NotebookCellSkin>().FirstOrDefault();
+            var cellType = skin?.CellType as NotebookCellType? ?? NotebookCellType.Code;
+            if (cellType == NotebookCellType.Code)
             {
-                var skin = cellControls[i].Skins.OfType<NotebookCellSkin>().FirstOrDefault();
-                var cellType = skin?.CellType as NotebookCellType? ?? NotebookCellType.Code;
-                if (cellType == NotebookCellType.Code)
-                {
-                    selectedCellIndex = i;
-                    StateHasChanged();
-                    await RunCell(i);
-                }
+                selectedCellIndex = i;
+                StateHasChanged();
+                var nextIndex = i + 1;
+                RunCell(i, () => RunNextCellInSequence(nextIndex));
+                return; // RunCell continuation drives the rest
             }
         }
-        finally
-        {
-            isRunningAll = false;
-            StateHasChanged();
-        }
+
+        // No more code cells — done.
+        isRunningAll = false;
+        StateHasChanged();
     }
 
     private void ClearAllOutputs()
@@ -378,42 +378,30 @@
         NotifyCellsChanged();
     }
 
-    private async Task<NotebookCellOutput> ExecuteCodeAsync(string code, string language)
+    private IObservable<NotebookCellOutput> ExecuteCode(string code, string language)
     {
         if (Hub == null || BoundKernelAddress == null)
         {
-            return new NotebookCellOutput
+            return Observable.Return(new NotebookCellOutput
             {
                 Error = "No kernel available for execution. Please configure KernelAddress.",
                 IsSuccess = false
-            };
+            });
         }
 
-        try
-        {
-            var request = new SubmitCodeRequest(code);
-            // Post request and wait for response
-            var response = await Hub.Observe(request, o => o.WithTarget(BoundKernelAddress)).FirstAsync().ToTask();
-
-            if (response is NotebookCellOutput output)
+        var request = new SubmitCodeRequest(code);
+        return Hub.Observe(request, o => o.WithTarget(BoundKernelAddress))
+            .FirstAsync()
+            .Select(d => new NotebookCellOutput
             {
-                return output;
-            }
-
-            return new NotebookCellOutput
-            {
-                Value = response,
-                IsSuccess = true
-            };
-        }
-        catch (Exception ex)
-        {
-            return new NotebookCellOutput
+                Value = d.Message?.SubmissionId,
+                IsSuccess = d.Message?.Success ?? false
+            })
+            .Catch<NotebookCellOutput, Exception>(ex => Observable.Return(new NotebookCellOutput
             {
                 Error = ex.Message,
                 IsSuccess = false
-            };
-        }
+            }));
     }
 
     private void OnGlobalKeyDown(KeyboardEventArgs e)

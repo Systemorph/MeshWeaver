@@ -2,7 +2,6 @@
 
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Messaging;
 
@@ -21,57 +20,54 @@ public class AutocompleteClient(
 
     /// <summary>
     /// Gets autocomplete suggestions by dispatching requests to all configured addresses.
+    /// Per-address responses merge through Observable.Merge — no per-address Task await,
+    /// no <c>.ToTask()</c> bridge on hub round-trips.
     /// </summary>
-    public async Task<AutocompleteResponse> GetCompletionsAsync(
+    public IObservable<AutocompleteResponse> GetCompletions(
         string query,
-        AgentContext? context,
-        CancellationToken ct = default)
+        AgentContext? context)
     {
-        var allItems = ImmutableList<AutocompleteItem>.Empty;
+        var addresses = GetAllDispatchAddresses(context);
 
-        // Get all addresses to query
-        var addresses = await GetAllDispatchAddressesAsync(context, ct);
-
-        foreach (var address in addresses)
-        {
-            try
+        var perAddress = addresses
+            .Select(address =>
             {
                 var delivery = hub.Post(
                     new AutocompleteRequest(query, context?.Context),
-                    o => o.WithTarget(address))!;
-                var callbackResponse = await hub.Observe(delivery)
+                    o => o.WithTarget(address));
+                if (delivery == null)
+                    return Observable.Return<IReadOnlyList<AutocompleteItem>>(Array.Empty<AutocompleteItem>());
+
+                return hub.Observe(delivery)
                     .Timeout(DefaultTimeout)
                     .FirstAsync()
-                    .ToTask(ct);
+                    .Select(d => d.Message is AutocompleteResponse { Items: { } items }
+                        ? items
+                        : Array.Empty<AutocompleteItem>())
+                    // Tolerate hub-level failures (target unreachable, timeout as DeliveryFailure)
+                    // and any unexpected response type — skipping is the historical behaviour.
+                    .Catch<IReadOnlyList<AutocompleteItem>, Exception>(
+                        _ => Observable.Return<IReadOnlyList<AutocompleteItem>>(Array.Empty<AutocompleteItem>()));
+            });
 
-                // Tolerate hub-level failures (target unreachable, timeout as DeliveryFailure)
-                // and any unexpected response type — skipping is the historical behaviour.
-                if (callbackResponse.Message is AutocompleteResponse { Items: not null } ar)
-                {
-                    allItems = allItems.AddRange(ar.Items);
-                }
-            }
-            catch
+        return perAddress
+            .Merge()
+            .Aggregate(ImmutableList<AutocompleteItem>.Empty, (acc, items) => acc.AddRange(items))
+            .Select(allItems =>
             {
-                // Skip addresses that fail to respond or timeout
-            }
-        }
-
-        // Deduplicate by InsertText (keep highest priority item)
-        var deduplicated = allItems
-            .GroupBy(i => i.InsertText)
-            .Select(g => g.OrderByDescending(i => i.Priority).First())
-            .ToImmutableList();
-
-        return new AutocompleteResponse(deduplicated);
+                // Deduplicate by InsertText (keep highest priority item)
+                var deduplicated = allItems
+                    .GroupBy(i => i.InsertText)
+                    .Select(g => g.OrderByDescending(i => i.Priority).First())
+                    .ToImmutableList();
+                return new AutocompleteResponse(deduplicated);
+            });
     }
 
     /// <summary>
     /// Gets all addresses to dispatch to: base addresses + context address.
     /// </summary>
-    private Task<IReadOnlyCollection<Address>> GetAllDispatchAddressesAsync(
-        AgentContext? context,
-        CancellationToken ct)
+    private IReadOnlyCollection<Address> GetAllDispatchAddresses(AgentContext? context)
     {
         var addresses = ImmutableHashSet<Address>.Empty;
 
@@ -87,6 +83,6 @@ public class AutocompleteClient(
             addresses = addresses.Add(context.Address);
         }
 
-        return Task.FromResult<IReadOnlyCollection<Address>>(addresses);
+        return addresses;
     }
 }

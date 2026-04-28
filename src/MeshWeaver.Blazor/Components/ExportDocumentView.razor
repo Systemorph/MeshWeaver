@@ -147,7 +147,7 @@
         }
     }
 
-    private async Task ExportAsync()
+    private void ExportAsync()
     {
         if (string.IsNullOrEmpty(SourcePath)) return;
 
@@ -156,35 +156,40 @@
         _done = false;
         StateHasChanged();
 
+        var options = new DocumentExportOptions
+        {
+            Format = _format,
+            Title = string.IsNullOrWhiteSpace(_title) ? null : _title,
+            BrandNodePath = string.IsNullOrWhiteSpace(_brandNodePath) ? null : _brandNodePath,
+            CoverPage = _coverPage,
+            TableOfContents = _toc,
+            PageBreakBeforeH1 = _pbH1,
+            PageBreakBeforeH2 = _pbH2,
+            IncludeChildren = _includeChildren,
+            PageBreakBetweenChildren = _pbChildren,
+            HeaderOverride = string.IsNullOrWhiteSpace(_header) ? null : _header,
+            FooterOverride = string.IsNullOrWhiteSpace(_footer) ? null : _footer
+        };
+
+        // Subscribe — no await on hub-touching observable.
+        Hub.Observe(
+                new ExportDocumentRequest(SourcePath, options),
+                o => o.WithTarget(new MeshWeaver.Messaging.Address(SourcePath)))
+            .FirstAsync()
+            .Subscribe(
+                response => _ = InvokeAsync(() => OnExportResponseAsync(response)),
+                ex => _ = InvokeAsync(() => OnExportErrorAsync(ex.Message)));
+    }
+
+    private async Task OnExportResponseAsync(IMessageDelivery<ExportDocumentResponse> response)
+    {
         try
         {
-            var options = new DocumentExportOptions
-            {
-                Format = _format,
-                Title = string.IsNullOrWhiteSpace(_title) ? null : _title,
-                BrandNodePath = string.IsNullOrWhiteSpace(_brandNodePath) ? null : _brandNodePath,
-                CoverPage = _coverPage,
-                TableOfContents = _toc,
-                PageBreakBeforeH1 = _pbH1,
-                PageBreakBeforeH2 = _pbH2,
-                IncludeChildren = _includeChildren,
-                PageBreakBetweenChildren = _pbChildren,
-                HeaderOverride = string.IsNullOrWhiteSpace(_header) ? null : _header,
-                FooterOverride = string.IsNullOrWhiteSpace(_footer) ? null : _footer
-            };
-
-            var response = await Hub.Observe(
-                    new ExportDocumentRequest(SourcePath, options),
-                    o => o.WithTarget(new MeshWeaver.Messaging.Address(SourcePath)))
-                .FirstAsync()
-                .ToTask();
-
             if (response?.Message is { } result && result.Content.Length > 0)
             {
                 using var ms = new MemoryStream(result.Content);
                 using var streamRef = new DotNetStreamReference(ms);
                 await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", result.FileName, streamRef);
-
                 _done = true;
             }
             else
@@ -201,6 +206,13 @@
             _isExporting = false;
             StateHasChanged();
         }
+    }
+
+    private void OnExportErrorAsync(string message)
+    {
+        _error = $"Export failed: {message}";
+        _isExporting = false;
+        StateHasChanged();
     }
 
     private void Reset()

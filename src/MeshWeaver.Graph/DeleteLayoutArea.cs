@@ -52,7 +52,7 @@ public static class DeleteLayoutArea
             .Catch<Permission, Exception>(_ => Observable.Return(Permission.None));
 
         var descendantsObs = (meshQuery != null
-            ? Observable.FromAsync(token => CountDescendantsAsync(meshQuery, nodePath, token))
+            ? CountDescendants(meshQuery, nodePath)
             : Observable.Return(0))
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch<int, Exception>(_ => Observable.Return(0));
@@ -69,14 +69,11 @@ public static class DeleteLayoutArea
             .StartWith(placeholder);
     }
 
-    private static async Task<int> CountDescendantsAsync(IMeshService meshQuery, string nodePath, CancellationToken ct)
-    {
-        var count = 0;
-        await foreach (var _ in meshQuery.QueryAsync(
-                           MeshQueryRequest.FromQuery($"path:{nodePath} scope:descendants"), ct))
-            count++;
-        return count;
-    }
+    private static IObservable<int> CountDescendants(IMeshService meshQuery, string nodePath) =>
+        meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{nodePath} scope:descendants"))
+            .Take(1)
+            .Select(c => c.Items.Count);
 
     private static UiControl BuildAccessDenied(string backHref) =>
         Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")

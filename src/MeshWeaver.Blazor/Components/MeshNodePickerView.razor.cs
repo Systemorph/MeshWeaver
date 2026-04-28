@@ -89,7 +89,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private void OpenSearch()
     {
         _isSearchOpen = true;
-        _ = LoadResultsAsync();
+        LoadResultsAsync();
         StateHasChanged();
     }
 
@@ -129,16 +129,16 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         try { await Task.Delay(DebounceMs, ct); }
         catch (TaskCanceledException) { return; }
         if (ct.IsCancellationRequested) return;
-        await LoadResultsAsync();
+        LoadResultsAsync();
     }
 
-    private async Task LoadResultsAsync()
+    private void LoadResultsAsync()
     {
         // When Items are provided and already cached, filter in-memory
         if (HasItems && _cachedResults != null)
         {
             _results = FilterCached(_searchText.Trim());
-            await InvokeAsync(StateHasChanged);
+            _ = InvokeAsync(StateHasChanged);
             return;
         }
 
@@ -147,43 +147,48 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         var cts = _loadCts = new CancellationTokenSource();
 
         _isLoading = true;
-        await InvokeAsync(StateHasChanged);
+        _ = InvokeAsync(StateHasChanged);
+
+        var queries = GetQueries();
+        if (queries.Length == 0)
+        {
+            FinaliseLoadResults(new List<MeshNode>(), cts);
+            return;
+        }
+
+        var userText = _searchText.Trim();
+        var observables = queries.Select(baseQuery =>
+        {
+            var fullQuery = HasItems || string.IsNullOrEmpty(userText)
+                ? baseQuery
+                : $"{baseQuery} {userText}";
+            return MeshQuery
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
+                .Take(1)
+                .Select(c => (IReadOnlyList<MeshNode>)c.Items)
+                .Catch<IReadOnlyList<MeshNode>, Exception>(
+                    _ => Observable.Return<IReadOnlyList<MeshNode>>(new List<MeshNode>()));
+        });
+
+        // Subscribe — no await on hub round-trip. CombineLatest waits for the initial
+        // set from every query before firing once. The Subscribe callback finishes the
+        // load on the dispatcher via InvokeAsync.
+        observables.CombineLatest()
+            .Take(1)
+            .Subscribe(allBatches =>
+            {
+                if (cts.Token.IsCancellationRequested) return;
+                var queryResults = allBatches.SelectMany(batch => batch).ToList();
+                FinaliseLoadResults(queryResults, cts);
+            });
+    }
+
+    private void FinaliseLoadResults(List<MeshNode> queryResults, CancellationTokenSource cts)
+    {
+        if (cts.Token.IsCancellationRequested) return;
 
         try
         {
-            var queryResults = new List<MeshNode>();
-
-            // Execute queries (if any)
-            var queries = GetQueries();
-            if (queries.Length > 0)
-            {
-                var userText = _searchText.Trim();
-                var tasks = queries.Select(async baseQuery =>
-                {
-                    var fullQuery = HasItems || string.IsNullOrEmpty(userText)
-                        ? baseQuery
-                        : $"{baseQuery} {userText}";
-                    try
-                    {
-                        // ObserveQuery initial-set snapshot — autocomplete is per-keystroke,
-                        // no live updates needed.
-                        return await MeshQuery
-                            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(fullQuery))
-                            .Take(1)
-                            .Select(c => (IReadOnlyList<MeshNode>)c.Items)
-                            .ToTask(cts.Token);
-                    }
-                    catch
-                    {
-                        return (IReadOnlyList<MeshNode>)new List<MeshNode>();
-                    }
-                });
-
-                var allResults = await Task.WhenAll(tasks);
-                cts.Token.ThrowIfCancellationRequested();
-                queryResults = allResults.SelectMany(batch => batch).ToList();
-            }
-
             // Merge Items + query results, deduplicate by Path (case-insensitive; Items take precedence)
             var items = BoundItems ?? [];
             var merged = items.AsEnumerable()
@@ -203,11 +208,6 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
                 _results = merged;
             }
         }
-        catch (OperationCanceledException)
-        {
-            // Superseded by a newer search — don't touch _results
-            return;
-        }
         catch
         {
             _results = new List<MeshNode>();
@@ -215,7 +215,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
         finally
         {
             _isLoading = false;
-            await InvokeAsync(StateHasChanged);
+            _ = InvokeAsync(StateHasChanged);
         }
     }
 

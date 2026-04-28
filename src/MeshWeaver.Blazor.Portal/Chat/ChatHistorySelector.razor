@@ -325,29 +325,29 @@
         await OnClose.InvokeAsync();
     }
 
-    private async Task DeleteConversation(string chatPath)
+    private void DeleteConversation(string chatPath)
     {
-        try
+        // Subscribe — no await on hub round-trip. Continuation updates state on the dispatcher.
+        var request = new DeleteNodeRequest(chatPath);
+        Hub.Observe(request, o => o.WithTarget(new Address(chatPath)))
+            .FirstAsync()
+            .Subscribe(
+                _ => _ = InvokeAsync(() => OnConversationDeletedAsync(chatPath)),
+                ex => Console.WriteLine($"Error deleting conversation: {ex.Message}"));
+    }
+
+    private async Task OnConversationDeletedAsync(string chatPath)
+    {
+        // Remove from local list
+        Chats = Chats.Where(c => c.Path != chatPath).ToList();
+
+        // If this was the selected conversation, start a new one
+        if (SelectedConversationId == chatPath)
         {
-            // Delete via DeleteNodeRequest
-            var request = new DeleteNodeRequest(chatPath);
-            await Hub.Observe(request, o => o.WithTarget(new Address(chatPath))).FirstAsync().ToTask();
-
-            // Remove from local list
-            Chats = Chats.Where(c => c.Path != chatPath).ToList();
-
-            // If this was the selected conversation, start a new one
-            if (SelectedConversationId == chatPath)
-            {
-                await StartNewConversation();
-            }
-
-            StateHasChanged();
+            await StartNewConversation();
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error deleting conversation: {ex.Message}");
-        }
+
+        StateHasChanged();
     }
 
     private string FormatDate(DateTime date)

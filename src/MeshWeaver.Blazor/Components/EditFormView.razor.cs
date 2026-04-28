@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 using Microsoft.AspNetCore.Components.Forms;
@@ -20,22 +21,31 @@ public partial class EditFormView
             );
     }
 
-    private async void Submit(EditContext context)
+    private void Submit(EditContext context)
     {
-        if(Stream is null)
+        if (Stream is null)
             throw new InvalidOperationException("Stream must be set before submitting the form.");
-        var log = await Stream.SubmitModel(model!);
-        if(log.Status == ActivityStatus.Succeeded)
+
+        // Subscribe — do NOT bridge to Task / await. The hub round-trip stays
+        // observable end-to-end (see Doc/Architecture/AsynchronousCalls.md).
+        Stream.SubmitModel(model!).Subscribe(log =>
         {
-            Log = null;
-            ShowSuccess();
-            Reset();
-        }
-        else
-        {
-            Log = log;
-            ShowError();
-        }
+            InvokeAsync(() =>
+            {
+                if (log.Status == ActivityStatus.Succeeded)
+                {
+                    Log = null;
+                    ShowSuccess();
+                    Reset();
+                }
+                else
+                {
+                    Log = log;
+                    ShowError();
+                }
+                StateHasChanged();
+            });
+        });
     }
 
     private ModelParameter<JsonElement> Convert(JsonElement jsonObject)

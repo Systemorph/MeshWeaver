@@ -32,43 +32,52 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<FutuReDataCube>> LoadLocalDataCube(IWorkspace workspace)
     {
         var contentService = workspace.Hub.ServiceProvider.GetRequiredService<IContentService>();
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var hub = workspace.Hub;
         var address = workspace.Hub.Address.ToString();
         var segments = address.Split('/');
         var businessUnit = segments.Length > 1 ? segments[1] : address;
         var buPath = segments.Length > 1 ? $"{segments[0]}/{segments[1]}" : segments[0];
 
-        return Observable.FromAsync<(List<FutuReDataCube> Rows, string Currency)>(async ct =>
-        {
-            // Look up the BU currency from the mesh node
-            var buCurrency = "CHF";
-            var buNode = await meshQuery.QueryAsync<MeshNode>($"path:{buPath}", ct: ct).FirstOrDefaultAsync(ct);
-            if (buNode?.Content is BusinessUnit bu)
-                buCurrency = bu.Currency;
-            else if (buNode?.Content is JsonElement json
-                     && json.TryGetProperty("currency", out var val)
-                     && val.ValueKind == JsonValueKind.String)
-                buCurrency = val.GetString() ?? "CHF";
+        // BU node lookup goes through the per-node MeshNodeReference reducer (authoritative,
+        // no read-side index lag). CSV I/O stays on a separate Observable.FromAsync at the
+        // file boundary. Both compose into the final tuple.
+        var buCurrencyObs = hub.GetMeshNode(buPath, TimeSpan.FromSeconds(10))
+            .Select(buNode =>
+            {
+                if (buNode?.Content is BusinessUnit bu)
+                    return bu.Currency;
+                if (buNode?.Content is JsonElement json
+                    && json.TryGetProperty("currency", out var val)
+                    && val.ValueKind == JsonValueKind.String)
+                    return val.GetString() ?? "CHF";
+                return "CHF";
+            });
 
+        var csvRowsObs = Observable.FromAsync<List<FutuReDataCube>>(async ct =>
+        {
             var stream = await contentService.GetContentAsync("attachments", "datacube.csv", ct);
             if (stream == null)
-                return (new List<FutuReDataCube>(), buCurrency);
+                return new List<FutuReDataCube>();
             using var reader = new StreamReader(stream);
             var content = await reader.ReadToEndAsync(ct);
-            return (ParseLocalCsvContent(content, businessUnit), buCurrency);
-        }).CombineLatest(
-            LoadLocalLinesOfBusiness(workspace),
-            (csvResult, lobs) =>
-            {
-                var lobLookup = lobs.ToDictionary(l => l.SystemName, l => l.DisplayName);
-                return csvResult.Rows.Select(row => row with
+            return ParseLocalCsvContent(content, businessUnit);
+        });
+
+        return buCurrencyObs
+            .SelectMany(currency => csvRowsObs.Select(rows => (Rows: rows, Currency: currency)))
+            .CombineLatest(
+                LoadLocalLinesOfBusiness(workspace),
+                (csvResult, lobs) =>
                 {
-                    LineOfBusinessName = lobLookup.GetValueOrDefault(row.LineOfBusiness, row.LineOfBusiness),
-                    LocalLineOfBusinessName = lobLookup.GetValueOrDefault(row.LocalLineOfBusiness, row.LocalLineOfBusiness),
-                    Currency = csvResult.Currency
-                }).AsEnumerable();
-            }
-        ).DistinctUntilChanged();
+                    var lobLookup = lobs.ToDictionary(l => l.SystemName, l => l.DisplayName);
+                    return csvResult.Rows.Select(row => row with
+                    {
+                        LineOfBusinessName = lobLookup.GetValueOrDefault(row.LineOfBusiness, row.LineOfBusiness),
+                        LocalLineOfBusinessName = lobLookup.GetValueOrDefault(row.LocalLineOfBusiness, row.LocalLineOfBusiness),
+                        Currency = csvResult.Currency
+                    }).AsEnumerable();
+                }
+            ).DistinctUntilChanged();
     }
 
     /// <summary>

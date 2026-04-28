@@ -115,7 +115,7 @@
             ExcludedSatellites.Add(satelliteType);
     }
 
-    private async Task ExportAndDownloadAsync()
+    private void ExportAndDownloadAsync()
     {
         if (string.IsNullOrEmpty(SourcePath)) return;
 
@@ -125,21 +125,22 @@
         ProgressMessage = "Exporting nodes...";
         StateHasChanged();
 
-        string? tempDir = null;
+        var exportService = Hub.ServiceProvider.GetRequiredService<IMeshExportService>();
+        var tempDir = Path.Combine(Path.GetTempPath(), $"meshexport_{Guid.NewGuid():N}");
+        IReadOnlySet<string>? excluded = ExcludedSatellites.Count > 0 ? ExcludedSatellites : null;
+
+        // Subscribe — no await on hub-touching observable. Continuation handles ZIP + JS download.
+        exportService.ExportToDirectory(SourcePath, tempDir, excluded)
+            .Take(1)
+            .Subscribe(
+                result => _ = InvokeAsync(() => OnExportCompletedAsync(result, tempDir)),
+                ex => _ = InvokeAsync(() => OnExportFailed(ex.Message, tempDir)));
+    }
+
+    private async Task OnExportCompletedAsync(ExportResult result, string tempDir)
+    {
         try
         {
-            var exportService = Hub.ServiceProvider.GetRequiredService<IMeshExportService>();
-
-            tempDir = Path.Combine(Path.GetTempPath(), $"meshexport_{Guid.NewGuid():N}");
-
-            IReadOnlySet<string>? excluded = ExcludedSatellites.Count > 0
-                ? ExcludedSatellites
-                : null;
-
-            var result = await exportService.ExportToDirectory(SourcePath, tempDir, excluded)
-                .Take(1)
-                .ToTask();
-
             if (!result.Success)
             {
                 ExportError = result.Error;
@@ -152,13 +153,11 @@
             ProgressMessage = $"Zipping {NodesExported} nodes...";
             StateHasChanged();
 
-            // Create ZIP in memory
             using var memoryStream = new MemoryStream();
             ZipFile.CreateFromDirectory(tempDir, memoryStream, CompressionLevel.Optimal, includeBaseDirectory: false);
             memoryStream.Position = 0;
 
-            // Trigger browser download via JS interop
-            var nodeId = SourcePath.Split('/').LastOrDefault() ?? "export";
+            var nodeId = SourcePath!.Split('/').LastOrDefault() ?? "export";
             var fileName = $"{nodeId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
 
             using var streamRef = new DotNetStreamReference(memoryStream);
@@ -178,6 +177,15 @@
                 try { Directory.Delete(tempDir, recursive: true); } catch { }
             StateHasChanged();
         }
+    }
+
+    private void OnExportFailed(string message, string tempDir)
+    {
+        ExportError = $"Export failed: {message}";
+        IsExporting = false;
+        if (tempDir != null && Directory.Exists(tempDir))
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        StateHasChanged();
     }
 
     private void Reset()

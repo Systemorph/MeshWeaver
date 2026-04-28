@@ -363,39 +363,50 @@ public static class LayoutClientExtensions
             return defaultValue;
         }
     }
-    public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)
+    /// <summary>
+    /// Submits a model parameter through the synchronization stream's owning hub.
+    /// Returns <c>IObservable&lt;ActivityLog&gt;</c> — never <c>Task</c> — to keep the
+    /// hub round-trip composable end-to-end (see <c>Doc/Architecture/AsynchronousCalls.md</c>).
+    /// Subscribe to receive the activity log; do not bridge with <c>.ToTask()</c>.
+    /// </summary>
+    public static IObservable<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)
     {
-        try
+        var delivery = stream.Hub.Post(
+            new DataChangeRequest { Updates = [data.Submit()] },
+            o => o.WithTarget(stream.Owner));
+
+        if (delivery is null)
         {
-            var delivery = stream.Hub.Post(
-                new DataChangeRequest { Updates = [data.Submit()] },
-                o => o.WithTarget(stream.Owner))!;
-            var callbackResponse = await stream.Hub.Observe(delivery).FirstAsync().ToTask();
-            if (callbackResponse.Message is not DataChangeResponse responseMsg)
+            return Observable.Return(new ActivityLog(ActivityCategory.DataUpdate)
             {
-                return new ActivityLog(ActivityCategory.DataUpdate)
-                {
-                    End = DateTime.UtcNow,
-                    Messages = [new($"Unexpected response shape '{callbackResponse.Message?.GetType().Name ?? "null"}'.", LogLevel.Error)]
-                };
-            }
-            if (responseMsg.Status == DataChangeStatus.Committed)
-            {
-                data.Confirm();
-                return responseMsg.Log;
-            }
-            else
-                return responseMsg.Log;
+                End = DateTime.UtcNow,
+                Messages = [new("Failed to post DataChangeRequest (no route).", LogLevel.Error)]
+            });
         }
-        catch (Exception e)
-        {
-            return new ActivityLog(ActivityCategory.DataUpdate)
+
+        return stream.Hub.Observe(delivery)
+            .FirstAsync()
+            .Select(callbackResponse =>
+            {
+                if (callbackResponse.Message is not DataChangeResponse responseMsg)
+                {
+                    return new ActivityLog(ActivityCategory.DataUpdate)
+                    {
+                        End = DateTime.UtcNow,
+                        Messages = [new($"Unexpected response shape '{callbackResponse.Message?.GetType().Name ?? "null"}'.", LogLevel.Error)]
+                    };
+                }
+
+                if (responseMsg.Status == DataChangeStatus.Committed)
+                    data.Confirm();
+
+                return responseMsg.Log;
+            })
+            .Catch<ActivityLog, Exception>(e => Observable.Return(new ActivityLog(ActivityCategory.DataUpdate)
             {
                 End = DateTime.UtcNow,
                 Messages = [new(e.Message, LogLevel.Error)]
-            };
-        }
-
+            }));
     }
 }
 

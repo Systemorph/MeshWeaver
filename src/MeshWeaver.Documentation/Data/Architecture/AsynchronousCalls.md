@@ -498,6 +498,11 @@ The 2026-04-24 PlanStorage / MeshNodeAuditing test failures all traced to the sa
 
 ## 🚨 Blazor / GUI rule — *no `await` ever, no `Task.FromResult`, stay in observables*
 
+> **Full treatment in [Blazor Async — `Subscribe`, not `await`](BlazorAsync).** That
+> article is the practical playbook: lifecycle hooks, click handlers, parallel
+> queries, multi-step flows, and the channel bridge for IAsyncEnumerable-shaped APIs.
+> Read it before touching any `.razor` / `.razor.cs` file.
+
 **Never** `await` a mesh operation in a Blazor component lifecycle method, click handler, autocomplete callback, or anywhere else. This is non-negotiable: every `await meshService.QueryAsync(...)`, `await meshService.UpdateNode(...)`, `await Hub.AwaitResponse(...)` in GUI code is a deadlock waiting to happen, and `Task.FromResult(snapshot)` is no better — it freezes the snapshot at the call moment and ignores live updates.
 
 The pattern is: **maintain a state list (or scalar) outside the observable; subscribe to the mesh observable; when the observable emits, fold the new items into your state list (sorted/dedup as required) and call `StateHasChanged`**.
