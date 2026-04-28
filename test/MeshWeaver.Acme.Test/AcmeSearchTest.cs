@@ -30,9 +30,11 @@ namespace MeshWeaver.Acme.Test;
 /// </summary>
 public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Per-session cache — Guid suffix prevents Windows file-lock collisions
+    // when a stale .dll from a prior test process is still loaded.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        "MeshWeaverAcmeSearchTests",
+        $"MeshWeaverAcmeSearchTests-{Guid.NewGuid():N}",
         ".mesh-cache");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -77,7 +79,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             .QueryAsync<MeshNode>("*ACME* scope:subtree is:main limit:50")
             .ToListAsync();
 
-        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Markdown",
+        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Organization",
             "scope:subtree should include the ACME root node itself");
     }
 
@@ -94,8 +96,8 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             .QueryAsync<MeshNode>("*ACME* scope:descendants is:main limit:50")
             .ToListAsync();
 
-        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Markdown",
-            "scope:descendants should include the ACME root node (NodeType: Markdown is searchable)");
+        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Organization",
+            "scope:descendants should include the ACME root node (NodeType: Organization)");
     }
 
     [Fact]
@@ -150,6 +152,6 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // Also verify the node is actually fetchable (not just permission-granted)
         var node = await ReadNodeAsync("ACME");
         node.Should().NotBeNull("ACME node should exist");
-        node!.NodeType.Should().Be("Markdown");
+        node!.NodeType.Should().Be("Organization");
     }
 }

@@ -177,57 +177,66 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         => meshQuery.QueryAsync<MeshNode>(
             MeshQueryRequest.FromQuery(query, WellKnownUsers.System), ct: ct);
 
-    public async Task<ApiToken?> ValidateTokenAsync(string rawToken)
+    /// <summary>
+    /// Reactive token validation — synchronous method returning <see cref="IObservable{T}"/>.
+    /// The Task-returning <c>await ValidateTokenAsync</c> shape deadlocks when invoked from
+    /// hub-reachable code (the <see cref="IAsyncEnumerable{T}"/> iteration flows through a
+    /// hub round-trip; awaiting it captures the dispatch SyncContext and blocks the action
+    /// block waiting for itself). Returning <see cref="IObservable{T}"/> lets callers compose
+    /// without bridging back to <see cref="Task"/> mid-flow. See CLAUDE.md "NOTHING ASYNC EVER".
+    /// </summary>
+    public IObservable<ApiToken?> ValidateToken(string rawToken)
     {
         if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(TokenPrefix))
-            return null;
+            return Observable.Return<ApiToken?>(null);
 
         var hash = HashToken(rawToken);
         var hashPrefix = hash[..12];
         var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
 
-        var indexNode = await QueryAsSystemAsync($"path:{indexPath}").FirstOrDefaultAsync();
-        if (indexNode == null)
-            return null;
+        return Observable.FromAsync(() => QueryAsSystemAsync($"path:{indexPath}")
+                .FirstOrDefaultAsync().AsTask())
+            .SelectMany(indexNode =>
+            {
+                if (indexNode == null)
+                    return Observable.Return<(MeshNode? node, ApiToken? token)>((null, null));
 
-        // Follow index pointer to the full token, or handle legacy tokens directly
-        MeshNode? tokenNode;
-        ApiToken? apiToken;
-        var index = indexNode.Content as ApiTokenIndex ?? ExtractApiTokenIndex(indexNode);
-        if (index != null)
-        {
-            // New format: index pointer -> follow to user namespace
-            if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
-                return null;
-            tokenNode = await QueryAsSystemAsync($"path:{index.TokenPath}").FirstOrDefaultAsync();
-            apiToken = tokenNode?.Content as ApiToken ?? ExtractApiToken(tokenNode);
-        }
-        else
-        {
-            // Legacy format: full ApiToken at index path
-            tokenNode = indexNode;
-            apiToken = indexNode.Content as ApiToken ?? ExtractApiToken(indexNode);
-        }
+                var index = indexNode.Content as ApiTokenIndex ?? ExtractApiTokenIndex(indexNode);
+                if (index != null)
+                {
+                    if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+                        return Observable.Return<(MeshNode? node, ApiToken? token)>((null, null));
+                    return Observable.FromAsync(() =>
+                            QueryAsSystemAsync($"path:{index.TokenPath}")
+                                .FirstOrDefaultAsync().AsTask())
+                        .Select(tn => (node: tn,
+                            token: (tn?.Content as ApiToken) ?? ExtractApiToken(tn)));
+                }
+                // Legacy format: full ApiToken at index path
+                return Observable.Return((node: (MeshNode?)indexNode,
+                    token: (indexNode.Content as ApiToken) ?? ExtractApiToken(indexNode)));
+            })
+            .Select(t => FinalizeToken(t.node, t.token, hash, hashPrefix));
+    }
 
+    private ApiToken? FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix)
+    {
         if (apiToken == null)
             return null;
-
         if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
             return null;
-
         if (apiToken.IsRevoked)
         {
             logger.LogDebug("Token {HashPrefix} is revoked", hashPrefix);
             return null;
         }
-
         if (apiToken.ExpiresAt.HasValue && apiToken.ExpiresAt.Value < DateTimeOffset.UtcNow)
         {
             logger.LogDebug("Token {HashPrefix} has expired", hashPrefix);
             return null;
         }
 
-        // Update LastUsedAt (fire-and-forget, non-critical)
+        // Update LastUsedAt (fire-and-forget, non-critical).
         try
         {
             var updated = apiToken with { LastUsedAt = DateTimeOffset.UtcNow };

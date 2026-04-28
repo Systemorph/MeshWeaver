@@ -36,9 +36,11 @@ namespace MeshWeaver.Acme.Test;
 /// </summary>
 public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Per-session cache — Guid suffix prevents Windows file-lock collisions
+    // where a stale .dll from a prior test process is still loaded in memory.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        "MeshWeaverTodoCreateTests",
+        $"MeshWeaverTodoCreateTests-{Guid.NewGuid():N}",
         ".mesh-cache");
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

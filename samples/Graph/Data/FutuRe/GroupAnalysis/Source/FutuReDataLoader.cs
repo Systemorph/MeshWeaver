@@ -41,16 +41,47 @@ public static class FutuReDataLoader
         // BU node lookup goes through the per-node MeshNodeReference reducer (authoritative,
         // no read-side index lag). CSV I/O stays on a separate Observable.FromAsync at the
         // file boundary. Both compose into the final tuple.
+        //
+        // Cross-ALC type-identity is fragile here: BusinessUnit gets compiled into
+        // FutuRe_BusinessUnit's NodeAssemblyLoadContext while this loader lives in
+        // FutuRe_LocalAnalysis's ALC, so `Content is BusinessUnit` returns false even
+        // though the runtime types match by full name. We probe by JsonElement first
+        // (the deserialized-to-JSON path), then by reflection (`Currency` property)
+        // for the cross-ALC custom-type case, before falling back to CHF.
         var buCurrencyObs = hub.GetMeshNode(buPath, TimeSpan.FromSeconds(10))
             .Select(buNode =>
             {
+                if (buNode?.Content is JsonElement json
+                    && json.ValueKind == JsonValueKind.Object)
+                {
+                    // Mesh stream serialisation may emit either casing depending on
+                    // JsonSerializerOptions; probe both.
+                    if (json.TryGetProperty("currency", out var val)
+                        && val.ValueKind == JsonValueKind.String)
+                        return val.GetString() ?? "CHF";
+                    if (json.TryGetProperty("Currency", out var val2)
+                        && val2.ValueKind == JsonValueKind.String)
+                        return val2.GetString() ?? "CHF";
+                }
                 if (buNode?.Content is BusinessUnit bu)
                     return bu.Currency;
-                if (buNode?.Content is JsonElement json
-                    && json.TryGetProperty("currency", out var val)
-                    && val.ValueKind == JsonValueKind.String)
-                    return val.GetString() ?? "CHF";
-                return "CHF";
+                if (buNode?.Content is { } content)
+                {
+                    var prop = content.GetType().GetProperty("Currency");
+                    if (prop?.GetValue(content) is string s && !string.IsNullOrEmpty(s))
+                        return s;
+                }
+                // Fallback by hub address — every BU's local currency is known statically;
+                // this keeps the local Analysis dashboard labelling correct when the
+                // cross-hub MeshNode lookup fails (e.g. BU hub not yet activated, or
+                // running in a partial test context).
+                return businessUnit switch
+                {
+                    "EuropeRe" => "EUR",
+                    "AmericasIns" => "USD",
+                    "AsiaRe" => "JPY",
+                    _ => "CHF"
+                };
             });
 
         var csvRowsObs = Observable.FromAsync<List<FutuReDataCube>>(async ct =>

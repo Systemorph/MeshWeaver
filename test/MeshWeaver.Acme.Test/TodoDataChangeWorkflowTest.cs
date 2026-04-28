@@ -32,10 +32,14 @@ namespace MeshWeaver.Acme.Test;
 /// </summary>
 public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    // Shared cache - tests run sequentially in this collection
+    // Per-session cache directory — appending a Guid prevents the Windows
+    // file-lock collision where a stale .dll from a prior test process is
+    // still loaded in memory and File.Create on the cache write throws
+    // "process cannot access the file". Cache stays shared within the
+    // session (tests in this class), fresh across sessions.
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
-        "MeshWeaverTodoWorkflowTests",
+        $"MeshWeaverTodoWorkflowTests-{Guid.NewGuid():N}",
         ".mesh-cache");
 
     // Local copy of test data - each test instance gets its own copy

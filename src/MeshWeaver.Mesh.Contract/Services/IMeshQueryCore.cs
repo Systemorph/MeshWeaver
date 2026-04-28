@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor.Test")]
 [assembly: InternalsVisibleTo("MeshWeaver.Blazor.Portal")]
 
 namespace MeshWeaver.Mesh.Services;

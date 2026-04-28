@@ -474,8 +474,15 @@ public static class ProfitabilityLayoutAreas
     // Individual Areas (toolbar shown on group hub only)
     // ---------------------------------------------------------------
 
+    // Group hub = FutuRe/Analysis (the parent rollup). Local BU hubs
+    // (FutuRe/EuropeRe/Analysis, FutuRe/AmericasIns/Analysis, FutuRe/AsiaRe/Analysis)
+    // ALSO have a TransactionMapping data source — their own mapping rules — so
+    // the previous "stream != null" probe identified them as group hubs and routed
+    // them through the toolbar branch with PlanChf, converting their amounts to
+    // CHF and labelling them "CHF". The hub address is the authoritative
+    // discriminator: only "FutuRe/Analysis" is the group hub.
     private static bool IsGroupHub(LayoutAreaHost host)
-        => host.Workspace.GetStream<TransactionMapping>() != null;
+        => string.Equals(host.Hub.Address.ToString(), "FutuRe/Analysis", StringComparison.Ordinal);
 
     /// <summary>
     /// Renders a view with currency toolbar on group hub, without toolbar on local hubs.
@@ -493,8 +500,13 @@ public static class ProfitabilityLayoutAreas
                 return GetDataCube(area, toolbar.CurrencyMode)
                     .Select(data => render(data.ToList(), isOriginal, label));
             });
+        // Local BU hubs: stay in the BU's own currency. Using PlanChf here would
+        // convert EuropeRe (EUR) to CHF and then label it "CHF" — `isOriginal=true`
+        // means "show the data's Currency field" so the conversion + label drift
+        // out of sync. OriginalCurrency keeps amounts and labels in the BU's
+        // native currency (EuropeRe → EUR, AmericasIns → USD, AsiaRe → JPY).
         return Controls.Stack.WithView((LayoutAreaHost area, RenderingContext ctx) =>
-            GetDataCube(area).Select(data => render(data.ToList(), true, "")));
+            GetDataCube(area, CurrencyModes.OriginalCurrency).Select(data => render(data.ToList(), true, "")));
     }
 
     /// <summary>
@@ -521,8 +533,10 @@ public static class ProfitabilityLayoutAreas
                 var label = isOriginal ? "" : " (CHF)";
                 return BuildStack(area, toolbar.CurrencyMode, isOriginal, label);
             });
+        // Local BU hubs: stay in the BU's own currency (see RenderView above
+        // for the rationale on OriginalCurrency vs PlanChf).
         return Controls.Stack.WithView((LayoutAreaHost area, RenderingContext ctx) =>
-            BuildStack(area, CurrencyModes.PlanChf, true, ""));
+            BuildStack(area, CurrencyModes.OriginalCurrency, true, ""));
     }
 
     [Display(GroupName = "Profitability", Order = 10)]
