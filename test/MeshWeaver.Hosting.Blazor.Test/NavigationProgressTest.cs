@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Mesh;
@@ -32,7 +33,7 @@ public class NavigationProgressTest
 {
     private readonly MockNavigationManager _navigationManager;
     private readonly IPathResolver _pathResolver;
-    private readonly IMeshService _meshQuery;
+    private readonly IMeshQueryCore _meshQuery;
     private readonly IMessageHub _hub;
     private readonly IServiceProvider _hubServiceProvider;
     private readonly INodeTypeService _nodeTypeService;
@@ -41,7 +42,7 @@ public class NavigationProgressTest
     {
         _navigationManager = new MockNavigationManager();
         _pathResolver = Substitute.For<IPathResolver>();
-        _meshQuery = Substitute.For<IMeshService>();
+        _meshQuery = Substitute.For<IMeshQueryCore>();
         _hub = Substitute.For<IMessageHub>();
         _hubServiceProvider = Substitute.For<IServiceProvider>();
         _nodeTypeService = Substitute.For<INodeTypeService>();
@@ -50,8 +51,10 @@ public class NavigationProgressTest
         _hubServiceProvider.GetService(typeof(INodeTypeService)).Returns(_nodeTypeService);
 
         // Empty mesh query by default â€” node-loading path is best-effort.
-        _meshQuery.QueryAsync(Arg.Any<MeshQueryRequest>(), Arg.Any<CancellationToken>())
-            .Returns(ToAsyncObjects());
+        // Empty observable so the chain in LoadNodeWithPreRenderedHtml completes
+        // with node = null (Catch falls through to Observable.Return(null)).
+        _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
+            .Returns(System.Reactive.Linq.Observable.Empty<QueryResultChange<MeshNode>>());
     }
 
     // Short retries so retry-exhaustion tests run in under ~100 ms total.
