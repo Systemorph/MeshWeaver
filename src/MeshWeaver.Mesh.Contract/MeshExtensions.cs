@@ -361,18 +361,9 @@ public static class MeshExtensions
                         : MeshChangeEvent.Updated(resultNode);
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(changeEvent);
 
-                    // Version history (non-critical, fire-and-forget Subscribe). Pure
-                    // observable surface — no Task, no Observable.FromAsync bridge.
-                    if (mode == "create" && !catalog.Configuration.IsSatelliteNodeType(resultNode.NodeType))
-                    {
-                        var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                        versionQuery?.WriteVersion(resultNode, hub.JsonSerializerOptions)
-                            .Subscribe(
-                                _ => { },
-                                ex => logger.LogWarning(ex,
-                                    "Version history write failed at {Path} (non-critical)",
-                                    resultNode.Path));
-                    }
+                    // Version history is now written inside PersistenceService.SaveNode
+                    // (chained off the post-save MeshNode emission) — no explicit
+                    // WriteVersion needed here, and no race between competing save paths.
 
                     if (mode == "confirm")
                     {
@@ -1302,42 +1293,22 @@ public static class MeshExtensions
                     // updated but persistence lags (debounced flush), causing
                     // ObserveQueryFreshnessTest-style stale reads.
                     //
-                    // Version history MUST chain off SaveNode's emission so that
-                    // WriteVersionAsync receives the post-save Version (the storage
-                    // layer assigns the new monotonic Version inside SaveNodeAsync).
-                    // Using the pre-save nodeToSave's stale Version would write the
-                    // updated content to the OLD version's filename, overwriting the
-                    // previous snapshot — exactly what
-                    // VersionQuery_GetVersionAsync_ReturnsCorrectSnapshot caught
-                    // (v1 file ended up with V2 content).
+                    // PersistenceService.SaveNode chains WriteVersion off the
+                    // post-save emission — the persistence layer owns the version
+                    // snapshot now, so the handler doesn't need to (and can't)
+                    // race a parallel save against an explicit WriteVersion call.
                     var updatePersistence = hub.ServiceProvider.GetService<IMeshStorage>();
                     var updateChangeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-                    var updateVersionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-                    var canVersion = meshConfig != null
-                        && !meshConfig.IsSatelliteNodeType(nodeToSave.NodeType)
-                        && updateVersionQuery != null;
                     if (updatePersistence != null)
                     {
-                        // Chain WriteVersion off SaveNode's emission so the
-                        // post-save Version is used. Pure IObservable composition
-                        // — no Observable.FromAsync, no Task bridge.
-                        var saveChain = canVersion
-                            ? updatePersistence.SaveNode(nodeToSave)
-                                .SelectMany(saved =>
-                                {
-                                    updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved));
-                                    return updateVersionQuery!.WriteVersion(saved, hub.JsonSerializerOptions);
-                                })
-                            : updatePersistence.SaveNode(nodeToSave)
-                                .Do(saved => updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved)));
-                        saveChain.Subscribe(
-                            _ => { },
-                            persistEx => logger.LogWarning(persistEx,
-                                "[UpdateNode] persistence flush failed at {Path}", nodeToSave.Path));
+                        updatePersistence.SaveNode(nodeToSave)
+                            .Subscribe(
+                                saved => updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved)),
+                                persistEx => logger.LogWarning(persistEx,
+                                    "[UpdateNode] persistence flush failed at {Path}", nodeToSave.Path));
                     }
                     else
                     {
-                        // No persistence — no version assignment, no version history.
                         updateChangeFeed?.Publish(MeshChangeEvent.Updated(nodeToSave));
                     }
 
