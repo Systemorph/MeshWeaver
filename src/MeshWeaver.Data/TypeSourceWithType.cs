@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data.Validation;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Data;
@@ -86,36 +87,14 @@ public abstract record TypeSourceWithType<T, TTypeSource>(IWorkspace Workspace, 
     /// </code>
     /// </example>
     public TTypeSource WithTypedAccessRestriction(
-        Func<string, T, AccessRestrictionContext, CancellationToken, bool> restriction,
+        Func<string, T, AccessRestrictionContext, bool> restriction,
         string? name = null)
     {
         return WithAccessRestriction(
-            (action, ctx, accessCtx, ct) =>
-            {
-                if (ctx is T instance)
-                    return Task.FromResult(restriction(action, instance, accessCtx, ct));
-                return Task.FromResult(true); // Allow if not the right type (shouldn't happen for instance-level checks)
-            },
-            name);
-    }
-
-    /// <summary>
-    /// Adds a strongly-typed async access restriction for row-level operations.
-    /// </summary>
-    /// <param name="restriction">Strongly-typed async restriction function</param>
-    /// <param name="name">Optional name for logging/debugging</param>
-    /// <returns>Updated type source with the restriction added</returns>
-    public TTypeSource WithTypedAccessRestriction(
-        Func<string, T, AccessRestrictionContext, CancellationToken, Task<bool>> restriction,
-        string? name = null)
-    {
-        return WithAccessRestriction(
-            async (action, ctx, accessCtx, ct) =>
-            {
-                if (ctx is T instance)
-                    return await restriction(action, instance, accessCtx, ct);
-                return true;
-            },
+            (action, ctx, accessCtx) =>
+                Observable.Return(ctx is T instance
+                    ? restriction(action, instance, accessCtx)
+                    : true), // Allow if not the right type (shouldn't happen for instance-level checks)
             name);
     }
 }

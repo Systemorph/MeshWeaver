@@ -79,13 +79,13 @@ public class TypeLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestB
                         type
                             // Only Admin role can Create - validation runs on client
                             .WithAccessRestriction(
-                                (action, ctx, accessCtx, ct) =>
+                                (action, ctx, accessCtx) =>
                                 {
                                     // Allow all actions except Create for non-admins
                                     if (action != AccessAction.Create)
-                                        return Task.FromResult(true);
+                                        return Observable.Return(true);
                                     // For Create, require Admin role
-                                    return Task.FromResult(
+                                    return Observable.Return(
                                         accessCtx.UserContext?.Roles?.Contains("Admin") == true);
                                 },
                                 "AdminOnlyCreate")
@@ -217,7 +217,7 @@ public class RowLevelAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
                         type
                             // Row-level restriction: only owner can Update or Delete
                             .WithTypedAccessRestriction(
-                                (action, entity, accessCtx, ct) =>
+                                (action, entity, accessCtx) =>
                                 {
                                     // Read is allowed for all
                                     if (action == AccessAction.Read)
@@ -536,11 +536,11 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
                             type
                                 // Type-specific: only Admin can Create
                                 .WithAccessRestriction(
-                                    (action, ctx, accessCtx, ct) =>
+                                    (action, ctx, accessCtx) =>
                                     {
                                         if (action != AccessAction.Create)
-                                            return Task.FromResult(true);
-                                        return Task.FromResult(
+                                            return Observable.Return(true);
+                                        return Observable.Return(
                                             accessCtx.UserContext?.Roles?.Contains("Admin") == true);
                                     },
                                     "AdminOnlyCreate")

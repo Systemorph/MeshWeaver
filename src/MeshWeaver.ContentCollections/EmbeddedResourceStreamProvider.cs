@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -128,7 +129,9 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
             .ToAsyncEnumerable();
     }
 
-    public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
+    public async IAsyncEnumerable<FolderItem> GetFolders(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         EnsureInitialized();
         var normalizedPath = path.TrimStart('/').Replace('/', '.');
@@ -137,14 +140,17 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
             .Select(p => p[(normalizedPath.Length == 0 ? 0 : normalizedPath.Length + 1)..])
             .Where(p => p.Contains('.'))
             .Select(p => p[..p.IndexOf('.')])
-            .Distinct()
-            .Select(name => new FolderItem($"{path.TrimEnd('/')}/{name}", name, 0))
-            .ToArray();
-
-        return Task.FromResult<IReadOnlyCollection<FolderItem>>(folders);
+            .Distinct();
+        foreach (var name in folders)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return new FolderItem($"{path.TrimEnd('/')}/{name}", name, 0);
+        }
     }
 
-    public Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
+    public async IAsyncEnumerable<FileItem> GetFiles(
+        string path,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         EnsureInitialized();
         var normalizedPath = path.TrimStart('/').Replace('/', '.');
@@ -154,19 +160,15 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
             {
                 var relativePath = p[(normalizedPath.Length == 0 ? 0 : normalizedPath.Length + 1)..];
                 return !relativePath.Contains('.') || relativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
-            })
-            .Select(p =>
-            {
-                var fileName = p.Split('.').Last();
-                if (p.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-                {
-                    fileName += ".md";
-                }
-                return new FileItem($"{path.TrimEnd('/')}/{fileName}", fileName, DateTime.UtcNow);
-            })
-            .ToArray();
-
-        return Task.FromResult<IReadOnlyCollection<FileItem>>(files);
+            });
+        foreach (var p in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            var fileName = p.Split('.').Last();
+            if (p.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                fileName += ".md";
+            yield return new FileItem($"{path.TrimEnd('/')}/{fileName}", fileName, DateTime.UtcNow);
+        }
     }
 
     public Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken cancellationToken = default)

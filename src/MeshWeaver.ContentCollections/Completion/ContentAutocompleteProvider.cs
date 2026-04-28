@@ -49,19 +49,20 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
     private static async IAsyncEnumerable<AutocompleteItem> EnumerateMatchingFilesAsync(
         ContentCollection collection, string path, string searchText, string? contextPath)
     {
-        IReadOnlyCollection<FileItem>? files = null;
-        IReadOnlyCollection<FolderItem>? folders = null;
+        var files = new List<FileItem>();
+        var folders = new List<FolderItem>();
         try
         {
-            files = await collection.GetFilesAsync(path);
-            folders = await collection.GetFoldersAsync(path);
+            await foreach (var f in collection.GetFiles(path))
+                files.Add(f);
+            await foreach (var f in collection.GetFolders(path))
+                folders.Add(f);
         }
         catch
         {
             // Skip paths that fail to enumerate
         }
 
-        if (files != null)
         {
             foreach (var file in files)
             {
@@ -104,14 +105,11 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
             }
         }
 
-        if (folders != null)
+        foreach (var folder in folders)
         {
-            foreach (var folder in folders)
+            await foreach (var item in EnumerateMatchingFilesAsync(collection, folder.Path, searchText, contextPath))
             {
-                await foreach (var item in EnumerateMatchingFilesAsync(collection, folder.Path, searchText, contextPath))
-                {
-                    yield return item;
-                }
+                yield return item;
             }
         }
     }
