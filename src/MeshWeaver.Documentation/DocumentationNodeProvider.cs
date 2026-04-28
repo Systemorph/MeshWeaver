@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Documentation;
 
@@ -18,9 +19,18 @@ public class DocumentationNodeProvider : IStaticNodeProvider
 
     private readonly Lazy<MeshNode[]> _lazyNodes;
 
-    public DocumentationNodeProvider(IMessageHub hub)
+    /// <summary>
+    /// Takes <see cref="IServiceProvider"/> instead of <see cref="IMessageHub"/> so the
+    /// provider can be resolved as a singleton from inside the mesh-hub-construction
+    /// pipeline (DI graph: <c>WithMeshNodes()</c> → <c>GetServices&lt;IStaticNodeProvider&gt;()</c>
+    /// runs while <c>IMessageHub</c> is still in-flight). Resolving <c>IMessageHub</c> here
+    /// would re-enter <c>BuildHub</c> and stack-overflow. The hub is resolved lazily on
+    /// first <see cref="GetStaticNodes"/> call — at which point construction is complete.
+    /// </summary>
+    public DocumentationNodeProvider(IServiceProvider serviceProvider)
     {
-        _lazyNodes = new Lazy<MeshNode[]>(() => LoadNodes(hub.JsonSerializerOptions));
+        _lazyNodes = new Lazy<MeshNode[]>(() =>
+            LoadNodes(serviceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions));
     }
 
     public IEnumerable<MeshNode> GetStaticNodes()

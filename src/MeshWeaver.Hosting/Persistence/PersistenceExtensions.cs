@@ -420,7 +420,8 @@ public static class PersistenceExtensions
             new RoutingPersistenceServiceCore(
                 sp.GetRequiredService<IPartitionedStoreFactory>(),
                 sp.GetService<IDataChangeNotifier>(),
-                sp.GetServices<IStaticNodeProvider>()));
+                sp.GetServices<IStaticNodeProvider>(),
+                sp.GetServices<IPartitionStorageProvider>()));
         services.AddSingleton<IStorageService>(sp =>
             sp.GetRequiredService<RoutingPersistenceServiceCore>());
 

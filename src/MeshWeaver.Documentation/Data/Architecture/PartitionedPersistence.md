@@ -82,7 +82,32 @@ On startup, `InitializeAsync` discovers existing partitions and restores routing
 
 # Where Partitions Come From
 
-A partition has to be **registered with the routing layer** before any path under it can be read. Three sources contribute partitions, and the rules differ:
+A partition has to be **registered with the routing layer** before any path under it can be read. Sources contribute partitions, and the rules differ:
+
+## 0. IPartitionStorageProvider rules (sequential, first-match-wins)
+
+The supported wire-up: each partition declares its own backend at registration time via fluent `MeshBuilder` extensions. Rules are evaluated in registration order; the first whose `Matches(firstSegment)` returns true owns the partition. There is no `DataSource` string discrimination inside the routing core — adding a new backend means registering a new rule, not editing the routing core.
+
+```csharp
+mesh
+    // Pin "Doc" to a read-only embedded-resource partition
+    .AddEmbeddedResourcePartition(
+        "Doc",
+        typeof(DocumentationExtensions).Assembly,
+        "MeshWeaver.Documentation.Data",
+        "Built-in MeshWeaver platform documentation")
+
+    // Future shape: pin specific namespaces to specific backends
+    // .AddFileSystemPartition("Northwind", "./data/northwind")
+    // .AddPostgresPartition("ACME", connStr, schema: "acme")
+
+    // Catch-all: anything not matched by an earlier rule
+    // .AddPostgresPartitionPattern("*");
+```
+
+Providers are constructed from the parent service collection only. They MUST NOT depend on `IMessageHub` or `IMeshQueryCore` — they run during persistence init, before / during the singleton `IMessageHub` factory. Re-entering that factory was the cyclic-DI cause of the Documentation stack overflow this redesign retired.
+
+Each provider also declares which **query contexts** it participates in (`search`, `create`, `autocomplete`, `browse` — see `Doc/DataMesh/QuerySyntax.md` for the existing `context:` qualifier vocabulary). Consumers running with `context:search` skip every partition whose context set doesn't include `search`. This is a partition-level participation gate that complements the per-node `ExcludeFromContext` flag.
 
 ## 1. PartitionDefinition (config-time, declared)
 
@@ -349,6 +374,10 @@ Each registration method calls `AddPartitionedCoreAndWrapperServices()` which re
 # Source Files
 
 - `src/MeshWeaver.Hosting/Persistence/PathPartition.cs`
+- `src/MeshWeaver.Hosting/Persistence/IPartitionStorageProvider.cs` — sequential rule contract + `PartitionContexts`
+- `src/MeshWeaver.Hosting/Persistence/EmbeddedResourceStorageAdapter.cs`
+- `src/MeshWeaver.Hosting/Persistence/EmbeddedResourcePartitionStorageProvider.cs`
+- `src/MeshWeaver.Hosting/Persistence/PartitionConfigurationExtensions.cs` — fluent `MeshBuilder.Add*Partition` extensions
 - `src/MeshWeaver.Hosting/Persistence/IPartitionedStoreFactory.cs`
 - `src/MeshWeaver.Hosting/Persistence/RoutingPersistenceServiceCore.cs`
 - `src/MeshWeaver.Hosting/Persistence/Query/RoutingMeshQueryProvider.cs`
