@@ -271,9 +271,20 @@ public class MessageService : IMessageService
             bool shouldDefer = !gates.IsEmpty;
             if (shouldDefer)
             {
-                // System messages like ShutdownRequest must never be deferred - they are critical
-                // for disposal and would cause deadlocks if deferred behind closed gates
-                if (delivery.Message is ShutdownRequest or DisposeRequest)
+                // System messages like ShutdownRequest must never be deferred — they are
+                // critical for disposal and would cause deadlocks if deferred behind closed
+                // gates.
+                //
+                // DeliveryFailure has the same requirement: it's the routing layer's reply
+                // to a request that couldn't be delivered. Deferring it strands the
+                // sender's hub.Observe(...) waiting for a response that's already sitting
+                // in our deferred buffer — the caller can't react via OnError, the request
+                // appears to time out, and any attempt by the routing layer to retry
+                // (which would post another DeliveryFailure) just hits the same gate.
+                // DeliveryFailure carries no state mutation; running it through every
+                // open gate is unconditionally safe and removes the per-gate need to
+                // remember to add `or DeliveryFailure` to its predicate.
+                if (delivery.Message is ShutdownRequest or DisposeRequest or DeliveryFailure)
                 {
                     logger.LogDebug(
                         "Allowing system message {MessageType} (ID: {MessageId}) through all gates for hub {Address}",
