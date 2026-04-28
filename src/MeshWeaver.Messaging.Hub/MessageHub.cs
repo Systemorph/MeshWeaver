@@ -389,7 +389,10 @@ public sealed class MessageHub : IMessageHub
                         messageType.Name, delivery.Id, Address);
                 }
 
-                return delivery.Failed($"No handler found for {messageType.Name}");
+                // Manual Post above is the response — return Forwarded (not Failed)
+                // so the cross-tier OrleansRoutingService doesn't post a second
+                // DeliveryFailure on top of the one we just sent.
+                return delivery.Forwarded();
             }
 
             return delivery.Ignored();

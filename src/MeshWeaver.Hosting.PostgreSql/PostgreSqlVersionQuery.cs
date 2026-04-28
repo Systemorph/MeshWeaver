@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -7,8 +7,10 @@ using Npgsql;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// PostgreSQL implementation of IVersionQuery.
-/// Queries the mesh_node_history table (schema-local via SearchPath).
+/// PostgreSQL implementation of <see cref="IVersionQuery"/>. Queries the
+/// <c>mesh_node_history</c> table (schema-local via SearchPath). All public
+/// methods return <see cref="IObservable{T}"/> — see
+/// <c>Doc/Architecture/AsynchronousCalls.md</c>.
 /// </summary>
 public class PostgreSqlVersionQuery : IVersionQuery
 {
@@ -31,105 +33,112 @@ public class PostgreSqlVersionQuery : IVersionQuery
         return (ns, id);
     }
 
-    public async IAsyncEnumerable<MeshNodeVersion> GetVersionsAsync(
-        string path, [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        var (ns, id) = SplitPath(path);
-        await using var cmd = _dataSource.CreateCommand(
-            "SELECT version, last_modified, changed_by, name, node_type " +
-            $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 " +
-            "ORDER BY version DESC");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
-
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+    public IObservable<MeshNodeVersion> GetVersions(string path)
+        => Observable.Create<MeshNodeVersion>(async (observer, ct) =>
         {
-            yield return new MeshNodeVersion(
-                path,
-                reader.GetInt64(0),
-                new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4)
-            );
-        }
-    }
+            try
+            {
+                var (ns, id) = SplitPath(path);
+                await using var cmd = _dataSource.CreateCommand(
+                    "SELECT version, last_modified, changed_by, name, node_type " +
+                    $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 " +
+                    "ORDER BY version DESC");
+                cmd.Parameters.AddWithValue(ns);
+                cmd.Parameters.AddWithValue(id);
 
-    public async Task<MeshNode?> GetVersionAsync(
-        string path, long version, JsonSerializerOptions options,
-        CancellationToken ct = default)
-    {
-        var (ns, id) = SplitPath(path);
-        await using var cmd = _dataSource.CreateCommand(
-            "SELECT id, namespace, name, node_type, category, icon, display_order, " +
-            "last_modified, version, state, content, desired_id, main_node " +
-            $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 AND version = $3");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
-        cmd.Parameters.AddWithValue(version);
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    observer.OnNext(new MeshNodeVersion(
+                        path,
+                        reader.GetInt64(0),
+                        new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero),
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3),
+                        reader.IsDBNull(4) ? null : reader.GetString(4)));
+                }
+                observer.OnCompleted();
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+            }
+        });
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            return null;
+    public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct =>
+        {
+            var (ns, id) = SplitPath(path);
+            await using var cmd = _dataSource.CreateCommand(
+                "SELECT id, namespace, name, node_type, category, icon, display_order, " +
+                "last_modified, version, state, content, desired_id, main_node " +
+                $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 AND version = $3");
+            cmd.Parameters.AddWithValue(ns);
+            cmd.Parameters.AddWithValue(id);
+            cmd.Parameters.AddWithValue(version);
 
-        return ReadMeshNode(reader, options);
-    }
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                return (MeshNode?)null;
 
-    public async Task<MeshNode?> GetVersionBeforeAsync(
-        string path, long beforeVersion, JsonSerializerOptions options,
-        CancellationToken ct = default)
-    {
-        var (ns, id) = SplitPath(path);
-        await using var cmd = _dataSource.CreateCommand(
-            "SELECT id, namespace, name, node_type, category, icon, display_order, " +
-            "last_modified, version, state, content, desired_id, main_node " +
-            $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 AND version < $3 " +
-            "ORDER BY version DESC LIMIT 1");
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(id);
-        cmd.Parameters.AddWithValue(beforeVersion);
+            return ReadMeshNode(reader, options);
+        });
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            return null;
+    public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct =>
+        {
+            var (ns, id) = SplitPath(path);
+            await using var cmd = _dataSource.CreateCommand(
+                "SELECT id, namespace, name, node_type, category, icon, display_order, " +
+                "last_modified, version, state, content, desired_id, main_node " +
+                $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 AND version < $3 " +
+                "ORDER BY version DESC LIMIT 1");
+            cmd.Parameters.AddWithValue(ns);
+            cmd.Parameters.AddWithValue(id);
+            cmd.Parameters.AddWithValue(beforeVersion);
 
-        return ReadMeshNode(reader, options);
-    }
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                return (MeshNode?)null;
 
-    public async Task WriteVersionAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var ns = node.Namespace ?? "";
-        var contentJson = node.Content != null
-            ? JsonSerializer.Serialize(node.Content, node.Content.GetType(), options)
-            : null;
+            return ReadMeshNode(reader, options);
+        });
 
-        await using var cmd = _dataSource.CreateCommand(
-            $"""
-            INSERT INTO {_historyTable} (
-                namespace, id, name, node_type, description, category, icon,
-                display_order, last_modified, version, state, content, desired_id, main_node
-            )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)
-            ON CONFLICT (namespace, id, version) DO NOTHING
-            """);
-        cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(node.Id);
-        cmd.Parameters.AddWithValue((object?)node.Name ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.NodeType ?? DBNull.Value);
-        cmd.Parameters.AddWithValue(DBNull.Value); // description
-        cmd.Parameters.AddWithValue((object?)node.Category ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.Icon ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.Order ?? DBNull.Value);
-        cmd.Parameters.AddWithValue(node.LastModified.UtcDateTime);
-        cmd.Parameters.AddWithValue(node.Version);
-        cmd.Parameters.AddWithValue((short)node.State);
-        cmd.Parameters.AddWithValue((object?)contentJson ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.DesiredId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)node.MainNode ?? DBNull.Value);
+    public IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct =>
+        {
+            var ns = node.Namespace ?? "";
+            var contentJson = node.Content != null
+                ? JsonSerializer.Serialize(node.Content, node.Content.GetType(), options)
+                : null;
 
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
+            await using var cmd = _dataSource.CreateCommand(
+                $"""
+                INSERT INTO {_historyTable} (
+                    namespace, id, name, node_type, description, category, icon,
+                    display_order, last_modified, version, state, content, desired_id, main_node
+                )
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)
+                ON CONFLICT (namespace, id, version) DO NOTHING
+                """);
+            cmd.Parameters.AddWithValue(ns);
+            cmd.Parameters.AddWithValue(node.Id);
+            cmd.Parameters.AddWithValue((object?)node.Name ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)node.NodeType ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(DBNull.Value); // description
+            cmd.Parameters.AddWithValue((object?)node.Category ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)node.Icon ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)node.Order ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(node.LastModified.UtcDateTime);
+            cmd.Parameters.AddWithValue(node.Version);
+            cmd.Parameters.AddWithValue((short)node.State);
+            cmd.Parameters.AddWithValue((object?)contentJson ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)node.DesiredId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)node.MainNode ?? DBNull.Value);
+
+            await cmd.ExecuteNonQueryAsync(ct);
+            return node;
+        });
 
     private static MeshNode ReadMeshNode(NpgsqlDataReader reader, JsonSerializerOptions options)
     {
