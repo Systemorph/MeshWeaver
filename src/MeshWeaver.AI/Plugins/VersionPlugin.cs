@@ -39,22 +39,16 @@ public class VersionPlugin(IMessageHub hub)
         logger.LogInformation("GetVersions called for path={Path}", path);
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Observable.FromAsync(async ct =>
+        versionQuery.GetVersions(path)
+            .Select(v => (object)new
             {
-                var versions = ImmutableList<object>.Empty;
-                await foreach (var v in versionQuery.GetVersionsAsync(path, ct))
-                {
-                    versions = versions.Add(new
-                    {
-                        v.Version,
-                        LastModified = v.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
-                        v.ChangedBy,
-                        v.Name,
-                        v.NodeType
-                    });
-                }
-                return versions;
+                v.Version,
+                LastModified = v.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
+                v.ChangedBy,
+                v.Name,
+                v.NodeType
             })
+            .ToList()
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 versions => tcs.TrySetResult(versions.Count == 0
@@ -79,7 +73,7 @@ public class VersionPlugin(IMessageHub hub)
         logger.LogInformation("GetVersion called for path={Path}, version={Version}", path, version);
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Observable.FromAsync(ct => versionQuery.GetVersionAsync(path, version, hub.JsonSerializerOptions, ct))
+        versionQuery.GetVersion(path, version, hub.JsonSerializerOptions)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 node => tcs.TrySetResult(node == null
@@ -104,7 +98,7 @@ public class VersionPlugin(IMessageHub hub)
         logger.LogInformation("RestoreVersion called for path={Path}, version={Version}", path, version);
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Observable.FromAsync(ct => versionQuery.GetVersionAsync(path, version, hub.JsonSerializerOptions, ct))
+        versionQuery.GetVersion(path, version, hub.JsonSerializerOptions)
             .SubscribeOn(TaskPoolScheduler.Default)
             .SelectMany(historicalNode =>
             {
@@ -139,23 +133,16 @@ public class VersionPlugin(IMessageHub hub)
             return Task.FromResult($"Error: Invalid timestamp '{timestamp}'. Use ISO 8601 format (e.g., '2026-03-25T14:30:00Z').");
 
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Observable.FromAsync(async ct =>
-            {
-                // Find the latest version at or before the target time
-                await foreach (var v in versionQuery.GetVersionsAsync(path, ct))
-                {
-                    if (v.LastModified <= targetTime)
-                        return v;
-                }
-                return null;
-            })
+        versionQuery.GetVersions(path)
+            .Where(v => v.LastModified <= targetTime)
+            .Take(1)
+            .DefaultIfEmpty()
             .SubscribeOn(TaskPoolScheduler.Default)
             .SelectMany(targetVersion =>
             {
                 if (targetVersion == null)
                     return Observable.Return<(MeshNode? restored, MeshNodeVersion? target)>((null, null));
-                return Observable.FromAsync(ct =>
-                        versionQuery.GetVersionAsync(path, targetVersion.Version, hub.JsonSerializerOptions, ct))
+                return versionQuery.GetVersion(path, targetVersion.Version, hub.JsonSerializerOptions)
                     .SelectMany(historicalNode =>
                     {
                         if (historicalNode == null)

@@ -127,20 +127,22 @@ public static class VersionLayoutArea
         // Mode 1: from=X&to=Y — compare two historical versions.
         if (long.TryParse(fromStr, out var fromVersion) && long.TryParse(toStr, out var toVersion))
         {
-            return Observable.FromAsync(async () =>
-            {
-                var fromNode = await versionQuery.GetVersionAsync(hubPath, fromVersion, options);
-                var toNode = await versionQuery.GetVersionAsync(hubPath, toVersion, options);
-                if (fromNode == null)
-                    return (UiControl?)Controls.Html($"<p>Version {fromVersion} not found.</p>");
-                if (toNode == null)
-                    return (UiControl?)Controls.Html($"<p>Version {toVersion} not found.</p>");
+            return versionQuery.GetVersion(hubPath, fromVersion, options)
+                .Zip(versionQuery.GetVersion(hubPath, toVersion, options),
+                    (fromNode, toNode) => (fromNode, toNode))
+                .Select(pair =>
+                {
+                    var (fromNode, toNode) = pair;
+                    if (fromNode == null)
+                        return (UiControl?)Controls.Html($"<p>Version {fromVersion} not found.</p>");
+                    if (toNode == null)
+                        return (UiControl?)Controls.Html($"<p>Version {toVersion} not found.</p>");
 
-                return (UiControl?)BuildDiffStack(host, hubPath, fromNode, toNode, options,
-                    $"Version {fromVersion}", $"Version {toVersion}",
-                    $"Comparing Version {fromVersion} to Version {toVersion}",
-                    restoreVersion: fromVersion);
-            });
+                    return (UiControl?)BuildDiffStack(host, hubPath, fromNode, toNode, options,
+                        $"Version {fromVersion}", $"Version {toVersion}",
+                        $"Comparing Version {fromVersion} to Version {toVersion}",
+                        restoreVersion: fromVersion);
+                });
         }
 
         // Mode 2: version=X — compare historical version to current.
@@ -155,20 +157,22 @@ public static class VersionLayoutArea
         // no live workspace subscription. Render once with the snapshot; diff editor
         // doesn't need to re-render on subsequent stream ticks.
         return host.Hub.GetMeshNode(hubPath)
-            .SelectMany(async currentNode =>
+            .SelectMany(currentNode =>
             {
                 if (currentNode == null)
-                    return (UiControl?)Controls.Html($"<p>Node {hubPath} not found.</p>");
+                    return Observable.Return<UiControl?>(Controls.Html($"<p>Node {hubPath} not found.</p>"));
 
-                var historicalNode = await versionQuery.GetVersionAsync(hubPath, targetVersion, options);
+                return versionQuery.GetVersion(hubPath, targetVersion, options)
+                    .Select(historicalNode =>
+                    {
+                        if (historicalNode == null)
+                            return (UiControl?)Controls.Html($"<p>Version {targetVersion} not found.</p>");
 
-                if (historicalNode == null)
-                    return (UiControl?)Controls.Html($"<p>Version {targetVersion} not found.</p>");
-
-                return (UiControl?)BuildDiffStack(host, hubPath, historicalNode, currentNode, options,
-                    $"Version {targetVersion}", "Current",
-                    $"Comparing Version {targetVersion} to Current",
-                    restoreVersion: targetVersion);
+                        return (UiControl?)BuildDiffStack(host, hubPath, historicalNode, currentNode, options,
+                            $"Version {targetVersion}", "Current",
+                            $"Comparing Version {targetVersion} to Current",
+                            restoreVersion: targetVersion);
+                    });
             });
     }
 
@@ -243,7 +247,7 @@ public static class VersionLayoutArea
         var msg = request.Message;
         var options = hub.JsonSerializerOptions;
 
-        Observable.FromAsync(ct => versionQuery.GetVersionAsync(msg.Path, msg.TargetVersion, options, ct))
+        versionQuery.GetVersion(msg.Path, msg.TargetVersion, options)
             .Subscribe(historicalNode =>
             {
                 if (historicalNode == null)
@@ -317,8 +321,8 @@ public static class VersionLayoutArea
                 // No await — each path's lookup is wrapped in Observable.FromAsync and merged.
                 return activityLog.AffectedPaths
                     .ToObservable()
-                    .SelectMany(path => Observable.FromAsync(ct =>
-                        versionQuery.GetVersionBeforeAsync(path, activityLog.StartVersion, options, ct)))
+                    .SelectMany(path =>
+                        versionQuery.GetVersionBefore(path, activityLog.StartVersion, options))
                     .Where(node => node != null)
                     .Select(node => node! with { Version = 0 })
                     .Aggregate(

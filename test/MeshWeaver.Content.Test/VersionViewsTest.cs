@@ -176,9 +176,10 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var versionQuery = Mesh.ServiceProvider.GetService<IVersionQuery>();
         versionQuery.Should().NotBeNull("FileSystemVersionStore should be registered");
 
-        var versions = new System.Collections.Generic.List<MeshNodeVersion>();
-        await foreach (var v in versionQuery!.GetVersionsAsync(nodePath, TestContext.Current.CancellationToken))
-            versions.Add(v);
+        var versions = await versionQuery!.GetVersions(nodePath)
+            .ToList()
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {versions.Count} versions");
         versions.Should().NotBeEmpty("at least one version snapshot should exist after updates");
