@@ -16,6 +16,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -38,6 +39,29 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
 {
     private const string NodeTypePath = "Systemorph/LinkedInProfile";
     private const string SourceNamespace = "Systemorph/LinkedInProfile/Source";
+
+    // Per-session cache directory so a stale Systemorph_LinkedInProfile.dll
+    // locked by a prior test process can't break compilation. The default
+    // bin/.mesh-cache is shared across runs and triggers
+    // UnauthorizedAccessException → IOException("file is being used by
+    // another process") on Windows, after which the dynamic LayoutAreas
+    // piece never compiles and Overview falls back to an empty render.
+    private static readonly string CacheDirectory = System.IO.Path.Combine(
+        System.IO.Path.GetTempPath(),
+        $"MeshWeaverLinkedInTelemetryTests-{Guid.NewGuid():N}",
+        ".mesh-cache");
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
+        base.ConfigureMesh(builder)
+            .ConfigureServices(services =>
+            {
+                services.Configure<CompilationCacheOptions>(o =>
+                {
+                    o.CacheDirectory = CacheDirectory;
+                    o.EnableDiskCache = true;
+                });
+                return services;
+            });
 
     [Fact(Timeout = 60000)]
     public async Task LinkedInTelemetryImport_CompilesAndRendersImportArea()
