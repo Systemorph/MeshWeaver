@@ -67,9 +67,10 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Act
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
-        var versions = new List<MeshNodeVersion>();
-        await foreach (var v in versionQuery.GetVersionsAsync("test/mynode"))
-            versions.Add(v);
+        var versions = await versionQuery.GetVersions("test/mynode")
+            .ToList()
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         versions.Should().NotBeEmpty("node was created and updated 3 times");
@@ -87,9 +88,10 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
         var options = Mesh.JsonSerializerOptions;
 
-        var versionsAfterCreate = new List<MeshNodeVersion>();
-        await foreach (var v in versionQuery.GetVersionsAsync("test/snapshot"))
-            versionsAfterCreate.Add(v);
+        var versionsAfterCreate = await versionQuery.GetVersions("test/snapshot")
+            .ToList()
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         // Update to V2
         var updated = created with { Name = "V2" };
@@ -99,7 +101,9 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var firstVersion = versionsAfterCreate.LastOrDefault();
         firstVersion.Should().NotBeNull("there should be at least one version after create");
 
-        var historicalNode = await versionQuery.GetVersionAsync("test/snapshot", firstVersion!.Version, options);
+        var historicalNode = await versionQuery.GetVersion("test/snapshot", firstVersion!.Version, options)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         historicalNode.Should().NotBeNull("the first version should be retrievable");
@@ -117,9 +121,10 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var options = Mesh.JsonSerializerOptions;
 
         // Capture version after v1 create
-        var versionsAfterV1 = new List<MeshNodeVersion>();
-        await foreach (var v in versionQuery.GetVersionsAsync("test/before"))
-            versionsAfterV1.Add(v);
+        var versionsAfterV1 = await versionQuery.GetVersions("test/before")
+            .ToList()
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
         var v1Version = versionsAfterV1.LastOrDefault();
         v1Version.Should().NotBeNull("there should be a version after create");
 
@@ -130,21 +135,26 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.UpdateNode(created with { Name = "V3" });
 
         // Capture all versions
-        var allVersions = new List<MeshNodeVersion>();
-        await foreach (var v in versionQuery.GetVersionsAsync("test/before"))
-            allVersions.Add(v);
+        var allVersions = await versionQuery.GetVersions("test/before")
+            .ToList()
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
         var v3Version = allVersions.FirstOrDefault();
         v3Version.Should().NotBeNull("there should be a latest version");
 
         // Act - get the version before v3 (should be v2)
-        var beforeV3 = await versionQuery.GetVersionBeforeAsync("test/before", v3Version!.Version, options);
+        var beforeV3 = await versionQuery.GetVersionBefore("test/before", v3Version!.Version, options)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         beforeV3.Should().NotBeNull("there should be a version before v3");
         beforeV3!.Name.Should().Be("V2", "the version before v3 should be v2");
 
         // Act - get the version before v1 (should be null since v1 is the first)
-        var beforeV1 = await versionQuery.GetVersionBeforeAsync("test/before", v1Version!.Version, options);
+        var beforeV1 = await versionQuery.GetVersionBefore("test/before", v1Version!.Version, options)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         // Assert
         beforeV1.Should().BeNull("there should be no version before the first one");
@@ -170,9 +180,10 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Act
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
-        var versions = new List<MeshNodeVersion>();
-        await foreach (var v in versionQuery.GetVersionsAsync("test/satellite"))
-            versions.Add(v);
+        var versions = await versionQuery.GetVersions("test/satellite")
+            .ToList()
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         // Assert - satellite content should now be included in version history
         versions.Should().NotBeEmpty("satellite content nodes should now have version history");
@@ -189,10 +200,11 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var options = Mesh.JsonSerializerOptions;
 
         // Capture the original version
-        var versionsAfterCreate = new List<MeshNodeVersion>();
         var nodePath = $"{TestPartition}/rollback";
-        await foreach (var v in versionQuery.GetVersionsAsync(nodePath))
-            versionsAfterCreate.Add(v);
+        var versionsAfterCreate = await versionQuery.GetVersions(nodePath)
+            .ToList()
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
         var originalVersion = versionsAfterCreate.LastOrDefault();
         originalVersion.Should().NotBeNull("there should be a version after create");
 
