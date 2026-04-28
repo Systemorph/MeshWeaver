@@ -54,7 +54,7 @@ public interface IVersionQuery
     /// pre-save Version writes the new content into an OLDER version's
     /// snapshot, overwriting history).
     /// <para>Default implementation is a no-op observable (single emission of
-    /// the input + completion); overridden by <see cref="FileSystemVersionStore"/>
+    /// the input + completion); overridden by <c>FileSystemVersionStore</c>
     /// and <c>PostgreSqlVersionQuery</c>.</para>
     /// </summary>
     IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)

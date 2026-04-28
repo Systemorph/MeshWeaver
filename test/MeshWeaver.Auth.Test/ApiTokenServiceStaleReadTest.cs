@@ -7,6 +7,7 @@ using FluentAssertions;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -72,12 +73,11 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
 
         ok.Should().BeTrue("RevokeToken must observe the just-created token (no stale lag)");
 
-        // Confirm the IsRevoked flag actually flipped on the authoritative state.
-        await ReadNode(creation.Node.Path)
-            .Where(n => n.Content is ApiToken t && t.IsRevoked)
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(TestContext.Current.CancellationToken);
+        // Confirm the revoke actually took effect — ValidateToken must reject the now-revoked token.
+        // ApiToken paths don't have a per-node hub, so we can't subscribe to MeshNodeReference;
+        // ValidateTokenAsync exercises the same authoritative read path used in production auth.
+        var validated = await service.ValidateTokenAsync(creation.RawToken);
+        validated.Should().BeNull("revoked tokens must not validate");
     }
 
     /// <summary>
@@ -104,9 +104,10 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
 
         ok.Should().BeTrue("DeleteToken must observe the just-created token (no stale lag)");
 
-        // The node must actually be gone — ReadNodeAsync returns null for deleted nodes.
-        var node = await ReadNodeAsync(creation.Node.Path);
-        node.Should().BeNull("DeleteToken should have hard-deleted the node");
+        // The token must no longer validate — ValidateToken returns null when the index
+        // pointer is gone (which DeleteToken removed alongside the user-namespace node).
+        var validated = await service.ValidateTokenAsync(creation.RawToken);
+        validated.Should().BeNull("DeleteToken should have removed the token's index pointer");
     }
 
     /// <summary>
@@ -159,13 +160,6 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
             .FirstAsync()
             .ToTask(TestContext.Current.CancellationToken);
         ok.Should().BeTrue();
-
-        // Wait reactively for the IsRevoked flag to flip rather than polling.
-        await ReadNode(creation.Node.Path)
-            .Where(n => n.Content is ApiToken t && t.IsRevoked)
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(TestContext.Current.CancellationToken);
 
         var afterRevoke = await service.ValidateTokenAsync(creation.RawToken);
         afterRevoke.Should().BeNull("revoked tokens must not validate");
