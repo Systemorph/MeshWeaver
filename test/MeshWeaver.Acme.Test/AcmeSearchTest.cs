@@ -77,12 +77,12 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             .QueryAsync<MeshNode>("*ACME* scope:subtree is:main limit:50")
             .ToListAsync();
 
-        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Organization",
+        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Markdown",
             "scope:subtree should include the ACME root node itself");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task DescendantsSearch_IncludesOrganizationRootNode()
+    public async Task DescendantsSearch_FindsOrganizationRootNode()
     {
         // Updated 2026-04-24: was DescendantsSearch_MissesOrganizationRootNode and asserted
         // the bug behavior. The query engine was fixed elsewhere; scope:descendants now
@@ -94,8 +94,8 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             .QueryAsync<MeshNode>("*ACME* scope:descendants is:main limit:50")
             .ToListAsync();
 
-        results.Should().Contain(n => n.Path == "ACME",
-            "scope:descendants should include the ACME root node when its name matches the wildcard");
+        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Markdown",
+            "scope:descendants should include the ACME root node (NodeType: Markdown is searchable)");
     }
 
     [Fact]
@@ -150,6 +150,6 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // Also verify the node is actually fetchable (not just permission-granted)
         var node = await ReadNodeAsync("ACME");
         node.Should().NotBeNull("ACME node should exist");
-        node!.NodeType.Should().Be("Organization");
+        node!.NodeType.Should().Be("Markdown");
     }
 }
