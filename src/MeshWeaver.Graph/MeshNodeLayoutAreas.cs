@@ -90,6 +90,14 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddDefaultLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
+            // Always wire MeshDataSource so the canonical
+            // workspace.GetMeshNodeStream() / MeshNodeReference reducer is
+            // available even on hubs that don't declare a ContentType. Every
+            // default layout area (Overview, Thumbnail, Settings, …) reads the
+            // OWN MeshNode through this reducer; without it, GetDataRequest
+            // with MeshNodeReference fails with "Failed to create stream" and
+            // the layout area handler silently drops responses.
+            .AddMeshDataSource()
             .AddDefaultMeshMenu()
             .AddDefaultSettingsMenuItems()
             .WithHandler<RollbackNodeRequest>(VersionLayoutArea.HandleRollbackNodeRequest)
