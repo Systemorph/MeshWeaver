@@ -332,7 +332,7 @@
         Hub.Observe(request, o => o.WithTarget(new Address(chatPath)))
             .FirstAsync()
             .Subscribe(
-                _ => _ = InvokeAsync(() => OnConversationDeletedAsync(chatPath)),
+                _ => InvokeAsync(() => OnConversationDeletedAsync(chatPath)),
                 ex => Console.WriteLine($"Error deleting conversation: {ex.Message}"));
     }
 

@@ -245,11 +245,14 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
     /// <summary>
     /// Reactive token revocation — marks the token as revoked via
     /// <see cref="IMeshService.UpdateNode"/> and removes the index pointer.
-    /// Uses <c>hub.GetMeshNode</c> for the authoritative current state — never
-    /// <c>QueryAsync</c>, which lags through the read-side index.
+    /// ApiToken nodes don't have a per-node hub activated, so the lookup goes through
+    /// the mesh-level read-side index (system identity); <c>hub.GetMeshNode</c> would
+    /// hang waiting for a route to a non-activatable address.
     /// </summary>
     public IObservable<bool> RevokeToken(string tokenNodePath) =>
-        hub.GetMeshNode(tokenNodePath, TimeSpan.FromSeconds(10))
+        Observable.FromAsync(() => meshQuery.QueryAsync<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{tokenNodePath}", WellKnownUsers.System))
+            .FirstOrDefaultAsync().AsTask())
             .SelectMany(node =>
             {
                 var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
@@ -274,11 +277,13 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
 
     /// <summary>
     /// Reactive hard-delete — removes both the primary token node and its index entry.
-    /// Uses <c>hub.GetMeshNode</c> for the authoritative current state — never
-    /// <c>QueryAsync</c>, which lags through the read-side index.
+    /// Same rationale as <see cref="RevokeToken"/>: ApiToken nodes have no per-node
+    /// hub, so we use the mesh-level read-side index for the lookup.
     /// </summary>
     public IObservable<bool> DeleteToken(string tokenNodePath) =>
-        hub.GetMeshNode(tokenNodePath, TimeSpan.FromSeconds(10))
+        Observable.FromAsync(() => meshQuery.QueryAsync<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{tokenNodePath}", WellKnownUsers.System))
+            .FirstOrDefaultAsync().AsTask())
             .SelectMany(node =>
             {
                 var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
