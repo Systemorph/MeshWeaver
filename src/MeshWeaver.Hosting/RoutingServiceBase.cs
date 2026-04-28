@@ -149,9 +149,7 @@ namespace MeshWeaver.Hosting
                             Message = failureMessage
                         }, o => o.ResponseFor(delivery));
                 }
-                // Manual Post above is the response — return Forwarded so cross-tier
-                // routing doesn't post a second DeliveryFailure for this delivery.
-                return delivery.Forwarded();
+                return delivery.Failed(failureMessage);
             }
 
             if (resolution != null)
