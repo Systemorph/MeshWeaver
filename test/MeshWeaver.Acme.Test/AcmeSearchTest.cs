@@ -77,12 +77,12 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             .QueryAsync<MeshNode>("*ACME* scope:subtree is:main limit:50")
             .ToListAsync();
 
-        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Organization",
+        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Markdown",
             "scope:subtree should include the ACME root node itself");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task DescendantsSearch_MissesOrganizationRootNode()
+    public async Task DescendantsSearch_FindsOrganizationRootNode()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -90,8 +90,8 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             .QueryAsync<MeshNode>("*ACME* scope:descendants is:main limit:50")
             .ToListAsync();
 
-        results.Should().NotContain(n => n.Path == "ACME",
-            "scope:descendants should NOT include the ACME root node (documents the bug behavior)");
+        results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Markdown",
+            "scope:descendants should include the ACME root node (NodeType: Markdown is searchable)");
     }
 
     [Fact]
@@ -147,6 +147,6 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var node = await meshService.QueryAsync<MeshNode>("path:ACME").FirstOrDefaultAsync();
         node.Should().NotBeNull("ACME node should exist");
-        node!.NodeType.Should().Be("Organization");
+        node!.NodeType.Should().Be("Markdown");
     }
 }

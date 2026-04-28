@@ -528,7 +528,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         if (delivery != null)
         {
-            _ = Hub.RegisterCallback(delivery, (response, _) =>
+            Hub.RegisterCallback(delivery, (response, _) =>
             {
                 isCancelling = false;
                 InvokeAsync(StateHasChanged);
