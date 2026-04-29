@@ -376,6 +376,19 @@ public static class ThreadExecution
 
         void RespondAndStartExecution()
         {
+            // Register the completion callback BEFORE starting execution. The
+            // _Exec hub's ExecuteMessageAsync calls NotifyParentCompletion when
+            // the agent finishes streaming; that lookup needs the callback to
+            // already be in CompletionCallbacks. Without this registration the
+            // delegation tool's TaskCompletionSource never resolves and the
+            // parent thread hangs (ExecutionCompleted response never arrives at
+            // the original SubmitMessageRequest delivery).
+            CompletionCallbacks[threadPath] = completionResponse =>
+            {
+                hub.Post(completionResponse, o => o.ResponseFor(delivery));
+                CompletionCallbacks.TryRemove(threadPath, out _);
+            };
+
             hub.Post(new SubmitMessageResponse { Success = true, Messages = ImmutableList.Create(userMsgId, responseMsgId) },
                 o => o.ResponseFor(delivery));
 

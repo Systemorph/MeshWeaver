@@ -120,6 +120,22 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// </summary>
     string GetDisposalDiagnostics();
 
+    /// <summary>
+    /// True if this hub or any hosted hub hit Quiescing-phase timeout — i.e. there
+    /// were Observe-registered response callbacks still pending when the dispose
+    /// drain budget elapsed. Tests should treat this as a dispose failure: a
+    /// leaked subscription that never received its reply is a real bug, not a
+    /// "test cleanup oddity".
+    /// </summary>
+    bool AnyHubQuiescingTimedOut();
+
+    /// <summary>
+    /// Concise summary of the hubs (and their pending callbacks) that hit Quiescing
+    /// timeout, for inclusion in a dispose-failure error message. Empty if
+    /// <see cref="AnyHubQuiescingTimedOut"/> is false.
+    /// </summary>
+    string GetQuiescingTimeoutSummary();
+
     internal void Start();
 
     /// <summary>

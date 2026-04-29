@@ -623,7 +623,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
-        var files = await collection!.GetFiles("/").ToListAsync(TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        var files = await collection!.GetFiles("/", ct).ToListAsync(ct);
         files.Should().Contain(f => f.Name == "readme.md");
         files.Should().Contain(f => f.Name == "data.json");
     }
@@ -633,10 +634,11 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        var collection = await contentService.GetCollectionAsync("test-content", ct);
         collection.Should().NotBeNull();
 
-        var folders = await collection!.GetFolders("/").ToListAsync(TestContext.Current.CancellationToken);
+        var folders = await collection!.GetFolders("/", ct).ToListAsync(ct);
         folders.Should().Contain(f => f.Name == "images");
     }
 
@@ -645,10 +647,11 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        var collection = await contentService.GetCollectionAsync("test-content", ct);
         collection.Should().NotBeNull();
 
-        var files = await collection!.GetFiles("/images").ToListAsync(TestContext.Current.CancellationToken);
+        var files = await collection!.GetFiles("/images", ct).ToListAsync(ct);
         files.Should().Contain(f => f.Name == "logo.svg");
     }
 
@@ -666,7 +669,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         await collection!.SaveFileAsync("/", "uploaded.txt", stream);
 
         // Verify it shows up in browsing
-        var files = await collection.GetFiles("/").ToListAsync(TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        var files = await collection.GetFiles("/", ct).ToListAsync(ct);
         files.Should().Contain(f => f.Name == "uploaded.txt");
 
         // Clean up

@@ -28,7 +28,42 @@ public sealed class MessageHub : IMessageHub
     // Per-message response subjects. Observe(...) creates and stores; HandleCallbacks
     // pushes the response onto the matching subject. AsyncSubject emits the last value
     // on subscribe, so subscribers added before AND after the response arrives both see it.
-    private readonly Dictionary<string, System.Reactive.Subjects.AsyncSubject<IMessageDelivery>> responseSubjects = new();
+    // Metadata (request type / target / age) is captured at registration so the dispose
+    // Quiescing phase can name *which* callbacks are still pending when it times out.
+    private readonly Dictionary<string, PendingCallback> responseSubjects = new();
+
+    private sealed record PendingCallback(
+        System.Reactive.Subjects.AsyncSubject<IMessageDelivery> Subject,
+        string RequestType,
+        Address? Target,
+        long RegisteredAtTicks);
+
+    /// <summary>
+    /// Cross-process dispose trace. Every phase boundary (Quiescing entry/exit,
+    /// DisposeHostedHubs entry/exit, ShutDown entry/exit) appends a single line
+    /// with timestamp, hub address, phase, and elapsed-ms. Path is fixed so the
+    /// developer can `tail -f` it during a test run and spot a stalled phase
+    /// immediately, without waiting for the suite to finish.
+    /// </summary>
+    private static readonly string DisposeTraceLogPath =
+        Path.Combine(Path.GetTempPath(), "meshweaver-dispose-trace.log");
+    private static readonly object DisposeTraceLogLock = new();
+
+    private static void DisposeTrace(Address address, string phase, long elapsedMs, string? extra = null)
+    {
+        try
+        {
+            var line = extra is null
+                ? $"{DateTime.UtcNow:HH:mm:ss.fff} {address} {phase} elapsed={elapsedMs}ms"
+                : $"{DateTime.UtcNow:HH:mm:ss.fff} {address} {phase} elapsed={elapsedMs}ms {extra}";
+            lock (DisposeTraceLogLock)
+                File.AppendAllText(DisposeTraceLogPath, line + Environment.NewLine);
+        }
+        catch
+        {
+            // Tracing must never throw out of dispose.
+        }
+    }
 
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
@@ -416,7 +451,9 @@ public sealed class MessageHub : IMessageHub
     /// emission is triggered when <see cref="HandleCallbacks"/> matches the response.
     /// </summary>
     public IObservable<IMessageDelivery> Observe(IMessageDelivery delivery)
-        => RestoreUserContextOnEmission(ObserveById(delivery.Id), delivery.AccessContext);
+        => RestoreUserContextOnEmission(
+            ObserveById(delivery.Id, delivery.Message?.GetType().Name ?? "<null>", delivery.Target),
+            delivery.AccessContext);
 
     /// <summary>
     /// Posts <paramref name="r"/> with a pre-generated message id and returns the
@@ -436,14 +473,20 @@ public sealed class MessageHub : IMessageHub
         var accessService = ServiceProvider.GetService<AccessService>();
         var capturedCtx = accessService?.Context;
         var messageId = Guid.NewGuid().AsString();
-        var subject = GetOrAddResponseSubject(messageId);
+        // Resolve the target up-front so the pending-callback diagnostic can name
+        // which hub we're waiting on. We only run `options(...)` once — Post below
+        // gets the same composed PostOptions via WithMessageId chaining.
+        var probeOptions = options(new PostOptions(Address));
+        var subject = GetOrAddResponseSubject(messageId, r?.GetType().Name ?? "<null>", probeOptions.Target);
         Post(r, opts => options(opts).WithMessageId(messageId));
         return RestoreUserContextOnEmission(ApplyTimeout(subject), capturedCtx);
     }
 
-    private IObservable<IMessageDelivery> ObserveById(string messageId)
+    private IObservable<IMessageDelivery> ObserveById(string messageId,
+        string requestType = "<unknown>",
+        Address? target = null)
     {
-        var subject = GetOrAddResponseSubject(messageId);
+        var subject = GetOrAddResponseSubject(messageId, requestType, target);
         return ApplyTimeout(subject);
     }
 
@@ -471,7 +514,10 @@ public sealed class MessageHub : IMessageHub
                 $"No response received in hub {Address} within {Configuration.RequestTimeout}. " +
                 "The request may have been undeliverable or the target hub was not found.")));
 
-    private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(string messageId)
+    private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(
+        string messageId,
+        string requestType = "<unknown>",
+        Address? target = null)
     {
         lock (responseSubjects)
         {
@@ -482,13 +528,18 @@ public sealed class MessageHub : IMessageHub
                     $"Hub {Address} is shutting down — cannot register new response subject for {messageId}."));
                 return disposed;
             }
-            if (!responseSubjects.TryGetValue(messageId, out var subject))
+            if (!responseSubjects.TryGetValue(messageId, out var entry))
             {
-                subject = new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>();
-                responseSubjects[messageId] = subject;
-                logger.LogDebug("Adding response subject for {Id}", messageId);
+                entry = new PendingCallback(
+                    new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>(),
+                    requestType,
+                    target,
+                    Stopwatch.GetTimestamp());
+                responseSubjects[messageId] = entry;
+                logger.LogDebug("Adding response subject for {Id} (type={Type}, target={Target})",
+                    messageId, requestType, target);
             }
-            return subject;
+            return entry.Subject;
         }
     }
 
@@ -522,15 +573,16 @@ public sealed class MessageHub : IMessageHub
             return Task.FromResult(delivery);
         }
 
-        System.Reactive.Subjects.AsyncSubject<IMessageDelivery>? subject;
+        System.Reactive.Subjects.AsyncSubject<IMessageDelivery> subject;
         lock (responseSubjects)
         {
-            if (!responseSubjects.Remove(requestIdString, out subject))
+            if (!responseSubjects.Remove(requestIdString, out var entry))
             {
                 logger.LogDebug("No subject found for response message {MessageType} (ID: {MessageId}) - treating as processed",
                     delivery.Message.GetType().Name, delivery.Id);
                 return Task.FromResult(delivery.Processed());
             }
+            subject = entry.Subject;
         }
 
         logger.LogDebug("Dispatching response to subject | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
@@ -618,6 +670,17 @@ public sealed class MessageHub : IMessageHub
     public bool IsDisposing => Disposal != null;
 
     public Task? Disposal { get; private set; }
+
+    /// <summary>
+    /// Set when the Quiescing-phase drain budget (<see cref="QuiesceTimeout"/>)
+    /// expires with callbacks still pending. Tests inspect this on the root mesh
+    /// (and recursively on hosted hubs via <see cref="GetDisposalDiagnostics"/>)
+    /// to fail loud rather than silently swallow leaked Observe subscriptions.
+    /// </summary>
+    public bool QuiescingTimedOut { get; private set; }
+    /// <summary>One-line summary of the pending callbacks at the moment Quiescing
+    /// timed out — empty if it didn't fire. Used by the test-base error message.</summary>
+    public string? QuiescingTimeoutDetail { get; private set; }
     private readonly TaskCompletionSource disposingTaskCompletionSource = new();
     private readonly Stopwatch disposalStopwatch = new();
 
@@ -660,19 +723,24 @@ public sealed class MessageHub : IMessageHub
 
         logger.LogDebug("POSTING initial ShutdownRequest for hub {Address} with Version={Version} (disposal preparation took {elapsed}ms)",
             Address, Version, totalStopwatch.ElapsedMilliseconds);
-        Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+        DisposeTrace(Address, "DISPOSE_INVOKED", totalStopwatch.ElapsedMilliseconds,
+            $"hostedHubsCount={hostedHubs.Hubs.Count()}");
+        Post(new ShutdownRequest(MessageHubRunLevel.Quiescing, Version));
 
         // Safety net: if the normal shutdown path deadlocks for any reason,
         // force-complete the disposal task after a timeout to prevent indefinite hangs.
+        // Budget breakdown: 10 s quiesce + 10 s hostedHubs.Disposal + ~2 s buffer drain
+        // = ~22 s. The previous 5 s ceiling was tighter than the quiesce phase alone
+        // and would short-circuit the new pipeline.
         _ = Task.Run(async () =>
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(5));
+                await Task.Delay(TimeSpan.FromSeconds(25));
                 if (!disposingTaskCompletionSource.Task.IsCompleted)
                 {
                     logger.LogError(
-                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within 5 seconds. " +
+                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within 25 seconds. " +
                         "RunLevel={RunLevel}. Force-completing disposal to prevent hang.",
                         Address, RunLevel);
                     disposingTaskCompletionSource.TrySetResult();
@@ -708,6 +776,34 @@ public sealed class MessageHub : IMessageHub
         return sb.ToString();
     }
 
+    public bool AnyHubQuiescingTimedOut()
+    {
+        if (QuiescingTimedOut) return true;
+        foreach (var child in hostedHubs.Hubs)
+            if (child.AnyHubQuiescingTimedOut()) return true;
+        return false;
+    }
+
+    public string GetQuiescingTimeoutSummary()
+    {
+        var sb = new System.Text.StringBuilder();
+        AppendQuiescingTimeoutSummary(sb, depth: 0);
+        return sb.ToString();
+    }
+
+    private void AppendQuiescingTimeoutSummary(System.Text.StringBuilder sb, int depth)
+    {
+        if (QuiescingTimedOut)
+        {
+            sb.Append(new string(' ', depth * 2))
+              .Append("Hub ").Append(Address).Append(": ")
+              .AppendLine(QuiescingTimeoutDetail ?? "(no detail captured)");
+        }
+        foreach (var child in hostedHubs.Hubs)
+            if (child is MessageHub childMh)
+                childMh.AppendQuiescingTimeoutSummary(sb, depth + 1);
+    }
+
     private void AppendDiagnostics(System.Text.StringBuilder sb, int depth)
     {
         var indent = new string(' ', depth * 2);
@@ -735,6 +831,14 @@ public sealed class MessageHub : IMessageHub
               .Append(snapshot.CurrentMessageElapsedMs)
               .Append("ms)");
         }
+        // Pending callbacks: same data as the [QUIESCE-START] / [QUIESCE-TIMEOUT] log
+        // lines, but folded into the test-base [DISPOSE] snapshot so a 30 s test-base
+        // dispose timeout names *what* was outstanding even when structured logs
+        // aren't visible to the test author.
+        var pending = SnapshotPendingCallbacks();
+        if (pending.Length > 0)
+            sb.Append(" PendingCallbacks=").Append(pending.Length)
+              .Append('[').Append(FormatPendingCallbacks(pending)).Append(']');
         sb.AppendLine();
 
         var hosted = hostedHubs.Hubs.ToArray();
@@ -797,13 +901,106 @@ public sealed class MessageHub : IMessageHub
 
         switch (request.Message.RunLevel)
         {
+            case MessageHubRunLevel.Quiescing:
+                lock (locker)
+                {
+                    if (RunLevel >= MessageHubRunLevel.Quiescing)
+                    {
+                        TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: Quiescing already processed (RunLevel={runLevel}), ignoring",
+                            Address, RunLevel);
+                        return request.Ignored();
+                    }
+                    RunLevel = MessageHubRunLevel.Quiescing;
+                }
+
+                var initialPendingSnapshot = SnapshotPendingCallbacks();
+                TryLog(LogLevel.Information,
+                    "[QUIESCE-START] {Address}: {Count} pending callbacks at dispose entry: {Pending}",
+                    Address, initialPendingSnapshot.Length, FormatPendingCallbacks(initialPendingSnapshot));
+                DisposeTrace(Address, "QUIESCE_START", disposalStopwatch.ElapsedMilliseconds,
+                    $"pending={initialPendingSnapshot.Length}");
+
+                // CRITICAL: do the wait OFF the action block. The action block processes
+                // messages serially (MaxDegreeOfParallelism = 1) — if we await Task.Delay
+                // on the action block thread, no other messages can be dequeued, including
+                // the very response messages we're waiting for. That's a self-deadlock that
+                // turns every dispose into a guaranteed QuiesceTimeout.
+                //
+                // Fire-and-forget Task.Run mirrors how the DisposeHostedHubs branch (below)
+                // awaits hostedHubs.Disposal — the handler returns immediately, the action
+                // block stays free to dispatch responses into HandleCallbacks, and the
+                // continuation posts DisposeHostedHubs once we're done.
+#pragma warning disable CS4014
+                _ = Task.Run(async () =>
+#pragma warning restore CS4014
+                {
+                    try
+                    {
+                        var quiesceSw = Stopwatch.StartNew();
+                        while (quiesceSw.Elapsed < QuiesceTimeout)
+                        {
+                            bool empty;
+                            lock (responseSubjects) empty = responseSubjects.Count == 0;
+                            if (empty) break;
+                            try { await Task.Delay(QuiescePollInterval); }
+                            catch { break; }
+                        }
+
+                        int remainingCount;
+                        lock (responseSubjects) remainingCount = responseSubjects.Count;
+                        if (remainingCount == 0)
+                        {
+                            TryLog(LogLevel.Information,
+                                "[QUIESCE-OK] {Address}: drained {Count} callback(s) in {Elapsed}ms",
+                                Address, initialPendingSnapshot.Length, quiesceSw.ElapsedMilliseconds);
+                            DisposeTrace(Address, "QUIESCE_OK", quiesceSw.ElapsedMilliseconds,
+                                $"drained={initialPendingSnapshot.Length}");
+                        }
+                        else
+                        {
+                            var stuck = SnapshotPendingCallbacks();
+                            var detail = FormatPendingCallbacks(stuck);
+                            TryLog(LogLevel.Warning,
+                                "[QUIESCE-TIMEOUT] {Address}: {Count} callback(s) still pending after {Timeout}s — forcibly cancelling. Pending: {Pending}",
+                                Address, stuck.Length, QuiesceTimeout.TotalSeconds, detail);
+                            DisposeTrace(Address, "QUIESCE_TIMEOUT", quiesceSw.ElapsedMilliseconds,
+                                $"pending={stuck.Length}|{detail}");
+                            // Sticky flag — tests recursively inspect this and treat any
+                            // hub with QuiescingTimedOut=true as a dispose failure. Forces
+                            // visibility on leaked Observe subscriptions instead of letting
+                            // them silently extend dispose budgets across the suite.
+                            QuiescingTimedOut = true;
+                            QuiescingTimeoutDetail = $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}";
+                            try { CancelCallbacks(); }
+                            catch (Exception cancelEx)
+                            {
+                                TryLog(LogLevel.Warning, "[QUIESCE-TIMEOUT] {Address}: CancelCallbacks threw {Type}: {Message}",
+                                    Address, cancelEx.GetType().Name, cancelEx.Message);
+                            }
+                        }
+                    }
+                    catch (Exception quiesceEx)
+                    {
+                        // Never let the Quiescing branch throw — that would leave the dispose
+                        // state machine wedged at Quiescing forever (worse than the original
+                        // hang). Log best-effort and fall through to the next phase post.
+                        TryLog(LogLevel.Error,
+                            "[QUIESCE-ERROR] {Address}: unexpected exception {Type}: {Message}; proceeding to DisposeHostedHubs anyway.",
+                            Address, quiesceEx.GetType().Name, quiesceEx.Message);
+                    }
+                    finally
+                    {
+                        Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+                    }
+                });
+                break;
             case MessageHubRunLevel.DisposeHostedHubs:
                 var disposeHostedHubsStopwatch = Stopwatch.StartNew();
                 lock (locker)
                 {
                     if (RunLevel == MessageHubRunLevel.DisposeHostedHubs)
                     {
-                        logger.LogWarning(
+                        TryLog(LogLevel.Warning,
                             "DisposeHostedHubs already processed for hub {Address}, ignoring (phase time: {elapsed}ms)",
                             Address, phaseStopwatch.ElapsedMilliseconds);
                         return request.Ignored();
@@ -812,6 +1009,8 @@ public sealed class MessageHub : IMessageHub
                     RunLevel = MessageHubRunLevel.DisposeHostedHubs;
                 }
 
+                DisposeTrace(Address, "HOSTED_DISPOSE_START", disposalStopwatch.ElapsedMilliseconds,
+                    $"hostedHubsCount={hostedHubs.Hubs.Count()}");
                 hostedHubs.Dispose();
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 Task.Run(async () =>
@@ -819,22 +1018,40 @@ public sealed class MessageHub : IMessageHub
                 {
                     try
                     {
-                        logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting hostedHubs.Disposal (IsCompleted={isCompleted})",
+                        TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: Awaiting hostedHubs.Disposal (IsCompleted={isCompleted})",
                             Address, hostedHubs.Disposal?.IsCompleted);
                         await hostedHubs.Disposal!;
-                        logger.LogDebug("[DISPOSE-TRACE] {address}: hostedHubs.Disposal completed in {elapsed}ms",
+                        TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: hostedHubs.Disposal completed in {elapsed}ms",
                             Address, disposeHostedHubsStopwatch.ElapsedMilliseconds);
+                        DisposeTrace(Address, "HOSTED_DISPOSE_OK", disposeHostedHubsStopwatch.ElapsedMilliseconds);
                     }
                     catch (Exception e)
                     {
-                        logger.LogDebug("[DISPOSE-TRACE] {address}: hostedHubs.Disposal ERROR after {elapsed}ms: {error}",
+                        TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: hostedHubs.Disposal ERROR after {elapsed}ms: {error}",
                             Address, disposeHostedHubsStopwatch.ElapsedMilliseconds, e.Message);
+                        DisposeTrace(Address, "HOSTED_DISPOSE_ERROR", disposeHostedHubsStopwatch.ElapsedMilliseconds,
+                            $"{e.GetType().Name}: {e.Message}");
                     }
                     finally
                     {
-                        logger.LogDebug("[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
-                            Address, Version);
-                        Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
+                        // Defensive: this finally runs even if the catch's logger
+                        // calls throw. The Post itself can throw if the hub is in
+                        // an unexpected state — wrap so the state machine still
+                        // tries to advance to ShutDown rather than wedging here.
+                        try
+                        {
+                            TryLog(LogLevel.Debug, "[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
+                                Address, Version);
+                            Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
+                            DisposeTrace(Address, "POSTED_SHUTDOWN", disposeHostedHubsStopwatch.ElapsedMilliseconds);
+                        }
+                        catch (Exception postEx)
+                        {
+                            DisposeTrace(Address, "POSTED_SHUTDOWN_FAILED", disposeHostedHubsStopwatch.ElapsedMilliseconds,
+                                $"{postEx.GetType().Name}: {postEx.Message}");
+                            // Force-complete the disposal task so callers don't hang.
+                            try { disposingTaskCompletionSource.TrySetException(postEx); } catch { }
+                        }
                     }
                 });
 
@@ -910,25 +1127,46 @@ public sealed class MessageHub : IMessageHub
         return request.Processed();
     }
 
+    /// <summary>
+    /// Best-effort logger call that swallows any exception. The dispose pipeline
+    /// runs while DI scope / logger may be partially torn down (e.g. tests dispose
+    /// the service provider before the hub's disposal task completes); a logger
+    /// call that throws during dispose would otherwise wedge the state machine.
+    /// Field <see cref="logger"/> is non-nullable but the underlying logger
+    /// factory may already be disposed — the null-conditional + catch is what
+    /// keeps the state machine progressing in that case.
+    /// </summary>
+    private void TryLog(LogLevel level, string message, params object?[] args)
+    {
+        try
+        {
+            logger?.Log(level, message, args);
+        }
+        catch
+        {
+            // Swallow — diagnostic logging must never throw out of the dispose path.
+        }
+    }
+
     private void CancelCallbacks()
     {
         // Push ObjectDisposedException to all pending response subjects so anyone
         // currently subscribed gets onError instead of waiting forever.
-        System.Reactive.Subjects.AsyncSubject<IMessageDelivery>[] pendingSubjects;
+        PendingCallback[] pending;
         lock (responseSubjects)
         {
-            pendingSubjects = responseSubjects.Values.ToArray();
+            pending = responseSubjects.Values.ToArray();
             responseSubjects.Clear();
         }
         logger.LogDebug("Cancelling {SubjectCount} pending response subjects during disposal for hub {Address}",
-            pendingSubjects.Length, Address);
+            pending.Length, Address);
 
-        foreach (var subject in pendingSubjects)
+        foreach (var entry in pending)
         {
             try
             {
-                subject.OnError(new ObjectDisposedException(nameof(MessageHub),
-                    $"Hub {Address} was disposed before the response arrived."));
+                entry.Subject.OnError(new ObjectDisposedException(nameof(MessageHub),
+                    $"Hub {Address} was disposed before the response arrived (request type {entry.RequestType}, target {entry.Target})."));
             }
             catch
             {
@@ -936,6 +1174,44 @@ public sealed class MessageHub : IMessageHub
             }
         }
     }
+
+    /// <summary>
+    /// Snapshot of currently-pending response callbacks. Used by the Quiescing dispose
+    /// phase and by <see cref="GetDisposalDiagnostics"/> so a hung dispose names *what*
+    /// the hub was waiting on, not just that it was waiting.
+    /// </summary>
+    private (string MessageId, string RequestType, Address? Target, long AgeMs)[] SnapshotPendingCallbacks()
+    {
+        lock (responseSubjects)
+        {
+            var nowTicks = Stopwatch.GetTimestamp();
+            return responseSubjects
+                .Select(kv => (
+                    kv.Key,
+                    kv.Value.RequestType,
+                    kv.Value.Target,
+                    (long)((nowTicks - kv.Value.RegisteredAtTicks) * 1000.0 / Stopwatch.Frequency)))
+                .ToArray();
+        }
+    }
+
+    private static string FormatPendingCallbacks(
+        (string MessageId, string RequestType, Address? Target, long AgeMs)[] pending)
+    {
+        if (pending.Length == 0)
+            return "<none>";
+        return string.Join(", ", pending.Select(p =>
+            $"{p.MessageId}={p.RequestType}@{p.Target}({p.AgeMs}ms)"));
+    }
+
+    /// <summary>
+    /// Per-hub Quiescing-phase budget. Configured via
+    /// <see cref="MessageHubConfiguration.WithQuiesceTimeout"/>; defaults to 2 s.
+    /// Tests with deliberately abandoned <c>Observe(...)</c> subscriptions should
+    /// drop this to ~100-500 ms.
+    /// </summary>
+    private TimeSpan QuiesceTimeout => Configuration.QuiesceTimeout;
+    private static readonly TimeSpan QuiescePollInterval = TimeSpan.FromMilliseconds(50);
 
 
     private readonly ConcurrentBag<Func<IMessageHub, CancellationToken, Task>> asyncDisposeActions = new();

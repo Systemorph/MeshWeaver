@@ -13,7 +13,11 @@ on:
 jobs:
   build:
     name: Build and Run Unit tests
-    timeout-minutes: 30
+    # 45 min: setup+restore+build runs ~3 min; tests should finish in ~25 min,
+    # but a single hung project can burn an extra 8 min (per-project cap, see
+    # "Run Tests" step). Headroom over the realistic worst case so a single
+    # hang doesn't kill the whole job.
+    timeout-minutes: 45
     runs-on: ubuntu-latest
 
     steps:
@@ -55,18 +59,32 @@ jobs:
         set +e
         : > test/test-results.log
         echo "::group::Per-project test runs"
-        for csproj in $(find test -name '*.csproj' ! -path '*Cosmos*' | sort); do
+        # `! -path '*/bin/*'`: the build copies sample csproj fixtures into test
+        # bin dirs (e.g. MeshWeaver.Samples.Graph.csproj under
+        # test/MeshWeaver.Acme.Test/bin/Debug/net10.0/SamplesGraph/). They match
+        # the *.csproj pattern but aren't test projects — invoking dotnet test on
+        # each wastes ~1 s × 23 entries per run.
+        for csproj in $(find test -name '*.csproj' ! -path '*Cosmos*' ! -path '*/bin/*' | sort); do
           name=$(basename "$csproj" .csproj)
           echo "::endgroup::"
           echo "::group::$name"
-          # blame-hang-timeout 30s (was 90s): individual test [Fact(Timeout=N)]
-          # already kills slow tests, so blame's job is to catch the *next*
-          # frame after that — 30s is plenty. Lowering this drops the
-          # worst-case CI cost from 90s × N hung tests to 30s × N.
-          dotnet test "$csproj" --no-build --verbosity minimal -l:trx \
+          # `timeout 8m`: a previous regression had MeshWeaver.Hosting.Monolith.Test
+          # hanging on Linux for 16+ min before the job-level 30 min cap fired,
+          # which prevented every subsequent project from running. blame-hang-timeout
+          # only fires when xUnit considers a *test* to have stalled — fixture-init
+          # and between-class hangs slip past it. The wall-clock timeout is the
+          # backstop: SIGTERM the test host, log, move on. 8 min is generous
+          # (worst real project today is FutuRe at ~5 min); raise if a legitimate
+          # project crosses it.
+          timeout --signal=TERM --kill-after=30s 8m \
+            dotnet test "$csproj" --no-build --verbosity minimal -l:trx \
               --blame-hang-timeout 30s --blame-hang-dump-type mini
           rc=$?
-          marker="[CI] $name exit=$rc"
+          if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
+            marker="[CI] $name exit=$rc TIMEOUT (8m wall-clock cap hit — likely fixture/init hang)"
+          else
+            marker="[CI] $name exit=$rc"
+          fi
           echo "$marker"
           echo "$marker" >> test/test-results.log
         done

@@ -62,7 +62,19 @@ public class MessageService : IMessageService
             try { await x.Invoke(); }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Unhandled exception in delivery pipeline for hub {Address}", address);
+                // Defensive: a faulting log call here (e.g. xUnit output helper
+                // invalidated after test completion) would fault the action block,
+                // which propagates to deliveryAction.Completion and silently wedges
+                // dispose. Wrap so a broken logger never escalates to a hung pump.
+                try
+                {
+                    logger.LogError(ex, "Unhandled exception in delivery pipeline for hub {Address}", address);
+                }
+                catch
+                {
+                    // Logger itself failed — nothing else to do; we already swallowed
+                    // the inner exception so the action block stays alive.
+                }
             }
         }, blockOptions);
 

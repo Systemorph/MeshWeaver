@@ -261,6 +261,30 @@ public record MessageHubConfiguration
     internal TimeSpan RequestTimeout { get; init; } = new(0, 0, 30);
 
     /// <summary>
+    /// Quiescing-phase drain budget per hub. When <see cref="MessageHub.Dispose"/> fires,
+    /// the hub waits up to this long for in-flight response callbacks (registered via
+    /// <c>hub.Observe(...)</c>) to resolve naturally before forcibly cancelling them
+    /// with <see cref="ObjectDisposedException"/>.
+    /// <para>
+    /// Default: 2 s — enough headroom for a slow CI scheduler to deliver a legitimate
+    /// reply, low enough that a leaked callback fails fast.
+    /// </para>
+    /// <para>
+    /// Tests with deliberately abandoned callbacks (e.g. <c>client.Observe(req)</c> +
+    /// <c>Subscribe(...)</c> with no completion path) should call
+    /// <see cref="WithQuiesceTimeout"/> on their hub configuration to drop this to
+    /// ~100-500 ms — every leaked callback otherwise costs the full budget per
+    /// dispose, which compounds across N test classes.
+    /// </para>
+    /// </summary>
+    internal TimeSpan QuiesceTimeout { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Sets the Quiescing-phase drain budget for this hub. See <see cref="QuiesceTimeout"/>.
+    /// </summary>
+    public MessageHubConfiguration WithQuiesceTimeout(TimeSpan timeout) => this with { QuiesceTimeout = timeout };
+
+    /// <summary>
     /// When true, the hub will not automatically post InitializeHubRequest during construction.
     /// Manual initialization is required by posting InitializeHubRequest to the hub.
     /// </summary>
