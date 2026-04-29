@@ -4,6 +4,7 @@ using System.Text.Json;
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor.Test")]
 [assembly: InternalsVisibleTo("MeshWeaver.Blazor.Portal")]
+[assembly: InternalsVisibleTo("Memex.Portal.Shared")]
 // Castle.DynamicProxy (used by NSubstitute) generates proxies in this assembly;
 // without InternalsVisibleTo it can't implement the internal IMeshQueryCore.
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]
