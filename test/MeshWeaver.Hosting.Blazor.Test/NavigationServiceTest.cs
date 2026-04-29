@@ -41,13 +41,15 @@ public class NavigationServiceTest
         _hubServiceProvider = Substitute.For<IServiceProvider>();
         _nodeTypeService = Substitute.For<INodeTypeService>();
 
-        // INodeTypeService is registered at Hub level, not main DI
+        // INodeTypeService and IMeshQueryCore are registered at Hub level, not main
+        // DI — NavigationService resolves both through hub.ServiceProvider lazily.
         _hub.ServiceProvider.Returns(_hubServiceProvider);
         _hubServiceProvider.GetService(typeof(INodeTypeService)).Returns(_nodeTypeService);
+        _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
     }
 
     private NavigationService CreateService() =>
-        new(_navigationManager, _pathResolver, _meshQuery, _hub);
+        new(_navigationManager, _pathResolver, _hub);
 
     /// <summary>
     /// Capture the latest <see cref="NavigationContext"/> emitted by the reactive

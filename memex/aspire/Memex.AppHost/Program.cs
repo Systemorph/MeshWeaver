@@ -50,10 +50,15 @@ if (mode == "monolith")
 // LLM API key (single Azure Foundry key for both Anthropic and OpenAI endpoints)
 var azureFoundryKey = builder.AddParameter("azure-foundry-key", secret: true);
 
-// Authentication (Microsoft is required; Google is optional for local)
+// Authentication (Microsoft client id+secret required; tenant id optional —
+// omit entirely for "common" multi-tenant which signs in any Microsoft account.
+// Setting a stale/wrong tenant produces AADSTS90002 "Tenant not found" at first
+// sign-in, which is harder to diagnose than just defaulting to common).
 var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
-var microsoftTenantId = builder.AddParameter("microsoft-tenant-id", secret: false);
+var microsoftTenantIdValue = builder.Configuration["Parameters:microsoft-tenant-id"] ?? "";
+IResourceBuilder<ParameterResource>? microsoftTenantId = string.IsNullOrEmpty(microsoftTenantIdValue)
+    ? null : builder.AddParameter("microsoft-tenant-id", secret: false);
 
 // Embedding, Google auth, and custom domain (non-secret optional — ACA accepts empty env vars)
 var embeddingEndpoint = builder.AddParameter("embedding-endpoint", value: "", secret: false);
@@ -185,7 +190,6 @@ var portal = builder
     .WithEnvironment("Authentication__EnableDevLogin", mode != "prod" ? "true" : "false")
     .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
-    .WithEnvironment("Authentication__Microsoft__TenantId", microsoftTenantId)
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
     // NuGet cache for #r "nuget:..." directives (in-process restore via MeshWeaver.NuGet).
     .WithEnvironment("NUGET_PACKAGES", "/tmp/nuget-cache")

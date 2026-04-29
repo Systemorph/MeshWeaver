@@ -49,6 +49,11 @@ public class NavigationProgressTest
 
         _hub.ServiceProvider.Returns(_hubServiceProvider);
         _hubServiceProvider.GetService(typeof(INodeTypeService)).Returns(_nodeTypeService);
+        // IMeshQueryCore is resolved through hub.ServiceProvider.GetRequiredService
+        // (the lazy pattern that VUserHelper / SyncedQueryMeshNodes also use), so
+        // wire the substitute through the hub's service provider rather than
+        // injecting it into the constructor.
+        _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
 
         // Empty mesh query by default â€” node-loading path is best-effort.
         // Empty observable so the chain in LoadNodeWithPreRenderedHtml completes
@@ -61,7 +66,7 @@ public class NavigationProgressTest
     private static readonly int[] FastRetryDelays = [10, 10, 10];
 
     private NavigationService CreateService(int[]? retryDelays = null) =>
-        new(_navigationManager, _pathResolver, _meshQuery, _hub, retryDelays ?? FastRetryDelays);
+        new(_navigationManager, _pathResolver, _hub, retryDelays ?? FastRetryDelays);
 
     private static List<NavigationStatus> CaptureStatus(NavigationService service)
     {
