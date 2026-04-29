@@ -279,9 +279,12 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     /// <summary>
     /// A script that targets a node which is not flagged executable must be rejected
-    /// up-front (no kernel dispatch, no silent success).
+    /// up-front (no kernel dispatch, no silent success). Reject is a synchronous
+    /// path: HandleExecuteScript reads the local workspace, sees IsExecutable=false,
+    /// and posts the error response — should be milliseconds. Anything slower means
+    /// an await/deadlock has slipped into the read path.
     /// </summary>
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = 5_000)]
     public async Task ExecuteScript_ForNonExecutableCodeNode_ReportsError()
     {
         var id = $"noexec-{Guid.NewGuid():N}";
