@@ -142,11 +142,9 @@ public static class MarkdownEditLayoutArea
                     if (updated is not MeshNodeMetadata updatedProps)
                         return;
 
-                    var updatedNode = updatedProps.ApplyTo(node);
-
-                    host.Hub.Post(
-                        new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
-                        o => o.WithTarget(host.Hub.Address));
+                    // Persist via remote stream Update — apply props to the LATEST
+                    // node (Doc/Architecture/InitializationGates.md).
+                    host.Workspace.UpdateMeshNode(current => updatedProps.ApplyTo(current), node.Path);
                 }));
     }
 }
