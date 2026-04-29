@@ -186,13 +186,12 @@ public static class OverviewLayoutArea
                     // Update current to prevent re-sending
                     current = updatedContent;
 
-                    // Create updated MeshNode with new content
-                    var updatedNode = node with { Content = updatedContent };
-
-                    // Issue DataChangeRequest to persist the change
-                    host.Hub.Post(
-                        new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
-                        o => o.WithTarget(host.Hub.Address));
+                    // Persist via remote stream Update — read-modify-write inside
+                    // the lambda so we patch atop the LATEST node (not a stale
+                    // captured snapshot). The owning hub's MeshDataSource
+                    // processes the patch and broadcasts to subscribers
+                    // (Doc/Architecture/InitializationGates.md).
+                    host.Workspace.UpdateMeshNode(current => current with { Content = updatedContent }, node.Path);
                 }));
     }
 

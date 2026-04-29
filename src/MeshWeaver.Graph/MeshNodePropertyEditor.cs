@@ -367,14 +367,11 @@ public static class MeshNodePropertyEditor
                     .Take(1)
                     .Subscribe(updatedContent =>
                     {
-                        var updatedNode = node with { Content = updatedContent };
-                        var targetAddress = new Address(nodePath);
-                        var delivery = ctx.Host.Hub.Post(
-                            new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
-                            o => o.WithTarget(targetAddress))!;
-                        ctx.Host.Hub.Observe(delivery).Subscribe(
-                            _ => ctx.Host.UpdateData(editStateId, false),
-                            _ => ctx.Host.UpdateData(editStateId, false));
+                        // Persist via remote stream Update — read-modify-write
+                        // inside the lambda atop the LATEST node. Edit-state cleared
+                        // optimistically; subscribers re-render with the patched content.
+                        ctx.Host.Workspace.UpdateMeshNode(current => current with { Content = updatedContent }, nodePath);
+                        ctx.Host.UpdateData(editStateId, false);
                     });
                 return Task.CompletedTask;
             });

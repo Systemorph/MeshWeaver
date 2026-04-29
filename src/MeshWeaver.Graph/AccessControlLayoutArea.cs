@@ -352,6 +352,11 @@ public static class AccessControlLayoutArea
                                 }
                             };
 
+                            // CREATE flow (not update) — DataChangeRequest is the framework
+                            // primitive for create-or-update; UpdateMeshNode requires the
+                            // node to already exist on the owning hub. The owning hub's
+                            // data layer (registered by AddData) processes the create
+                            // natively. See Doc/Architecture/AsynchronousCalls.md.
                             saveCtx.Hub.Post(
                                 new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
                                 o => o.WithTarget(saveCtx.Hub.Address));
