@@ -692,6 +692,63 @@ public sealed class MessageHub : IMessageHub
             disposeAction.Invoke(this);
 
     }
+
+    /// <summary>
+    /// Multi-line snapshot of the hub's disposal state. Reports own RunLevel + Disposal-task
+    /// status, the message service's per-buffer counts (so a backlog from a handler that keeps
+    /// re-posting shows up as a non-zero queue), and a one-line entry per hosted hub
+    /// recursively. Test base classes call this when a dispose timeout fires; the returned
+    /// string is meant to land in xUnit test output so the failure says *why* dispose hung
+    /// rather than just "operation was canceled".
+    /// </summary>
+    public string GetDisposalDiagnostics()
+    {
+        var sb = new System.Text.StringBuilder();
+        AppendDiagnostics(sb, depth: 0);
+        return sb.ToString();
+    }
+
+    private void AppendDiagnostics(System.Text.StringBuilder sb, int depth)
+    {
+        var indent = new string(' ', depth * 2);
+        var snapshot = (messageService is MessageService ms)
+            ? ms.GetQueueSnapshot()
+            : (Buffer: -1, Deferred: -1, Execution: -1, OpenGates: -1, DeliveryCompleted: false,
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+        sb.Append(indent)
+          .Append("Hub ").Append(Address)
+          .Append(" RunLevel=").Append(RunLevel)
+          .Append(" Disposal=")
+          .Append(Disposal == null ? "<not started>"
+              : Disposal.IsCompleted ? "Completed" : "Pending")
+          .Append(" Queue(buffer=").Append(snapshot.Buffer)
+          .Append(",deferred=").Append(snapshot.Deferred)
+          .Append(",exec=").Append(snapshot.Execution)
+          .Append(",openGates=").Append(snapshot.OpenGates)
+          .Append(",deliveryActionCompleted=").Append(snapshot.DeliveryCompleted)
+          .Append(')');
+        if (snapshot.CurrentMessage != null)
+        {
+            sb.Append(" Executing(")
+              .Append(snapshot.CurrentMessage)
+              .Append(", ")
+              .Append(snapshot.CurrentMessageElapsedMs)
+              .Append("ms)");
+        }
+        sb.AppendLine();
+
+        var hosted = hostedHubs.Hubs.ToArray();
+        if (hosted.Length == 0)
+            return;
+        sb.Append(indent).Append("HostedHubs (").Append(hosted.Length).Append("):").AppendLine();
+        foreach (var child in hosted)
+        {
+            if (child is MessageHub childMh)
+                childMh.AppendDiagnostics(sb, depth + 1);
+            else
+                sb.Append(indent).Append("  Hub ").Append(child.Address).AppendLine();
+        }
+    }
     private async Task<IMessageDelivery> HandleShutdown(
         IMessageDelivery<ShutdownRequest> request,
         CancellationToken ct
