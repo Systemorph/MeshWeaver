@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Data;
@@ -45,22 +46,28 @@ public record TypeSourceWithTypeWithDataStorage<T>
         return instances;
     }
 
-    protected override async Task<InstanceCollection> InitializeAsync(
+    /// <summary>
+    /// IDataStorage is a pure DB abstraction (transactions + IQueryable backed by EF
+    /// or in-memory) — no hub round-trips, so wrapping with
+    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken,Task{TResult}})"/>
+    /// is sanctioned per <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </summary>
+    protected override IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
-    )
+    ) => Observable.FromAsync(async ct =>
     {
-        await using var transaction = await Storage.StartTransactionAsync(cancellationToken);
+        await using var transaction = await Storage.StartTransactionAsync(ct);
         return LastSaved = new()
         {
             Instances = (
                 await Storage
                     .Query<T>()
-                    .ToDictionaryAsync(TypeDefinition.GetKey, x => (object)x, cancellationToken)
+                    .ToDictionaryAsync(TypeDefinition.GetKey, x => (object)x, ct)
             ).ToImmutableDictionary(),
             GetKey = TypeDefinition.GetKey
         };
-    }
+    });
 
     public IDataStorage Storage { get; init; }
 }

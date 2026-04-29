@@ -52,6 +52,26 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     {
         instances = MergePartialUpdates(instances);
 
+        // Race guard: an empty change can race the async Initialize emission
+        // (the framework's stream Subscribe loop may invoke Update with an empty
+        // InstanceCollection between stream creation and Initialize completion;
+        // see Doc/Architecture/InitializationGates.md). When that happens with
+        // _lastSaved already populated, the previous behaviour overwrote
+        // _lastSaved = empty and every subsequent ReduceToMeshNode returned null
+        // — the OrleansHostedHubRoutingTest workspace-propagation symptom.
+        //
+        // If incoming is empty AND we have data AND nobody requested an explicit
+        // delete (no _pendingDeletes), treat the call as a no-op. Legitimate
+        // deletion paths add to _pendingDeletes and pass through unchanged.
+        if (instances.Instances.Count == 0
+            && _lastSaved.Instances.Count > 0
+            && _pendingDeletes.IsEmpty)
+        {
+            _logger?.LogDebug("MeshNodeTypeSource.UpdateImpl: no-op empty change for {HubPath} (preserving {Count} loaded entries)",
+                _hubPath, _lastSaved.Instances.Count);
+            return _lastSaved;
+        }
+
         // Open MeshNode init gate when node becomes Active or Transient
         {
             var ownNode = instances.Instances.Values.OfType<MeshNode>()
@@ -105,14 +125,26 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             _debounceTimer?.Dispose();
             _debounceTimer = new Timer(_ =>
             {
-                // Fire-and-forget for debounce — errors are logged inside FlushPendingSavesAsync.
-                // On disposal, FlushOnDispose awaits properly.
-                _ = FlushPendingSavesAsync();
+                // Fire-and-forget for debounce — errors are logged inside FlushPendingSaves.
+                // Subscribe drives the flush; no await captures a hub scheduler context.
+                FlushPendingSaves().Subscribe(_ => { }, _ => { });
             }, null, DebounceInterval, Timeout.InfiniteTimeSpan);
         }
     }
 
-    private async Task FlushPendingSavesAsync()
+    /// <summary>
+    /// Flushes the debounced save/delete queue. Returns <see cref="IObservable{Unit}"/> so
+    /// callers compose with <c>.Subscribe(...)</c> instead of awaiting a Task — the
+    /// awaited continuation captured the calling scheduler and deadlocked when the
+    /// timer fired during a grain-context save chain.
+    /// <para>
+    /// <see cref="IStorageService.SaveNodeAsync"/> / <see cref="IStorageService.DeleteNodeAsync"/>
+    /// only touch the DB (in-memory dictionary, file I/O, or SQL) — no hub round-trip,
+    /// so wrapping with <see cref="Observable.FromAsync(Func{CancellationToken,Task})"/>
+    /// is the sanctioned bridge per <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </para>
+    /// </summary>
+    private IObservable<System.Reactive.Unit> FlushPendingSaves()
     {
         var saves = new List<MeshNode>();
         foreach (var key in _pendingSaves.Keys.ToArray())
@@ -126,41 +158,46 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             deletes.Add(path);
 
         if (saves.Count == 0 && deletes.Count == 0)
-            return;
+            return Observable.Return(System.Reactive.Unit.Default);
 
         _logger?.LogInformation("MeshNodeTypeSource: Flushing {Saves} saves, {Deletes} deletes for {HubPath}",
             saves.Count, deletes.Count, _hubPath);
 
         var options = _workspace.Hub.JsonSerializerOptions;
-        foreach (var node in saves)
-        {
-            try
-            {
-                // Save directly to persistence — do NOT post UpdateNodeRequest
-                // to avoid a feedback loop (handler → workspace → TypeSource → handler)
-                await _persistenceCore.SaveNodeAsync(node, options);
-                _logger?.LogDebug("MeshNodeTypeSource: Saved {Path} (version={Version})", node.Path, node.Version);
-            }
-            catch (Exception ex)
-            {
-                // Log at Error with full detail — especially PostgreSQL exceptions
-                _logger?.LogError(ex, "MeshNodeTypeSource: SAVE FAILED for {Path} (version={Version}, hubPath={HubPath}). " +
-                    "This may cause data loss on shutdown!", node.Path, node.Version, _hubPath);
-            }
-        }
 
-        foreach (var path in deletes)
-        {
-            try
-            {
-                await _persistenceCore.DeleteNodeAsync(path);
-                _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", path);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "MeshNodeTypeSource: DELETE FAILED for {Path} (hubPath={HubPath})", path, _hubPath);
-            }
-        }
+        // Compose all persistence ops as observable steps, fail-soft per item.
+        // Concat preserves ordering, mirroring the sequential foreach semantics
+        // of the original async/await implementation.
+        var saveOps = saves.Select(node =>
+            Observable.FromAsync(ct => _persistenceCore.SaveNodeAsync(node, options, ct))
+                .Select(_ =>
+                {
+                    _logger?.LogDebug("MeshNodeTypeSource: Saved {Path} (version={Version})", node.Path, node.Version);
+                    return System.Reactive.Unit.Default;
+                })
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    _logger?.LogError(ex, "MeshNodeTypeSource: SAVE FAILED for {Path} (version={Version}, hubPath={HubPath}). " +
+                        "This may cause data loss on shutdown!", node.Path, node.Version, _hubPath);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                }));
+
+        var deleteOps = deletes.Select(path =>
+            Observable.FromAsync(ct => _persistenceCore.DeleteNodeAsync(path, false, ct))
+                .Select(_ =>
+                {
+                    _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", path);
+                    return System.Reactive.Unit.Default;
+                })
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    _logger?.LogError(ex, "MeshNodeTypeSource: DELETE FAILED for {Path} (hubPath={HubPath})", path, _hubPath);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                }));
+
+        return saveOps.Concat(deleteOps).Concat()
+            .DefaultIfEmpty(System.Reactive.Unit.Default)
+            .LastAsync();
     }
 
     private InstanceCollection MergePartialUpdates(InstanceCollection instances)
@@ -202,39 +239,52 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             : instances;
     }
 
-    protected override async Task<InstanceCollection> InitializeAsync(
+    /// <summary>
+    /// Loads the own MeshNode from persistence on first stream subscription.
+    /// <para>
+    /// <c>IStorageService.GetNode</c> already returns <see cref="IObservable{T}"/>;
+    /// composing through <c>.Select</c> keeps the chain reactive end-to-end. No
+    /// <c>await</c>, no <c>.ToTask</c>, no <see cref="Observable.FromAsync{TResult}"/>
+    /// — the framework's per-stream init machinery subscribes to this observable
+    /// and opens the <see cref="MeshNodeExtensions.MeshNodeInitGateName"/> gate on
+    /// first emission. See <c>Doc/Architecture/InitializationGates.md</c>.
+    /// </para>
+    /// <para>
+    /// The gate-open call inside <c>.Select</c> is intentional: the gate is the
+    /// "loaded enough to serve queued non-CreateNodeRequest traffic" condition,
+    /// and the moment we have that signal is exactly when the observable emits
+    /// the first <see cref="InstanceCollection"/>. Hubs that are NOT backed by a
+    /// persisted node (top-level mesh hub at <c>mesh/&lt;guid&gt;</c>, deleted
+    /// nodes, fresh per-test fixtures) MUST still open the gate — otherwise every
+    /// queued response (CreateNodeResponse, GetDataResponse, …) waits forever and
+    /// every test times out.
+    /// </para>
+    /// </summary>
+    protected override IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
-        CancellationToken ct)
-    {
-        var ownNode = await _persistenceCore.GetNode(_hubPath, _workspace.Hub.JsonSerializerOptions).FirstAsync().ToTask(ct);
+        CancellationToken cancellationToken)
+        => _persistenceCore.GetNode(_hubPath, _workspace.Hub.JsonSerializerOptions)
+            .FirstAsync()
+            .Select(rawNode =>
+            {
+                var ownNode = rawNode != null ? ResolveJsonElementContent(rawNode) : null;
 
-        if (ownNode != null)
-            ownNode = ResolveJsonElementContent(ownNode);
+                if (ownNode is { Version: > 0 })
+                {
+                    _logger?.LogDebug("MeshNodeTypeSource: Restoring hub {Address} to version {Version}",
+                        _workspace.Hub.Address, ownNode.Version);
+                    _workspace.Hub.SetInitialVersion(ownNode.Version);
+                }
 
-        if (ownNode is { Version: > 0 })
-        {
-            _logger?.LogDebug("MeshNodeTypeSource: Restoring hub {Address} to version {Version}",
-                _workspace.Hub.Address, ownNode.Version);
-            _workspace.Hub.SetInitialVersion(ownNode.Version);
-        }
+                _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
 
-        // Open the MeshNodeInit gate once init is done — unconditionally.
-        // The gate exists to defer non-CreateNodeRequest traffic until persistence
-        // has been consulted; once we've awaited GetNode(...) above, that contract
-        // is satisfied whether or not a node was actually found. Hubs that are NOT
-        // backed by a persisted node (e.g. the top-level mesh hub at mesh/<guid>,
-        // hubs whose node was deleted, or fresh per-test fixtures) MUST still open
-        // the gate — otherwise every CreateNodeResponse / GetDataResponse routed
-        // back to them is deferred indefinitely and every test request times out.
-        _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
+                var allNodes = new List<MeshNode>();
+                if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
+                    allNodes.Add(ownNode);
 
-        var allNodes = new List<MeshNode>();
-        if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
-            allNodes.Add(ownNode);
-
-        _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Id);
-        return _lastSaved;
-    }
+                _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Id);
+                return _lastSaved;
+            });
 
     private MeshNode ResolveJsonElementContent(MeshNode node)
     {
@@ -281,7 +331,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
     private sealed class FlushOnDispose(MeshNodeTypeSource source) : IAsyncDisposable
     {
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync()
         {
             lock (source._timerLock)
             {
@@ -297,16 +347,23 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                     pendingCount, source._hubPath);
             }
 
-            try
-            {
-                await source.FlushPendingSavesAsync();
-                source._logger?.LogDebug("MeshNodeTypeSource: Disposal flush completed for {HubPath}", source._hubPath);
-            }
-            catch (Exception ex)
-            {
-                source._logger?.LogError(ex,
-                    "MeshNodeTypeSource: DISPOSAL FLUSH FAILED for {HubPath} — pending saves may be lost!", source._hubPath);
-            }
+            // Bridge the IObservable flush to the IAsyncDisposable contract via .ToTask
+            // at the boundary — disposal IS the framework edge, no further mesh work
+            // runs after this completes (per AsynchronousCalls.md, the Task boundary
+            // belongs at framework lifecycle hooks).
+            return new ValueTask(source.FlushPendingSaves()
+                .Select(_ =>
+                {
+                    source._logger?.LogDebug("MeshNodeTypeSource: Disposal flush completed for {HubPath}", source._hubPath);
+                    return System.Reactive.Unit.Default;
+                })
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    source._logger?.LogError(ex,
+                        "MeshNodeTypeSource: DISPOSAL FLUSH FAILED for {HubPath} — pending saves may be lost!", source._hubPath);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                })
+                .ToTask());
         }
     }
 }

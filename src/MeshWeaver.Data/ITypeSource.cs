@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 
@@ -22,10 +24,19 @@ public interface ITypeSource
     ITypeSource WithInitialData(Func<IEnumerable<object>> loadInstances) =>
         WithInitialData((_, _) => Task.FromResult(loadInstances()));
 
-    internal Task<InstanceCollection> InitializeAsync(
+    /// <summary>
+    /// Loads the initial <see cref="InstanceCollection"/> for this type source, reactively.
+    /// Implementations compose any persistence / remote / static data sources as
+    /// <see cref="IObservable{T}"/> and emit exactly one <see cref="InstanceCollection"/>.
+    /// <b>Never <c>await</c></b> a hub round-trip inside an implementation — that captures
+    /// the calling scheduler and deadlocks the hub action block. See
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </summary>
+    internal IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
     );
+
     InstanceCollection Update(ChangeItem<EntityStore> changeItem);
 
     string CollectionName { get; }

@@ -126,16 +126,17 @@ public record VirtualTypeSource<T>(
         return StreamUpdates().Select(items => items.Cast<object>());
     }
 
-    protected override async Task<InstanceCollection> InitializeAsync(
+    /// <summary>
+    /// Pure observable composition over the type's stream provider — no <c>await</c>,
+    /// no <c>.ToTask</c>. The framework consumer subscribes; the gate opens on
+    /// emission. See <c>Doc/Architecture/AsynchronousCalls.md</c> + the
+    /// "Initialization gates" section.
+    /// </summary>
+    protected override IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
-    )
-    {
-        var instances = await StreamUpdates()
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(cancellationToken);
-
-        return new InstanceCollection(instances.Cast<object>(), TypeDefinition.GetKey);
-    }
+    ) => StreamUpdates()
+        .Take(1)
+        .Timeout(TimeSpan.FromSeconds(30))
+        .Select(items => new InstanceCollection(items.Cast<object>(), TypeDefinition.GetKey));
 }
