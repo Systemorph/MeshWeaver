@@ -123,10 +123,25 @@ public static class MeshDataSourceExtensions
                                         new Address(targetPath), new MeshNodeReference());
                                 }
 
-                                // MeshNodeReference() — own MeshNode via local InstanceCollection.
-                                var collectionStream = workspace.GetStream(
-                                    new CollectionReference(nameof(MeshNode)));
-                                return (collectionStream as ISynchronizationStream<InstanceCollection>)
+                                // MeshNodeReference() — own MeshNode. Reduce from the data
+                                // source's PRIMARY EntityStore stream rather than the
+                                // workspace's CollectionReference("MeshNode") stream. The
+                                // workspace builds a separate cached reduced stream for
+                                // CollectionReference, and writes via dsStream.Update on the
+                                // primary EntityStore don't always propagate to that cached
+                                // reduced stream's subscribers (the propagation bug behind
+                                // ThreadSubmissionServer's watcher missing AppendUserInput
+                                // updates and the cluster of delegation/streaming test
+                                // failures). Reducing directly from the primary keeps both
+                                // the watcher and any other own-MeshNodeReference subscriber
+                                // pinned to the same stream that workspace.UpdateMeshNode
+                                // writes through.
+                                var ownDataSource = workspace.DataContext
+                                    .GetDataSourceForType(typeof(MeshNode));
+                                var primary = ownDataSource?.GetStreamForPartition(null);
+                                var collectionStream = primary
+                                    ?.Reduce<InstanceCollection>(new CollectionReference(nameof(MeshNode)));
+                                return collectionStream
                                     ?.Reduce((WorkspaceReference<MeshNode>)reference, configuration);
                             }))
                     .WithDataSource(_ => dataSource)
