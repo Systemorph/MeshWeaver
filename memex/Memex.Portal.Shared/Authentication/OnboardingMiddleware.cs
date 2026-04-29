@@ -64,93 +64,125 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Only check authenticated, non-virtual users
-        if (context.User?.Identity?.IsAuthenticated == true && !IsExcludedPath(context.Request.Path))
+        // Pull the reactive composition all the way up: the user-resolution
+        // pipeline (FindUserByEmail → conditional LoadUserRoles → SetContext)
+        // is a single observable chain. The only Task bridge is on the line
+        // below — ASP.NET's RequestDelegate signature forces Task at this
+        // boundary, but everything else stays observable so a slow query
+        // layer can't deadlock by awaiting a result the awaiting thread is
+        // supposed to publish.
+        //
+        // Outcome semantics:
+        //   • Result = "Redirect" — middleware bounces to /onboarding, doesn't
+        //     call next.
+        //   • Result = "PassThrough" — context updated (or skipped because
+        //     unauthenticated / virtual / excluded path); fall through to next.
+        var outcome = await BuildPipeline(context).FirstAsync().ToTask();
+
+        if (outcome == OnboardingOutcome.Redirect)
         {
-            var portalApp = context.RequestServices.GetService<PortalApplication>();
-            if (portalApp != null)
-            {
-                var accessService = portalApp.Hub.ServiceProvider.GetRequiredService<AccessService>();
-                var userContext = accessService.Context ?? accessService.CircuitContext;
-
-                // Skip virtual users — they don't need onboarding
-                if (userContext is { IsVirtual: false } && !string.IsNullOrEmpty(userContext.ObjectId))
-                {
-                    var email = userContext.Email ?? userContext.ObjectId;
-
-                    // If the context's ObjectId was already resolved to a username
-                    // (different from the email), this user was onboarded in the current
-                    // session. Skip the query — it may not find newly created nodes
-                    // immediately due to routing/caching in the mesh query layer.
-                    if (!string.IsNullOrEmpty(email) &&
-                        !string.IsNullOrEmpty(userContext.ObjectId) &&
-                        userContext.ObjectId != email)
-                    {
-                        await next(context);
-                        return;
-                    }
-
-                    // IMeshQueryCore — the unsecured infrastructure-query surface.
-                    // VUserHelper and SyncedQueryMeshNodes use this same surface — see
-                    // PersistenceExtensions.RegisterMeshQueryCoreOnMeshHub.
-                    var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshQueryCore>();
-                    if (meshQuery != null)
-                    {
-                        try
-                        {
-                            var node = await FindUserByEmailAsync(meshQuery, portalApp.Hub, email);
-
-                            if (node == null || node.State == MeshNodeState.Transient)
-                            {
-                                logger.LogInformation(
-                                    "OnboardingMiddleware: Redirecting to onboarding for {Email}",
-                                    email);
-                                context.Response.Redirect("/onboarding");
-                                return;
-                            }
-
-                            // Active user — update AccessContext with username (node ID)
-                            var username = node.Id;
-                            var roles = await LoadUserRolesAsync(meshQuery, portalApp.Hub, username);
-
-                            var updatedContext = userContext with
-                            {
-                                ObjectId = username,
-                                Name = node.Name ?? username,
-                                Roles = roles
-                            };
-                            // Set per-request context only. CircuitAccessHandler handles
-                            // per-circuit persistence via CreateInboundActivityHandler.
-                            accessService.SetContext(updatedContext);
-                        }
-                        catch (Exception ex)
-                        {
-                            // Non-critical — don't block the request on onboarding check failure
-                            logger.LogWarning(ex,
-                                "OnboardingMiddleware: Failed to check user node for {UserId}",
-                                userContext.ObjectId);
-                        }
-                    }
-                }
-            }
+            context.Response.Redirect("/onboarding");
+            return;
         }
 
         await next(context);
     }
 
+    private enum OnboardingOutcome { PassThrough, Redirect }
+
     /// <summary>
-    /// Reactive lookup of the User node by email. Composes
-    /// <see cref="IMeshQueryCore.ObserveQuery{T}"/> →
-    /// <see cref="Observable.Where{TSource}"/> (skip Initial empties while the
-    /// catalog is still warming) → <see cref="Observable.Take{TSource}(IObservable{TSource}, int)"/>
-    /// → <see cref="Observable.Timeout{T}(IObservable{T}, TimeSpan)"/>. The
-    /// single <see cref="System.Reactive.Threading.Tasks.TaskObservableExtensions.ToTask{TResult}(IObservable{TResult})"/>
-    /// at the bottom bridges to the middleware's Task boundary — every other
-    /// step stays observable so a slow query layer doesn't deadlock the
-    /// request thread, and a stalled query surfaces as a TimeoutException
-    /// instead of a silent /onboarding redirect.
+    /// Builds the reactive onboarding pipeline. Returns an observable that
+    /// emits exactly one <see cref="OnboardingOutcome"/> describing what the
+    /// middleware should do next. Composition is end-to-end reactive — no
+    /// intermediate <c>await</c>, no fire-and-forget Subscribe, no
+    /// TaskCompletionSource. The single Task bridge lives in
+    /// <see cref="InvokeAsync"/>.
     /// </summary>
-    private static Task<MeshNode?> FindUserByEmailAsync(
+    private IObservable<OnboardingOutcome> BuildPipeline(HttpContext context)
+    {
+        if (context.User?.Identity?.IsAuthenticated != true || IsExcludedPath(context.Request.Path))
+            return Observable.Return(OnboardingOutcome.PassThrough);
+
+        var portalApp = context.RequestServices.GetService<PortalApplication>();
+        if (portalApp == null)
+            return Observable.Return(OnboardingOutcome.PassThrough);
+
+        var accessService = portalApp.Hub.ServiceProvider.GetRequiredService<AccessService>();
+        var userContext = accessService.Context ?? accessService.CircuitContext;
+
+        // Skip virtual users — they don't need onboarding.
+        if (userContext is not { IsVirtual: false } || string.IsNullOrEmpty(userContext.ObjectId))
+            return Observable.Return(OnboardingOutcome.PassThrough);
+
+        var email = userContext.Email ?? userContext.ObjectId;
+
+        // ObjectId already resolved to a username (different from the email)?
+        // This session has been onboarded — skip the query (which would race
+        // routing/caching in the mesh query layer for newly created nodes).
+        if (!string.IsNullOrEmpty(email)
+            && !string.IsNullOrEmpty(userContext.ObjectId)
+            && userContext.ObjectId != email)
+            return Observable.Return(OnboardingOutcome.PassThrough);
+
+        var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshQueryCore>();
+        if (meshQuery == null)
+            return Observable.Return(OnboardingOutcome.PassThrough);
+
+        // Reactive composition: FindUser → SelectMany → either Redirect (no
+        // node / Transient) or LoadRoles → set context → PassThrough.
+        return FindUserByEmail(meshQuery, portalApp.Hub, email)
+            .SelectMany(node =>
+            {
+                if (node == null || node.State == MeshNodeState.Transient)
+                {
+                    logger.LogInformation(
+                        "OnboardingMiddleware: Redirecting to onboarding for {Email}", email);
+                    return Observable.Return(OnboardingOutcome.Redirect);
+                }
+
+                var username = node.Id;
+                return LoadUserRoles(meshQuery, portalApp.Hub, username)
+                    .Select(roles =>
+                    {
+                        var updatedContext = userContext with
+                        {
+                            ObjectId = username,
+                            Name = node.Name ?? username,
+                            Roles = roles
+                        };
+                        // Set per-request context. CircuitAccessHandler handles
+                        // per-circuit persistence via CreateInboundActivityHandler.
+                        accessService.SetContext(updatedContext);
+                        return OnboardingOutcome.PassThrough;
+                    });
+            })
+            .Catch<OnboardingOutcome, Exception>(ex =>
+            {
+                // Non-critical — don't block the request on onboarding check failure.
+                logger.LogWarning(ex,
+                    "OnboardingMiddleware: Failed to check user node for {UserId}",
+                    userContext.ObjectId);
+                return Observable.Return(OnboardingOutcome.PassThrough);
+            });
+    }
+
+    /// <summary>
+    /// Reactive lookup of the User node by email. Returns
+    /// <see cref="IObservable{T}"/> rather than <see cref="Task{T}"/> so the
+    /// caller composes the chain rather than bridging to Task in the middle —
+    /// awaited Tasks on hub-touching observables can deadlock when the awaited
+    /// thread is the one that would publish the result. The middleware is the
+    /// single allowed bridge point (ASP.NET's RequestDelegate is Task-based);
+    /// it composes <c>FindUserByEmail(...).FirstOrDefaultAsync().ToTask()</c>
+    /// at the very edge.
+    ///
+    /// <para>Built on <see cref="IMeshQueryCore.ObserveQuery{T}"/> so the chain
+    /// emits live: Initial may be empty before the catalog finishes loading
+    /// the User partition; <see cref="Observable.Where{TSource}"/> skips empty
+    /// snapshots and waits for the first change carrying an item. Timeout
+    /// falls back to null instead of hanging.</para>
+    /// </summary>
+    private static IObservable<MeshNode?> FindUserByEmail(
         IMeshQueryCore meshQuery, IMessageHub hub, string email)
     {
         var request = MeshQueryRequest.FromQuery(
@@ -158,78 +190,61 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
             WellKnownUsers.System);
 
         return meshQuery.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
-            .Where(c => c.ChangeType == QueryChangeType.Initial
-                     || c.ChangeType == QueryChangeType.Reset
-                     || c.ChangeType == QueryChangeType.Added
-                     || c.ChangeType == QueryChangeType.Updated)
-            // Initial may be empty before the catalog has loaded the User
-            // partition; wait for the first change carrying an item.
             .Where(c => c.Items.Count > 0)
             .Select(c => (MeshNode?)c.Items[0])
             .Take(1)
-            .Timeout(LookupTimeout, Observable.Return<MeshNode?>(null))
-            .FirstOrDefaultAsync()
-            .ToTask();
+            .Timeout(LookupTimeout, Observable.Return<MeshNode?>(null));
     }
 
     /// <summary>
-    /// Loads the user's role names from AccessAssignment nodes via the same
-    /// reactive surface as <see cref="FindUserByEmailAsync"/>. Initial emission
-    /// of the ObserveQuery stream carries every matching access node; we read
-    /// it once, fold roles, and return.
+    /// Reactive load of the user's role names from AccessAssignment nodes —
+    /// same shape as <see cref="FindUserByEmail"/>. Returns
+    /// <see cref="IObservable{T}"/> so the caller composes; the Initial /
+    /// Reset change carries the snapshot, fold roles via Select, Take(1) and
+    /// Timeout the empty set on failure. No <c>.ToTask()</c>, no <c>await</c>;
+    /// the only Task bridge in this file is at the middleware boundary.
     /// </summary>
-    private static async Task<IReadOnlyCollection<string>> LoadUserRolesAsync(
+    private static IObservable<IReadOnlyCollection<string>> LoadUserRoles(
         IMeshQueryCore meshQuery, IMessageHub hub, string username)
     {
-        try
+        var request = MeshQueryRequest.FromQuery(
+            $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10",
+            WellKnownUsers.System);
+
+        return meshQuery.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
+            .Where(c => c.ChangeType == QueryChangeType.Initial
+                     || c.ChangeType == QueryChangeType.Reset)
+            .Take(1)
+            .Select(change => FoldRoles(change, hub.JsonSerializerOptions))
+            .Timeout(LookupTimeout, Observable.Return((IReadOnlyCollection<string>)Array.Empty<string>()))
+            .Catch<IReadOnlyCollection<string>, Exception>(_ =>
+                Observable.Return((IReadOnlyCollection<string>)Array.Empty<string>()));
+    }
+
+    private static IReadOnlyCollection<string> FoldRoles(
+        QueryResultChange<MeshNode> change, JsonSerializerOptions options)
+    {
+        var roles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var accessNode in change.Items)
         {
-            var request = MeshQueryRequest.FromQuery(
-                $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10",
-                WellKnownUsers.System);
+            if (accessNode.Content == null)
+                continue;
 
-            // Initial change carries the snapshot — Take(1) completes; if the
-            // query layer never emits within LookupTimeout, fall back to empty.
-            var initial = await meshQuery.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
-                .Where(c => c.ChangeType == QueryChangeType.Initial
-                         || c.ChangeType == QueryChangeType.Reset)
-                .Take(1)
-                .Timeout(LookupTimeout, Observable.Return(new QueryResultChange<MeshNode>
-                {
-                    ChangeType = QueryChangeType.Initial,
-                    Items = Array.Empty<MeshNode>(),
-                    Timestamp = DateTimeOffset.UtcNow,
-                }))
-                .FirstAsync()
-                .ToTask();
-
-            var roles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var accessNode in initial.Items)
+            AccessAssignment? assignment = accessNode.Content switch
             {
-                if (accessNode.Content == null)
-                    continue;
+                AccessAssignment aa => aa,
+                JsonElement je => JsonSerializer.Deserialize<AccessAssignment>(
+                    je.GetRawText(), options),
+                _ => null
+            };
 
-                AccessAssignment? assignment = accessNode.Content switch
-                {
-                    AccessAssignment aa => aa,
-                    JsonElement je => JsonSerializer.Deserialize<AccessAssignment>(
-                        je.GetRawText(), hub.JsonSerializerOptions),
-                    _ => null
-                };
+            if (assignment == null)
+                continue;
 
-                if (assignment == null)
-                    continue;
-
-                foreach (var r in assignment.Roles.Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role)))
-                    roles.Add(r.Role);
-            }
-
-            return roles.ToList();
+            foreach (var r in assignment.Roles.Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role)))
+                roles.Add(r.Role);
         }
-        catch
-        {
-            // Non-critical — return empty roles on failure
-            return [];
-        }
+        return roles.ToList();
     }
 
     private static bool IsExcludedPath(PathString path)
