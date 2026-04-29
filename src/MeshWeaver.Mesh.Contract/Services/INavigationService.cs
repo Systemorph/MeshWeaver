@@ -32,9 +32,16 @@ public record NavigationOptions(string Uri)
 public interface INavigationService : IDisposable
 {
     /// <summary>
-    /// Gets the current relative path from navigation.
+    /// Reactive stream of the current relative path. <see cref="ReplaySubject{T}"/>(1)
+    /// semantics — new subscribers immediately receive the last seen path, and every
+    /// subsequent location change emits again. Never emits null or empty: the first
+    /// emission is held back until the underlying <c>NavigationManager</c> has a
+    /// real URI (RemoteNavigationManager throws "...has not been initialized"
+    /// until the Blazor circuit's first JS interop tick — the previous
+    /// <c>string? CurrentPath { get; }</c> property surfaced that as a
+    /// caller-visible exception or a null fallback).
     /// </summary>
-    string? CurrentPath { get; }
+    IObservable<string> Path { get; }
 
     /// <summary>
     /// Gets the current namespace (resolved Address path).

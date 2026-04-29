@@ -58,14 +58,16 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
             Output.WriteLine("Posting AppendUserMessageRequest...");
             var workspace = client.GetWorkspace();
 
-            // Subscribe BEFORE submitting to capture the moment Messages.Count >= 2.
-            var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(ThreadPath))!
+            // The thread is pre-seeded with 4 messages. Subscribe for Messages.Count >= 6
+            // (4 seed + 1 user input cell + 1 agent response cell created by this submission).
+            // The agent response is the LAST id appended.
+            var sixMessages = workspace.GetRemoteStream<MeshNode>(new Address(ThreadPath))!
                 .Select(nodes =>
                 {
                     var node = nodes?.FirstOrDefault(n => n.Path == ThreadPath);
                     return (node?.Content as MeshThread)?.Messages ?? [];
                 })
-                .Where(ids => ids.Count >= 2)
+                .Where(ids => ids.Count >= 6)
                 .Timeout(20.Seconds())
                 .FirstAsync()
                 .ToTask(ct);
@@ -80,13 +82,15 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
             submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
             Output.WriteLine($"Append accepted: success={submitResp.Message.Success}");
 
-            // Resolve message ids (user + response).
-            var msgIds = await twoMessages;
-            var responseMsgId = msgIds[1];
+            // Resolve message ids — last id is the new agent response cell.
+            var msgIds = await sixMessages;
+            var responseMsgId = msgIds[^1];
             var responsePath = $"{ThreadPath}/{responseMsgId}";
-            Output.WriteLine($"Response cell: {responseMsgId}");
+            Output.WriteLine($"Response cell: {responseMsgId} (full list: [{string.Join(",", msgIds)}])");
 
-            // Wait for the response cell text to fill in (= execution finished streaming).
+            // Wait for the response cell text to fill in. Skip transient placeholders
+            // ("Allocating agent...", "Initializing...") — the EchoChatClient's final
+            // streaming text always contains "received" once execution is done.
             ThreadMessage? responseMsg = null;
             for (var i = 0; i < 100; i++)
             {
@@ -98,7 +102,8 @@ public class OrleansChatHistoryTest(SharedOrleansFixture fixture, ITestOutputHel
                 else if (node?.Content is JsonElement cje)
                     responseMsg = cje.Deserialize<ThreadMessage>(client.JsonSerializerOptions);
 
-                if (!string.IsNullOrEmpty(responseMsg?.Text)) break;
+                if (responseMsg?.Text is { } text && text.Contains("received", StringComparison.OrdinalIgnoreCase))
+                    break;
                 await Task.Delay(200, ct);
             }
 

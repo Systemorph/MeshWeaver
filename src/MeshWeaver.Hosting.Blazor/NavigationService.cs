@@ -34,6 +34,17 @@ internal class NavigationService : INavigationService
     // ServiceProvider instead — same instance, just sourced from the right scope.
     private readonly Lazy<IMeshQueryCore> _queryCore;
     private readonly IMessageHub _hub;
+    // Reactive path stream — see <see cref="INavigationService.Path"/>. Never
+    // emits null/empty; the first emission lands when ProcessLocationChange or
+    // OnLocationChanged read a real URI off NavigationManager. Latecomer
+    // subscribers get the last seen path via ReplaySubject(1) cache.
+    private readonly System.Reactive.Subjects.ReplaySubject<string> _pathSubject = new(bufferSize: 1);
+    // Mirror of _pathSubject's last emission. Used for synchronous "did the user
+    // navigate away during the retry delay?" checks where we don't want to plumb
+    // an Rx subscription. Updated on every OnNext below; reads are racy but
+    // bounded — the worst case is a stale retry that's then re-dropped on the
+    // next tick.
+    private string? _currentPathSnapshot;
     private readonly ILogger<NavigationService>? _logger;
     private readonly int[] _retryDelays;
 
@@ -78,32 +89,37 @@ internal class NavigationService : INavigationService
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
         _retryDelays = retryDelays ?? DefaultRetryDelays;
 
-        // Start with a descriptive status so the very first render has a label â€”
-        // never a blank spinner. `CurrentPath` reads `NavigationManager.Uri`, which
-        // throws "RemoteNavigationManager has not been initialized" if accessed
-        // during DI construction (Blazor Server circuit activation). Fall back to
-        // an empty path in that case â€” InitializeAsync re-emits LookingUp with the
-        // real path once the NavigationManager is wired up.
-        string? initialPath = null;
-        try { initialPath = CurrentPath; } catch (InvalidOperationException) { /* not yet initialized */ }
-        _status.OnNext(NavigationStatus.LookingUp(initialPath));
+        // Status starts unlabelled — InitializeAsync emits LookingUp with the
+        // real path the moment NavigationManager has a URI and the Path stream
+        // gets its first emission.
+        _status.OnNext(NavigationStatus.LookingUp(null));
     }
 
     /// <inheritdoc />
-    public string? CurrentPath
+    public IObservable<string> Path => _pathSubject;
+
+    /// <summary>
+    /// Reads <c>NavigationManager.Uri</c> guarded against RemoteNavigationManager's
+    /// "has not been initialized" exception. Internal — external code subscribes
+    /// to <see cref="Path"/> instead. Returns null when the manager isn't ready;
+    /// the caller decides whether to fall back, retry, or skip emitting.
+    /// </summary>
+    private string? TryReadCurrentPath()
     {
-        get
-        {
-            // RemoteNavigationManager.Uri throws "...has not been initialized" when
-            // accessed before the Blazor circuit's first JS interop tick. Every
-            // call site reading CurrentPath used to need its own try/catch around
-            // an InvalidOperationException; centralise the guard here so the
-            // property is safe to call from any thread at any time. Returns null
-            // when the navigation manager isn't ready — call sites already
-            // null-coalesce / null-check.
-            try { return _navigationManager.ToBaseRelativePath(_navigationManager.Uri); }
-            catch (InvalidOperationException) { return null; }
-        }
+        try { return _navigationManager.ToBaseRelativePath(_navigationManager.Uri); }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    /// <summary>
+    /// Pushes <paramref name="path"/> onto the <see cref="Path"/> stream and
+    /// updates the synchronous mirror used by retry's stale-check. Skips empty
+    /// paths so the never-null-or-empty contract holds.
+    /// </summary>
+    private void PublishPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        _currentPathSnapshot = path;
+        _pathSubject.OnNext(path);
     }
 
     /// <inheritdoc />
@@ -143,11 +159,16 @@ internal class NavigationService : INavigationService
         _isInitialized = true;
         _navigationManager.LocationChanged += OnLocationChanged;
 
-        // Reactive — kicks off the resolution chain via Subscribe; never awaits it.
-        // Callers that need to observe the resulting NavigationContext should
-        // subscribe to OnNavigationContextChanged. Tests bridge that event at
-        // their edge (TaskCompletionSource sanctioned per AsynchronousCalls.md).
-        ProcessLocationChange(CurrentPath ?? "");
+        // Push the initial path onto the Path stream and kick off resolution.
+        // Reactive — Subscribe-driven; never awaits a hub round-trip. Callers
+        // that need to observe the resulting NavigationContext subscribe to
+        // <see cref="NavigationContext"/>.
+        var initial = TryReadCurrentPath();
+        if (!string.IsNullOrEmpty(initial))
+        {
+            PublishPath(initial);
+            ProcessLocationChange(initial);
+        }
         return Task.CompletedTask;
     }
 
@@ -209,27 +230,59 @@ internal class NavigationService : INavigationService
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         var path = _navigationManager.ToBaseRelativePath(e.Location);
+        PublishPath(path);
         ProcessLocationChange(path);
     }
+
+    // Per-path resolution subscription. Cancelled when the user navigates away
+    // so the previous path's live resolution stream stops emitting into a
+    // navigation context that's no longer relevant.
+    private IDisposable? _resolutionSubscription;
+    // Watchdog disposable for the not-found timeout. Cancelled when the
+    // resolution arrives in time or when the user navigates away.
+    private IDisposable? _notFoundWatchdog;
 
     private void ProcessLocationChange(string path)
     {
         IsResolving = true;
         _status.OnNext(NavigationStatus.LookingUp(path));
 
-        // Reactive — Subscribe, never await (await on resolution chain is a deadlock
-        // surface; see Doc/Architecture/AsynchronousCalls.md).
-        _pathResolver.ResolvePath(path).Subscribe(resolution =>
+        // Cancel any prior resolution + watchdog. The user navigated; the
+        // previous path's resolution stream is now stale.
+        _resolutionSubscription?.Dispose();
+        _notFoundWatchdog?.Dispose();
+
+        // Subscribe-and-stay: the live ResolvePath stream re-emits whenever
+        // the catalog changes. Once we get a non-null resolution we proceed,
+        // and the subscription stays open so a later catalog change (e.g. the
+        // node being deleted) reflows into the navigation context. No retry
+        // timer, no backoff array — the catalog change feed drives re-emit.
+        var resolved = false;
+        _resolutionSubscription = _pathResolver.ResolvePath(path).Subscribe(resolution =>
         {
             if (resolution is null)
-            {
-                // Do NOT fire OnNavigationContextChanged(null) here — that causes the
-                // "Page Not Found" card to flash while retries are still running.
-                RetryResolution(path);
-                return;
-            }
+                return; // wait for the catalog to learn about the path
+            resolved = true;
+            _notFoundWatchdog?.Dispose();
             ProcessResolvedPath(path, resolution);
         });
+
+        // Watchdog: if no resolution arrives within the cumulative retry budget,
+        // flip to NotFound. Replaces the previous per-attempt Observable.Timer
+        // chain — same outer time budget, but the work happens through the live
+        // stream above instead of polling re-resolves.
+        var totalBudget = _retryDelays.Sum();
+        _notFoundWatchdog = Observable.Timer(TimeSpan.FromMilliseconds(totalBudget))
+            .Subscribe(_ =>
+            {
+                if (resolved) return;
+                if (_currentPathSnapshot != path) return; // user navigated away
+                IsResolving = false;
+                Context = null;
+                CurrentNamespace = null;
+                _status.OnNext(NavigationStatus.NotFound(path));
+                _navigationContext.OnNext(null);
+            });
     }
 
     private void ProcessResolvedPath(string path, AddressResolution resolution)
@@ -266,42 +319,6 @@ internal class NavigationService : INavigationService
             if (currentNodePath != _lastLoadedNodePath)
                 _ = LoadCreatableTypesAsync(currentNodePath);
         });
-    }
-
-    /// <summary>
-    /// Retries path resolution with backoff when the initial attempt returns null.
-    /// This handles the case where the mesh catalog is still initializing at startup.
-    /// Runs in the background so the UI can show a spinner while waiting.
-    /// </summary>
-    /// <summary>
-    /// Reactive retry chain — schedule timer + resolve, recurse to next attempt on
-    /// miss. No await, no Task.Delay; uses Observable.Timer.
-    /// </summary>
-    private void RetryResolution(string path) => AttemptRetry(path, 0);
-
-    private void AttemptRetry(string path, int attemptIdx)
-    {
-        if (attemptIdx >= _retryDelays.Length)
-        {
-            // All retries exhausted — flip to "Page Not Found".
-            IsResolving = false;
-            Context = null;
-            CurrentNamespace = null;
-            _status.OnNext(NavigationStatus.NotFound(path));
-            _navigationContext.OnNext(null);
-            return;
-        }
-
-        Observable.Timer(TimeSpan.FromMilliseconds(_retryDelays[attemptIdx]))
-            .Where(_ => CurrentPath == path) // navigation moved on → drop
-            .SelectMany(_ => _pathResolver.ResolvePath(path))
-            .Subscribe(resolution =>
-            {
-                if (resolution is not null)
-                    ProcessResolvedPath(path, resolution);
-                else
-                    AttemptRetry(path, attemptIdx + 1);
-            });
     }
 
     /// <summary>
@@ -466,6 +483,10 @@ internal class NavigationService : INavigationService
         _disposed = true;
         _loadingCts?.Cancel();
         _loadingCts?.Dispose();
+        _resolutionSubscription?.Dispose();
+        _notFoundWatchdog?.Dispose();
+        _pathSubject.OnCompleted();
+        _pathSubject.Dispose();
         _navigationContext.Dispose();
         _creatableTypes.Dispose();
         _status.Dispose();

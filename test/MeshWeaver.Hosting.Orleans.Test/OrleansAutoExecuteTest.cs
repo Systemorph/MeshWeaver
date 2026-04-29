@@ -48,7 +48,18 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
         // Canonical CQRS-correct read: target the per-node hub's MeshNodeReference
         // reducer, not an EntityCollection lookup. The owning hub is the source of
         // truth for MeshNode content; this avoids any catalog / index lag.
-        var response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
+        // Polling tests call this while a node is still being materialized (response
+        // cell created async by the agent loop) — routing returns NotFound until then.
+        // Swallow that as null so the caller's polling loop can keep trying.
+        IMessageDelivery<GetDataResponse> response;
+        try
+        {
+            response = await client.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path))).FirstAsync().ToTask(ct);
+        }
+        catch (DeliveryFailureException)
+        {
+            return null;
+        }
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
             node = je.Deserialize<MeshNode>(Fixture.ClientMesh.JsonSerializerOptions);

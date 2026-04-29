@@ -129,17 +129,26 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
             .FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
 
-        // 2. Trigger UpdateMeshNode by posting AppendUserMessageRequest. The handler
-        //    writes to workspace.UpdateMeshNode (which lazily forces the workspace
-        //    InstanceCollection<MeshNode> to load via MeshNodeTypeSource.InitializeAsync,
-        //    then merges the update). The response confirms the write completed.
-        var newMsgId = Guid.NewGuid().ToString("N")[..8];
-        Output.WriteLine($"[Act] Posting AppendUserMessageRequest with msgId={newMsgId}");
+        // 2. Confirm the thread starts empty (no UserMessageIds).
+        var before = await ReadThreadAsync(client, threadPath, ct);
+        before.Should().NotBeNull();
+        before!.UserMessageIds.Count.Should().Be(0, "thread starts empty");
+
+        // 3. Trigger UpdateMeshNode by posting AppendUserMessageRequest. The handler
+        //    routes through ThreadInput.AppendUserInput which calls
+        //    workspace.UpdateMeshNode to add a SERVER-allocated id to UserMessageIds
+        //    (the legacy UserMessageId on the request is ignored — see
+        //    ThreadSubmission.HandleAppendUserMessage). Asserting on UserMessageIds.Count
+        //    growing is the canary for "local workspace write visible to grain-direct read".
+        Output.WriteLine($"[Act] Posting AppendUserMessageRequest");
         var resp = await client.Observe(
                 new AppendUserMessageRequest
                 {
                     ThreadPath = threadPath,
-                    UserMessageId = newMsgId,
+                    // UserMessageId is required by the contract but ignored by the new
+                    // server flow — the handler allocates a server-side id; we assert
+                    // on UserMessageIds.Count growing instead of looking for this id.
+                    UserMessageId = Guid.NewGuid().ToString("N")[..8],
                     UserText = "Workspace propagation test message",
                     ContextPath = "User/TestUser"
                 },
@@ -148,22 +157,22 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
         resp.Message.Success.Should().BeTrue(resp.Message.Error);
         Output.WriteLine($"[Resp] AppendUserMessageResponse OK");
 
-        // 3. Now read via GetDataRequest. The new message id MUST be visible.
+        // 4. Poll until the new UserMessageId shows up via a fresh GetDataRequest.
         //    If this fails, the local workspace write is invisible to subsequent
-        //    grain-direct reads â€” that's the bug class behind the 17 failures.
+        //    grain-direct reads — that's the bug class behind the polling failures.
         MeshThread? current = null;
         for (var i = 0; i < 20; i++)
         {
             current = await ReadThreadAsync(client, threadPath, ct);
-            if (current?.Messages.Contains(newMsgId) == true)
+            if (current?.UserMessageIds.Count > 0)
             {
-                Output.WriteLine($"[Assert] After {i * 200}ms: Messages has {current.Messages.Count} entries: [{string.Join(",", current.Messages)}]");
+                Output.WriteLine($"[Assert] After {i * 200}ms: UserMessageIds=[{string.Join(",", current.UserMessageIds)}], Messages=[{string.Join(",", current.Messages)}]");
                 return;
             }
             await Task.Delay(200, ct);
         }
         throw new Xunit.Sdk.XunitException(
-            $"After 4s the GetDataRequest for {threadPath} still does not show the appended msgId={newMsgId}. " +
+            $"After 4s the GetDataRequest for {threadPath} still shows UserMessageIds.Count=0. " +
             $"current.Messages={(current == null ? "(null)" : string.Join(",", current.Messages))}. " +
             "The per-thread grain's UpdateMeshNode write did not become visible to a fresh MeshNodeReference read on the same grain.");
     }
