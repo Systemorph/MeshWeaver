@@ -776,11 +776,24 @@ public sealed class MessageHub : IMessageHub
         return sb.ToString();
     }
 
-    public bool AnyHubQuiescingTimedOut()
+    /// <summary>
+    /// Hard cap on hosted-hub tree recursion. Real hierarchies are at most a few
+    /// levels deep; anything beyond this is almost certainly a cycle (e.g. hub A
+    /// hosts hub B whose configuration re-creates A). Without this guard the
+    /// recursion would stack-overflow the test host on Linux, where the default
+    /// stack is smaller than Windows and the unwind silently kills the process
+    /// (no error, no trx update — just SIGTERM at the wall-clock cap).
+    /// </summary>
+    private const int MaxHostedHubRecursionDepth = 32;
+
+    public bool AnyHubQuiescingTimedOut() => AnyHubQuiescingTimedOut(depth: 0);
+
+    private bool AnyHubQuiescingTimedOut(int depth)
     {
         if (QuiescingTimedOut) return true;
+        if (depth >= MaxHostedHubRecursionDepth) return false;
         foreach (var child in hostedHubs.Hubs)
-            if (child.AnyHubQuiescingTimedOut()) return true;
+            if (child is MessageHub childMh && childMh.AnyHubQuiescingTimedOut(depth + 1)) return true;
         return false;
     }
 
@@ -793,6 +806,12 @@ public sealed class MessageHub : IMessageHub
 
     private void AppendQuiescingTimeoutSummary(System.Text.StringBuilder sb, int depth)
     {
+        if (depth >= MaxHostedHubRecursionDepth)
+        {
+            sb.Append(new string(' ', depth * 2))
+              .AppendLine("(recursion depth limit reached — possible hosted-hub cycle)");
+            return;
+        }
         if (QuiescingTimedOut)
         {
             sb.Append(new string(' ', depth * 2))
@@ -806,6 +825,12 @@ public sealed class MessageHub : IMessageHub
 
     private void AppendDiagnostics(System.Text.StringBuilder sb, int depth)
     {
+        if (depth >= MaxHostedHubRecursionDepth)
+        {
+            sb.Append(new string(' ', depth * 2))
+              .AppendLine("(recursion depth limit reached — possible hosted-hub cycle)");
+            return;
+        }
         var indent = new string(' ', depth * 2);
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
