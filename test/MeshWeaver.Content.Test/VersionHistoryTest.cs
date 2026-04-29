@@ -127,6 +127,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
             .ToTask(TestContext.Current.CancellationToken);
         var v1Version = versionsAfterV1.LastOrDefault();
         v1Version.Should().NotBeNull("there should be a version after create");
+        Output.WriteLine($"After Create: versions = [{string.Join(", ", versionsAfterV1.Select(v => v.Version))}]");
 
         // Update to V2
         await NodeFactory.UpdateNode(created with { Name = "V2" });
@@ -139,6 +140,14 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
             .ToList()
             .FirstAsync()
             .ToTask(TestContext.Current.CancellationToken);
+        Output.WriteLine($"After all updates: versions = [{string.Join(", ", allVersions.Select(v => v.Version))}]");
+        foreach (var v in allVersions)
+        {
+            var snapshot = await versionQuery.GetVersion("test/before", v.Version, options)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            Output.WriteLine($"  Version {v.Version}: Name='{snapshot?.Name}'");
+        }
         var v3Version = allVersions.FirstOrDefault();
         v3Version.Should().NotBeNull("there should be a latest version");
 
