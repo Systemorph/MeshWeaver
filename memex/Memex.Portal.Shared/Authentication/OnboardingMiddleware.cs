@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -14,12 +16,35 @@ namespace Memex.Portal.Shared.Authentication;
 /// Middleware that redirects authenticated users without an Active user node
 /// to the onboarding page. Runs after UserContextMiddleware.
 ///
-/// Flow:
-/// - No user node (or Transient) → redirect /onboarding
-/// - Active node → update AccessContext with username, pass through
+/// <para>Flow:
+/// <list type="bullet">
+/// <item><description>No user node (or Transient) → redirect /onboarding</description></item>
+/// <item><description>Active node → update AccessContext with username, pass through</description></item>
+/// </list>
+/// </para>
+///
+/// <para>The user lookup uses <see cref="IMeshQueryCore"/> (the unsecured
+/// infrastructure surface — same one VUserHelper / SyncedQueryMeshNodes use).
+/// Going through <c>IMeshService</c> applies the ACL filter, but at this point
+/// in the pipeline the authenticated user has no mesh roles yet — so the
+/// secured query returns nothing and every signed-in user got bounced to
+/// /onboarding even when their User node existed.</para>
+///
+/// <para>Internally the lookup is a reactive observable chain
+/// (<c>ObserveQuery</c> → <c>Where</c> → <c>Take(1)</c> → <c>Timeout</c>);
+/// the single <c>await</c> at the middleware boundary is unavoidable because
+/// ASP.NET Core's <c>RequestDelegate</c> is Task-based.</para>
 /// </summary>
 public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddleware> logger)
 {
+    /// <summary>
+    /// Hard cap on the user-node lookup. The reactive chain below uses
+    /// <see cref="System.Reactive.Linq.Observable.Timeout{T}"/> to fail loudly
+    /// if the query layer never emits — better than silently bouncing the user
+    /// to /onboarding because the catalog hadn't surfaced their User node yet.
+    /// </summary>
+    private static readonly TimeSpan LookupTimeout = TimeSpan.FromSeconds(5);
+
     private static readonly HashSet<string> ExcludedPrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
         "/onboarding",
@@ -65,24 +90,18 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                         return;
                     }
 
-                    var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshService>();
+                    // IMeshQueryCore — the unsecured infrastructure-query surface.
+                    // VUserHelper and SyncedQueryMeshNodes use this same surface — see
+                    // PersistenceExtensions.RegisterMeshQueryCoreOnMeshHub.
+                    var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshQueryCore>();
                     if (meshQuery != null)
                     {
                         try
                         {
-                            // Look up User node by email stored in content.
-                            // Use ImpersonateAsHub scope because user context may not have
-                            // sufficient permissions yet at this point in the pipeline.
-                            MeshNode? node;
-                            using (accessService.ImpersonateAsHub(portalApp.Hub))
-                            {
-                                node = await meshQuery.QueryAsync<MeshNode>(
-                                    $"nodeType:User namespace:User content.email:{email} limit:1").FirstOrDefaultAsync();
-                            }
+                            var node = await FindUserByEmailAsync(meshQuery, portalApp.Hub, email);
 
                             if (node == null || node.State == MeshNodeState.Transient)
                             {
-                                // No user node or incomplete onboarding — redirect
                                 logger.LogInformation(
                                     "OnboardingMiddleware: Redirecting to onboarding for {Email}",
                                     email);
@@ -92,10 +111,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
 
                             // Active user — update AccessContext with username (node ID)
                             var username = node.Id;
-
-                            // Query global AccessAssignment to populate roles
-                            var roles = await LoadUserRolesAsync(
-                                meshQuery, accessService, portalApp.Hub, username);
+                            var roles = await LoadUserRolesAsync(meshQuery, portalApp.Hub, username);
 
                             var updatedContext = userContext with
                             {
@@ -123,37 +139,88 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     }
 
     /// <summary>
-    /// Loads the user's role names from AccessAssignment nodes across all scopes.
-    /// Used to populate AccessContext.Roles so permission checks work in Blazor components.
+    /// Reactive lookup of the User node by email. Composes
+    /// <see cref="IMeshQueryCore.ObserveQuery{T}"/> →
+    /// <see cref="Observable.Where{TSource}"/> (skip Initial empties while the
+    /// catalog is still warming) → <see cref="Observable.Take{TSource}(IObservable{TSource}, int)"/>
+    /// → <see cref="Observable.Timeout{T}(IObservable{T}, TimeSpan)"/>. The
+    /// single <see cref="System.Reactive.Threading.Tasks.TaskObservableExtensions.ToTask{TResult}(IObservable{TResult})"/>
+    /// at the bottom bridges to the middleware's Task boundary — every other
+    /// step stays observable so a slow query layer doesn't deadlock the
+    /// request thread, and a stalled query surfaces as a TimeoutException
+    /// instead of a silent /onboarding redirect.
+    /// </summary>
+    private static Task<MeshNode?> FindUserByEmailAsync(
+        IMeshQueryCore meshQuery, IMessageHub hub, string email)
+    {
+        var request = MeshQueryRequest.FromQuery(
+            $"nodeType:User namespace:User content.email:{email} limit:1",
+            WellKnownUsers.System);
+
+        return meshQuery.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
+            .Where(c => c.ChangeType == QueryChangeType.Initial
+                     || c.ChangeType == QueryChangeType.Reset
+                     || c.ChangeType == QueryChangeType.Added
+                     || c.ChangeType == QueryChangeType.Updated)
+            // Initial may be empty before the catalog has loaded the User
+            // partition; wait for the first change carrying an item.
+            .Where(c => c.Items.Count > 0)
+            .Select(c => (MeshNode?)c.Items[0])
+            .Take(1)
+            .Timeout(LookupTimeout, Observable.Return<MeshNode?>(null))
+            .FirstOrDefaultAsync()
+            .ToTask();
+    }
+
+    /// <summary>
+    /// Loads the user's role names from AccessAssignment nodes via the same
+    /// reactive surface as <see cref="FindUserByEmailAsync"/>. Initial emission
+    /// of the ObserveQuery stream carries every matching access node; we read
+    /// it once, fold roles, and return.
     /// </summary>
     private static async Task<IReadOnlyCollection<string>> LoadUserRolesAsync(
-        IMeshService meshQuery, AccessService accessService, IMessageHub hub, string username)
+        IMeshQueryCore meshQuery, IMessageHub hub, string username)
     {
         try
         {
-            var roles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            using (accessService.ImpersonateAsHub(hub))
-            {
-                await foreach (var accessNode in meshQuery.QueryAsync<MeshNode>(
-                    $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10"))
+            var request = MeshQueryRequest.FromQuery(
+                $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10",
+                WellKnownUsers.System);
+
+            // Initial change carries the snapshot — Take(1) completes; if the
+            // query layer never emits within LookupTimeout, fall back to empty.
+            var initial = await meshQuery.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
+                .Where(c => c.ChangeType == QueryChangeType.Initial
+                         || c.ChangeType == QueryChangeType.Reset)
+                .Take(1)
+                .Timeout(LookupTimeout, Observable.Return(new QueryResultChange<MeshNode>
                 {
-                    if (accessNode.Content == null)
-                        continue;
+                    ChangeType = QueryChangeType.Initial,
+                    Items = Array.Empty<MeshNode>(),
+                    Timestamp = DateTimeOffset.UtcNow,
+                }))
+                .FirstAsync()
+                .ToTask();
 
-                    AccessAssignment? assignment = accessNode.Content switch
-                    {
-                        AccessAssignment aa => aa,
-                        JsonElement je => JsonSerializer.Deserialize<AccessAssignment>(
-                            je.GetRawText(), hub.JsonSerializerOptions),
-                        _ => null
-                    };
+            var roles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var accessNode in initial.Items)
+            {
+                if (accessNode.Content == null)
+                    continue;
 
-                    if (assignment == null)
-                        continue;
+                AccessAssignment? assignment = accessNode.Content switch
+                {
+                    AccessAssignment aa => aa,
+                    JsonElement je => JsonSerializer.Deserialize<AccessAssignment>(
+                        je.GetRawText(), hub.JsonSerializerOptions),
+                    _ => null
+                };
 
-                    foreach (var r in assignment.Roles.Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role)))
-                        roles.Add(r.Role);
-                }
+                if (assignment == null)
+                    continue;
+
+                foreach (var r in assignment.Roles.Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role)))
+                    roles.Add(r.Role);
             }
 
             return roles.ToList();
