@@ -145,12 +145,16 @@ public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
 {
     /// <summary>
     /// Shared root directory for the <see cref="IAssemblyStore"/> across every silo in
-    /// the test cluster. Fixed (not <c>Guid.NewGuid()</c>) so that multi-silo tests can
-    /// observe one silo's Put reflected in another silo's TryGet — exactly what the
-    /// content-addressed store promises in production across ACA replicas.
+    /// the test cluster. Per-process Guid suffix (mirrors the Acme/FutuRe test isolation
+    /// pattern, e.g. <c>AcmeSearchTest.SharedCacheDirectory</c>) so a stale DLL from a
+    /// previous test process can't collide on Windows file locks or be re-loaded into
+    /// the new <see cref="System.Runtime.Loader.AssemblyLoadContext"/>. The Guid is
+    /// computed once per AppDomain via <c>static readonly</c>, so every silo in the
+    /// same cluster (same process) still sees the same root and the cross-silo
+    /// Put-on-A / TryGet-on-B invariant holds.
     /// </summary>
     public static readonly string AssemblyStoreRoot =
-        Path.Combine(Path.GetTempPath(), "mw-orleans-asmstore");
+        Path.Combine(Path.GetTempPath(), $"mw-orleans-asmstore-{Guid.NewGuid():N}");
 
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder

@@ -413,12 +413,16 @@ public class DynamicCompilationSiloConfigurator : ISiloConfigurator, IHostConfig
 public class CrossSiloFileSystemSiloConfigurator : ISiloConfigurator, IHostConfigurator
 {
     /// <summary>
-    /// Shared filesystem root for both silos' persistence. Fixed (not Guid-based)
-    /// so the two silos reach the same directory; per-test isolation comes from
-    /// the unique NodeType id in each test method.
+    /// Shared filesystem root for both silos' persistence. Per-process Guid suffix
+    /// (Acme/FutuRe test-isolation pattern) so each test run gets a fresh dir —
+    /// avoids cross-run contamination of partially-written nodes / NodeType
+    /// configurations from prior failed runs. The Guid is computed once per
+    /// AppDomain via <c>static readonly</c>, so every silo in the same cluster
+    /// (same process) still sees the same root and writes from silo A are visible
+    /// to silo B.
     /// </summary>
     public static readonly string PersistenceRoot =
-        Path.Combine(Path.GetTempPath(), "mw-orleans-xsilo-fs");
+        Path.Combine(Path.GetTempPath(), $"mw-orleans-xsilo-fs-{Guid.NewGuid():N}");
 
     public void Configure(ISiloBuilder siloBuilder)
     {
