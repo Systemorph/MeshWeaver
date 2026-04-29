@@ -177,10 +177,15 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var responseMsgId = msgIds[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
 
-        // Now poll the response message for tool calls AND text
+        // Now poll the response message for tool calls AND text. Sub-thread tool
+        // execution can take 20+ seconds in Orleans (grain activation + chat client
+        // round-trip), and the polling break condition requires every tool call to
+        // be resolved (Result != null), so the loop has to run long enough to cover
+        // the tool's full lifecycle. Outer test timeout is 120s; the iteration cap
+        // here is the inner safety net so we don't hang past the timeout.
         Output.WriteLine("5. Polling response message for content...");
         ThreadMessage? finalResponse = null;
-        for (var i = 0; i < 100; i++)
+        for (var i = 0; i < 300; i++)
         {
             var responseMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
             if (responseMsg != null)
@@ -191,7 +196,12 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
                 {
                     Output.WriteLine($"  [POLL {i}] text={responseMsg.Text?.Length ?? 0}chars, toolCalls={responseMsg.ToolCalls.Count}, delegations={responseMsg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
                 }
-                if (hasText && responseMsg.ToolCalls.All(c => c.Result != null))
+                // Need: text present AND tool calls present AND every tool call resolved.
+                // The plain `.All(...)` is vacuously true when ToolCalls is empty — that
+                // races against the streaming sequence where text-chunk pushes can land
+                // before the tool-call entry is committed, so we'd break out with
+                // ToolCalls=[] and the NotBeEmpty assertion would fail downstream.
+                if (hasText && hasTools && responseMsg.ToolCalls.All(c => c.Result != null))
                 {
                     finalResponse = responseMsg;
                     break;
@@ -479,56 +489,34 @@ internal class ToolCallingFakeChatClient : IChatClient
     public void Dispose() { }
 }
 
-internal class ToolCallingFakeChatClientFactory : IChatClientFactory
+/// <summary>
+/// Inherits from <see cref="ChatClientAgentFactory"/> so the framework's tool-creation
+/// pipeline runs — registers <c>delegate_to_agent</c> for default agents, wraps
+/// tools with <c>WrapToolWithAccessContext</c>, and adds the function-invoking
+/// middleware. <see cref="GetStandardTools"/> contributes the <c>test_tool</c>
+/// the Worker exercises in <c>ToolCallingFakeChatClient</c>.
+/// </summary>
+internal class ToolCallingFakeChatClientFactory(IMessageHub hub) : ChatClientAgentFactory(hub)
 {
-    public string Name => "ToolCallingFakeFactory";
-    public IReadOnlyList<string> Models => ["tool-calling-model"];
-    public int Order => 0;
-    public bool IsPersistent => false;
+    public override string Name => "ToolCallingFakeFactory";
+    public override IReadOnlyList<string> Models => ["tool-calling-model"];
+    public override int Order => 0;
 
-    public ChatClientAgent CreateAgent(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
+    protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        // Orchestrator delegates, Worker does simple text
-        IChatClient client = config.Id == "Orchestrator"
-            ? new DelegatingFakeChatClient(config.Id)
+        // Orchestrator emits delegation calls; Worker exercises the test tool then streams text.
+        return agentConfig.Id == "Orchestrator"
+            ? new DelegatingFakeChatClient(agentConfig.Id)
             : new ToolCallingFakeChatClient();
-
-        var agent = new ChatClientAgent(chatClient: client,
-            instructions: config.Instructions ?? "Test assistant.",
-            name: config.Id, description: config.Description ?? config.Id,
-            tools: [AIFunctionFactory.Create((string param) => $"Tool executed with {param}", "test_tool", "A test tool")],
-            loggerFactory: null, services: null);
-
-        // Wrap with function calling middleware — same as production ChatClientAgentFactory
-        return agent.AsBuilder()
-            .Use((AIAgent _, FunctionInvocationContext ctx,
-                Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
-                CancellationToken ct) =>
-            {
-                chat.ForwardToolCall?.Invoke(new ToolCallEntry
-                {
-                    Name = ctx.Function.Name,
-                    DisplayName = ctx.Function.Name,
-                    Arguments = ctx.Arguments?.Count > 0
-                        ? string.Join(", ", ctx.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
-                        : null,
-                    Timestamp = DateTime.UtcNow
-                });
-                return next(ctx, ct);
-            })
-            .Build() as ChatClientAgent ?? agent;
     }
 
-    public Task<ChatClientAgent> CreateAgentAsync(
-        AgentConfiguration config, IAgentChat chat,
-        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
-        IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        string? modelName = null)
-        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
+    protected override IEnumerable<AITool> GetStandardTools(IAgentChat chat)
+    {
+        yield return AIFunctionFactory.Create(
+            (string param) => $"Tool executed with {param}",
+            "test_tool",
+            "A test tool the Worker calls before streaming text.");
+    }
 }
 
 public class StreamingSiloConfigurator : ISiloConfigurator, IHostConfigurator
@@ -551,7 +539,7 @@ public class StreamingSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .AddAI()
             .ConfigureServices(services =>
             {
-                services.AddSingleton<IChatClientFactory>(new ToolCallingFakeChatClientFactory());
+                services.AddSingleton<IChatClientFactory, ToolCallingFakeChatClientFactory>();
                 return services;
             })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
