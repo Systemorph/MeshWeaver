@@ -46,7 +46,10 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
     {
         return builder
             .UseMonolithMesh()
-            .AddInMemoryPersistence()
+            // AddDocumentation registers an embedded-resource partition under
+            // the "Doc" namespace; partition-routing persistence is required
+            // for that provider to actually serve reads.
+            .AddPartitionedInMemoryPersistence()
             .AddDocumentation()
             .ConfigureServices(services =>
                 services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
