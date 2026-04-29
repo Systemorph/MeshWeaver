@@ -234,53 +234,39 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             .Merge(externalChanges)
             .Merge(feedRemovals);
 
-        // Pipeline: query change deltas → live path-set → per-path remote streams →
-        // CombineLatest → IEnumerable<MeshNode>. Per the architecture
-        // (Doc/Architecture/InitializationGates.md + the user's directive):
-        // "queries return only ids; resolve content via remote streams."
+        // Fold change deltas into a path → MeshNode dictionary. The upstream
+        // IMeshQueryProvider.ObserveQuery is registered with userId=WellKnownUsers.System
+        // (line above), so its emissions already bypass per-node read validators
+        // — we use the carried payloads directly.
         //
-        // Step 1: fold query deltas into the path-set. The query layer's
-        // QueryResultChange.Items may carry MeshNode payloads, but we DROP the
-        // content and keep only Path — content always comes from the owning
-        // hub's remote stream so single-source-of-truth holds and writes via
-        // remote-stream Update propagate back to readers.
-        var pathSetUpdates = changes
+        // We INTENTIONALLY do not open per-path remote streams to "refresh" the
+        // values: the synced AccessAssignment query is consumed by SecurityService
+        // BEFORE permission evaluation has a system-identity view of its own data,
+        // and a per-path remote-stream subscription would re-enter the read
+        // validator chain in the caller's user context — at which point
+        // RlsNodeValidator denies (e.g. nodelete-user has no read on
+        // `_Access/Roland_Access`), the synced collection silently empties, and
+        // SecurityService.HasPermission returns false for everyone.
+        //
+        // Future writes to a synced node DO propagate via the upstream
+        // ObserveQuery's Updated events, which carry the post-write MeshNode
+        // payload — the DistinctUntilChanged below de-dupes equal payloads.
+        return changes
             .Scan(
-                ImmutableHashSet<string>.Empty,
-                (set, change) => change.ChangeType switch
+                ImmutableDictionary<string, MeshNode>.Empty,
+                (dict, change) => change.ChangeType switch
                 {
                     QueryChangeType.Initial or QueryChangeType.Reset
                         or QueryChangeType.Added or QueryChangeType.Updated =>
-                        change.Items.Aggregate(set, (s, n) =>
-                            string.IsNullOrEmpty(n.Path) ? s : s.Add(n.Path)),
+                        change.Items.Aggregate(dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)),
                     QueryChangeType.Removed =>
-                        change.Items.Aggregate(set, (s, n) =>
-                            string.IsNullOrEmpty(n.Path) ? s : s.Remove(n.Path)),
-                    _ => set,
+                        change.Items.Aggregate(dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
+                    _ => dict,
                 })
-            .Do(set => pathSet.OnNext(set))
-            .DistinctUntilChanged();
-
-        // Step 2: for each path-set, open per-path remote streams. CombineLatest
-        // emits whenever any path's content changes, producing a live
-        // IEnumerable<MeshNode>. Switch when the path-set changes — old
-        // subscriptions drop, new ones come in.
-        return pathSetUpdates
-            .Select(set =>
-            {
-                if (set.IsEmpty)
-                    return Observable.Return((IEnumerable<MeshNode>)Array.Empty<MeshNode>());
-
-                var perPath = set
-                    .Select(path => workspace.GetMeshNodeStream(path)
-                        .StartWith(default(MeshNode)!) // ensure CombineLatest has a value per path
-                        .Where(n => n != null))
-                    .ToArray();
-
-                return Observable.CombineLatest(perPath)
-                    .Select(list => (IEnumerable<MeshNode>)list.Where(n => n != null).ToArray());
-            })
-            .Switch()
-            .DistinctUntilChanged();
+            .Do(dict => pathSet.OnNext(dict.Keys.ToImmutableHashSet()))
+            .DistinctUntilChanged()
+            .Select(dict => (IEnumerable<MeshNode>)dict.Values);
     }
 }
