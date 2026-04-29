@@ -234,27 +234,53 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             .Merge(externalChanges)
             .Merge(feedRemovals);
 
-        // Fold change deltas into a path → MeshNode dictionary.
-        return changes
+        // Pipeline: query change deltas → live path-set → per-path remote streams →
+        // CombineLatest → IEnumerable<MeshNode>. Per the architecture
+        // (Doc/Architecture/InitializationGates.md + the user's directive):
+        // "queries return only ids; resolve content via remote streams."
+        //
+        // Step 1: fold query deltas into the path-set. The query layer's
+        // QueryResultChange.Items may carry MeshNode payloads, but we DROP the
+        // content and keep only Path — content always comes from the owning
+        // hub's remote stream so single-source-of-truth holds and writes via
+        // remote-stream Update propagate back to readers.
+        var pathSetUpdates = changes
             .Scan(
-                ImmutableDictionary<string, MeshNode>.Empty,
-                (dict, change) => change.ChangeType switch
+                ImmutableHashSet<string>.Empty,
+                (set, change) => change.ChangeType switch
                 {
-                    // Initial / Reset replace the snapshot for THIS query —
-                    // but in a multi-query union we'd lose other queries'
-                    // entries. Treat every event as additive/removal so the
-                    // unioned dict accumulates correctly.
                     QueryChangeType.Initial or QueryChangeType.Reset
                         or QueryChangeType.Added or QueryChangeType.Updated =>
-                        change.Items.Aggregate(dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)),
+                        change.Items.Aggregate(set, (s, n) =>
+                            string.IsNullOrEmpty(n.Path) ? s : s.Add(n.Path)),
                     QueryChangeType.Removed =>
-                        change.Items.Aggregate(dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
-                    _ => dict,
+                        change.Items.Aggregate(set, (s, n) =>
+                            string.IsNullOrEmpty(n.Path) ? s : s.Remove(n.Path)),
+                    _ => set,
                 })
-            .Do(dict => pathSet.OnNext(dict.Keys.ToImmutableHashSet()))
-            .DistinctUntilChanged()
-            .Select(dict => (IEnumerable<MeshNode>)dict.Values);
+            .Do(set => pathSet.OnNext(set))
+            .DistinctUntilChanged();
+
+        // Step 2: for each path-set, open per-path remote streams. CombineLatest
+        // emits whenever any path's content changes, producing a live
+        // IEnumerable<MeshNode>. Switch when the path-set changes — old
+        // subscriptions drop, new ones come in.
+        return pathSetUpdates
+            .Select(set =>
+            {
+                if (set.IsEmpty)
+                    return Observable.Return((IEnumerable<MeshNode>)Array.Empty<MeshNode>());
+
+                var perPath = set
+                    .Select(path => workspace.GetMeshNodeStream(path)
+                        .StartWith(default(MeshNode)!) // ensure CombineLatest has a value per path
+                        .Where(n => n != null))
+                    .ToArray();
+
+                return Observable.CombineLatest(perPath)
+                    .Select(list => (IEnumerable<MeshNode>)list.Where(n => n != null).ToArray());
+            })
+            .Switch()
+            .DistinctUntilChanged();
     }
 }
