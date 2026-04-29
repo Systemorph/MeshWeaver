@@ -220,14 +220,25 @@ public static class ThreadExecution
         try { ownNode = hub.GetWorkspace().GetMeshNodeStream(); }
         catch { return Task.CompletedTask; }
 
+        // Take the FIRST emission whose Content is typed as MeshThread (post-
+        // ResolveJsonElementContent). Previously we used `.Take(1)` directly on
+        // the full stream — which races: an early emission during data-source init
+        // can be null/JsonElement-shaped, the pattern match below fails silently,
+        // and the auto-execute is dropped.
+        //
+        // We must NOT also wait for `PendingUserMessage` here: HandleSubmitMessage
+        // sets PendingUserMessage AFTER hub init, and that update would re-trigger
+        // a Where-based filter — racing HandleSubmitMessage's own dispatch and
+        // double-creating cells (failing with "Node already exists").
+        //
+        // So: wait only for typed MeshThread Content; check PendingUserMessage
+        // INSIDE Subscribe so threads NOT created with BuildThreadWithMessages
+        // skip the auto-execute path silently.
         var sub = ownNode
-            .Where(node => node?.Content is MeshThread { PendingUserMessage: not null, IsExecuting: true } t
-                           && t.ActiveMessageId != null)
+            .Where(node => node?.Content is MeshThread)
             .Take(1)
             .Subscribe(node =>
         {
-            // Re-check inside Subscribe — Where guarantees the conditions hold but
-            // the pattern match on Content lets us bind `thread` for downstream use.
             if (node?.Content is not MeshThread { PendingUserMessage: not null } thread)
                 return;
 
