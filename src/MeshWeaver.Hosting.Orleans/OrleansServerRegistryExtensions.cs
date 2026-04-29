@@ -79,8 +79,9 @@ public static class OrleansServerRegistryExtensions
 
     public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
     {
-        // Register defaults if not already registered - user can register their own first
-        services.AddInMemoryPersistence();
+        // Register defaults if not already registered - user can register their own first.
+        // Partition routing is the default (see OrleansConnectionExtensions for rationale).
+        services.AddPartitionedInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
 
         // Register Orleans-distributed change feed (wraps local feed + Orleans streams)

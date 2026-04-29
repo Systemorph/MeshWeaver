@@ -167,24 +167,54 @@ public static class PersistenceExtensions
         => builder.AddInMemoryPersistence();
 
     /// <summary>
-    /// Adds in-memory persistence (no file system backing) using the routing
-    /// partition stack. Writable partitions get their own per-partition
-    /// <see cref="InMemoryPersistenceService"/> via
-    /// <see cref="InMemoryPartitionedStoreFactory"/>; static-provider partitions
-    /// (<see cref="PartitionDefinition"/> with <c>DataSource = "static"</c>) are
-    /// surfaced through <see cref="StaticNodePartitionStore"/> by
-    /// <see cref="RoutingPersistenceServiceCore"/>. Static partitions are NEVER
-    /// wrapped by <see cref="InMemoryPersistenceService"/>.
+    /// Adds in-memory persistence (no file system backing) using a single
+    /// <see cref="InMemoryPersistenceService"/> singleton. Use this when the test
+    /// or app does not need <see cref="IPartitionStorageProvider"/> rules
+    /// (e.g. <see cref="EmbeddedResourcePartition"/>) — those go through the
+    /// routing core and require <see cref="AddPartitionedInMemoryPersistence(IServiceCollection)"/>.
     /// </summary>
     /// <param name="services">The service collection</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
-        // TEMP: revert to single-store registration. The routing-based wiring
-        // regressed Orleans tests where the per-partition store is created on
-        // SaveNodeAsync but the grain activation's GetNodeAsync misses it. Need
-        // to debug the routing-vs-singleton race separately.
         return services.AddCoreAndWrapperServices<InMemoryPersistenceService>();
+    }
+
+    /// <summary>
+    /// Adds in-memory persistence using the partition-routing stack. Each
+    /// first-segment partition gets its own <see cref="InMemoryPersistenceService"/>
+    /// via <see cref="InMemoryPartitionedStoreFactory"/>; explicit
+    /// <see cref="IPartitionStorageProvider"/> rules (e.g.
+    /// <see cref="EmbeddedResourcePartitionStorageProvider"/> registered by
+    /// <c>AddEmbeddedResourcePartition</c>) are honoured first-match-wins; the
+    /// in-memory factory is the writable catch-all fallback. Static partitions
+    /// (<see cref="PartitionDefinition"/> with <c>DataSource = "static"</c>) are
+    /// surfaced read-only by <see cref="RoutingPersistenceServiceCore"/>.
+    ///
+    /// <para>Use this when the host registers <see cref="EmbeddedResourcePartition"/>
+    /// rules — e.g. <see cref="MeshWeaver.Documentation.DocumentationExtensions.AddDocumentation"/>.
+    /// Plain <see cref="AddInMemoryPersistence(IServiceCollection)"/> registers a
+    /// single store and bypasses the routing core, so embedded-resource
+    /// partitions wouldn't be reachable.</para>
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPartitionedInMemoryPersistence(this IServiceCollection services)
+    {
+        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+        services.AddSingleton<IPartitionedStoreFactory, InMemoryPartitionedStoreFactory>();
+        return services.AddPartitionedCoreAndWrapperServices();
+    }
+
+    /// <summary>
+    /// Mesh-builder shortcut for <see cref="AddPartitionedInMemoryPersistence(IServiceCollection)"/>.
+    /// Also registers <c>IMeshQueryCore</c> on the top-most mesh hub.
+    /// </summary>
+    public static TBuilder AddPartitionedInMemoryPersistence<TBuilder>(this TBuilder builder)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services => services.AddPartitionedInMemoryPersistence());
+        return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
     /// <summary>

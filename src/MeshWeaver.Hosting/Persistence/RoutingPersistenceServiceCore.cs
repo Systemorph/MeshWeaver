@@ -36,6 +36,36 @@ internal class RoutingPersistenceServiceCore : IStorageService
         _changeNotifier = changeNotifier;
         _staticNodeProviders = staticNodeProviders ?? [];
         _partitionStorageProviders = partitionStorageProviders ?? [];
+
+        // Synchronous seed: every IPartitionStorageProvider with an explicit
+        // PartitionDefinition.Namespace is registered into _stores +
+        // _queryProviders eagerly. This is the production wiring path for
+        // read-only embedded-resource partitions (e.g. AddDocumentation), so
+        // queries that fan out across all partitions reach Doc/Architecture/...
+        // without waiting for a lazy InitializeAsync to run.
+        //
+        // Per Doc/Architecture/AsynchronousCalls.md: nothing async in
+        // hub-reachable code. The query path that depends on _queryProviders
+        // (RoutingMeshQueryProvider.QueryAsync / ObserveQuery) MUST NOT
+        // .Wait() / .Result on EnsureInitializedAsync — that deadlocks the
+        // hub action block. Pre-seed synchronously here instead.
+        //
+        // Backend-backed partitions (FileSystem subdirs, PostgreSQL schemas)
+        // still discover lazily via DiscoverNewProvidersAsync — they have no
+        // PartitionDefinition.Namespace at registration time.
+        foreach (var provider in _partitionStorageProviders)
+        {
+            var ns = provider.PartitionDefinition?.Namespace;
+            if (string.IsNullOrEmpty(ns)) continue;
+            if (_stores.ContainsKey(ns)) continue;
+
+            var core = new InMemoryPersistenceService(provider.Adapter, _changeNotifier);
+            if (_stores.TryAdd(ns, core))
+            {
+                _queryProviders[ns] =
+                    new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+            }
+        }
     }
 
     /// <summary>

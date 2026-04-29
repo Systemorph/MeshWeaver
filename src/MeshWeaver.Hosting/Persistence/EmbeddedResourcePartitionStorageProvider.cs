@@ -28,7 +28,8 @@ public sealed class EmbeddedResourcePartitionStorageProvider : IPartitionStorage
         IEnumerable<string>? contexts = null)
     {
         _namespace = @namespace;
-        Adapter = new EmbeddedResourceStorageAdapter(assembly, resourcePrefix, seedNodes);
+        Adapter = new EmbeddedResourceStorageAdapter(assembly, resourcePrefix, seedNodes,
+            partitionNamespace: @namespace);
         PartitionDefinition = new PartitionDefinition
         {
             Namespace = @namespace,

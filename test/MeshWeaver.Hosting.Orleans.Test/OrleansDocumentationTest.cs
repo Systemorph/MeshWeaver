@@ -9,6 +9,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Documentation;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
@@ -162,7 +163,13 @@ public class DocSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     public void Configure(IHostBuilder hostBuilder)
     {
+        // AddDocumentation registers an EmbeddedResource IPartitionStorageProvider
+        // for the "Doc" namespace; the routing-aware partitioned in-memory stack is
+        // required for that provider to actually serve reads. Plain AddInMemoryPersistence
+        // would register a single non-routing InMemoryPersistenceService and the Doc
+        // namespace would be unreachable. See Doc/Architecture/PartitionedPersistence.md.
         hostBuilder.UseOrleansMeshServer()
+            .AddPartitionedInMemoryPersistence()
             .ConfigurePortalMesh()
             .AddDocumentation()
             .AddGraph()

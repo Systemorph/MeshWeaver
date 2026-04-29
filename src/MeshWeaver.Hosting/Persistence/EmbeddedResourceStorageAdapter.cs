@@ -30,6 +30,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
 
     private readonly Assembly _assembly;
     private readonly string _prefix;
+    private readonly string _partitionPrefix;
     private readonly FileFormatParserRegistry _parserRegistry;
     private readonly Dictionary<string, ResourceEntry> _entriesByPath;
     private readonly Dictionary<string, MeshNode> _seedNodes;
@@ -37,19 +38,29 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
     public EmbeddedResourceStorageAdapter(
         Assembly assembly,
         string prefix,
-        IEnumerable<MeshNode>? seedNodes = null)
+        IEnumerable<MeshNode>? seedNodes = null,
+        string? partitionNamespace = null)
     {
         _assembly = assembly;
         _prefix = prefix.EndsWith('.') ? prefix : prefix + ".";
+        // Routing layer hands us paths *with* the partition namespace
+        // ("Doc/Architecture/BusinessRules"); resource names strip it
+        // ("Architecture.BusinessRules.md"). Index entries with the partition
+        // prefix included so lookups by full path match without per-call
+        // string surgery.
+        _partitionPrefix = string.IsNullOrEmpty(partitionNamespace)
+            ? string.Empty
+            : partitionNamespace.Trim('/') + "/";
         _parserRegistry = new FileFormatParserRegistry();
-        _entriesByPath = BuildIndex(assembly, _prefix);
+        _entriesByPath = BuildIndex(assembly, _prefix, _partitionPrefix);
         _seedNodes = (seedNodes ?? [])
             .ToDictionary(n => n.Path.Trim('/'), StringComparer.OrdinalIgnoreCase);
     }
 
     private record ResourceEntry(string ResourceName, string Path, string Extension);
 
-    private static Dictionary<string, ResourceEntry> BuildIndex(Assembly assembly, string prefix)
+    private static Dictionary<string, ResourceEntry> BuildIndex(
+        Assembly assembly, string prefix, string partitionPrefix)
     {
         var map = new Dictionary<string, ResourceEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in assembly.GetManifestResourceNames())
@@ -68,7 +79,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
             // Resource names use '.' as both folder separator and extension separator.
             // The last '.' is the extension; everything before is the path with '.' separators.
             var rawPath = withoutPrefix[..lastDot];
-            var path = rawPath.Replace('.', '/');
+            var path = partitionPrefix + rawPath.Replace('.', '/');
             map[path] = new ResourceEntry(name, path, ext);
         }
         return map;

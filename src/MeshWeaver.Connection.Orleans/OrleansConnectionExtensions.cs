@@ -35,7 +35,12 @@ public static class OrleansConnectionExtensions
 
     private static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
     {
-        services.AddInMemoryPersistence();
+        // Partition routing as the default: any host (silo or client) using
+        // UseOrleansMeshServer / UseOrleansMeshClient gets the routing core, so
+        // IPartitionStorageProvider rules (e.g. AddDocumentation's embedded-resource
+        // partition) are reachable from queries without per-test reconfiguration.
+        // See Doc/Architecture/PartitionedPersistence.md.
+        services.AddPartitionedInMemoryPersistence();
         services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
         return services;
     }
