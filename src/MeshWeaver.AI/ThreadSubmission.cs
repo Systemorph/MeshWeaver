@@ -522,27 +522,28 @@ internal static class ThreadSubmissionServer
                 var threadNode = change.Value;
                 if (threadNode?.Content is not MeshThread thread) return;
 
-                // Identity assertion at the watcher tick — this is where the loss showed
-                // up in the Orleans delegation tests. The watcher subscription was
-                // installed during hub init at a point when AsyncLocal AccessContext
-                // had NOT yet been set by SetThreadHubIdentity (separate Subscribe
-                // branch), so Throttle's timer-scheduler delivers ticks with the
-                // captured-at-install context — not the user's identity. We expect
-                // the user identity (ideally thread.CreatedBy) here; log loudly when
-                // it's missing or wrong so the cascade isn't silent.
+                // Identity assertion at the watcher tick — informational only. The
+                // watcher's AsyncLocal is captured at Subscribe-install time (hub
+                // init, before SetThreadHubIdentity has run a separate Subscribe
+                // branch), so we expect a mismatch in the Orleans grain case where
+                // the install-time context is the hub's own address. DispatchRound
+                // resolves identity correctly via thread.CreatedBy → MeshNode.CreatedBy
+                // — the warning here exists only to surface unexpected drift.
                 var accessService = threadHub.ServiceProvider.GetService<AccessService>();
                 var asyncLocalAtTick = accessService?.Context?.ObjectId;
                 var circuitAtTick = accessService?.CircuitContext?.ObjectId;
-                if (asyncLocalAtTick != thread.CreatedBy)
+                var expectedIdentity = !string.IsNullOrEmpty(thread.CreatedBy)
+                    ? thread.CreatedBy
+                    : threadNode.CreatedBy;
+                if (asyncLocalAtTick != expectedIdentity)
                 {
-                    logger?.LogWarning(
-                        "[ThreadSubmission] watcher tick IDENTITY_MISMATCH thread={ThreadPath} " +
-                        "asyncLocal={AsyncLocal} circuit={Circuit} expected={CreatedBy} — " +
-                        "AsyncLocal was lost across the GetStream Subscribe boundary; " +
-                        "DispatchRound will fall back to thread.CreatedBy.",
+                    logger?.LogDebug(
+                        "[ThreadSubmission] watcher tick identity drift thread={ThreadPath} " +
+                        "asyncLocal={AsyncLocal} circuit={Circuit} expected={Expected} — " +
+                        "DispatchRound will resolve via thread.CreatedBy / MeshNode.CreatedBy.",
                         threadPath, asyncLocalAtTick ?? "(null)",
                         circuitAtTick ?? "(null)",
-                        thread.CreatedBy ?? "(null)");
+                        expectedIdentity ?? "(null)");
                 }
 
                 logger?.LogDebug(
@@ -630,11 +631,26 @@ internal static class ThreadSubmissionServer
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var asyncLocalCtx = accessService?.Context;
         var circuitCtx = accessService?.CircuitContext;
-        var userCtx = asyncLocalCtx ?? circuitCtx;
+
+        // The AsyncLocal at this point may be the THREAD HUB's own address — the
+        // watcher fires on a Throttle timer scheduler and captures whatever
+        // ExecutionContext was active at the time `Subscribe` was called (hub init,
+        // when SetContext hadn't yet propagated). Treat hub-as-user as no-identity
+        // and fall through to the wrapping MeshNode.CreatedBy (set by the
+        // CreateNodeRequest handler from the requester's AccessContext).
+        var hubAsUserMatch = asyncLocalCtx?.ObjectId is { } id
+            && (string.Equals(id, threadPath, StringComparison.Ordinal)
+                || string.Equals(id, hub.Address.ToFullString(), StringComparison.Ordinal));
+        var userCtx = hubAsUserMatch ? null : (asyncLocalCtx ?? circuitCtx);
+
         var fellBackToCreatedBy = false;
-        if (userCtx is null && !string.IsNullOrEmpty(thread.CreatedBy))
+        // Resolution: thread content's CreatedBy → wrapping node's CreatedBy → null.
+        var resolvedCreatedBy = !string.IsNullOrEmpty(thread.CreatedBy)
+            ? thread.CreatedBy
+            : threadNode.CreatedBy;
+        if (userCtx is null && !string.IsNullOrEmpty(resolvedCreatedBy))
         {
-            userCtx = new AccessContext { ObjectId = thread.CreatedBy, Name = thread.CreatedBy };
+            userCtx = new AccessContext { ObjectId = resolvedCreatedBy, Name = resolvedCreatedBy };
             fellBackToCreatedBy = true;
         }
 
@@ -644,11 +660,14 @@ internal static class ThreadSubmissionServer
         // the persistent circuit context (Blazor) or thread.CreatedBy (Orleans).
         logger?.LogInformation(
             "[ThreadSubmission] DispatchRound identity thread={ThreadPath} responseId={ResponseId} " +
-            "asyncLocal={AsyncLocal} circuit={Circuit} createdBy={CreatedBy} fallbackToCreatedBy={FallbackToCreatedBy} effective={Effective}",
+            "asyncLocal={AsyncLocal} hubAsUserMatch={HubAsUser} circuit={Circuit} threadCreatedBy={ThreadCreatedBy} " +
+            "nodeCreatedBy={NodeCreatedBy} fallbackToCreatedBy={FallbackToCreatedBy} effective={Effective}",
             threadPath, responseMsgId,
             asyncLocalCtx?.ObjectId ?? "(null)",
+            hubAsUserMatch,
             circuitCtx?.ObjectId ?? "(null)",
             thread.CreatedBy ?? "(null)",
+            threadNode.CreatedBy ?? "(null)",
             fellBackToCreatedBy,
             userCtx?.ObjectId ?? "(null)");
 
@@ -804,6 +823,14 @@ internal static class ThreadSubmissionServer
         // Materialize satellite cells in parallel, then proceed. We swallow per-cell errors
         // (cell may already exist from a prior crashed attempt — that's recoverable) and only
         // wait for one notification per cell before continuing.
+        //
+        // Each CreateNodeRequest is posted via hub.Observe with explicit
+        // o.WithAccessContext(userCtx) so the cell is created under the user's identity
+        // (resolved from thread.CreatedBy / MeshNode.CreatedBy by DispatchRound). The
+        // AsyncLocal at this watcher-callback boundary may still be the thread hub's
+        // own address (Throttle scheduler hop), so meshService.CreateNode's
+        // CaptureContext() would otherwise stamp deliveries with hub-as-user — leading
+        // to "Node created at .../<id> by <thread-hub-path>" instead of "by <user>".
         var creationStreams = pendingForRound.Select(p =>
         {
             var cell = new MeshNode(p.Id, threadPath)
@@ -812,7 +839,10 @@ internal static class ThreadSubmissionServer
                 MainNode = mainEntity,
                 Content = p.Msg
             };
-            return meshService.CreateNode(cell)
+            return hub.Observe(new CreateNodeRequest(cell),
+                    o => userCtx != null
+                        ? o.WithAccessContext(userCtx).WithTarget(hub.Address)
+                        : o.WithTarget(hub.Address))
                 .Take(1)
                 .Select(_ => true)
                 .Catch<bool, Exception>(ex =>

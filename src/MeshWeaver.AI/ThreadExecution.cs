@@ -83,6 +83,13 @@ public static class ThreadExecution
     /// Sets the thread hub's access context to the thread creator's identity.
     /// Without this, the hub's default identity is its own address path,
     /// causing "Access denied" when reading child message nodes.
+    ///
+    /// Resolution order:
+    ///   1. <see cref="MeshThread.CreatedBy"/> (set by callers that explicitly stamp it)
+    ///   2. <see cref="MeshNode.CreatedBy"/> (filled by the CreateNodeRequest handler
+    ///      from the requester's AccessContext) — covers the common case where the
+    ///      caller didn't pass <c>createdBy</c> to <c>BuildThreadNode</c> and the
+    ///      thread content's <c>CreatedBy</c> is null.
     /// </summary>
     private static Task SetThreadHubIdentity(IMessageHub hub, CancellationToken ct)
     {
@@ -90,11 +97,14 @@ public static class ThreadExecution
         // true request/response, no SubscribeRequest+immediate-unsubscribe.
         hub.GetMeshNode(hub.Address.ToString()).Subscribe(node =>
         {
-            if (node?.Content is MeshThread { CreatedBy: { Length: > 0 } createdBy })
-            {
-                var accessService = hub.ServiceProvider.GetService<AccessService>();
-                accessService?.SetContext(new AccessContext { ObjectId = createdBy, Name = createdBy });
-            }
+            if (node is null) return;
+            var createdBy = (node.Content as MeshThread)?.CreatedBy;
+            if (string.IsNullOrEmpty(createdBy))
+                createdBy = node.CreatedBy;
+            if (string.IsNullOrEmpty(createdBy))
+                return;
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            accessService?.SetContext(new AccessContext { ObjectId = createdBy, Name = createdBy });
         });
         return Task.CompletedTask;
     }
