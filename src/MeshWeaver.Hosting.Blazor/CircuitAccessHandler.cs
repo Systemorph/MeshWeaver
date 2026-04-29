@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -147,19 +149,34 @@ public class CircuitAccessHandler : CircuitHandler
     {
         try
         {
-            // Impersonate as the hub identity for this lookup — the user's access context
-            // isn't established yet during login, so we use the hub's system-level identity
-            // to query the User namespace for email-to-ObjectId resolution.
-            var accessService = _hub.ServiceProvider.GetService<AccessService>();
-            if (accessService == null)
+            // IMeshQueryCore — the unsecured infrastructure-query surface (same one
+            // VUserHelper / SyncedQueryMeshNodes / OnboardingMiddleware use). The
+            // ImpersonateAsHub-on-IMeshService approach was unreliable: at login
+            // time the user has no mesh roles yet, so the secured query returned
+            // nothing and ObjectId stayed as the email. Downstream code then
+            // routed to User/{email}, which doesn't exist (the actual node is
+            // User/{username}), producing "Delivery failed to User/<email>".
+            // See PersistenceExtensions.RegisterMeshQueryCoreOnMeshHub.
+            var meshQuery = _hub.ServiceProvider.GetService<IMeshQueryCore>();
+            if (meshQuery == null)
                 return null;
 
-            using (accessService.ImpersonateAsHub(_hub))
+            var request = MeshQueryRequest.FromQuery(
+                $"nodeType:User namespace:User content.email:{email} limit:1",
+                Mesh.Security.WellKnownUsers.System);
+
+            // IAsyncEnumerable + await foreach — pull-based protocol, no hub
+            // round-trip on the observable side, so no risk of the
+            // ObserveQuery + .ToTask() deadlock the user flagged. InMemoryMeshQueryCore's
+            // QueryAsync is an in-memory filter with no hub messaging; the
+            // enumeration yields cooperatively. Take the first match (limit:1)
+            // and bail; the loop exits via the break before it sees a second.
+            await foreach (var item in meshQuery.QueryAsync(request, _hub.JsonSerializerOptions))
             {
-                var meshService = _hub.ServiceProvider.GetRequiredService<IMeshService>();
-                return await meshService.QueryAsync<MeshNode>(
-                    $"nodeType:User namespace:User content.email:{email} limit:1").FirstOrDefaultAsync();
+                if (item is MeshNode node)
+                    return node;
             }
+            return null;
         }
         catch (Exception ex)
         {
