@@ -204,12 +204,23 @@ public static class MeshDataSourceExtensions
             if (node == null)
                 return next.Invoke(delivery, ct);
 
+            // Identity precedence: prefer the per-delivery AccessContext (always
+            // set by Orleans RequestContext propagation + MessageHubGrain.DeliverMessage
+            // / OrleansRoutingService) over the AsyncLocal accessService.Context
+            // which is reset to null in UserServiceDeliveryPipeline's `finally`
+            // before the per-delivery Subscribe callback chain finishes — so on
+            // subsequent calls the AsyncLocal would surface as null and the
+            // user-scope shortcut in RlsNodeValidator would never trigger,
+            // forcing the permission check down the anonymous path → "Access denied".
             var accessService = hub.ServiceProvider.GetService<AccessService>();
+            var validatorAccessCtx = delivery.AccessContext
+                ?? accessService?.Context
+                ?? accessService?.CircuitContext;
             var context = new NodeValidationContext
             {
                 Operation = NodeOperation.Read,
                 Node = node,
-                AccessContext = accessService?.Context ?? accessService?.CircuitContext
+                AccessContext = validatorAccessCtx
             };
 
             // Sync-delivery shape (Doc/Architecture/AsynchronousCalls.md): the
