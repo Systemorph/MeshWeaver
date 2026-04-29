@@ -494,16 +494,26 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         if (string.IsNullOrEmpty(normalizedPath))
             return (null, 0);
 
-        // Try storage adapter first (e.g., PostgreSQL with dedicated SQL)
+        // Try storage adapter first (e.g., PostgreSQL with dedicated SQL).
+        // The adapter is expected to return the longest prefix it can find;
+        // if it covers the full path we accept it directly. If it covers only
+        // a partial prefix, we still walk down the rest because the cached
+        // adapter view may lag behind the on-disk state.
+        var pathSegments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var bestMatch = (Node: (MeshNode?)null, Depth: 0);
         if (_storageAdapter != null)
         {
             var (adapterNode, adapterSegments) = await _storageAdapter.FindBestPrefixMatchAsync(normalizedPath, options, ct);
-            if (adapterNode != null)
+            if (adapterNode != null && adapterSegments == pathSegments.Length)
                 return (adapterNode, adapterSegments);
+            if (adapterNode != null && adapterSegments > bestMatch.Depth)
+                bestMatch = (adapterNode, adapterSegments);
         }
 
-        // Fall back to in-memory LINQ scan
-        var match = _nodes.Values
+        // In-memory LINQ scan. Mirrors the longest-prefix semantics of the
+        // adapter result: a node at "ACME/ProductLaunch" can prefix-match
+        // "ACME/ProductLaunch/Todo/LaunchEvent" with depth=2.
+        var inMemory = _nodes.Values
             .Where(n =>
             {
                 var nodePath = NormalizePath(n.Path);
@@ -512,28 +522,35 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
             })
             .OrderByDescending(n => n.Path.Length)
             .FirstOrDefault();
-
-        if (match != null)
+        if (inMemory != null)
         {
-            var segments = match.Path.Split('/').Length;
-            return (match, segments);
+            var depth = inMemory.Path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
+            if (depth == pathSegments.Length)
+                return (inMemory, depth);
+            if (depth > bestMatch.Depth)
+                bestMatch = (inMemory, depth);
         }
 
-        // Walk up the path hierarchy using storage adapter (lazy loading)
-        // This handles nodes not yet loaded into _nodes (e.g., _Source/*.cs files)
+        // Walk down via the storage adapter for paths deeper than what the
+        // in-memory scan covered. Without this, a stale cache entry for an
+        // ancestor (e.g. ACME/ProductLaunch loaded by an earlier lookup)
+        // short-circuits the resolver and downstream routing reports
+        // "No node found at X. Closest ancestor is ACME/ProductLaunch" even
+        // though the leaf file (ACME/ProductLaunch/Todo/LaunchEvent.json)
+        // sits right next to a sibling that resolved correctly. Read each
+        // depth from full → shallowest; the first hit wins (deepest match).
         if (_storageAdapter != null)
         {
-            var segments = normalizedPath.Split('/');
-            for (int depth = segments.Length; depth >= 1; depth--)
+            for (int depth = pathSegments.Length; depth > bestMatch.Depth; depth--)
             {
-                var testPath = string.Join("/", segments.Take(depth));
+                var testPath = string.Join("/", pathSegments.Take(depth));
                 var node = await GetNodeAsyncCore(testPath, options, ct);
                 if (node != null)
                     return (node, depth);
             }
         }
 
-        return (null, 0);
+        return bestMatch.Node != null ? (bestMatch.Node, bestMatch.Depth) : (null, 0);
     }
 
     private static string NormalizePath(string? path) =>
