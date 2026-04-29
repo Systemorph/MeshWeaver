@@ -147,12 +147,13 @@ public static class MemexConfiguration
                     MeshWeaver.Mesh.INodeMenuProvider,
                     Memex.Portal.Shared.Social.LinkedInCredentialMenuProvider>());
 
-            // "Social Media" menu shortcut on the viewer's User node →
-            // {userPath}/SocialMedia hub page (lazy-created on first menu render).
-            services.TryAddEnumerable(
-                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
-                    MeshWeaver.Mesh.INodeMenuProvider,
-                    Memex.Portal.Shared.Social.SocialMediaUserMenuProvider>());
+            // (Removed: SocialMediaUserMenuProvider — hardcoded a NodeType
+            // ("Systemorph/SocialMediaHub") that isn't registered anywhere in
+            // the codebase. NodeTypes belong in the database (NodeTypeDefinition
+            // MeshNodes), not as DLL-side string constants. The SocialMedia
+            // hub feature should be added back when its NodeType is defined
+            // through the regular mesh node creation flow rather than wired
+            // through a DLL-time CreateNode that fails on the receiver.)
         }
 
         // Configure authentication
