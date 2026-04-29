@@ -250,21 +250,22 @@ public class NavigationProgressTest
     public async Task Status_WhenResolutionFailsOnFirstAttempt_ThenSucceeds_NeverEmitsNotFound()
     {
         _navigationManager.SetUri("http://localhost/eventually/exists");
-        var callCount = 0;
-        _pathResolver.ResolvePath("eventually/exists")
-            .Returns(_ =>
-            {
-                callCount++;
-                return System.Reactive.Linq.Observable.Return<AddressResolution?>(
-                    callCount == 1
-                        ? null
-                        : new AddressResolution("eventually/exists", null));
-            });
+        // Production uses subscribe-and-stay on the live ResolvePath stream:
+        // a single subscription receives null (catalog hasn't learned about the
+        // path yet) and waits for a subsequent emission when the catalog changes.
+        // Model that with a ReplaySubject — emit null, then later (within the
+        // retry budget) emit the successful resolution.
+        var resolutionSubject = new System.Reactive.Subjects.ReplaySubject<AddressResolution?>(1);
+        resolutionSubject.OnNext(null);
+        _pathResolver.ResolvePath("eventually/exists").Returns(resolutionSubject);
 
-        var service = CreateService(retryDelays: [20, 20, 20]);
+        var service = CreateService(retryDelays: [200, 200, 200]);
         var emissions = CaptureStatus(service);
 
         await service.InitializeAsync();
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        // Catalog "learned" about the path — re-emit before the watchdog budget expires.
+        resolutionSubject.OnNext(new AddressResolution("eventually/exists", null));
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         emissions.Should().NotContain(s => s.Phase == NavigationPhase.NotFound);

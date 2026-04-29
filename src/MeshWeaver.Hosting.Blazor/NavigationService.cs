@@ -89,10 +89,14 @@ internal class NavigationService : INavigationService
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
         _retryDelays = retryDelays ?? DefaultRetryDelays;
 
-        // Status starts unlabelled — InitializeAsync emits LookingUp with the
-        // real path the moment NavigationManager has a URI and the Path stream
-        // gets its first emission.
-        _status.OnNext(NavigationStatus.LookingUp(null));
+        // Initial status: best-effort read of the current path so subscribers
+        // (Status BehaviorSubject) see "Looking up <path>" instead of a generic
+        // "Looking up page…" between construction and InitializeAsync. If the
+        // NavigationManager isn't ready yet (RemoteNavigationManager throws
+        // "has not been initialized"), TryReadCurrentPath returns null and the
+        // status falls back to the unlabelled form — InitializeAsync will
+        // re-emit with the path the moment it's available.
+        _status.OnNext(NavigationStatus.LookingUp(TryReadCurrentPath()));
     }
 
     /// <inheritdoc />
