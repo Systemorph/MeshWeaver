@@ -152,6 +152,16 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
 
             await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
 
+            // Activate the per-thread hub by sending it a message — CreateNodeRequest above
+            // landed at User/TestUser, the catalog has the node, but the per-thread grain
+            // is created lazily on its first inbound message. Without this ping, the hub's
+            // WithInitialization callbacks (including WatchForExecution that fires the
+            // auto-execute dispatch) never run and the response cell is never created.
+            // AutoExecute_CreatesResponseCell_And_CompletesExecution gets this for free
+            // because it polls the THREAD path (which activates the hub on first poll);
+            // this test polls only the response cell, so it must trigger activation explicitly.
+            await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+
             // Poll for response cell to have final text (not empty, not "Allocating agent...")
             for (var i = 0; i < 60; i++)
             {

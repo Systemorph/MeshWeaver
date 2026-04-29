@@ -210,18 +210,24 @@ public static class ThreadExecution
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var threadPath = hub.Address.Path;
 
-        // One-shot startup check via the LOCAL workspace stream — purely in-process,
-        // no cross-hub GetDataRequest, so it isn't affected by routing snags caused
-        // by the Orleans hosted-hub address suffix (`...~mesh/<guid>`). The owning
-        // hub's MeshDataSource has loaded its MeshNode at init, so the local
-        // MeshNodeReference reducer's first emission is the persisted node.
+        // Startup auto-execute hook for threads created with BuildThreadWithMessages
+        // (IsExecuting=true + PendingUserMessage set at creation time). Wait for the
+        // FIRST emission whose Content is a MeshThread carrying both flags — earlier
+        // emissions during data-source init can be empty/null and were previously
+        // swallowed by Take(1), causing the auto-execute to silently drop.
         // HandleSubmitMessage handles runtime execution after startup.
         IObservable<MeshNode> ownNode;
         try { ownNode = hub.GetWorkspace().GetMeshNodeStream(); }
         catch { return Task.CompletedTask; }
 
-        var sub = ownNode.Take(1).Subscribe(node =>
+        var sub = ownNode
+            .Where(node => node?.Content is MeshThread { PendingUserMessage: not null, IsExecuting: true } t
+                           && t.ActiveMessageId != null)
+            .Take(1)
+            .Subscribe(node =>
         {
+            // Re-check inside Subscribe — Where guarantees the conditions hold but
+            // the pattern match on Content lets us bind `thread` for downstream use.
             if (node?.Content is not MeshThread { PendingUserMessage: not null } thread)
                 return;
 
