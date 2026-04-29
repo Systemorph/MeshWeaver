@@ -90,7 +90,21 @@ internal class NavigationService : INavigationService
     }
 
     /// <inheritdoc />
-    public string? CurrentPath => _navigationManager.ToBaseRelativePath(_navigationManager.Uri);
+    public string? CurrentPath
+    {
+        get
+        {
+            // RemoteNavigationManager.Uri throws "...has not been initialized" when
+            // accessed before the Blazor circuit's first JS interop tick. Every
+            // call site reading CurrentPath used to need its own try/catch around
+            // an InvalidOperationException; centralise the guard here so the
+            // property is safe to call from any thread at any time. Returns null
+            // when the navigation manager isn't ready — call sites already
+            // null-coalesce / null-check.
+            try { return _navigationManager.ToBaseRelativePath(_navigationManager.Uri); }
+            catch (InvalidOperationException) { return null; }
+        }
+    }
 
     /// <inheritdoc />
     public string? CurrentNamespace { get; private set; }
