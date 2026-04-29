@@ -200,45 +200,8 @@ internal class ReentrancyTestAgentFactory(IMessageHub hub) : ChatClientAgentFact
         => new ToolCallingReentrancyClient();
 }
 
-public class ReentrancyTestSiloConfigurator : ISiloConfigurator, IHostConfigurator
+public class ReentrancyTestSiloConfigurator : TestSiloConfigurator
 {
-    public void Configure(ISiloBuilder siloBuilder)
-    {
-        siloBuilder.ConfigureMeshWeaverServer()
-            .AddMemoryGrainStorageAsDefault();
-    }
-
-    public void Configure(IHostBuilder hostBuilder)
-    {
-        hostBuilder.UseOrleansMeshServer()
-            .AddInMemoryPersistence()
-            .ConfigurePortalMesh()
-            .AddGraph()
-            .AddAI()
-            .AddRowLevelSecurity()
-            .AddMeshNodes(new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
-            .AddMeshNodes(TestUserAdminAccess())
-            .ConfigureServices(services =>
-                services.AddSingleton<IChatClientFactory, ReentrancyTestAgentFactory>())
-            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
-    }
-
-    // TestUser-specific Admin (mirrors samples/Graph/Data/User/_Access/TestUser_Access.json).
-    // Namespace MUST end in "/_Access" — see SecurityService.ComputeScopeRoles.
-    private static MeshNode[] TestUserAdminAccess()
-    {
-        var assignment = new AccessAssignment
-        {
-            AccessObject = "TestUser",
-            DisplayName = "Test User",
-            Roles = [new RoleAssignment { Role = "Admin" }]
-        };
-        return [new("TestUser_Access", "User/_Access")
-        {
-            NodeType = "AccessAssignment",
-            Name = "TestUser Access",
-            Content = assignment,
-            MainNode = "User",
-        }];
-    }
+    protected override void RegisterChatClientFactory(IServiceCollection services)
+        => services.AddSingleton<IChatClientFactory, ReentrancyTestAgentFactory>();
 }
