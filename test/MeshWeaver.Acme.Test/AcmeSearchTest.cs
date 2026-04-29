@@ -70,14 +70,35 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             .AddGraph();
     }
 
+    /// <summary>
+    /// QueryAsync goes through the catalog index which is populated asynchronously
+    /// during persistence init. Locally this completes within the implicit test
+    /// startup window; CI is slower and the first call can return an empty set
+    /// before the FileSystem partition's recursive scan finishes. Poll the query
+    /// over a short window so the tests aren't flaky in environments where the
+    /// scan hasn't yet seen the ACME organization node.
+    /// </summary>
+    private async Task<List<MeshNode>> QueryUntilAcmeIndexedAsync(string query, CancellationToken ct)
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        List<MeshNode> results = new();
+        while (DateTime.UtcNow < deadline)
+        {
+            results = await meshService.QueryAsync<MeshNode>(query, ct: ct).ToListAsync(ct);
+            if (results.Any(n => n.Path == "ACME" && n.NodeType == "Organization"))
+                return results;
+            await Task.Delay(200, ct);
+        }
+        return results;
+    }
+
     [Fact(Timeout = 60000)]
     public async Task SubtreeSearch_FindsOrganizationRootNode()
     {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var results = await meshService
-            .QueryAsync<MeshNode>("*ACME* scope:subtree is:main limit:50")
-            .ToListAsync();
+        var ct = TestContext.Current.CancellationToken;
+        var results = await QueryUntilAcmeIndexedAsync(
+            "*ACME* scope:subtree is:main limit:50", ct);
 
         results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Organization",
             "scope:subtree should include the ACME root node itself");
@@ -90,11 +111,9 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // the bug behavior. The query engine was fixed elsewhere; scope:descendants now
         // returns the ACME root node when its name matches the wildcard. Test now asserts
         // the corrected behavior so a future regression of the original bug is caught.
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var results = await meshService
-            .QueryAsync<MeshNode>("*ACME* scope:descendants is:main limit:50")
-            .ToListAsync();
+        var ct = TestContext.Current.CancellationToken;
+        var results = await QueryUntilAcmeIndexedAsync(
+            "*ACME* scope:descendants is:main limit:50", ct);
 
         results.Should().Contain(n => n.Path == "ACME" && n.NodeType == "Organization",
             "scope:descendants should include the ACME root node (NodeType: Organization)");
@@ -140,12 +159,20 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // → SecurityService.HasPermissionAsync("ACME", userId, Permission.Read)
         // The Public_Access.json at ACME/_Access grants Viewer to Public,
         // and SecurityService merges Public permissions as floor for authenticated users.
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        // SecurityService loads AccessAssignment satellites asynchronously via the
+        // synced query — locally this completes within test startup, CI is slower
+        // and the first HasPermissionAsync call returns false before the scan
+        // catches the ACME/_Access partition. Poll over a short window.
+        var ct = TestContext.Current.CancellationToken;
         var userId = TestUsers.Admin.ObjectId;
-
-        var hasRead = await Mesh.HasPermissionAsync(
-            "ACME", userId, Permission.Read, CancellationToken.None);
-
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        var hasRead = false;
+        while (DateTime.UtcNow < deadline)
+        {
+            hasRead = await Mesh.HasPermissionAsync("ACME", userId, Permission.Read, ct);
+            if (hasRead) break;
+            await Task.Delay(200, ct);
+        }
         hasRead.Should().BeTrue(
             "authenticated users should have Read access to ACME via Public_Access.json Viewer role");
 
