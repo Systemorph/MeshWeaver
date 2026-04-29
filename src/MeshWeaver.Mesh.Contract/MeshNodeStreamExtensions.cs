@@ -91,6 +91,36 @@ public static class MeshNodeStreamExtensions
         Func<MeshNode, MeshNode> update,
         string? nodePath = null)
     {
+        // Cross-address: forward to the owning hub's remote MeshNodeReference stream
+        // and call .Update there. The synchronization protocol propagates the patch
+        // to the owning hub, which persists via its MeshDataSource and broadcasts to
+        // all subscribers. Per the architecture: writes ALWAYS go through the owning
+        // hub's source; remote callers never write to a local InstanceCollection.
+        // See Doc/Architecture/InitializationGates.md + AsynchronousCalls.md.
+        var hubPath = workspace.Hub.Address.Path;
+        if (!string.IsNullOrEmpty(nodePath)
+            && !string.Equals(nodePath, hubPath, StringComparison.Ordinal))
+        {
+            var remote = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(nodePath), new MeshNodeReference());
+            remote.Update(current =>
+            {
+                if (current is null) return null;
+                var updated = update(current);
+                return new ChangeItem<MeshNode>(
+                    updated, remote.StreamId, remote.StreamId,
+                    Data.ChangeType.Patch, remote.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
+            }, ex =>
+            {
+                workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode")
+                    ?.LogError(ex, "[UPDATE-MESHNODE-REMOTE-FAIL] hub={HubAddress} target={NodePath}",
+                        workspace.Hub.Address, nodePath);
+                return Task.FromException(ex);
+            });
+            return;
+        }
 
         // Local: write to the data source's MeshNode partition stream — same stream the
         // workspace reduces from, so updates propagate to all subscribers (and to persistence
