@@ -65,21 +65,9 @@ jobs:
         # the *.csproj pattern but aren't test projects — invoking dotnet test on
         # each wastes ~1 s × 23 entries per run.
         #
-        # Skipped projects (linux-only test-runner-boot hang reproducible across
-        # multiple branches/commits): MeshWeaver.AI.Test, MeshWeaver.Autocomplete.Test,
-        # MeshWeaver.Content.Test, MeshWeaver.Hosting.Monolith.Test. All four
-        # produce the same signature on Linux: xUnit reports a [Skip] mid-run,
-        # then the runner stalls indefinitely before discovering the next test
-        # class. Same projects pass cleanly on Windows. Tracking issue: TODO.
-        # Removing them from CI gets the rest of the suite green; the four are
-        # still tested locally pre-push.
         for csproj in $(find test -name '*.csproj' \
             ! -path '*Cosmos*' \
             ! -path '*/bin/*' \
-            ! -name 'MeshWeaver.AI.Test.csproj' \
-            ! -name 'MeshWeaver.Autocomplete.Test.csproj' \
-            ! -name 'MeshWeaver.Content.Test.csproj' \
-            ! -name 'MeshWeaver.Hosting.Monolith.Test.csproj' \
             | sort); do
           name=$(basename "$csproj" .csproj)
           echo "::endgroup::"
