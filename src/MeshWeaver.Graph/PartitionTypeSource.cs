@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
@@ -95,27 +96,35 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         return instances;
     }
 
-    protected override async Task<InstanceCollection> InitializeAsync(
+    /// <summary>
+    /// <c>IStorageService.GetPartitionObjectsAsync</c> is a pure DB hit (file system /
+    /// SQL / in-memory dictionary) — no hub round-trip — so wrapping with
+    /// <see cref="Observable.FromAsync{TResult}(Func{System.Threading.CancellationToken,Task{TResult}})"/>
+    /// is sanctioned per <c>Doc/Architecture/AsynchronousCalls.md</c>. The framework
+    /// subscribes to the returned observable; the gate opens on emission.
+    /// </summary>
+    protected override IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
-        CancellationToken ct)
-    {
-        _logger?.LogDebug("PartitionTypeSource<{Type}>.InitializeAsync: Loading from partition {PartitionPath}",
-            typeof(T).Name, _partitionPath);
-
-        var items = new List<T>();
-
-        await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(_partitionPath, null, _workspace.Hub.JsonSerializerOptions).WithCancellation(ct))
+        CancellationToken cancellationToken)
+        => Observable.FromAsync(async ct =>
         {
-            if (obj is T typedObj)
+            _logger?.LogDebug("PartitionTypeSource<{Type}>.Initialize: Loading from partition {PartitionPath}",
+                typeof(T).Name, _partitionPath);
+
+            var items = new List<T>();
+
+            await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(_partitionPath, null, _workspace.Hub.JsonSerializerOptions).WithCancellation(ct))
             {
-                items.Add(typedObj);
+                if (obj is T typedObj)
+                {
+                    items.Add(typedObj);
+                }
             }
-        }
 
-        _logger?.LogDebug("PartitionTypeSource<{Type}>.InitializeAsync: Loaded {Count} items from {PartitionPath}",
-            typeof(T).Name, items.Count, _partitionPath);
+            _logger?.LogDebug("PartitionTypeSource<{Type}>.Initialize: Loaded {Count} items from {PartitionPath}",
+                typeof(T).Name, items.Count, _partitionPath);
 
-        _lastSaved = new InstanceCollection(items.Cast<object>(), TypeDefinition.GetKey);
-        return _lastSaved;
-    }
+            _lastSaved = new InstanceCollection(items.Cast<object>(), TypeDefinition.GetKey);
+            return _lastSaved;
+        });
 }

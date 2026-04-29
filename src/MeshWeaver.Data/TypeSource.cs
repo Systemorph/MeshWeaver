@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 
@@ -57,26 +58,25 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         Task<IEnumerable<object>>
     > InitializationFunction { get; init; } = (_, _) => Task.FromResult(Enumerable.Empty<object>());
 
-    Task<InstanceCollection> ITypeSource.InitializeAsync(
+    IObservable<InstanceCollection> ITypeSource.Initialize(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
-    ) => InitializeAsync(reference, cancellationToken);
+    ) => Initialize(reference, cancellationToken);
 
-    protected virtual async Task<InstanceCollection> InitializeAsync(
+    /// <summary>
+    /// Reactive initialization. Default impl wraps the legacy Task-returning
+    /// <see cref="InitializationFunction"/> via a single
+    /// <see cref="Observable.FromAsync{TResult}(Func{CancellationToken,Task{TResult}})"/>
+    /// — sanctioned because <see cref="InitializationFunction"/> is an opaque user
+    /// callback, not a hub round-trip; the bridge is local and does not capture the
+    /// hub scheduler. Subclasses that touch hubs / streams MUST override this method
+    /// and return a pure observable composition (no <c>await</c>, no <c>.ToTask</c>).
+    /// </summary>
+    protected virtual IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken
-    )
-    {
-        return new InstanceCollection(
-            await InitializeDataAsync(reference, cancellationToken),
-            TypeDefinition.GetKey
-        );
-    }
-
-    private Task<IEnumerable<object>> InitializeDataAsync(
-        WorkspaceReference<InstanceCollection> reference,
-        CancellationToken cancellationToken
-    ) => InitializationFunction(reference, cancellationToken);
+    ) => Observable.FromAsync(ct => InitializationFunction(reference, ct))
+        .Select(items => new InstanceCollection(items, TypeDefinition.GetKey));
 
     public void Dispose()
     {

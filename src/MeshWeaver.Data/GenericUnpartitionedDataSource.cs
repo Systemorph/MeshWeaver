@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -246,27 +247,44 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
             typeSource.Update(item);
     }
 
-    protected virtual async Task<EntityStore> GetInitialValueAsync(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
+    /// <summary>
+    /// Builds the initial <see cref="EntityStore"/> by composing each type source's
+    /// reactive <see cref="ITypeSource.Initialize"/> emission via <c>.Aggregate</c>.
+    /// <para>
+    /// Reactive end-to-end: no <c>await</c> on a per-type-source step (that bridge
+    /// is what deadlocks the hub action block when a type source touches a hub —
+    /// see <c>Doc/Architecture/InitializationGates.md</c>). The single
+    /// <c>.FirstAsync().ToTask(ct)</c> at the bottom is the framework-edge bridge
+    /// because <see cref="StreamConfiguration{T}.WithInitialization"/> consumes a
+    /// <c>Func&lt;…, Task&lt;TStream&gt;&gt;</c>; that bridge is sanctioned per
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// </para>
+    /// </summary>
+    protected virtual Task<EntityStore> GetInitialValueAsync(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
-        var store = new EntityStore()
+        var emptyStore = new EntityStore()
         {
             GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
         };
 
-        await foreach (var ts in TypeSources.Values.ToAsyncEnumerable())
-        {
-            WorkspaceReference<InstanceCollection> reference =
-                stream.StreamIdentity.Partition == null
-                    ? new CollectionReference(ts.CollectionName)
-                    : new PartitionedWorkspaceReference<InstanceCollection>(
-                        stream.StreamIdentity.Partition,
-                        new CollectionReference(ts.CollectionName)
-                    );
-            var initialized = await ts.InitializeAsync(reference, cancellationToken);
-            store = store.Update(reference, initialized);
-        }
-
-        return store;
+        return TypeSources.Values
+            .ToObservable()
+            .SelectMany(ts =>
+            {
+                WorkspaceReference<InstanceCollection> reference =
+                    stream.StreamIdentity.Partition == null
+                        ? new CollectionReference(ts.CollectionName)
+                        : new PartitionedWorkspaceReference<InstanceCollection>(
+                            stream.StreamIdentity.Partition,
+                            new CollectionReference(ts.CollectionName)
+                        );
+                return ts.Initialize(reference, cancellationToken)
+                    .Take(1)
+                    .Select(instances => (Reference: reference, Instances: instances));
+            })
+            .Aggregate(emptyStore, (acc, item) => acc.Update(item.Reference, item.Instances))
+            .FirstAsync()
+            .ToTask(cancellationToken);
     }
 
 
@@ -325,29 +343,39 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
             typeSource.Update(item);
     }
 
-    protected virtual async Task<EntityStore>
+    /// <summary>
+    /// Reactive equivalent of the unpartitioned <c>GetInitialValueAsync</c> for the
+    /// partitioned data source. Same pattern: per-type-source observable composition
+    /// via <c>SelectMany</c> + <c>Aggregate</c>, single bridge to Task at the
+    /// framework edge for <c>WithInitialization</c>.
+    /// </summary>
+    protected virtual Task<EntityStore>
         GetInitialValue(ISynchronizationStream<EntityStore> stream,
             CancellationToken cancellationToken)
     {
-        var store = new EntityStore()
+        var emptyStore = new EntityStore()
         {
             GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
         };
 
-        await foreach (var ts in TypeSources.Values.ToAsyncEnumerable())
-        {
-            WorkspaceReference<InstanceCollection> reference =
-                stream.StreamIdentity.Partition == null
-                    ? new CollectionReference(ts.CollectionName)
-                    : new PartitionedWorkspaceReference<InstanceCollection>(
-                        stream.StreamIdentity.Partition,
-                        new CollectionReference(ts.CollectionName)
-                    );
-            var initialized = await ts.InitializeAsync(reference, cancellationToken);
-            store = store.Update(reference, initialized);
-        }
-
-        return store;
+        return TypeSources.Values
+            .ToObservable()
+            .SelectMany(ts =>
+            {
+                WorkspaceReference<InstanceCollection> reference =
+                    stream.StreamIdentity.Partition == null
+                        ? new CollectionReference(ts.CollectionName)
+                        : new PartitionedWorkspaceReference<InstanceCollection>(
+                            stream.StreamIdentity.Partition,
+                            new CollectionReference(ts.CollectionName)
+                        );
+                return ts.Initialize(reference, cancellationToken)
+                    .Take(1)
+                    .Select(instances => (Reference: reference, Instances: instances));
+            })
+            .Aggregate(emptyStore, (acc, item) => acc.Update(item.Reference, item.Instances))
+            .FirstAsync()
+            .ToTask(cancellationToken);
     }
 
     protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)

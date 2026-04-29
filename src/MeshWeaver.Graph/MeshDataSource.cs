@@ -23,7 +23,39 @@ namespace MeshWeaver.Graph;
 public static class MeshDataSourceExtensions
 {
     /// <summary>
+    /// Marker that records every <see cref="AddMeshDataSource(MessageHubConfiguration, Func{MeshDataSource, MeshDataSource})"/>
+    /// call's configuration callback. Used to make AddMeshDataSource idempotent at the
+    /// framework-registration level — handlers, init hooks, and the gate are registered
+    /// exactly once — while still composing every caller's configuration into a SINGLE
+    /// <see cref="MeshDataSource"/> at data-context build time.
+    /// <para>
+    /// Without this composition, the per-thread / per-node hub got TWO MeshDataSource
+    /// instances (one from <c>ConfigureDefaultNodeHub</c>'s <c>AddDefaultLayoutAreas</c>
+    /// → <c>AddMeshDataSource()</c>, one from the NodeType's HubConfiguration's
+    /// <c>AddMeshDataSource(s =&gt; s.WithContentType&lt;T&gt;())</c>). DataContext
+    /// dedupes by <c>ds.Id = Hub.Address.ToString()</c> keeping the LAST one, so
+    /// <c>WithContentType&lt;T&gt;</c> from the NodeType layered onto a fresh
+    /// data source whose <c>WithMeshNodes()</c> ran on a different in-memory
+    /// <c>InstanceCollection</c> than every other framework consumer indexed against.
+    /// Cross-emitter visibility broke; <c>GetDataRequest(MeshNodeReference)</c>
+    /// returned <c>Data=null</c>.
+    /// </para>
+    /// </summary>
+    private sealed record MeshDataSourceMarker
+    {
+        public ImmutableList<Func<MeshDataSource, MeshDataSource>> Configurations { get; init; } =
+            ImmutableList<Func<MeshDataSource, MeshDataSource>>.Empty;
+    }
+
+    /// <summary>
     /// Adds a MeshDataSource to the data context, configured via the provided function.
+    /// <para>
+    /// <b>Idempotent</b>: subsequent calls compose their <paramref name="configuration"/>
+    /// callback onto the <em>same</em> MeshDataSource produced at data-context build
+    /// time. Framework registrations (handlers, init hooks, init gate, validator
+    /// pipeline) happen exactly once on the first call. See
+    /// <see cref="MeshDataSourceMarker"/> for the why.
+    /// </para>
     /// MeshNodes are always included automatically (own node only, not children).
     /// DataReference(string.Empty) returns Content of the MeshNode, not the MeshNode itself.
     /// For NodeType nodes, SchemaReference returns the ContentType schema via subhub forwarding.
@@ -32,11 +64,39 @@ public static class MeshDataSourceExtensions
         this MessageHubConfiguration config,
         Func<MeshDataSource, MeshDataSource> configuration)
     {
+        var existingMarker = config.Get<MeshDataSourceMarker>();
+        if (existingMarker is not null)
+        {
+            // Subsequent call — append configuration; framework bits already registered.
+            return config.Set(existingMarker with
+            {
+                Configurations = existingMarker.Configurations.Add(configuration)
+            });
+        }
+
+        // First call — record marker, register everything ONCE. The AddData lambda
+        // reads the FINAL marker at build time so all subsequently-appended
+        // configuration callbacks compose into the single MeshDataSource.
+        var marker = new MeshDataSourceMarker
+        {
+            Configurations = ImmutableList.Create(configuration)
+        };
         return config
+            .Set(marker)
             .AddData(data =>
             {
                 data.Workspace.Hub.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
-                var dataSource = configuration(new MeshDataSource(data.Workspace.Hub.Address.ToString(), data.Workspace).WithMeshNodes());
+
+                // Pull the FINAL marker from the live hub configuration — captures
+                // every subsequent AddMeshDataSource call's appended configuration.
+                var finalMarker = data.Workspace.Hub.Configuration.Get<MeshDataSourceMarker>()
+                    ?? marker;
+
+                var dataSource = new MeshDataSource(data.Workspace.Hub.Address.ToString(), data.Workspace)
+                    .WithMeshNodes();
+                foreach (var cfg in finalMarker.Configurations)
+                    dataSource = cfg(dataSource);
+
                 return data
                     .Configure(rm => rm
                         .ForReducedStream<InstanceCollection>(reduced => reduced

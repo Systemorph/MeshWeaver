@@ -126,8 +126,17 @@ public static class MeshNodeStreamExtensions
         {
             var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode");
-            logger?.LogError(ex, "UpdateMeshNode failed for {NodePath}", nodePath);
-            return Task.CompletedTask;
+            // Log AND propagate. Silent "log and swallow" hid every cross-grain
+            // workspace propagation bug (e.g. AppendUserMessageRequest arriving
+            // before MeshNodeTypeSource.Initialize emitted): the .Update call
+            // looked successful, the response said Success=true, but the actual
+            // collection write was lost — every subsequent poll then read empty.
+            // Re-throw so the caller observes the failure and can surface it
+            // (test failure / response.Error / circuit break). See
+            // Doc/Architecture/InitializationGates.md.
+            logger?.LogError(ex, "[UPDATE-MESHNODE-FAIL] hub={HubAddress} nodePath={NodePath} — propagating",
+                workspace.Hub.Address, nodePath);
+            return Task.FromException(ex);
         });
     }
 
