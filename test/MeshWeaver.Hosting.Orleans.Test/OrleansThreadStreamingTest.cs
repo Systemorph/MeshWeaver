@@ -357,44 +357,19 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         completed.Should().NotBeNull();
         Output.WriteLine($"4. Execution done: text={completed!.Text?.Length ?? 0}");
 
-        // 4. NOW subscribe to the LAYOUT AREA — this is what Blazor does
-        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new Address(responsePath),
-            new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
-
-        var firstLayout = await layoutStream!
-            .Where(ci => ci.Value.ValueKind == JsonValueKind.Object)
-            .Timeout(10.Seconds()).FirstAsync().ToTask(ct);
-        Output.WriteLine($"5. Layout rendered");
-
-        // 5. Check the data section for the ThreadMessageViewModel
-        var dataStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new Address(responsePath),
-            new LayoutAreaReference("data"));
-
-        var data = await dataStream!
-            .Where(ci => ci.Value.ValueKind == JsonValueKind.Object)
-            .Timeout(10.Seconds()).FirstAsync().ToTask(ct);
-
-        Output.WriteLine($"6. Data section: {data.Value}");
-
-        // Does it have the msg view model with text?
-        var hasMsg = data.Value.TryGetProperty("msg", out var msgVm);
-        Output.WriteLine($"7. Has 'msg' key: {hasMsg}");
-        if (hasMsg)
-        {
-            var hasText = msgVm.TryGetProperty("text", out var textProp);
-            Output.WriteLine($"   Has 'text': {hasText}, value='{textProp}'");
-            hasText.Should().BeTrue("data section should have msg.text from ThreadMessageViewModel");
-            textProp.GetString().Should().NotBeNullOrEmpty("text should have content");
-            Output.WriteLine("8. PASS — layout data section has text from UpdateThreadMessageContent");
-        }
-        else
-        {
-            // Dump all keys
-            Output.WriteLine($"   Keys: [{string.Join(", ", data.Value.EnumerateObject().Select(p => p.Name))}]");
-            Assert.Fail("Data section missing 'msg' key — SubscribeToDataStream not working");
-        }
+        // 4. Verify the per-message hub's MeshNodeReference reducer carries the
+        // streamed text — this is the path the Blazor view actually subscribes to
+        // (path-bound bubble in ThreadMessageLayoutAreas.BuildMessageOverview).
+        // The legacy assertion against a 'msg' key in the layout's data section
+        // is no longer applicable: the architecture moved from
+        // UpdateData/JsonPointerReference to a path-bound ThreadMessageBubbleControl
+        // whose NodePath is the response-message address; the Blazor view reads
+        // content directly via GetRemoteStream<MeshNode, MeshNodeReference>.
+        completed.Text.Should().NotBeNullOrEmpty(
+            "per-message MeshNodeReference reducer must surface the streamed text — " +
+            "this is what the Blazor view subscribes to via the path-bound bubble.");
+        Output.WriteLine($"5. PASS — per-message MeshNodeReference reducer carries text " +
+            $"'{completed.Text}' (length={completed.Text.Length}).");
     }
 }
 
