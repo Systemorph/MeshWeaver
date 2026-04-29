@@ -81,11 +81,19 @@ public static class MeshDataSourceExtensions
             .WithServices(services => services.AddSingleton<OwnNodeCache>())
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
             .WithInitialization(SubscribeToOwnDeletion)
+            // Compile watcher — when this hub's own MeshNode is a NodeTypeDefinition
+            // and CompilationStatus flips to Pending (via stream.Update from any
+            // caller's NodeTypeService), run Roslyn and write back the result. The
+            // synchronization protocol broadcasts the post-compile state to every
+            // silo's remote-stream cache, so callers across the cluster pick up
+            // AssemblyLocation without a request/response round-trip.
+            .WithInitialization(InstallCompileWatcher)
             .WithNodeOperationHandlers()
             // Per-node-hub contract for resolving (assembly + HubConfiguration) of the
-            // NodeType this hub is responsible for. Cheap on non-NodeType nodes — they
-            // fall through to Success=false and the consumer falls back. See
-            // NodeTypeContractHandler for the per-version cache + compile orchestration.
+            // NodeType this hub is responsible for. Kept as a fallback for hubs / callers
+            // that haven't migrated to the stream.Update path; the new slow path in
+            // NodeTypeService.ResolveViaStream replaces this for the common case. Cheap
+            // on non-NodeType nodes — they fall through to Success=false.
             .WithHandler<GetCompilationPathRequest>(NodeTypeContractHandler.Handle)
             // Post-load INodeValidator-Read hook for MeshNodeReference reads.
             .AddDeliveryPipeline(AddReadValidatorPipeline)
@@ -204,6 +212,124 @@ public static class MeshDataSourceExtensions
         public volatile MeshNode? Current;
         public volatile bool IsDeleted;
     }
+
+    /// <summary>
+    /// Per-NodeType compile watcher. The hub's own MeshNode stream is the trigger:
+    /// when content is a <see cref="NodeTypeDefinition"/> with
+    /// <c>CompilationStatus == <see cref="CompilationStatus.Pending"/></c>, run
+    /// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/> and
+    /// write the result back via <see cref="MeshNodeExtensions.UpdateMeshNode(IWorkspace, Func{MeshNode, MeshNode}, string?)"/>.
+    /// The persisted update flows back through the synchronization protocol to every
+    /// remote subscriber across silos — that is the cross-silo "broadcast" of compile
+    /// state without an explicit IMeshChangeFeed Update subscription (deletes still go
+    /// through the change feed; updates ride the sync stream).
+    ///
+    /// <para>Pre-state: caller flips <c>CompilationStatus = Pending</c> via
+    /// <c>stream.Update</c>. The watcher debounces Pending emissions (50 ms throttle)
+    /// so two callers racing to flip don't cause two compiles. The watcher's first
+    /// action is to write <c>Compiling</c>, which removes the Pending filter from
+    /// subsequent emissions and prevents re-trigger.</para>
+    /// </summary>
+    private static void InstallCompileWatcher(IMessageHub hub)
+    {
+        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+        if (compilationService is null)
+            return;
+
+        IWorkspace workspace;
+        try { workspace = hub.GetWorkspace(); }
+        catch { return; }
+
+        var hubPath = hub.Address.Path;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
+
+        IObservable<MeshNode?> ownStream;
+        try { ownStream = workspace.GetMeshNodeStream(); }
+        catch
+        {
+            // No MeshNodeReference reducer on this workspace — nothing to watch.
+            return;
+        }
+
+        var sub = ownStream
+            .Where(n => n?.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Pending)
+            .Throttle(TimeSpan.FromMilliseconds(50))
+            .SelectMany(node =>
+            {
+                logger?.LogDebug("CompileWatcher: Pending observed for {HubPath}, marking Compiling and starting Roslyn",
+                    hubPath);
+
+                // Flip Pending → Compiling so subsequent Pending emissions don't
+                // double-fire; record the start time for diagnostics.
+                workspace.UpdateMeshNode(curr =>
+                    curr.Content is NodeTypeDefinition def
+                        ? curr with
+                        {
+                            Content = def with
+                            {
+                                CompilationStatus = CompilationStatus.Compiling,
+                                LastCompileStartedAt = DateTimeOffset.UtcNow
+                            }
+                        }
+                        : curr);
+
+                return compilationService.CompileAndGetConfigurations(node!)
+                    .Take(1)
+                    .Select(result => new CompileOutcome(result, null))
+                    .Catch<CompileOutcome, Exception>(ex =>
+                        Observable.Return(new CompileOutcome(null, ex)));
+            })
+            .Subscribe(
+                outcome =>
+                {
+                    workspace.UpdateMeshNode(curr =>
+                    {
+                        if (curr.Content is not NodeTypeDefinition def)
+                            return curr;
+
+                        if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
+                        {
+                            logger?.LogDebug("CompileWatcher: success for {HubPath} → {Assembly}",
+                                hubPath, outcome.Result!.AssemblyLocation);
+                            return curr with
+                            {
+                                Content = def with
+                                {
+                                    CompilationStatus = CompilationStatus.Ok,
+                                    CompilationError = null,
+                                    LastCompileSucceededAt = DateTimeOffset.UtcNow,
+                                    LastCompiledVersion = curr.Version
+                                },
+                                AssemblyLocation = outcome.Result.AssemblyLocation
+                            };
+                        }
+
+                        var errorSummary = outcome.Error?.Message
+                            ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
+                                ? string.Join("; ", errs.Select(m => m.Message))
+                                : "Compilation produced no assembly");
+                        logger?.LogDebug("CompileWatcher: failure for {HubPath}: {Error}",
+                            hubPath, errorSummary);
+                        return curr with
+                        {
+                            Content = def with
+                            {
+                                CompilationStatus = CompilationStatus.Error,
+                                CompilationError = errorSummary
+                            }
+                        };
+                    });
+                },
+                ex => logger?.LogWarning(ex,
+                    "CompileWatcher: subscription faulted for {HubPath}", hubPath));
+
+        hub.RegisterForDisposal(sub);
+    }
+
+    /// <summary>Local record carrying the outcome of a single compile attempt.</summary>
+    private sealed record CompileOutcome(NodeCompilationResult? Result, Exception? Error);
 
     private static void SubscribeToOwnDeletion(IMessageHub hub)
     {

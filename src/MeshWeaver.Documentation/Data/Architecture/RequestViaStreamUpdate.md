@@ -80,73 +80,91 @@ result reaches every subscriber automatically:
   MeshNodeReference>` subscribers see the change via the synchronization protocol —
   no explicit broadcast needed.
 
-## When to apply: dynamic NodeType compilation
+## Applied: dynamic NodeType compilation
 
-Today `INodeTypeService.EnrichWithNodeType` handles dynamic `Code` NodeTypes via a
-cross-silo request/response:
+`INodeTypeService.EnrichWithNodeType`'s slow path now uses this pattern.
+`GetCompilationPathRequest` is retained as a fallback (for hubs without a workspace /
+remote-stream reducer); the primary path is stream-based.
 
-```csharp
-// SLOW PATH — see NodeTypeService.cs:524-555
-return hub.Observe(
-    new GetCompilationPathRequest(/* HEAD */),
-    o => o.WithTarget(new Address(nodeType)))
-    .Select(d => d.Message)
-    .Take(1)
-    .Timeout(TimeSpan.FromSeconds(30))
-    ...;
-```
-
-That round-trip happens during `MessageHubGrain.OnActivateAsync` and serialises into
-long chains under cluster-cold-start. **It should be replaced with this pattern**:
-
-### Caller — `EnrichWithNodeType` slow path becomes:
+### Caller — `NodeTypeService.ResolveViaStream`
 
 ```csharp
-// Mutate the NodeType node's state to request compilation
-workspace.UpdateMeshNode(node =>
-{
-    var code = node.Content as Code ?? new Code();
-    return node with
+// Subscribe to the per-NodeType remote stream and trigger compile only on the
+// initial null/Unknown emission; further emissions are observed for the terminal
+// status (Ok / Error). The trigger is a single stream.Update flipping
+// CompilationStatus to Pending — the synchronization protocol routes the patch
+// to the owning per-NodeType hub.
+var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+    new Address(nodeType), new MeshNodeReference());
+
+return stream
+    .Where(change => change?.Value != null)
+    .Select(change => change.Value!)
+    .Do(typeNode =>
     {
-        Content = code with
-        {
-            CompileRequestedAt = DateTime.UtcNow,
-            // any other request payload (target version, options, ...)
-        }
-    };
-}, nodePath: nodeTypePath);
-
-// Then OBSERVE the same node's MeshNodeReference reducer for the result
-// (AssemblyLocation appearing on Content, or a CompilationStatus field flipping
-// to Compiled / Failed).
+        if (typeNode.Content is not NodeTypeDefinition def) return;
+        if (def.CompilationStatus is not null
+            && def.CompilationStatus != CompilationStatus.Unknown) return;
+        if (Interlocked.CompareExchange(ref triggered, 1, 0) != 0) return;
+        stream.Update(current =>
+            current?.Content is NodeTypeDefinition d
+                && (d.CompilationStatus is null || d.CompilationStatus == CompilationStatus.Unknown)
+                ? new ChangeItem<MeshNode>(
+                    Value: current with { Content = d with { CompilationStatus = CompilationStatus.Pending } },
+                    ChangedBy: WellKnownUsers.System,
+                    StreamId: stream.StreamId,
+                    ChangeType: ChangeType.Full,
+                    Version: stream.Hub.Version,
+                    Updates: null)
+                : null);
+    })
+    .Where(typeNode => typeNode.Content is NodeTypeDefinition def
+        && (def.CompilationStatus == CompilationStatus.Ok
+            || def.CompilationStatus == CompilationStatus.Error))
+    .Take(1)
+    .Timeout(TimeSpan.FromSeconds(30));
 ```
 
-### Server — per-NodeType hub installs at init:
+### Server — `MeshDataSourceExtensions.InstallCompileWatcher`
 
 ```csharp
-workspace.GetStream(new MeshNodeReference())
-    .Where(change => change.Value?.Content is Code code
-                  && code.CompileRequestedAt > code.LastCompiledAt)
+workspace.GetMeshNodeStream()
+    .Where(n => n?.Content is NodeTypeDefinition d
+        && d.CompilationStatus == CompilationStatus.Pending)
     .Throttle(TimeSpan.FromMilliseconds(50))
-    .Subscribe(change => Compile(change.Value!).Subscribe(
-        result => workspace.UpdateMeshNode(n => n with
+    .SelectMany(node =>
+    {
+        // Pending → Compiling so the filter no longer matches; throttle would
+        // otherwise let one extra Pending sneak through.
+        workspace.UpdateMeshNode(curr =>
+            curr.Content is NodeTypeDefinition def
+                ? curr with { Content = def with {
+                    CompilationStatus = CompilationStatus.Compiling,
+                    LastCompileStartedAt = DateTimeOffset.UtcNow } }
+                : curr);
+
+        return compilationService.CompileAndGetConfigurations(node!).Take(1);
+    })
+    .Subscribe(result =>
+    {
+        workspace.UpdateMeshNode(curr =>
         {
-            Content = (Code)n.Content! with
-            {
-                AssemblyLocation = result.AssemblyLocation,
-                LastCompiledAt = DateTime.UtcNow,
-                CompilationStatus = CompilationStatus.Ok
-            }
-        }),
-        ex => workspace.UpdateMeshNode(n => n with
-        {
-            Content = (Code)n.Content! with
-            {
-                CompilationStatus = CompilationStatus.Failed,
-                CompilationError = ex.Message,
-                LastCompiledAt = DateTime.UtcNow
-            }
-        })));
+            if (curr.Content is not NodeTypeDefinition def) return curr;
+            return !string.IsNullOrEmpty(result?.AssemblyLocation)
+                ? curr with {
+                    Content = def with {
+                        CompilationStatus = CompilationStatus.Ok,
+                        CompilationError = null,
+                        LastCompileSucceededAt = DateTimeOffset.UtcNow,
+                        LastCompiledVersion = curr.Version },
+                    AssemblyLocation = result.AssemblyLocation }
+                : curr with {
+                    Content = def with {
+                        CompilationStatus = CompilationStatus.Error,
+                        CompilationError = result?.Log?.Errors().FirstOrDefault()?.Message
+                            ?? "Compilation produced no assembly" } };
+        });
+    });
 ```
 
 ### Cluster-wide cache propagation
