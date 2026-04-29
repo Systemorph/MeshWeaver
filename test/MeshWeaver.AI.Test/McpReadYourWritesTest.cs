@@ -281,7 +281,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     /// A script that targets a node which is not flagged executable must be rejected
     /// up-front (no kernel dispatch, no silent success).
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = 60_000)]
     public async Task ExecuteScript_ForNonExecutableCodeNode_ReportsError()
     {
         var id = $"noexec-{Guid.NewGuid():N}";

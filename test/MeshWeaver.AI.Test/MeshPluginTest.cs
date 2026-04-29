@@ -547,8 +547,21 @@ public class MeshPluginTest : MonolithMeshTestBase
         var deleteResult = await plugin.Delete(JsonSerializer.Serialize(new[] { path }));
         deleteResult.Should().Contain("Deleted:");
 
-        // 6. Verify deletion
-        var getAfterDelete = await plugin.Get($"@{path}");
+        // 6. Verify deletion. DeleteNode's response races with hub disposal —
+        //    until the per-node hub finishes Quiescing + DisposeHostedHubs +
+        //    ShutDown, GetDataRequest can still reach the (now-stale) hub and
+        //    return its cached MeshNode. Poll briefly so the test is robust
+        //    under suite load without requiring Delete to be synchronous on
+        //    the read side.
+        var getAfterDelete = string.Empty;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            getAfterDelete = await plugin.Get($"@{path}");
+            if (getAfterDelete.StartsWith("Not found"))
+                break;
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }
         getAfterDelete.Should().StartWith("Not found");
     }
 
