@@ -210,10 +210,17 @@ public static class ThreadExecution
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var threadPath = hub.Address.Path;
 
-        // One-shot startup check via GetDataRequest (posted to self) — true
-        // request/response, no SubscribeRequest+immediate-unsubscribe.
+        // One-shot startup check via the LOCAL workspace stream — purely in-process,
+        // no cross-hub GetDataRequest, so it isn't affected by routing snags caused
+        // by the Orleans hosted-hub address suffix (`...~mesh/<guid>`). The owning
+        // hub's MeshDataSource has loaded its MeshNode at init, so the local
+        // MeshNodeReference reducer's first emission is the persisted node.
         // HandleSubmitMessage handles runtime execution after startup.
-        hub.GetMeshNode(hub.Address.ToString()).Subscribe(node =>
+        IObservable<MeshNode> ownNode;
+        try { ownNode = hub.GetWorkspace().GetMeshNodeStream(); }
+        catch { return Task.CompletedTask; }
+
+        var sub = ownNode.Take(1).Subscribe(node =>
         {
             if (node?.Content is not MeshThread { PendingUserMessage: not null } thread)
                 return;
@@ -296,6 +303,7 @@ public static class ThreadExecution
                     error => logger?.LogDebug("[ThreadExec] User cell creation error: {Error}", error.Message));
             }
         });
+        hub.RegisterForDisposal(sub);
 
         return Task.CompletedTask;
     }
