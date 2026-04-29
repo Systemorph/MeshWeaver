@@ -26,7 +26,13 @@ internal class NavigationService : INavigationService
 {
     private readonly NavigationManager _navigationManager;
     private readonly IPathResolver _pathResolver;
-    private readonly IMeshQueryCore _queryCore;
+    // IMeshQueryCore is registered on the mesh hub's Autofac scope (see
+    // PersistenceExtensions.RegisterMeshQueryCoreOnMeshHub) — NOT on the root
+    // container. NavigationService is scoped to the Blazor circuit (root scope),
+    // so injecting IMeshQueryCore via the constructor would fail with
+    // "Cannot resolve parameter IMeshQueryCore". Resolve from the hub's
+    // ServiceProvider instead — same instance, just sourced from the right scope.
+    private readonly Lazy<IMeshQueryCore> _queryCore;
     private readonly IMessageHub _hub;
     private readonly ILogger<NavigationService>? _logger;
     private readonly int[] _retryDelays;
@@ -48,9 +54,8 @@ internal class NavigationService : INavigationService
     public NavigationService(
         NavigationManager navigationManager,
         IPathResolver pathResolver,
-        IMeshQueryCore queryCore,
         IMessageHub hub)
-        : this(navigationManager, pathResolver, queryCore, hub, DefaultRetryDelays)
+        : this(navigationManager, pathResolver, hub, DefaultRetryDelays)
     {
     }
 
@@ -61,14 +66,15 @@ internal class NavigationService : INavigationService
     internal NavigationService(
         NavigationManager navigationManager,
         IPathResolver pathResolver,
-        IMeshQueryCore queryCore,
         IMessageHub hub,
         int[] retryDelays)
     {
         _navigationManager = navigationManager;
         _pathResolver = pathResolver;
-        _queryCore = queryCore;
         _hub = hub;
+        _queryCore = new Lazy<IMeshQueryCore>(
+            () => hub.ServiceProvider.GetRequiredService<IMeshQueryCore>(),
+            LazyThreadSafetyMode.ExecutionAndPublication);
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
         _retryDelays = retryDelays ?? DefaultRetryDelays;
 
@@ -297,7 +303,7 @@ internal class NavigationService : INavigationService
         // can't proxy; IMeshQueryCore is a plain interface and is mockable.
         // Staleness doesn't matter here — we read MainNode + PreRenderedHtml at
         // navigation startup, not for CQRS-sensitive writes.
-        _queryCore
+        _queryCore.Value
             .ObserveQuery<MeshNode>(
                 // select: projects to only the routing-relevant fields — content
                 // is loaded only if we need to pre-render markdown below.

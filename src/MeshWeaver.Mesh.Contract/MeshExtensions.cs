@@ -1297,26 +1297,45 @@ public static class MeshExtensions
                     // post-save emission — the persistence layer owns the version
                     // snapshot now, so the handler doesn't need to (and can't)
                     // race a parallel save against an explicit WriteVersion call.
+                    //
+                    // CHAIN the Ok response off the SaveNode completion. Previously
+                    // the response posted before the save finished, so the caller's
+                    // read-after-write could miss the just-written version snapshot
+                    // (caught by VersionQuery_GetVersionBeforeAsync_FindsPreChangeState
+                    // — the second of two back-to-back UpdateNodes occasionally
+                    // returned Success before its WriteVersion file landed on disk).
                     var updatePersistence = hub.ServiceProvider.GetService<IMeshStorage>();
                     var updateChangeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
                     if (updatePersistence != null)
                     {
                         updatePersistence.SaveNode(nodeToSave)
                             .Subscribe(
-                                saved => updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved)),
-                                persistEx => logger.LogWarning(persistEx,
-                                    "[UpdateNode] persistence flush failed at {Path}", nodeToSave.Path));
+                                saved =>
+                                {
+                                    updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved));
+                                    logger.LogInformation(
+                                        "Node persisted at {Path} by {UpdatedBy}",
+                                        saved.Path, capturedRequest.UpdatedBy ?? "system");
+                                    hub.Post(UpdateNodeResponse.Ok(saved), o => o.ResponseFor(request));
+                                },
+                                persistEx =>
+                                {
+                                    logger.LogWarning(persistEx,
+                                        "[UpdateNode] persistence flush failed at {Path}", nodeToSave.Path);
+                                    hub.Post(
+                                        UpdateNodeResponse.Fail(persistEx.Message,
+                                            NodeUpdateRejectionReason.Unknown),
+                                        o => o.ResponseFor(request));
+                                });
                     }
                     else
                     {
                         updateChangeFeed?.Publish(MeshChangeEvent.Updated(nodeToSave));
+                        logger.LogInformation(
+                            "Node persisted at {Path} by {UpdatedBy}",
+                            nodeToSave.Path, capturedRequest.UpdatedBy ?? "system");
+                        hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
                     }
-
-                    logger.LogInformation(
-                        "Node persisted at {Path} by {UpdatedBy}",
-                        nodeToSave.Path, capturedRequest.UpdatedBy ?? "system");
-
-                    hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
                 },
                 ex =>
                 {
