@@ -32,7 +32,7 @@ public record NavigationOptions(string Uri)
 public interface INavigationService : IDisposable
 {
     /// <summary>
-    /// Reactive stream of the current relative path. <see cref="ReplaySubject{T}"/>(1)
+    /// Reactive stream of the current relative path. <c>ReplaySubject&lt;T&gt;(1)</c>
     /// semantics — new subscribers immediately receive the last seen path, and every
     /// subsequent location change emits again. Never emits null or empty: the first
     /// emission is held back until the underlying <c>NavigationManager</c> has a

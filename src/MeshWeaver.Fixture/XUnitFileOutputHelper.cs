@@ -117,15 +117,21 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         
         var timestampedMessage = $"[{DateTime.Now:HH:mm:ss.fff}] {message}";
         
-        // Write to xUnit output (visible in test runners)
+        // Write to xUnit output (visible in test runners). Catch ANY exception:
+        // xUnit v2 throws InvalidOperationException after test completion, but v3
+        // may throw ObjectDisposedException or other types when the test's output
+        // helper is invalidated. A throw here propagating into ILogger callers
+        // (e.g. MessageHub's dispose chain) would either fault the action block
+        // or — worse — re-trigger the log path on the way up, producing the
+        // "endless logs" cascade the dispose pipeline can't recover from.
         try
         {
             _xunitOutput.WriteLine(timestampedMessage);
         }
-        catch (InvalidOperationException)
+        catch
         {
-            // xUnit output may not be available (e.g., after test completion)
-            // Continue with file logging
+            // Swallow — file logging below still records the message; xUnit
+            // output is best-effort once the test has been reported.
         }
         
         // Write to file

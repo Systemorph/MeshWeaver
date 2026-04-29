@@ -1,4 +1,6 @@
 using System;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -89,10 +91,11 @@ public class DisposeTimeoutDiagnosticsTest(ITestOutputHelper output) : MonolithM
         var disposable = Mesh.GetHostedHub(new Address("@diag/willDispose"));
         disposable.Dispose();
 
-        // 5s safety net inside MessageHub.Dispose() force-completes if the normal
-        // path stalls; wait that bound + headroom.
-        var completed = await Task.Run(() => disposable.Disposal!.Wait(TimeSpan.FromSeconds(8)));
-        completed.Should().BeTrue("MessageHub.Dispose has a 5s safety-net force-completion");
+        // 25 s safety net inside MessageHub.Dispose() force-completes if the normal
+        // path stalls; wait that bound + headroom. A clean hosted-hub dispose
+        // (no pending callbacks, no hosted children) should still be sub-second.
+        var completed = await Task.Run(() => disposable.Disposal!.Wait(TimeSpan.FromSeconds(28)));
+        completed.Should().BeTrue("MessageHub.Dispose has a 25 s safety-net force-completion");
 
         var diag = disposable.GetDisposalDiagnostics();
         diag.Should().Contain("Disposal=Completed",
@@ -100,18 +103,68 @@ public class DisposeTimeoutDiagnosticsTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact]
+    public async Task QuiesceTimeout_PendingCallback_IsErroredAndDisposeCompletes()
+    {
+        // Pin the contract for the new Quiescing phase: a hub with a still-pending
+        // response callback (via hub.Observe to a non-existent target) must NOT
+        // stall dispose forever. The Quiescing phase waits up to 10 s, then forcibly
+        // pushes ObjectDisposedException into the subject and proceeds to
+        // hostedHubs.Dispose. Total dispose time stays bounded by the 25 s safety net.
+        //
+        // This is the regression-canary for the 16-min CI hang: before this branch,
+        // a leaked Observe subscription wedged dispose indefinitely; after it, the
+        // subject errors out within ~10 s and the subscriber sees OnError.
+        var disposable = Mesh.GetHostedHub(new Address("@diag/quiesceLeak"));
+
+        // Issue an Observe to a non-existent target — no response will ever arrive,
+        // so the response subject sits in responseSubjects until either a reply
+        // resolves it or Quiescing times out and CancelCallbacks pushes OnError.
+        Exception? observedError = null;
+        var awaiterDone = new TaskCompletionSource<bool>();
+        var subscription = disposable.Observe(
+                new PingRequest(),
+                o => o.WithTarget(new Address("@nonexistent/never")))
+            .Subscribe(
+                _ => { },
+                ex =>
+                {
+                    observedError = ex;
+                    awaiterDone.TrySetResult(true);
+                });
+
+        // Give the Observe a moment to register the subject, then dispose.
+        await Task.Delay(100);
+        disposable.Dispose();
+
+        // Dispose must complete within the 25 s safety net. The Quiescing phase
+        // burns ~10 s waiting for the (impossible) reply, then forcibly cancels.
+        var completed = await Task.Run(() => disposable.Disposal!.Wait(TimeSpan.FromSeconds(28)));
+        completed.Should().BeTrue("dispose must complete within the safety-net budget even with a leaked callback");
+
+        // The subscriber must observe an error — either an ObjectDisposedException
+        // (Quiescing-timeout force-cancel) or a TimeoutException (reply observable
+        // wrapper). What we MUST NOT see is the subscriber hanging without an error.
+        var errored = await Task.WhenAny(awaiterDone.Task, Task.Delay(TimeSpan.FromSeconds(2))) == awaiterDone.Task;
+        errored.Should().BeTrue("the leaked Observe subscriber must receive OnError after Quiescing cancels callbacks");
+        observedError.Should().NotBeNull("OnError must carry an exception explaining why the response never arrived");
+
+        subscription.Dispose();
+    }
+
+    [Fact]
     public void DisposeTimeout_IsBoundedToTensOfSeconds()
     {
-        // Belt-and-braces invariant: don't let DisposeTimeout drift back to the 30s+
-        // silent-swallow bound. Anything > 30s makes a hung-test class a job-timeout
-        // amplifier in CI â€” which is exactly the regression that triggered this
+        // Belt-and-braces invariant: don't let DisposeTimeout drift back to the
+        // silent-swallow regime. Anything > 30 s makes a hung test class a job-timeout
+        // amplifier in CI — which is exactly the regression that triggered this
         // hardening (CI canceled at 9m19s of a 30m job because each disposed test
         // class was burning ~30s on hub-shutdown).
         MonolithMeshTestBase.DisposeTimeout.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(30),
             "DisposeTimeout must stay tight so a hung test class fails fast instead of " +
-            "stacking 30s+ stalls into the job-level CI timeout");
-        MonolithMeshTestBase.DisposeTimeout.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(10),
-            "DisposeTimeout must clear MessageHub's 5s safety net + HostedHubsCollection's 10s fan-out cap " +
+            "stacking long stalls into the job-level CI timeout");
+        MonolithMeshTestBase.DisposeTimeout.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(25),
+            "DisposeTimeout must clear MessageHub's 25 s safety net (which itself accommodates " +
+            "the new 10 s Quiescing drain + 10 s hostedHubs fan-out cap + ~2 s buffer drain) " +
             "with headroom; otherwise we'd time out on healthy disposes");
     }
 }

@@ -4,6 +4,7 @@ public enum MessageHubRunLevel
 {
     Starting,
     Started,
+    Quiescing,
     DisposeHostedHubs,
     HostedHubsDisposed,
     ShutDown,

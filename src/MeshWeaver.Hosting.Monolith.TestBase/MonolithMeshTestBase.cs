@@ -29,13 +29,30 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     public const string TestPartition = "TestData";
 
+    /// <summary>
+    /// Quiescing budget for test-mesh hubs.
+    /// <para>
+    /// 500 ms is comfortably above the natural reply latency observed in tests
+    /// (peak ~100 ms locally) so legitimate handlers drain within the budget.
+    /// </para>
+    /// <para>
+    /// On timeout, the hub flips <see cref="IMessageHub.AnyHubQuiescingTimedOut"/>
+    /// and the test base fails the test class — a pending callback at dispose
+    /// is a leaked Observe subscription, which is always a real bug. The cost
+    /// of being strict: if a handler genuinely needs &gt;500 ms to reply, that
+    /// test must override this with <c>WithQuiesceTimeout(...)</c>.
+    /// </para>
+    /// </summary>
+    protected static readonly TimeSpan TestQuiesceTimeout = TimeSpan.FromMilliseconds(500);
+
     protected MeshBuilder ConfigureMeshBase(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
             .AddInMemoryPersistence()
             .AddRowLevelSecurity()
             .AddGraph()
-            .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" });
+            .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" })
+            .ConfigureHub(c => c.WithQuiesceTimeout(TestQuiesceTimeout));
 
     /// <summary>
     /// Default mesh configuration with PublicAdminAccess for in-memory tests.
@@ -55,6 +72,32 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             )
         );
         Services.AddSingleton(builder.BuildHub);
+        TestPhaseTrace(GetType().Name, "CTOR");
+    }
+
+    /// <summary>
+    /// Cross-process per-test phase trace. Single line per event into a fixed
+    /// file so a developer can `tail -f` it during a hung suite run and spot the
+    /// stuck test class without waiting for the run to finish.
+    /// </summary>
+    private static readonly string TestTraceLogPath =
+        Path.Combine(Path.GetTempPath(), "meshweaver-test-trace.log");
+    private static readonly object TestTraceLogLock = new();
+
+    private static void TestPhaseTrace(string testClass, string phase, long? elapsedMs = null, string? extra = null)
+    {
+        try
+        {
+            var line = $"{DateTime.UtcNow:HH:mm:ss.fff} [{testClass}] {phase}"
+                + (elapsedMs.HasValue ? $" elapsed={elapsedMs}ms" : "")
+                + (extra is null ? "" : $" {extra}");
+            lock (TestTraceLogLock)
+                File.AppendAllText(TestTraceLogPath, line + Environment.NewLine);
+        }
+        catch
+        {
+            // Tracing must never throw out of the test pipeline.
+        }
     }
 
     /// <summary>
@@ -65,13 +108,32 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     public override async ValueTask InitializeAsync()
     {
-        await base.InitializeAsync();
-        // Pre-warm BEFORE first Mesh access — DevLogin would otherwise trigger
-        // Mesh construction which can hit the NodeType-hub recursion before
-        // PreWarmNodeTypeHubs gets a chance to populate the cache.
-        PreWarmNodeTypeHubs();
-        TestUsers.DevLogin(Mesh);
-        await SetupAccessRightsAsync();
+        var sw = Stopwatch.StartNew();
+        var name = GetType().Name;
+        TestPhaseTrace(name, "INIT_START");
+        try
+        {
+            await base.InitializeAsync();
+            TestPhaseTrace(name, "INIT_BASE_DONE", sw.ElapsedMilliseconds);
+
+            // Pre-warm BEFORE first Mesh access — DevLogin would otherwise trigger
+            // Mesh construction which can hit the NodeType-hub recursion before
+            // PreWarmNodeTypeHubs gets a chance to populate the cache.
+            PreWarmNodeTypeHubs();
+            TestPhaseTrace(name, "INIT_PREWARM_DONE", sw.ElapsedMilliseconds);
+
+            TestUsers.DevLogin(Mesh);
+            TestPhaseTrace(name, "INIT_DEVLOGIN_DONE", sw.ElapsedMilliseconds);
+
+            await SetupAccessRightsAsync();
+            TestPhaseTrace(name, "INIT_DONE", sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            TestPhaseTrace(name, "INIT_ERROR", sw.ElapsedMilliseconds,
+                $"{ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
     }
 
     /// <summary>
@@ -340,6 +402,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         var routingService = RoutingService;
         return configuration
             .AddMeshTypes()
+            // Test client hubs accumulate the most leaked Observe subscriptions
+            // (27 / 34 QUIESCE_TIMEOUTs measured on Hosting.Monolith.Test). Cap
+            // their drain budget tight — the rest of the suite runs ~50 s faster.
+            .WithQuiesceTimeout(TestQuiesceTimeout)
             .WithInitialization((h, _) => routingService.RegisterStreamAsync(h));
     }
 
@@ -347,10 +413,17 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Wall-clock cap on test-class dispose. Anything longer is a hung handler /
     /// re-posting message loop / un-drained buffer — surface it as a loud
     /// <see cref="TimeoutException"/> with hub diagnostics rather than swallowing it.
-    /// MessageHub itself has a 5s safety-net force-completion path; this bound just
-    /// has to be larger than that with headroom for hosted-hub fan-out (10s).
+    /// Budget breakdown (post-Quiescing-phase introduction):
+    /// <list type="bullet">
+    ///   <item>10 s for the new <see cref="MessageHubRunLevel.Quiescing"/> drain.</item>
+    ///   <item>10 s for hostedHubs.Disposal (HostedHubsCollection's own cap).</item>
+    ///   <item>~2 s for buffer drain.</item>
+    /// </list>
+    /// 30 s gives clean disposes ample headroom while still firing fast on a *real*
+    /// callback / cascade leak. MessageHub itself has a 25 s safety-net force-
+    /// completion path inside Dispose() that is also aligned with this budget.
     /// </summary>
-    public static readonly TimeSpan DisposeTimeout = TimeSpan.FromSeconds(15);
+    public static readonly TimeSpan DisposeTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Cadence at which we snapshot the hub's <see cref="IMessageHub.GetDisposalDiagnostics"/>
@@ -365,14 +438,32 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         var testName = GetType().Name;
         var sw = Stopwatch.StartNew();
         Exception? disposeException = null;
+        TestPhaseTrace(testName, "DISPOSE_START");
         try
         {
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Dispose() invoking on {Mesh.Address}");
             Mesh.Dispose();
+            TestPhaseTrace(testName, "DISPOSE_INVOKED", sw.ElapsedMilliseconds);
 
             using var cts = new CancellationTokenSource(DisposeTimeout);
             await WaitWithProgressAsync(testName, sw, cts.Token);
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms");
+            TestPhaseTrace(testName, "DISPOSE_DONE", sw.ElapsedMilliseconds);
+
+            // Fail the test class' dispose if any hub hit Quiescing timeout. A leaked
+            // Observe subscription that never received its reply is a real bug —
+            // letting the suite continue silently turns it into a flaky timeout that
+            // surfaces unpredictably in CI. Surfacing here makes the offending test
+            // class fail loud with the offending request type / target / age.
+            if (Mesh.AnyHubQuiescingTimedOut())
+            {
+                var summary = Mesh.GetQuiescingTimeoutSummary();
+                TestPhaseTrace(testName, "DISPOSE_QUIESCE_LEAK", sw.ElapsedMilliseconds, summary);
+                disposeException = new InvalidOperationException(
+                    $"{testName} left Observe subscriptions pending past the Quiescing budget. " +
+                    $"This is a leaked callback — the test posted a request and never received " +
+                    $"(or never awaited) its reply. Pending callbacks at dispose:{Environment.NewLine}{summary}");
+            }
         }
         catch (OperationCanceledException)
         {
@@ -383,6 +474,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             var diagnostics = SafeGetDiagnostics();
             FileOutput.WriteLine($"[DISPOSE] {testName}: TIMEOUT after {sw.ElapsedMilliseconds}ms");
             FileOutput.WriteLine(diagnostics);
+            TestPhaseTrace(testName, "DISPOSE_TIMEOUT", sw.ElapsedMilliseconds, diagnostics);
             disposeException = new TimeoutException(
                 $"{testName} dispose timed out after {DisposeTimeout.TotalSeconds:F0}s " +
                 $"({sw.ElapsedMilliseconds}ms elapsed). Hub state at timeout:{Environment.NewLine}{diagnostics}");
@@ -392,6 +484,8 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             var diagnostics = SafeGetDiagnostics();
             FileOutput.WriteLine($"[DISPOSE] {testName}: ERROR after {sw.ElapsedMilliseconds}ms: {ex.GetType().Name}: {ex.Message}");
             FileOutput.WriteLine(diagnostics);
+            TestPhaseTrace(testName, "DISPOSE_ERROR", sw.ElapsedMilliseconds,
+                $"{ex.GetType().Name}: {ex.Message}");
             disposeException = new InvalidOperationException(
                 $"{testName} dispose failed after {sw.ElapsedMilliseconds}ms: {ex.GetType().Name}: {ex.Message}." +
                 $" Hub state:{Environment.NewLine}{diagnostics}", ex);
