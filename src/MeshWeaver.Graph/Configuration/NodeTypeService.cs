@@ -2,10 +2,12 @@
 using System.Net;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Threading;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -518,10 +520,156 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 nodeType));
         }
 
-        // (a) issue request to NodeType hub. (b) apply the AssemblyLocation +
-        // HubConfiguration delegate the response carries. No request-level cache —
-        // the disk-level CompilationCacheService is source-aware and the NodeType
-        // hub returns the cached DLL path on a hot path.
+        // SLOW PATH.
+        //
+        // Two convergent paths share the same persisted state:
+        //
+        // 1. <b>Caller request</b>. Posts <see cref="GetCompilationPathRequest"/>
+        //    to the per-NodeType hub. The handler runs Roslyn (idempotent — disk
+        //    cache short-circuits) and posts back the assembly path +
+        //    HubConfiguration delegate (Func, in-process only).
+        //
+        // 2. <b>Watcher</b>. The per-NodeType hub also installs an init-time
+        //    compile watcher (<see cref="MeshDataSourceExtensions"/>) that
+        //    triggers when <see cref="NodeTypeDefinition.CompilationStatus"/>
+        //    flips to <see cref="CompilationStatus.Pending"/>. The watcher
+        //    writes the compile result back to the MeshNode (Ok +
+        //    AssemblyLocation, or Error). That write rides the synchronization
+        //    protocol: every silo's <c>SyncedMeshNodeQuery</c> subscriber sees
+        //    the updated MeshNode and refreshes its local
+        //    <c>NodeTypeService._hubConfigurations</c> cache without a
+        //    cross-silo request — that is the cluster-wide cache-propagation
+        //    benefit of the watcher.
+        //
+        // The caller-request path stays the primary trigger because it integrates
+        // cleanly with HandleCreateNodeRequest's chain (timeout-bounded, single
+        // emission, surfaces compile errors back to the create flow). The watcher
+        // is the publication mechanism for cluster-wide convergence.
+        return ResolveViaRequest(node, nodeType);
+    }
+
+    /// <summary>
+    /// Stream-based slow path. See <see cref="EnrichWithNodeType"/> for the
+    /// architectural overview.
+    /// </summary>
+    private IObservable<MeshNode> ResolveViaStream(MeshNode node, string nodeType)
+    {
+        IWorkspace workspace;
+        try { workspace = hub.GetWorkspace(); }
+        catch
+        {
+            // Workspace unavailable — fall back to the legacy request/response path so
+            // hubs that haven't wired AddMeshDataSource keep working.
+            return ResolveViaRequest(node, nodeType);
+        }
+
+        var typeAddress = new Address(nodeType);
+        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(typeAddress, new MeshNodeReference());
+        if (stream is null)
+            return ResolveViaRequest(node, nodeType);
+
+        var triggered = 0;
+
+        return stream
+            .Where(change => change?.Value != null)
+            .Select(change => change.Value!)
+            .Do(typeNode =>
+            {
+                if (typeNode.Content is not NodeTypeDefinition def) return;
+                // Trigger compile only when no compile state exists yet. After triggering
+                // once, ignore further null emissions so we don't fight the watcher.
+                if (def.CompilationStatus is not null
+                    && def.CompilationStatus != CompilationStatus.Unknown) return;
+                if (Interlocked.CompareExchange(ref triggered, 1, 0) != 0) return;
+                logger.LogDebug("Stream slow path: triggering compile for {NodeType} (CompilationStatus={Status})",
+                    nodeType, def.CompilationStatus);
+                stream.Update(current =>
+                {
+                    if (current?.Content is not NodeTypeDefinition d) return null;
+                    if (d.CompilationStatus is not null && d.CompilationStatus != CompilationStatus.Unknown)
+                        return null;
+                    return new ChangeItem<MeshNode>(
+                        Value: current with { Content = d with { CompilationStatus = CompilationStatus.Pending } },
+                        ChangedBy: WellKnownUsers.System,
+                        StreamId: stream.StreamId,
+                        ChangeType: ChangeType.Full,
+                        Version: stream.Hub.Version,
+                        Updates: null);
+                });
+            })
+            .Where(typeNode => typeNode.Content is NodeTypeDefinition def
+                && (def.CompilationStatus == CompilationStatus.Ok
+                    || def.CompilationStatus == CompilationStatus.Error))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .SelectMany(typeNode => ApplyStreamResult(typeNode, node, nodeType))
+            .Catch<MeshNode, Exception>(ex =>
+            {
+                logger.LogDebug(ex,
+                    "Stream slow path for '{NodeType}' faulted — applying compilation-error overlay",
+                    nodeType);
+                return Observable.Return(WithCompilationErrorOverlay(node, nodeType, ex.Message));
+            });
+    }
+
+    /// <summary>
+    /// Materialises a compile result (Ok or Error) from the per-NodeType MeshNode into
+    /// the consumer-facing MeshNode. On Ok, recovers the in-process
+    /// <c>HubConfiguration</c> delegate by re-running
+    /// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/> against the
+    /// already-cached DLL — no recompile, the disk cache short-circuits to a reflection
+    /// pass.
+    /// </summary>
+    private IObservable<MeshNode> ApplyStreamResult(MeshNode typeNode, MeshNode node, string nodeType)
+    {
+        var def = typeNode.Content as NodeTypeDefinition;
+
+        if (def?.CompilationStatus == CompilationStatus.Ok && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
+        {
+            _compilationErrors.TryRemove(nodeType, out _);
+            _compilationSucceededAt[nodeType] = DateTimeOffset.UtcNow;
+
+            if (compilationService is null)
+                return Observable.Return(ApplyEntry(node,
+                    new PathCacheEntry(typeNode.AssemblyLocation!, null, null), nodeType));
+
+            return compilationService.CompileAndGetConfigurations(typeNode)
+                .Take(1)
+                .Select(result =>
+                {
+                    var matching = result?.NodeTypeConfigurations
+                        .FirstOrDefault(c => string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
+                        ?? result?.NodeTypeConfigurations.FirstOrDefault();
+                    var hubConfig = matching?.HubConfiguration;
+                    if (hubConfig != null)
+                        _hubConfigurations[nodeType] = hubConfig;
+                    return ApplyEntry(node,
+                        new PathCacheEntry(typeNode.AssemblyLocation!, null, hubConfig), nodeType);
+                })
+                .Catch<MeshNode, Exception>(ex =>
+                {
+                    logger.LogDebug(ex,
+                        "Stream slow path: HubConfiguration reflection for '{NodeType}' faulted",
+                        nodeType);
+                    return Observable.Return(ApplyEntry(node,
+                        new PathCacheEntry(typeNode.AssemblyLocation!, null, null), nodeType));
+                });
+        }
+
+        // Error / no DLL — record and overlay.
+        var error = def?.CompilationError ?? "Compilation failed";
+        _compilationErrors[nodeType] = error;
+        _compilationSucceededAt.TryRemove(nodeType, out _);
+        return Observable.Return(WithCompilationErrorOverlay(node, nodeType, error));
+    }
+
+    /// <summary>
+    /// Legacy request/response slow path. Kept as fallback for hubs that don't have a
+    /// workspace or remote-stream reducer (e.g. hubs without
+    /// <see cref="MeshDataSourceExtensions.AddMeshDataSource"/>).
+    /// </summary>
+    private IObservable<MeshNode> ResolveViaRequest(MeshNode node, string nodeType)
+    {
         return hub.Observe(
                 new GetCompilationPathRequest(/* HEAD */),
                 o => o.WithTarget(new Address(nodeType)))
@@ -545,8 +693,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 if (response.Success && !string.IsNullOrEmpty(response.AssemblyLocation))
                 {
-                    // Compile succeeded — clear any stale error state on this NodeType
-                    // so GetStatus flips back to Ok on the next read.
                     _compilationErrors.TryRemove(nodeType, out _);
                     _compilationSucceededAt[nodeType] = DateTimeOffset.UtcNow;
                     if (response.HubConfiguration != null)
@@ -559,12 +705,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                             response.HubConfiguration),
                         nodeType);
                 }
-
-                // Compile failed — cache the error so GetStatus / GetDiagnostics surface
-                // it on the next read. Without this the per-node-hub's NodeTypeContractHandler
-                // returns the failure response straight back to the caller, but the
-                // singleton NodeTypeService never learns about it, so callers polling
-                // GetStatus see "Unknown" instead of "Error".
                 if (!response.Success && !string.IsNullOrEmpty(response.Error))
                 {
                     _compilationErrors[nodeType] = response.Error!;

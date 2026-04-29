@@ -17,6 +17,15 @@ public enum CompilationStatus
     /// <summary>No compile has completed since the last invalidation.</summary>
     Unknown,
 
+    /// <summary>
+    /// Caller has requested a compile (set on the NodeType MeshNode via stream.Update);
+    /// the per-NodeType hub's compile watcher will pick this up, flip to
+    /// <see cref="Compiling"/>, and run Roslyn. Used as the trigger signal in the
+    /// stream-update / sync-stream-broadcast slow path that replaces
+    /// <c>GetCompilationPathRequest</c>.
+    /// </summary>
+    Pending,
+
     /// <summary>A compile is currently running.</summary>
     Compiling,
 
