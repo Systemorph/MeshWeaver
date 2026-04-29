@@ -87,20 +87,32 @@ public static class MeshNodeStreamExtensions
     /// works even when no per-node hub has been separately activated.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Updates a MeshNode through the canonical write path:
+    /// (a) the patch arrives in the sync stream — own (this hub) writes go through
+    /// the data source's primary EntityStore stream; remote writes go through the
+    /// remote MeshNodeReference stream's <c>.Update</c> which sends a
+    /// synchronization message to the owning hub. (b) On the owning hub, the patch
+    /// is validated via <c>WorkspaceOperations.Change</c> /
+    /// <c>HandleDataChangeRequest</c>'s <c>RunChangeValidators</c>. (c) The
+    /// validated patch is applied to the owning MeshDataSource. (d) The owning
+    /// hub broadcasts the change to all subscribers through the synchronization
+    /// protocol.
+    /// <para>
+    /// Read-modify-write: <paramref name="update"/> is invoked atop the latest
+    /// node from the owning source so concurrent callers don't lose updates.
+    /// </para>
+    /// </summary>
     public static void UpdateMeshNode(this IWorkspace workspace,
         Func<MeshNode, MeshNode> update,
         string? nodePath = null)
     {
-        // Cross-address: forward to the owning hub's remote MeshNodeReference stream
-        // and call .Update there. The synchronization protocol propagates the patch
-        // to the owning hub, which persists via its MeshDataSource and broadcasts to
-        // all subscribers. Per the architecture: writes ALWAYS go through the owning
-        // hub's source; remote callers never write to a local InstanceCollection.
-        // See Doc/Architecture/InitializationGates.md + AsynchronousCalls.md.
         var hubPath = workspace.Hub.Address.Path;
         if (!string.IsNullOrEmpty(nodePath)
             && !string.Equals(nodePath, hubPath, StringComparison.Ordinal))
         {
+            // Cross-address: the synchronization protocol carries the patch to the
+            // owning hub. The owning hub's data layer applies validation + writes.
             var remote = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(nodePath), new MeshNodeReference());
             remote.Update(current =>
@@ -122,9 +134,10 @@ public static class MeshNodeStreamExtensions
             return;
         }
 
-        // Local: write to the data source's MeshNode partition stream — same stream the
-        // workspace reduces from, so updates propagate to all subscribers (and to persistence
-        // via the data source's persister).
+        // Own: write directly to the data source's primary EntityStore stream.
+        // dsStream.Update reads the current EntityStore, applies the update via
+        // ApplyChanges, persists via MeshNodeTypeSource's debounced flush, and
+        // broadcasts through the synchronization protocol.
         var dataSource = workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
         if (dataSource == null)
             throw new InvalidOperationException("No data source registered for MeshNode");
@@ -154,18 +167,10 @@ public static class MeshNodeStreamExtensions
                 dsStream.StreamId));
         }, ex =>
         {
-            var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode");
-            // Log AND propagate. Silent "log and swallow" hid every cross-grain
-            // workspace propagation bug (e.g. AppendUserMessageRequest arriving
-            // before MeshNodeTypeSource.Initialize emitted): the .Update call
-            // looked successful, the response said Success=true, but the actual
-            // collection write was lost — every subsequent poll then read empty.
-            // Re-throw so the caller observes the failure and can surface it
-            // (test failure / response.Error / circuit break). See
-            // Doc/Architecture/InitializationGates.md.
-            logger?.LogError(ex, "[UPDATE-MESHNODE-FAIL] hub={HubAddress} nodePath={NodePath} — propagating",
-                workspace.Hub.Address, nodePath);
+            workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode")
+                ?.LogError(ex, "[UPDATE-MESHNODE-FAIL] hub={HubAddress} nodePath={NodePath} — propagating",
+                    workspace.Hub.Address, nodePath);
             return Task.FromException(ex);
         });
     }
