@@ -343,48 +343,100 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .WithInitialization((h, _) => routingService.RegisterStreamAsync(h));
     }
 
-    private static readonly string DisposeLogFile = Path.Combine(
-        AppContext.BaseDirectory, "test-logs", "dispose-trace.log");
+    /// <summary>
+    /// Wall-clock cap on test-class dispose. Anything longer is a hung handler /
+    /// re-posting message loop / un-drained buffer — surface it as a loud
+    /// <see cref="TimeoutException"/> with hub diagnostics rather than swallowing it.
+    /// MessageHub itself has a 5s safety-net force-completion path; this bound just
+    /// has to be larger than that with headroom for hosted-hub fan-out (10s).
+    /// </summary>
+    public static readonly TimeSpan DisposeTimeout = TimeSpan.FromSeconds(15);
 
-    private static void TraceDispose(string message)
-    {
-        try
-        {
-            var dir = Path.GetDirectoryName(DisposeLogFile)!;
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            File.AppendAllText(DisposeLogFile,
-                $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
-        }
-        catch { /* best effort */ }
-    }
+    /// <summary>
+    /// Cadence at which we snapshot the hub's <see cref="IMessageHub.GetDisposalDiagnostics"/>
+    /// while waiting for <see cref="IMessageHub.Disposal"/> — every tick lands in
+    /// <see cref="TestBase.FileOutput"/> (xUnit test output) so a slow dispose shows
+    /// progress incrementally instead of producing one giant snapshot at the timeout.
+    /// </summary>
+    private static readonly TimeSpan DisposeProgressInterval = TimeSpan.FromSeconds(3);
 
     public override async ValueTask DisposeAsync()
     {
         var testName = GetType().Name;
         var sw = Stopwatch.StartNew();
-        TraceDispose($"DISPOSE START: {testName} (MeshAddress={Mesh.Address})");
+        Exception? disposeException = null;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            TraceDispose($"  {testName}: Calling Mesh.Dispose()...");
+            FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Dispose() invoking on {Mesh.Address}");
             Mesh.Dispose();
-            TraceDispose($"  {testName}: Mesh.Dispose() returned in {sw.ElapsedMilliseconds}ms. Awaiting Mesh.Disposal...");
-            await Mesh.Disposal!.WaitAsync(cts.Token);
-            TraceDispose($"  {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms");
+
+            using var cts = new CancellationTokenSource(DisposeTimeout);
+            await WaitWithProgressAsync(testName, sw, cts.Token);
+            FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms");
         }
         catch (OperationCanceledException)
         {
-            TraceDispose($"  {testName}: TIMEOUT waiting for Mesh.Disposal after {sw.ElapsedMilliseconds}ms!");
+            // The previous 30s silent-swallow hid this in a per-machine trace file.
+            // Surface a loud TimeoutException with the hub's pending-state diagnostics
+            // so the failure message identifies which hub / queue is still draining
+            // and which handler (if any) is wedged on the action block.
+            var diagnostics = SafeGetDiagnostics();
+            FileOutput.WriteLine($"[DISPOSE] {testName}: TIMEOUT after {sw.ElapsedMilliseconds}ms");
+            FileOutput.WriteLine(diagnostics);
+            disposeException = new TimeoutException(
+                $"{testName} dispose timed out after {DisposeTimeout.TotalSeconds:F0}s " +
+                $"({sw.ElapsedMilliseconds}ms elapsed). Hub state at timeout:{Environment.NewLine}{diagnostics}");
         }
         catch (Exception ex)
         {
-            TraceDispose($"  {testName}: ERROR during dispose after {sw.ElapsedMilliseconds}ms: {ex.GetType().Name}: {ex.Message}");
+            var diagnostics = SafeGetDiagnostics();
+            FileOutput.WriteLine($"[DISPOSE] {testName}: ERROR after {sw.ElapsedMilliseconds}ms: {ex.GetType().Name}: {ex.Message}");
+            FileOutput.WriteLine(diagnostics);
+            disposeException = new InvalidOperationException(
+                $"{testName} dispose failed after {sw.ElapsedMilliseconds}ms: {ex.GetType().Name}: {ex.Message}." +
+                $" Hub state:{Environment.NewLine}{diagnostics}", ex);
         }
         finally
         {
-            TraceDispose($"  {testName}: Calling base.DisposeAsync()...");
             await base.DisposeAsync();
-            TraceDispose($"DISPOSE END: {testName} in {sw.ElapsedMilliseconds}ms total");
         }
+
+        if (disposeException != null)
+            throw disposeException;
+    }
+
+    /// <summary>
+    /// Awaits <see cref="IMessageHub.Disposal"/> with periodic progress snapshots.
+    /// Every <see cref="DisposeProgressInterval"/>, dumps
+    /// <see cref="IMessageHub.GetDisposalDiagnostics"/> to <see cref="TestBase.FileOutput"/>
+    /// so a hang shows up as a stream of snapshots converging on the offending hub
+    /// — instead of one big snapshot at the timeout.
+    /// </summary>
+    private async Task WaitWithProgressAsync(string testName, Stopwatch sw, CancellationToken ct)
+    {
+        var disposal = Mesh.Disposal!;
+        while (!disposal.IsCompleted)
+        {
+            using var progressCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            progressCts.CancelAfter(DisposeProgressInterval);
+            try
+            {
+                await disposal.WaitAsync(progressCts.Token);
+                return; // disposal completed
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Progress tick fired before disposal completed — log a snapshot and loop.
+                FileOutput.WriteLine(
+                    $"[DISPOSE] {testName}: still waiting after {sw.ElapsedMilliseconds}ms — snapshot:");
+                FileOutput.WriteLine(SafeGetDiagnostics());
+            }
+        }
+    }
+
+    private string SafeGetDiagnostics()
+    {
+        try { return Mesh.GetDisposalDiagnostics(); }
+        catch (Exception diagEx) { return $"<failed to gather diagnostics: {diagEx.Message}>"; }
     }
 }

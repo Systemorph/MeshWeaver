@@ -179,6 +179,36 @@ public class MessageService : IMessageService
     public Address Address { get; }
     public IMessageHub? ParentHub { get; }
 
+    // Tracks what message is currently executing so the disposal diagnostic snapshot
+    // can name *which* handler is wedged. Updated atomically around each handler
+    // invocation in ScheduleExecution. Null means the action block is idle.
+    private volatile string? currentlyExecutingMessageType;
+    private long currentlyExecutingStartedTicks;
+
+    /// <summary>
+    /// Snapshot counts of the dataflow buffers — used by
+    /// <see cref="MessageHub.GetDisposalDiagnostics"/> when a test-base dispose
+    /// timeout fires so the failure message tells you which queue is still
+    /// draining (or backlogged because a handler keeps re-posting). Includes the
+    /// type name of the currently-executing handler when the action block is
+    /// wedged so the diagnostic identifies the offending message.
+    /// </summary>
+    internal (int Buffer, int Deferred, int Execution, int OpenGates, bool DeliveryCompleted,
+              string? CurrentMessage, long CurrentMessageElapsedMs)
+        GetQueueSnapshot()
+    {
+        var current = currentlyExecutingMessageType;
+        long elapsed = 0;
+        if (current != null)
+        {
+            var startedTicks = Interlocked.Read(ref currentlyExecutingStartedTicks);
+            if (startedTicks > 0)
+                elapsed = (long)((Stopwatch.GetTimestamp() - startedTicks) * 1000.0 / Stopwatch.Frequency);
+        }
+        return (buffer.Count, deferredBuffer.Count, executionBuffer.Count, gates.Count,
+            deliveryAction.Completion.IsCompleted, current, elapsed);
+    }
+
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
         ScheduleNotify(delivery, cancellationToken);
 
@@ -420,6 +450,11 @@ public class MessageService : IMessageService
 
             var executionStopwatch = Stopwatch.StartNew();
             var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
+            // Mark this handler as the currently-executing one so a disposal timeout
+            // diagnostic can name it — without this, "dispose hung" tells you nothing
+            // about which handler is wedged. Cleared in `finally` below.
+            currentlyExecutingMessageType = delivery.Message.GetType().Name;
+            Interlocked.Exchange(ref currentlyExecutingStartedTicks, Stopwatch.GetTimestamp());
             try
             {
 
@@ -471,6 +506,15 @@ public class MessageService : IMessageService
                         delivery, executionStopwatch.ElapsedMilliseconds, e, Address);
                     ReportFailure(delivery.Failed(e.ToString()));
                 }
+            }
+            finally
+            {
+                // Clear the currently-executing tracker — the action block is now idle
+                // (or about to pick up the next message). Pairs with the assignment in
+                // the entry block above so a disposal diagnostic names the offending handler
+                // ONLY while it's actually in flight.
+                currentlyExecutingMessageType = null;
+                Interlocked.Exchange(ref currentlyExecutingStartedTicks, 0);
             }
 
             if (delivery.Message is not ExecutionRequest)

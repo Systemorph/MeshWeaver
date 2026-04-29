@@ -110,6 +110,15 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     Task? Disposal { get; }
     ITypeRegistry TypeRegistry { get; }
 
+    /// <summary>
+    /// Multi-line snapshot of the hub's disposal state for failure diagnostics.
+    /// Includes hub address, run-level, disposal-task status, hosted-hub addresses
+    /// (and whether each one's <see cref="Disposal"/> is still pending), and the
+    /// dataflow buffer counts on the underlying message service. Used by test
+    /// base classes when a dispose timeout fires so the failure says *why* it hung
+    /// rather than just "operation was canceled".
+    /// </summary>
+    string GetDisposalDiagnostics();
 
     internal void Start();
 
