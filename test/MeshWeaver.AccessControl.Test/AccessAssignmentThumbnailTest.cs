@@ -252,14 +252,21 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         client.Post(new ClickedEvent(removeButtonArea!, stream.StreamId),
             o => o.WithTarget(hostAddress));
 
-        // Wait reactively for the node's role count to drop to 1 — replaces the
-        // 100ms polling loop with an actual subscription to the per-node hub stream.
+        // Poll via GetDataRequest (request/response, always fresh) — the
+        // GetMeshNodeStream subscription pattern proved unreliable here:
+        // the Where(...) never matched after the click, even though the
+        // per-node hub had committed the new state. Mirrors the working
+        // pattern in UpdateAccessObject_CanSelectAnyNodeType_ViaDataChange.
         var ct = TestContext.Current.CancellationToken;
-        var updatedNode = await ReadNode($"{TestNamespace}/iris-access")
-            .Where(n => n.Content is AccessAssignment a && a.Roles.Count == 1)
-            .FirstAsync()
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
+        MeshNode? updatedNode = null;
+        while (System.DateTime.UtcNow < deadline)
+        {
+            updatedNode = await ReadNodeAsync($"{TestNamespace}/iris-access", ct);
+            if (updatedNode?.Content is AccessAssignment a && a.Roles.Count == 1)
+                break;
+            await Task.Delay(100, ct);
+        }
 
         updatedNode.Should().NotBeNull();
         var result = updatedNode!.Content as AccessAssignment;
@@ -335,13 +342,19 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         var updatedNode = created with { Content = updatedAssignment };
         await NodeFactory.UpdateNode(updatedNode);
 
-        // Verify the update was persisted — wait reactively for the AccessObject change.
+        // Poll via GetDataRequest — same pattern as the sibling
+        // CanSelectAnyNodeType test. GetMeshNodeStream + Where + FirstAsync
+        // does not surface the update reliably here.
         var ct = TestContext.Current.CancellationToken;
-        var result = await ReadNode($"{TestNamespace}/dave-access")
-            .Where(n => n.Content is AccessAssignment a && a.AccessObject == "User/eve")
-            .FirstAsync()
-            .Timeout(10.Seconds())
-            .ToTask(ct);
+        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
+        MeshNode? result = null;
+        while (System.DateTime.UtcNow < deadline)
+        {
+            result = await ReadNodeAsync($"{TestNamespace}/dave-access", ct);
+            if (result?.Content is AccessAssignment a && a.AccessObject == "User/eve")
+                break;
+            await Task.Delay(100, ct);
+        }
 
         result.Should().NotBeNull();
         var resultAssignment = result!.Content as AccessAssignment;

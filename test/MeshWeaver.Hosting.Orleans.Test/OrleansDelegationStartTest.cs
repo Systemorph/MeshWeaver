@@ -90,7 +90,17 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
             var responsePath = $"{subThreadPath}/{responseMsgId}";
             Output.WriteLine($"Sub-thread: {subThreadPath}, user={userMsgId}, response={responseMsgId}");
 
-            // Step 1: Create user cell
+            // Step 1: Create the sub-thread FIRST so its per-node hub exists. Routing
+            // for subsequent cell creates needs the sub-thread node to be on the routing
+            // path; without it, RouteMessage returns NotFound and the cell create fails.
+            // Production flow (ChatClientAgentFactory.delegate_to_agent at line 367-394)
+            // also creates all three nodes via meshService.CreateNode but does so
+            // concurrently / fire-and-forget so the routing race is hidden.
+            var threadResp = await client.Observe(new CreateNodeRequest(subThreadNode), o => o.WithTarget(new Address(parentMsgPath))).FirstAsync().ToTask(ct);
+            threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error);
+            Output.WriteLine("Sub-thread created â€” WatchForExecution should trigger");
+
+            // Step 2: Create user cell (now that sub-thread exists routing succeeds)
             var userCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, subThreadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
@@ -102,7 +112,7 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
             }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
             Output.WriteLine($"User cell created: success={userCellResp.Message.Success}");
 
-            // Step 2: Create response cell
+            // Step 3: Create response cell
             var responseCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, subThreadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
@@ -113,11 +123,6 @@ public class OrleansDelegationStartTest(SharedOrleansFixture fixture, ITestOutpu
                 }
             }), o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
             Output.WriteLine($"Response cell created: success={responseCellResp.Message.Success}");
-
-            // Step 3: Create thread with IsExecuting=true (triggers WatchForExecution)
-            var threadResp = await client.Observe(new CreateNodeRequest(subThreadNode), o => o.WithTarget(new Address(parentMsgPath))).FirstAsync().ToTask(ct);
-            threadResp.Message.Success.Should().BeTrue(threadResp.Message.Error);
-            Output.WriteLine("Sub-thread created â€” WatchForExecution should trigger");
 
             // Step 4: Poll for execution to complete
             for (var i = 0; i < 60; i++)
