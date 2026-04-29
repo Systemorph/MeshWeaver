@@ -89,40 +89,40 @@ internal class NavigationService : INavigationService
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
         _retryDelays = retryDelays ?? DefaultRetryDelays;
 
-        // Initial status: best-effort read of the current path so subscribers
-        // (Status BehaviorSubject) see "Looking up <path>" instead of a generic
-        // "Looking up page…" between construction and InitializeAsync. If the
-        // NavigationManager isn't ready yet (RemoteNavigationManager throws
-        // "has not been initialized"), TryReadCurrentPath returns null and the
-        // status falls back to the unlabelled form — InitializeAsync will
-        // re-emit with the path the moment it's available.
-        _status.OnNext(NavigationStatus.LookingUp(TryReadCurrentPath()));
+        // Status starts unlabelled. Reading NavigationManager.Uri here would
+        // throw "RemoteNavigationManager has not been initialized" because DI
+        // construction runs before the Blazor circuit's first JS interop
+        // tick — the previous TryReadCurrentPath swallowed the exception via
+        // try/catch but the IDE still surfaced it as a first-chance
+        // InvalidOperationException on every circuit start. The path arrives
+        // reactively via _pathSubject the moment InitializeAsync runs (called
+        // from PortalLayoutBase.OnInitializedAsync, where NavigationManager IS
+        // initialized), and Status.LookingUp gets re-emitted with the real
+        // path at that point.
+        _status.OnNext(NavigationStatus.LookingUp(null));
+
+        // Mirror Path emissions into _currentPathSnapshot for the watchdog's
+        // stale-check (synchronous read site that can't plumb an Rx
+        // subscription). Subscribe here so the mirror tracks every push,
+        // including the one InitializeAsync makes from the safe component
+        // lifecycle context.
+        _pathSubscription = _pathSubject.Subscribe(p => _currentPathSnapshot = p);
     }
+
+    private readonly IDisposable _pathSubscription;
 
     /// <inheritdoc />
     public IObservable<string> Path => _pathSubject;
 
     /// <summary>
-    /// Reads <c>NavigationManager.Uri</c> guarded against RemoteNavigationManager's
-    /// "has not been initialized" exception. Internal — external code subscribes
-    /// to <see cref="Path"/> instead. Returns null when the manager isn't ready;
-    /// the caller decides whether to fall back, retry, or skip emitting.
-    /// </summary>
-    private string? TryReadCurrentPath()
-    {
-        try { return _navigationManager.ToBaseRelativePath(_navigationManager.Uri); }
-        catch (InvalidOperationException) { return null; }
-    }
-
-    /// <summary>
-    /// Pushes <paramref name="path"/> onto the <see cref="Path"/> stream and
-    /// updates the synchronous mirror used by retry's stale-check. Skips empty
-    /// paths so the never-null-or-empty contract holds.
+    /// Pushes <paramref name="path"/> onto the <see cref="Path"/> stream — the
+    /// single source of truth. The synchronous _currentPathSnapshot mirror is
+    /// updated via the Subscribe in the constructor, not here, so every code
+    /// site that pushes a path goes through the reactive subject.
     /// </summary>
     private void PublishPath(string? path)
     {
         if (string.IsNullOrEmpty(path)) return;
-        _currentPathSnapshot = path;
         _pathSubject.OnNext(path);
     }
 
@@ -163,18 +163,30 @@ internal class NavigationService : INavigationService
         _isInitialized = true;
         _navigationManager.LocationChanged += OnLocationChanged;
 
-        // Push the initial path onto the Path stream and kick off resolution.
-        // Reactive — Subscribe-driven; never awaits a hub round-trip. Callers
-        // that need to observe the resulting NavigationContext subscribe to
-        // <see cref="NavigationContext"/>.
-        var initial = TryReadCurrentPath();
-        if (!string.IsNullOrEmpty(initial))
-        {
-            PublishPath(initial);
-            ProcessLocationChange(initial);
-        }
+        // Drive ProcessLocationChange off the reactive Path stream — every push
+        // to _pathSubject (initial bootstrap below + every LocationChanged event)
+        // flows through the same subscription. DistinctUntilChanged collapses
+        // redundant emissions for the same path. This is the "fully reactive"
+        // shape the user asked for: the Path subject is the single source of
+        // truth for the current path; ProcessLocationChange is just a
+        // subscriber.
+        _navigationSubscription = _pathSubject
+            .DistinctUntilChanged()
+            .Subscribe(ProcessLocationChange);
+
+        // Bootstrap: push the current URI onto the subject. NavigationManager
+        // IS initialized by the time this runs (PortalLayoutBase.OnInitializedAsync
+        // — Blazor circuit's component lifecycle), so this read is safe and the
+        // first-chance "RemoteNavigationManager has not been initialized" that
+        // showed up in the IDE on every circuit start is gone. The
+        // ProcessLocationChange subscription above kicks in synchronously off
+        // this push.
+        var initial = _navigationManager.ToBaseRelativePath(_navigationManager.Uri);
+        PublishPath(initial);
         return Task.CompletedTask;
     }
+
+    private IDisposable? _navigationSubscription;
 
     /// <inheritdoc />
     public void SetCurrentNamespace(string? @namespace)
@@ -233,9 +245,12 @@ internal class NavigationService : INavigationService
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
+        // Push onto _pathSubject only — ProcessLocationChange runs as a
+        // subscriber to the subject (wired in InitializeAsync), so the
+        // navigation flow is fully reactive: NavigationManager event →
+        // ReplaySubject → ProcessLocationChange.
         var path = _navigationManager.ToBaseRelativePath(e.Location);
         PublishPath(path);
-        ProcessLocationChange(path);
     }
 
     // Per-path resolution subscription. Cancelled when the user navigates away
@@ -489,6 +504,8 @@ internal class NavigationService : INavigationService
         _loadingCts?.Dispose();
         _resolutionSubscription?.Dispose();
         _notFoundWatchdog?.Dispose();
+        _navigationSubscription?.Dispose();
+        _pathSubscription.Dispose();
         _pathSubject.OnCompleted();
         _pathSubject.Dispose();
         _navigationContext.Dispose();
