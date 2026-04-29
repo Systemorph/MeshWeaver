@@ -25,6 +25,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansAssemblyStoreTest(ITestOutputHelper output) : OrleansTestBase(output)
 {
+    /// <summary>
+    /// Two silos so the Put-on-A / TryGet-on-B invariant can actually be exercised —
+    /// the base default is 1, which would fail the <c>silos.Count &gt;= 2</c> assertion.
+    /// </summary>
+    protected override short InitialSilosCount => 2;
+
     [Fact(Timeout = 30000)]
     public async Task Put_on_one_silo_is_visible_as_TryGet_hit_on_another()
     {

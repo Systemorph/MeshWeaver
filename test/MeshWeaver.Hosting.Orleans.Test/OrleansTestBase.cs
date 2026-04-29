@@ -51,11 +51,18 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
 
     protected static Address CreateClientAddress(string? id = null) => new("client", id ?? "1");
 
+    /// <summary>
+    /// Initial silo count for the <see cref="TestCluster"/>. Default 1 — tests that
+    /// need cross-silo behaviour (assembly-store sharing, cache propagation across
+    /// grain placements) override to <c>2</c>.
+    /// </summary>
+    protected virtual short InitialSilosCount => 1;
+
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
-        builder.Options.InitialSilosCount = 1;
+        builder.Options.InitialSilosCount = InitialSilosCount;
         builder.AddSiloBuilderConfigurator<TSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
