@@ -51,10 +51,24 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         var created = await NodeFactory.CreateNode(orgNode);
         created.Should().NotBeNull();
 
-        // Check effective permissions for the creator (admin user from TestBase)
+        // Check effective permissions for the creator (admin user from TestBase).
+        // The OrganizationNodeType.PostCreationHandler creates an AccessAssignment
+        // satellite that grants Admin to the creator. SecurityService's synced
+        // query over AccessAssignment indexes the new satellite asynchronously —
+        // locally this completes within the implicit test-startup window, CI
+        // (Linux runners, cold-disk reads) is slower and the first
+        // GetPermissionAsync call returns Permission.None before the scan
+        // catches up. Poll over a short window so the test isn't flaky.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var permissions = await Mesh.GetPermissionAsync(
-            orgId, TestUsers.Admin.ObjectId, TestTimeout);
+        Permission permissions = Permission.None;
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            permissions = await Mesh.GetPermissionAsync(
+                orgId, TestUsers.Admin.ObjectId, TestTimeout);
+            if (permissions.HasFlag(Permission.Read)) break;
+            await Task.Delay(200, TestTimeout);
+        }
 
         Output.WriteLine($"Effective permissions on {orgId}: {permissions}");
 
@@ -88,9 +102,18 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         };
         await NodeFactory.CreateNode(orgNode);
 
-        // Verify the creator has Admin permissions (PostCreationHandler creates AccessAssignment)
-        var creatorCheck = await Mesh.HasPermissionAsync(
-            orgId, creatorId, Permission.Update, TestTimeout);
+        // Verify the creator has Admin permissions (PostCreationHandler creates
+        // AccessAssignment). Poll for index propagation — same CI-only init
+        // race as AdminCreator_HasFullPermissions above.
+        var creatorCheck = false;
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            creatorCheck = await Mesh.HasPermissionAsync(
+                orgId, creatorId, Permission.Update, TestTimeout);
+            if (creatorCheck) break;
+            await Task.Delay(200, TestTimeout);
+        }
         creatorCheck.Should().BeTrue("PostCreationHandler should grant Admin role to creator");
 
         // Now check that a NON-admin user without claim-based roles has NO permissions
