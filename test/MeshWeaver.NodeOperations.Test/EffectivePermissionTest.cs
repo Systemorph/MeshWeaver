@@ -52,10 +52,22 @@ public class EffectivePermissionTest(ITestOutputHelper output) : MonolithMeshTes
         };
         await NodeFactory.CreateNode(orgNode);
 
-        // 3) Ask ISecurityService.HasPermission for this node
+        // 3) Ask ISecurityService.HasPermission for this node. The Organization's
+        //    PostCreationHandler creates an AccessAssignment satellite that
+        //    SecurityService picks up via its synced query — that propagation is
+        //    asynchronous and on slow CI the first query returns Permission.None
+        //    before the index catches up. Poll over a short window so the test
+        //    isn't flaky on Linux runners.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var permissions = await Mesh.GetPermissionAsync(
-            "Systemorph", TestUsers.Admin.ObjectId, TestTimeout);
+        Permission permissions = Permission.None;
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            permissions = await Mesh.GetPermissionAsync(
+                "Systemorph", TestUsers.Admin.ObjectId, TestTimeout);
+            if (permissions != Permission.None) break;
+            await Task.Delay(200, TestTimeout);
+        }
 
         permissions.Should().NotBe(Permission.None,
             "Creator should have permissions from persisted AccessAssignment on the Organization");
