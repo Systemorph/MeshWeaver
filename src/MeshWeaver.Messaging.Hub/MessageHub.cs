@@ -451,9 +451,12 @@ public sealed class MessageHub : IMessageHub
     /// emission is triggered when <see cref="HandleCallbacks"/> matches the response.
     /// </summary>
     public IObservable<IMessageDelivery> Observe(IMessageDelivery delivery)
-        => RestoreUserContextOnEmission(
-            ObserveById(delivery.Id, delivery.Message?.GetType().Name ?? "<null>", delivery.Target),
+    {
+        var requestType = delivery.Message?.GetType().Name ?? "<null>";
+        return RestoreUserContextOnEmission(
+            ObserveById(delivery.Id, requestType, delivery.Target),
             delivery.AccessContext);
+    }
 
     /// <summary>
     /// Posts <paramref name="r"/> with a pre-generated message id and returns the
@@ -477,9 +480,12 @@ public sealed class MessageHub : IMessageHub
         // which hub we're waiting on. We only run `options(...)` once — Post below
         // gets the same composed PostOptions via WithMessageId chaining.
         var probeOptions = options(new PostOptions(Address));
-        var subject = GetOrAddResponseSubject(messageId, r?.GetType().Name ?? "<null>", probeOptions.Target);
+        var requestType = r?.GetType().Name ?? "<null>";
+        var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target);
         Post(r, opts => options(opts).WithMessageId(messageId));
-        return RestoreUserContextOnEmission(ApplyTimeout(subject), capturedCtx);
+        return RestoreUserContextOnEmission(
+            ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+            capturedCtx);
     }
 
     private IObservable<IMessageDelivery> ObserveById(string messageId,
@@ -487,7 +493,7 @@ public sealed class MessageHub : IMessageHub
         Address? target = null)
     {
         var subject = GetOrAddResponseSubject(messageId, requestType, target);
-        return ApplyTimeout(subject);
+        return ApplyTimeout(subject, requestType, target, messageId);
     }
 
     /// <summary>
@@ -508,11 +514,27 @@ public sealed class MessageHub : IMessageHub
         });
     }
 
-    private IObservable<IMessageDelivery> ApplyTimeout(IObservable<IMessageDelivery> source)
-        => source.Timeout(Configuration.RequestTimeout, System.Reactive.Linq.Observable.Throw<IMessageDelivery>(
-            new TimeoutException(
-                $"No response received in hub {Address} within {Configuration.RequestTimeout}. " +
-                "The request may have been undeliverable or the target hub was not found.")));
+    private IObservable<IMessageDelivery> ApplyTimeout(
+        IObservable<IMessageDelivery> source,
+        string requestType,
+        Address? target,
+        string messageId)
+        => source.Timeout(Configuration.RequestTimeout,
+            System.Reactive.Linq.Observable.Defer<IMessageDelivery>(() =>
+                System.Reactive.Linq.Observable.Throw<IMessageDelivery>(
+                    new TimeoutException(BuildTimeoutMessage(requestType, target, messageId)))));
+
+    /// <summary>
+    /// Names the request that timed out. The previous form said only "No response
+    /// received in hub X within 30s" — diagnostics had to walk the call stack to
+    /// guess which Observe call timed out. Now the message includes the request
+    /// type, target address (the hub we expected to respond), and message id (so
+    /// you can grep MESSAGE_FLOW logs for the exact delivery).
+    /// </summary>
+    private string BuildTimeoutMessage(string requestType, Address? target, string messageId) =>
+        $"No response received in hub {Address} within {Configuration.RequestTimeout} " +
+        $"for request {requestType} (id={messageId}) → target {target?.ToString() ?? "<unset>"}. " +
+        $"The request may have been undeliverable or the target hub was not found.";
 
     private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(
         string messageId,
