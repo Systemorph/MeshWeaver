@@ -22,17 +22,6 @@ public partial class NamedAreaView
 
     private string? AreaToBeRendered { get; set; }
 
-    /// <summary>
-    /// Number of consecutive transient failures (timeout / "no response in hub")
-    /// the area has absorbed without a successful emission. Capped at
-    /// <see cref="MaxTransientRetries"/> to prevent runaway rebinds when the
-    /// upstream hub is genuinely down. Reset to zero on every successful
-    /// control emission.
-    /// </summary>
-    private int _transientRetryCount;
-    private const int MaxTransientRetries = 3;
-    private static readonly TimeSpan TransientRetryDelay = TimeSpan.FromMilliseconds(500);
-
     protected override void BindData()
     {
         subscription?.Dispose();
@@ -57,10 +46,6 @@ public partial class NamedAreaView
                 x =>
                 {
                     if (IsViewDisposed) return;
-                    // Successful emission resets the transient-retry budget so a
-                    // brief upstream blip followed by recovery doesn't permanently
-                    // exhaust the retry counter for the lifetime of this view.
-                    _transientRetryCount = 0;
                     try
                     {
                         InvokeAsync(() =>
@@ -100,49 +85,23 @@ public partial class NamedAreaView
                     // Transient hub/network failures (request timeouts, undeliverable
                     // routing, dropped circuit) are usually self-healing — the upstream
                     // hub finishes initialising, the security pipeline emits its first
-                    // value, the per-node hub comes back online — and a fresh
-                    // SubscribeRequest succeeds. Surface them to the user as an
-                    // "Error loading area: No response received in hub …" markdown
-                    // dump is hostile and unrecoverable from the GUI. Suppress the
-                    // markdown, show a brief reconnecting placeholder, and re-bind
-                    // the stream after a short delay. Cap the retry budget so a
-                    // permanently-down hub still surfaces eventually.
+                    // value, the per-node hub comes back online — and a subsequent
+                    // navigation will resubscribe. Don't render the framework-internal
+                    // "No response received in hub …" markdown to the user (hostile
+                    // and unactionable). Log at Warning, leave the previous RootControl
+                    // in place so the GUI doesn't flicker between "loading" and "error",
+                    // and let the next BindData (route change, parameter change) restart
+                    // the subscription naturally. Auto-retrying from this handler used
+                    // to be tempting but caused a feedback loop: each retry recreated
+                    // a subscription that emitted null first, the success handler reset
+                    // the counter, the next failure re-armed retries, and the GUI looped
+                    // forever consuming circuit bandwidth.
                     if (IsTransientHubFailure(error))
                     {
-                        var attempt = ++_transientRetryCount;
-                        if (attempt <= MaxTransientRetries)
-                        {
-                            Logger.LogWarning(error,
-                                "Transient hub failure on area {Area} (attempt {Attempt}/{Max}) — auto-reconnecting after {Delay}",
-                                AreaToBeRendered, attempt, MaxTransientRetries, TransientRetryDelay);
-                            try
-                            {
-                                InvokeAsync(async () =>
-                                {
-                                    if (IsViewDisposed) return;
-                                    try
-                                    {
-                                        // Show a non-error placeholder while we re-subscribe.
-                                        RootControl = new MarkdownControl(
-                                            $"_Reconnecting (attempt {attempt}/{MaxTransientRetries})…_");
-                                        RequestStateChange();
-                                        await Task.Delay(TransientRetryDelay);
-                                        if (IsViewDisposed) return;
-                                        // Rebuild the subscription against the same area —
-                                        // BindData disposes the old subscription and starts
-                                        // fresh, so a recovered upstream is picked up.
-                                        BindData();
-                                    }
-                                    catch (ObjectDisposedException) { /* renderer gone */ }
-                                });
-                            }
-                            catch (ObjectDisposedException) { /* renderer gone */ }
-                            return;
-                        }
-                        Logger.LogError(error,
-                            "Transient hub failure on area {Area} exceeded retry budget ({Max}) — surfacing to user",
-                            AreaToBeRendered, MaxTransientRetries);
-                        // Fall through to the user-visible markdown below.
+                        Logger.LogWarning(error,
+                            "Transient hub failure on area {Area} — suppressed from GUI; navigate or refresh to retry. Hub={Message}",
+                            AreaToBeRendered, error.Message);
+                        return;
                     }
 
                     // Access denied / validation failures / not-found are user-action
