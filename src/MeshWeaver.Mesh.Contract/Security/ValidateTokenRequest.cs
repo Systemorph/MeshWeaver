@@ -38,6 +38,18 @@ public record ValidateTokenResponse
     public string? UserName { get; init; }
     /// <summary>Email from the token.</summary>
     public string? UserEmail { get; init; }
+
+    /// <summary>
+    /// Roles captured on the <see cref="ApiToken"/> at creation time. The auth
+    /// middleware copies these into <see cref="AccessContext.Roles"/> so
+    /// SecurityService can resolve permissions via the claim-based role path
+    /// even on per-node hubs (where the synced AccessAssignment query is
+    /// intentionally not registered — see SecurityServiceExtensions:44-50).
+    /// Empty for tokens created before this field existed — those tokens
+    /// must be re-created to pick up non-claim role data.
+    /// </summary>
+    public IReadOnlyCollection<string> Roles { get; init; } = [];
+
     /// <summary>Error message if validation failed.</summary>
     public string? Error { get; init; }
     /// <summary>Whether validation succeeded.</summary>
@@ -46,6 +58,15 @@ public record ValidateTokenResponse
     /// <summary>Creates a successful validation response.</summary>
     public static ValidateTokenResponse Ok(string userId, string userName, string userEmail)
         => new() { UserId = userId, UserName = userName, UserEmail = userEmail };
+
+    /// <summary>
+    /// Creates a successful validation response carrying the token's role set so
+    /// the auth middleware can stamp <see cref="AccessContext.Roles"/> for
+    /// downstream permission checks.
+    /// </summary>
+    public static ValidateTokenResponse Ok(string userId, string userName, string userEmail,
+        IReadOnlyCollection<string> roles)
+        => new() { UserId = userId, UserName = userName, UserEmail = userEmail, Roles = roles };
 
     /// <summary>Creates a failed validation response.</summary>
     public static ValidateTokenResponse Fail(string error)

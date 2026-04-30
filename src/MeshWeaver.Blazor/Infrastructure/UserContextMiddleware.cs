@@ -102,6 +102,14 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             ObjectId = response.UserId ?? response.UserEmail!,
             Name = response.UserName ?? "",
             Email = response.UserEmail!,
+            // Stamp the roles captured on the ApiToken at creation time so
+            // SecurityService.GetEffectivePermissions can resolve permissions via
+            // its claim-based role path (lines 166-174). Without this, API-token
+            // requests against per-node hubs see 0 roles → 0 perms → the
+            // IsApiToken gate strips → DENY — because per-node hubs intentionally
+            // don't register the synced AccessAssignment query
+            // (SecurityServiceExtensions:44-50, recursion avoidance).
+            Roles = response.Roles,
             IsApiToken = true,
         };
     }

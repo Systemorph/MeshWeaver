@@ -147,7 +147,14 @@ public static class ApiTokenNodeType
                         return Unit.Default;
                     }
 
-                    var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail);
+                    // Include the roles captured on the ApiToken at creation time.
+                    // UserContextMiddleware stamps these onto AccessContext.Roles so
+                    // SecurityService.GetEffectivePermissions can resolve them via
+                    // the claim-based role path on per-node hubs — where the
+                    // synced AccessAssignment query is intentionally not registered
+                    // (SecurityServiceExtensions:44-50, recursion avoidance).
+                    var response = ValidateTokenResponse.Ok(
+                        apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles);
                     ValidationCache[hash] = (response, DateTimeOffset.UtcNow + CacheDuration);
                     hub.Post(response, o => o.ResponseFor(request));
                     return Unit.Default;
