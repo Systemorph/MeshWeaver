@@ -319,10 +319,23 @@ internal class SecurityService : ISecurityService
             if (_allNodesShared != null)
                 return _allNodesShared;
             var workspace = _hub.GetWorkspace();
+            // StartWith ensures the chain emits at least one value immediately
+            // even when the underlying synced-query VirtualDataSource hasn't
+            // delivered an Initial change yet — most relevant on per-node hubs
+            // where the AccessAssignment query is intentionally NOT registered
+            // (see SecurityServiceExtensions.AddRowLevelSecurity:44-50, recursion
+            // avoidance). Without this StartWith the downstream chain (GetUserScopeRolesStream
+            // → GetEffectivePermissions → HasPermission → AccessControlPipeline's Take(1))
+            // can hang indefinitely, surfacing as the 30 s
+            // "No response received in hub … for request GetDataRequest" timeout in
+            // both MCP and the Blazor GUI. Emitting Array.Empty up front lets the
+            // permission chain resolve as "no roles → 0 perms → DENY" fast, rather
+            // than waiting for an emission that never arrives.
             _allNodesShared = workspace
                 .GetQuery(AccessAssignmentQueryId,
                     $"nodeType:{SecurityCollections.AccessAssignmentNodeType} scope:subtree")
                 .Select(arr => arr.ToArray())
+                .StartWith(Array.Empty<MeshNode>())
                 .Replay(1)
                 .RefCount();
             return _allNodesShared;

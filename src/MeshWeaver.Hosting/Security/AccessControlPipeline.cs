@@ -111,6 +111,27 @@ public static class AccessControlPipeline
                         // closes each inner so Concat below actually advances
                         // through the check list and OnCompleted fires.
                         .Take(1)
+                        // Defense-in-depth: if the security data source hangs (e.g. the
+                        // AccessAssignment synced query has no first emission yet on this
+                        // hub), the inner Take(1) waits forever — Subscribe never fires
+                        // OnNext, next() is never invoked, no DeliveryFailure is posted,
+                        // and the caller's hub.Observe ends up timing out at the FULL
+                        // 30 s RequestTimeout. SecurityService.ObserveAllMeshNodes now
+                        // does StartWith(empty) to prevent this in the common path; this
+                        // Timeout is the safety net for any future never-emit regression
+                        // and converts a silent 30 s hang into a fast 2 s fail-closed
+                        // denial that surfaces in logs.
+                        .Timeout(TimeSpan.FromSeconds(2))
+                        .Catch<bool, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "AccessControlPipeline: permission check on {Path} for {Permission} did not " +
+                                "complete within 2 s — failing closed. " +
+                                "Likely cause: SecurityService data source hung (synced AccessAssignment query " +
+                                "with no Initial emission). Hub={Hub}, message={MessageType}",
+                                check.Path, check.Permission, hub.Address, delivery.Message.GetType().Name);
+                            return Observable.Return(false);
+                        })
                         .Select(ok => (Check: check, Ok: ok)))
                     .Concat()
                     .Subscribe(
