@@ -1301,6 +1301,74 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Triggers a compile for a NodeType by flipping its
+    /// <see cref="NodeTypeDefinition.CompilationStatus"/> to
+    /// <see cref="CompilationStatus.Pending"/> via a <see cref="PatchDataRequest"/>
+    /// targeted at the NodeType's hub. The request is fire-and-forget from the
+    /// caller's perspective — this method returns as soon as the patch is
+    /// acknowledged. The CompileWatcher (installed by <c>AddMeshDataSource</c>)
+    /// observes the Pending state on its own MeshNode stream and runs Roslyn,
+    /// then writes back <see cref="CompilationStatus.Ok"/> or
+    /// <see cref="CompilationStatus.Error"/> plus
+    /// <see cref="NodeTypeDefinition.LastCompilationActivityPath"/>.
+    ///
+    /// <para>Why a dedicated tool: <see cref="Patch"/> requires both Read (to merge
+    /// the existing node) and Update permission on the target node. A caller that
+    /// owns the NodeType but only has Create scope on its container couldn't trigger
+    /// a recompile via Patch. <c>Compile</c> bypasses the merge by sending a raw
+    /// JSON delta straight to the per-node hub via <see cref="PatchDataRequest"/>;
+    /// the hub applies it to its own workspace state and the watcher fires.</para>
+    ///
+    /// <para>Observe progress: poll <c>get @nodeTypePath</c> for
+    /// <c>compilationStatus</c> transitions, then once it settles to Ok/Error
+    /// follow <c>lastCompilationActivityPath</c> to fetch the full executed-source-
+    /// queries / matched-Code-paths / Roslyn-output trace.</para>
+    /// </summary>
+    public IObservable<string> Compile(string path)
+    {
+        logger.LogInformation("Compile called with path={Path}", path);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        var resolvedPath = ResolvePath(path);
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "path is required" },
+                hub.JsonSerializerOptions));
+
+        // JSON merge patch — PatchDataRequest applies this delta to the hub's
+        // own MeshNodeReference. Setting only the compilationStatus field
+        // preserves the rest of the NodeTypeDefinition. The default-string
+        // form of CompilationStatus matches the enum's [JsonStringEnumConverter]
+        // serialisation used by NodeTypeDefinition.
+        const string patchJson = """{"content":{"compilationStatus":"Pending"}}""";
+
+        return PatchViaDataRequest(resolvedPath, patchJson)
+            .Select(version => JsonSerializer.Serialize(
+                new
+                {
+                    status = "Triggered",
+                    path = resolvedPath,
+                    version,
+                    message = "Compile triggered. Poll `get " + resolvedPath
+                        + "` to watch CompilationStatus settle to Ok/Error and "
+                        + "LastCompilationActivityPath populate. Then `get` that "
+                        + "activity path for the full Roslyn trace."
+                },
+                hub.JsonSerializerOptions))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Compile trigger failed for {Path}", resolvedPath);
+                return Observable.Return(JsonSerializer.Serialize(
+                    new { status = "Error", path = resolvedPath, message = ex.Message },
+                    hub.JsonSerializerOptions));
+            });
+    }
+
+    /// <summary>
     /// Pure JSON formatter for <see cref="GetDiagnostics"/>. Lives on its own so a unit
     /// test can lock in the exact wording: in particular, the Ok branch must explicitly
     /// say "Compile SUCCEEDED" (not just "status: Ok") so that agents and humans reading
