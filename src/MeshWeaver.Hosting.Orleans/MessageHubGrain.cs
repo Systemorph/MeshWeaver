@@ -63,10 +63,15 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"Cannot activate grain {streamId}: node not found at {addressPath} after 5 attempts.");
         }
 
-        // Resolve hub configuration (triggers compilation if needed, composes with default config)
+        // Resolve hub configuration (triggers compilation if needed, composes
+        // with default config). Single Task bridge at the grain-activation
+        // boundary; the reactive chain inside ResolveHubConfiguration runs on
+        // the producer's scheduler so a CompileRequest routed back through
+        // the mesh during this activation doesn't capture and block the
+        // grain scheduler the way the previous Task-returning shape did.
         var hubFactory = meshHub.ServiceProvider.GetService<IMeshNodeHubFactory>();
         if (hubFactory != null)
-            node = await hubFactory.ResolveHubConfigurationAsync(node, cancellationToken);
+            node = await hubFactory.ResolveHubConfiguration(node).FirstAsync().ToTask(cancellationToken);
 
         if (node.AssemblyLocation is not null)
             Assembly.LoadFrom(node.AssemblyLocation);
