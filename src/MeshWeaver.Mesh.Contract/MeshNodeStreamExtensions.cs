@@ -129,7 +129,6 @@ public static class MeshNodeStreamExtensions
                     ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode")
                     ?.LogError(ex, "[UPDATE-MESHNODE-REMOTE-FAIL] hub={HubAddress} target={NodePath}",
                         workspace.Hub.Address, nodePath);
-                return Task.FromException(ex);
             });
             return;
         }
@@ -171,7 +170,6 @@ public static class MeshNodeStreamExtensions
                 ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode")
                 ?.LogError(ex, "[UPDATE-MESHNODE-FAIL] hub={HubAddress} nodePath={NodePath} — propagating",
                     workspace.Hub.Address, nodePath);
-            return Task.FromException(ex);
         });
     }
 

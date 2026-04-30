@@ -294,10 +294,9 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
             config => config.WithInitialization(GetInitialValueAsync).WithExceptionCallback(LogException));
     }
 
-    private Task LogException(Exception exception)
+    private void LogException(Exception exception)
     {
         Logger.LogError("An exception occurred synchronizing Data Source {Identity}: {Exception}", this.Id, exception);
-        return Task.CompletedTask;
     }
 
     protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)

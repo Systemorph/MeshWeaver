@@ -147,7 +147,7 @@ public class ContentCollection : IDisposable
             var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path;
             return new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version);
 
-        }, _ => Task.CompletedTask);
+        }, _ => { });
     }
 
     private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)

@@ -71,7 +71,6 @@ public static class MeshNodeExtensions
             var logger = stream.Hub.ServiceProvider.GetService<ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Graph.UpdateMeshNode");
             logger?.LogError(ex, "UpdateMeshNode failed for {NodePath}", nodePath);
-            return Task.CompletedTask;
         });
     }
 
