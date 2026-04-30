@@ -268,7 +268,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 ChangeType.Patch,
                 hub.Version,
                 [])
-        , _ => Task.CompletedTask);
+        , _ => { });
     }
 
     private void HandleNotebookEvent(IMessageHub hub, KernelEvent @event)

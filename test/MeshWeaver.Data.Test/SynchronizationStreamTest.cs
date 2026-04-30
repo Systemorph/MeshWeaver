@@ -90,7 +90,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                         [new EntityUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
                         stream.StreamId)
                 );
-            }, _ => Task.CompletedTask);
+            }, _ => { });
             return true;
         }).ToArray();
         await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(

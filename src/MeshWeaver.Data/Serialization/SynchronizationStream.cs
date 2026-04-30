@@ -148,7 +148,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     private const string SynchronizationGate = nameof(SynchronizationGate);
-    public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback)
+    public void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback)
     {
         if (!TryGetActiveHub(out var hub))
             return;
@@ -156,7 +156,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     public void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update,
-        Func<Exception, Task> exceptionCallback)
+        Action<Exception> exceptionCallback)
     {
         if (!TryGetActiveHub(out var hub))
             return;
@@ -253,7 +253,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
     }
 
-    public virtual void RequestChange(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback)
+    public virtual void RequestChange(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback)
     {
         // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
         Update(update, exceptionCallback);
@@ -366,7 +366,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 }
                 catch (Exception e)
                 {
-                    await exceptionCallback.Invoke(e);
+                    // Synchronous side-effect — Action<Exception> per the
+                    // "no Task on hub-touching error paths" rule. Caller can
+                    // log, push to a status subject, etc. but cannot await
+                    // (which would deadlock the hub action block).
+                    try { exceptionCallback.Invoke(e); }
+                    catch (Exception cbEx)
+                    {
+                        logger.LogError(cbEx,
+                            "[SYNC_STREAM] exceptionCallback threw while handling {OriginalException} on {StreamId}",
+                            e.Message, StreamId);
+                    }
                 }
                 return request.Processed();
             }).WithHandler<SetCurrentRequest>((hub, request) =>
@@ -535,7 +545,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     [PreventLogging]
-    public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
+    public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Action<Exception> ExceptionCallback);
 
     [PreventLogging]
     public record SetCurrentRequest(ChangeItem<TStream> Value);
@@ -565,7 +575,7 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     internal Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>>? Initialization { get; init; }
 
 
-    internal Func<Exception, Task> ExceptionCallback { get; init; } = _ => Task.CompletedTask;
+    internal Action<Exception> ExceptionCallback { get; init; } = _ => { };
 
     /// <summary>
     /// When true, the stream's hosted hub will not automatically post InitializeHubRequest during construction.
@@ -579,11 +589,8 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
         => this with { Initialization = init };
 
-    public StreamConfiguration<TStream> WithExceptionCallback(Func<Exception, Task> exceptionCallback)
-        => this with { ExceptionCallback = exceptionCallback };
-
     public StreamConfiguration<TStream> WithExceptionCallback(Action<Exception> exceptionCallback)
-        => this with { ExceptionCallback = ex => { exceptionCallback(ex); return Task.CompletedTask; } };
+        => this with { ExceptionCallback = exceptionCallback };
 
     /// <summary>
     /// Enables deferred initialization for the stream's hosted hub. When enabled, the hub will not automatically

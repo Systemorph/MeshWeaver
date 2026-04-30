@@ -76,7 +76,7 @@ public record VirtualDataSource(object Id, IWorkspace Workspace)
                                 .WithCollection(typeSource.CollectionName, collection);
                             return Task.FromResult<ChangeItem<EntityStore>?>(
                                 new ChangeItem<EntityStore>(newStore, Id.ToString()!, stream.StreamId, ChangeType.Full, stream.Hub.Version, []));
-                        }, _ => Task.CompletedTask);
+                        }, _ => { });
                     })
             );
         }

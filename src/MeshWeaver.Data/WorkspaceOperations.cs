@@ -89,11 +89,10 @@ public static class WorkspaceOperations
         }
     }
 
-    private static Task UpdateFailed(IMessageDelivery? delivery, Exception? exception)
+    private static void UpdateFailed(IMessageDelivery? delivery, Exception? exception)
     {
         if (exception != null)
             throw new DataException($"Data update failed: {exception.Message}", exception);
-        return Task.CompletedTask;
     }
 
     private static void Update(Activity? activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
@@ -150,7 +149,7 @@ public static class WorkspaceOperations
                 ex =>
                 {
                     subActivity?.Complete();
-                    return UpdateFailed(request, ex);
+                    UpdateFailed(request, ex);
                 }
             );
         }

@@ -115,11 +115,7 @@ public record LayoutAreaHost : IDisposable
                             accessService?.SetContext(null);
                     }
                 })
-                .WithExceptionCallback(ex =>
-            {
-                FailRendering(ex);
-                return Task.CompletedTask;
-            }));
+                .WithExceptionCallback(FailRendering));
         Reference = reference;
         logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
 
@@ -272,11 +268,7 @@ public record LayoutAreaHost : IDisposable
                 Stream.StreamId
                     )
             );
-        }, ex =>
-        {
-            logger.LogWarning(ex, "Cannot update {Area}", context.Area);
-            return Task.CompletedTask;
-        });
+        }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area));
     }
 
     /// <summary>
@@ -291,11 +283,7 @@ public record LayoutAreaHost : IDisposable
             var s = store ?? new EntityStore();
             var changes = RemoveViews(s, context.Area);
             return Stream.ApplyChanges(changes);
-        }, ex =>
-        {
-            logger.LogWarning(ex, "Cannot clear {Area}", context.Area);
-            return Task.CompletedTask;
-        });
+        }, ex => logger.LogWarning(ex, "Cannot clear {Area}", context.Area));
     }
 
     public void SubscribeToDataStream<T>(string id, IObservable<T> stream)
@@ -305,11 +293,7 @@ public record LayoutAreaHost : IDisposable
     {
         Stream.Update(ws =>
             Stream.ApplyChanges((ws ?? new EntityStore()).MergeWithUpdates((ws ?? new EntityStore()).Update(collection, update), Stream.StreamId)),
-            ex =>
-            {
-                logger.LogWarning(ex, "Cannot update {Collection}", collection);
-                return Task.CompletedTask;
-            });
+            ex => logger.LogWarning(ex, "Cannot update {Collection}", collection));
     }
 
     public void UpdateData(string id, object? data)
@@ -517,7 +501,7 @@ public record LayoutAreaHost : IDisposable
     public void UpdateProgress(string area, ProgressControl progress)
         => Stream.Update(state => Stream.ApplyChanges(
             new(state ?? new EntityStore(), [new(LayoutAreaReference.Areas, area, progress)], Stream.StreamId)),
-            ex => { logger.LogWarning(ex, "Cannot update progress for {Area}", area); return Task.CompletedTask; });
+            ex => logger.LogWarning(ex, "Cannot update progress for {Area}", area));
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {

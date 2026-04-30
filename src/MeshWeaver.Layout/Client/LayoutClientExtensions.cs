@@ -40,7 +40,6 @@ public static class LayoutClientExtensions
                     {
                         stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
                             .CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout");
-                        return Task.CompletedTask;
                     });
 
         }

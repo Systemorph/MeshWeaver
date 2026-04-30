@@ -62,7 +62,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         {
             insideDelegate.TrySetResult(accessService.Context?.ObjectId);
             return null;
-        }, _ => Task.CompletedTask);
+        }, _ => { });
 
         var seen = await insideDelegate.Task.WaitAsync(5.Seconds());
 
@@ -92,7 +92,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         {
             insideDelegate.TrySetResult(accessService.Context?.ObjectId);
             return null;
-        }, _ => Task.CompletedTask);
+        }, _ => { });
 
         var seen = await insideDelegate.Task.WaitAsync(5.Seconds());
 

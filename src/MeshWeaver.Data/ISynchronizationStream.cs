@@ -63,9 +63,20 @@ public interface ISynchronizationStream<TStream>
     /// </para>
     /// </summary>
     ChangeItem<TStream>? Current { get; }
-    void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback);
-    void Update(Func<TStream?, ChangeItem<TStream>?> update) => Update(update, _ => Task.CompletedTask);
-    void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update, Func<Exception, Task> exceptionCallback);
+    /// <summary>
+    /// Updates the stream by composing the provided <paramref name="update"/> on top of
+    /// the current value and posting the result. Failures (validation, persistence, hub
+    /// disposal) flow through <paramref name="exceptionCallback"/>.
+    ///
+    /// <para><paramref name="exceptionCallback"/> is <see cref="Action{T}"/> rather than
+    /// <see cref="Func{T, TResult}"/> with a Task return so callers can't await it. An
+    /// awaited Task on a hub-touching error path deadlocks when the awaited thread is
+    /// the one that would publish the result — see Doc/Architecture/AsynchronousCalls.md.
+    /// Side effects only: log, push to a status subject, etc.</para>
+    /// </summary>
+    void Update(Func<TStream?, ChangeItem<TStream>?> update, Action<Exception> exceptionCallback);
+    void Update(Func<TStream?, ChangeItem<TStream>?> update) => Update(update, _ => { });
+    void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update, Action<Exception> exceptionCallback);
     ReduceManager<TStream> ReduceManager { get; }
 
 }
