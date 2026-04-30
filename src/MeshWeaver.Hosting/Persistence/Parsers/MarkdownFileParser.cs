@@ -39,16 +39,45 @@ public partial class MarkdownFileParser : IFileFormatParser
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
 
         MarkdownFrontMatter? frontMatter = null;
+        string? rawYaml = null;
         if (yamlBlock != null)
         {
+            rawYaml = yamlBlock.Lines.ToString();
             try
             {
-                var yamlContent = yamlBlock.Lines.ToString();
-                frontMatter = YamlDeserializer.Deserialize<MarkdownFrontMatter>(yamlContent);
+                frontMatter = YamlDeserializer.Deserialize<MarkdownFrontMatter>(rawYaml);
             }
             catch
             {
-                // If YAML parsing fails, use defaults
+                // If YAML parsing fails, fall through to the regex-based extractor
+                // below — defensive against environment-specific YamlDotNet quirks
+                // (line endings, encoding, type-coercion edge cases) that would
+                // otherwise silently downgrade NodeType to "Markdown".
+            }
+        }
+
+        // Defensive NodeType extractor: if structured YAML deserialization didn't
+        // fill in NodeType (parser threw, returned null, or the property simply
+        // wasn't bound), pull it out of the raw YAML with a flat regex. This is
+        // strictly additive — only runs when frontMatter is null or missing
+        // NodeType, never overrides a successful parse. Catches the CI-Linux
+        // case where samples/Graph/Data/ACME/index.md's `NodeType: Organization`
+        // frontmatter wasn't binding through the structured path.
+        if (rawYaml is not null && string.IsNullOrEmpty(frontMatter?.NodeType))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                rawYaml,
+                @"^\s*NodeType\s*:\s*(?<value>[^\r\n#]+?)\s*$",
+                System.Text.RegularExpressions.RegexOptions.Multiline
+                | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                var nodeTypeValue = match.Groups["value"].Value.Trim().Trim('"', '\'');
+                if (!string.IsNullOrEmpty(nodeTypeValue))
+                {
+                    frontMatter ??= new MarkdownFrontMatter();
+                    frontMatter.NodeType = nodeTypeValue;
+                }
             }
         }
 
