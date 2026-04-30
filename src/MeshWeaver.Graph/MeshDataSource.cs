@@ -300,32 +300,29 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
-    /// Per-NodeType compile watcher. Compilation runs INDEPENDENT of any inbound
-    /// request — the trigger is the hub's own MeshNode stream itself:
-    /// <list type="bullet">
-    ///   <item><b>Initial compile</b>: <c>CompilationStatus == null</c> (a freshly-created
-    ///     NodeType that has never been compiled). The watcher starts compilation as
-    ///     soon as the NodeType definition appears, before any GetDataRequest arrives.
-    ///     This eliminates the request-side wait that previously caused 30 s timeouts
-    ///     on first access.</item>
-    ///   <item><b>Forced retry</b>: <c>CompilationStatus == <see cref="CompilationStatus.Pending"/></c>.
-    ///     Callers re-trigger compilation by flipping <c>Pending</c> through
-    ///     <c>stream.Update</c> — used by source-change detection, manual "Recompile"
-    ///     actions, and the <see cref="IMeshNodeService"/> slow path as a fallback.</item>
-    /// </list>
-    /// Once the watcher writes <see cref="CompilationStatus.Ok"/> or
-    /// <see cref="CompilationStatus.Error"/>, it does NOT auto-retry — the assembly
-    /// is cached and the NodeType is settled until something explicitly forces a
-    /// recompile. This avoids the failure mode where a broken source file would
-    /// loop the watcher forever.
-    ///
-    /// <para>The persisted update flows back through the synchronization protocol to every
+    /// Per-NodeType compile watcher. The hub's own MeshNode stream is the trigger:
+    /// when content is a <see cref="NodeTypeDefinition"/> with
+    /// <c>CompilationStatus == <see cref="CompilationStatus.Pending"/></c>, run
+    /// <see cref="IMeshNodeCompilationService.CompileAndGetConfigurations"/> and
+    /// write the result back via <see cref="MeshNodeExtensions.UpdateMeshNode(IWorkspace, Func{MeshNode, MeshNode}, string?)"/>.
+    /// The persisted update flows back through the synchronization protocol to every
     /// remote subscriber across silos — that is the cross-silo "broadcast" of compile
     /// state without an explicit IMeshChangeFeed Update subscription (deletes still go
-    /// through the change feed; updates ride the sync stream). The watcher debounces
-    /// trigger emissions (50 ms throttle) so two activators racing on hub start don't
-    /// cause two compiles. Its first action is to write <c>Compiling</c>, which moves
-    /// the status out of the trigger band and prevents re-fire.</para>
+    /// through the change feed; updates ride the sync stream).
+    ///
+    /// <para>Pre-state: caller flips <c>CompilationStatus = Pending</c> via
+    /// <c>stream.Update</c>. The watcher debounces Pending emissions (50 ms throttle)
+    /// so two callers racing to flip don't cause two compiles. The watcher's first
+    /// action is to write <c>Compiling</c>, which removes the Pending filter from
+    /// subsequent emissions and prevents re-trigger.</para>
+    ///
+    /// <para>NOTE: The watcher does NOT fire on <c>CompilationStatus == null</c>. An
+    /// earlier attempt to trigger on null (eager initial compile, request-independent)
+    /// raced with workspace init — UpdateMeshNode fired before the SynchronizationStream
+    /// was ready, surfacing as "stream cannot sync" exceptions. Eager triggering needs a
+    /// post-init signal, not the own-stream's first emission. For now the request slow
+    /// path in <see cref="NodeTypeService"/> remains responsible for the initial flip
+    /// to Pending.</para>
     /// </summary>
     private static void InstallCompileWatcher(IMessageHub hub)
     {
@@ -351,18 +348,15 @@ public static class MeshDataSourceExtensions
 
         var sub = ownStream
             .Where(n => n?.Content is NodeTypeDefinition d
-                && (d.CompilationStatus is null
-                    || d.CompilationStatus == CompilationStatus.Pending))
+                && d.CompilationStatus == CompilationStatus.Pending)
             .Throttle(TimeSpan.FromMilliseconds(50))
             .SelectMany(node =>
             {
-                var triggerStatus = (node!.Content as NodeTypeDefinition)?.CompilationStatus;
-                logger?.LogDebug(
-                    "CompileWatcher: trigger observed for {HubPath} (status={Status}); marking Compiling and starting Roslyn",
-                    hubPath, triggerStatus?.ToString() ?? "null");
+                logger?.LogDebug("CompileWatcher: Pending observed for {HubPath}, marking Compiling and starting Roslyn",
+                    hubPath);
 
-                // Flip null/Pending → Compiling so subsequent emissions in the trigger
-                // band don't double-fire; record the start time for diagnostics.
+                // Flip Pending → Compiling so subsequent Pending emissions don't
+                // double-fire; record the start time for diagnostics.
                 workspace.UpdateMeshNode(curr =>
                     curr.Content is NodeTypeDefinition def
                         ? curr with
