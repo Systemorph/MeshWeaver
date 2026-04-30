@@ -148,12 +148,37 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     private const string SynchronizationGate = nameof(SynchronizationGate);
-    public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback) =>
-        Hub.Post(new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback));
+    public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback)
+    {
+        if (!TryGetActiveHub(out var hub))
+            return;
+        hub.Post(new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback));
+    }
 
     public void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update,
-        Func<Exception, Task> exceptionCallback) =>
-        Hub.Post(new UpdateStreamRequest(update, exceptionCallback));
+        Func<Exception, Task> exceptionCallback)
+    {
+        if (!TryGetActiveHub(out var hub))
+            return;
+        hub.Post(new UpdateStreamRequest(update, exceptionCallback));
+    }
+
+    /// <summary>
+    /// Resolves the synchronization hub if the stream is alive and the hub is
+    /// non-null. Dead streams (constructed against a disposing parent) have
+    /// no hub; calling Hub.Post would NRE. Returns false in that case so
+    /// callers can no-op gracefully.
+    /// </summary>
+    private bool TryGetActiveHub(out IMessageHub hub)
+    {
+        if (isDisposed || Hub is null)
+        {
+            hub = null!;
+            return false;
+        }
+        hub = Hub;
+        return true;
+    }
 
     public void OnCompleted()
     {
@@ -193,7 +218,39 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void OnNext(ChangeItem<TStream> value)
     {
-        Hub.Post(new SetCurrentRequest(value));
+        // Dead stream (created against a disposing parent — see ctor) has no
+        // Hub. Propagate the dead state to subscribers via Store.OnCompleted
+        // instead of NRE'ing on Hub.Post.
+        if (isDisposed || Hub is null)
+        {
+            logger.LogDebug("[SYNC_STREAM] OnNext skipped for {StreamId} — stream is dead/disposed", StreamId);
+            return;
+        }
+
+        try
+        {
+            Hub.Post(new SetCurrentRequest(value));
+        }
+        catch (Exception ex)
+        {
+            // Propagate to the OTHER side of the stream — subscribers see OnError
+            // and can react. Without this catch, a Post failure (e.g. hub
+            // mid-disposal) bubbled up as a user-unhandled exception at the
+            // OnNext call site (typically inside an Rx pipeline) and the IDE
+            // broke even though the upstream had a Catch.
+            logger.LogWarning(ex,
+                "[SYNC_STREAM] OnNext post failed for {StreamId}; forwarding to subscribers via Store.OnError",
+                StreamId);
+            try
+            {
+                if (!Store.IsDisposed)
+                    Store.OnError(ex);
+            }
+            catch
+            {
+                // Store may already be terminated — best effort.
+            }
+        }
     }
 
     public virtual void RequestChange(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback)
