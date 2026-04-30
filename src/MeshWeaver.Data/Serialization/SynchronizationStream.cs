@@ -294,6 +294,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 "[SYNC_STREAM] Parent hub {Host} disposing (RunLevel={RunLevel}); creating dead stream for {Reference}",
                 Host.Address, Host.RunLevel, Reference);
             isDisposed = true;
+            // Hub stays null on a dead stream — every code path that touches
+            // Hub goes through TryGetActiveHub (guards isDisposed first) or
+            // the explicit null check in OnNext. The null! tells the
+            // compiler we accept the non-null contract gap; the runtime
+            // guards enforce it.
+            Hub = null!;
             Store.OnCompleted();
             return;
         }
