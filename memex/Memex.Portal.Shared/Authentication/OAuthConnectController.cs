@@ -208,13 +208,18 @@ public class OAuthConnectController(
             return BadRequest(new { error = "invalid_grant" });
         }
 
-        // Create an mw_ API token via the existing token service
+        // Create an mw_ API token via the existing token service. Lifetime
+        // is long-lived because OAuth clients (MCP, CLI tools) typically
+        // can't run interactive re-auth flows — a token that expires in 30
+        // days surprises users who connect once and come back months later.
+        // Refresh-token flow isn't implemented yet; until it is, default to
+        // 1 year. Bump if needed via TokenLifetime below.
         var (rawToken, _) = await TokenService.CreateTokenAsync(
             userId: entry.UserId,
             userName: entry.UserName,
             userEmail: entry.UserEmail,
             label: $"OAuth: {request.client_id}",
-            expiresAt: DateTimeOffset.UtcNow.AddDays(30));
+            expiresAt: DateTimeOffset.UtcNow.Add(TokenLifetime));
 
         logger.LogInformation("Issued OAuth access token for user {Email}, client {ClientId}", entry.UserEmail, request.client_id);
 
@@ -222,9 +227,16 @@ public class OAuthConnectController(
         {
             access_token = rawToken,
             token_type = "Bearer",
-            expires_in = (int)TimeSpan.FromDays(30).TotalSeconds,
+            expires_in = (int)TokenLifetime.TotalSeconds,
         });
     }
+
+    /// <summary>
+    /// Lifetime for OAuth-issued API tokens. Single source of truth — the
+    /// expiresAt timestamp on the token row and the expires_in OAuth response
+    /// field both read from this so they can't drift apart.
+    /// </summary>
+    private static readonly TimeSpan TokenLifetime = TimeSpan.FromDays(365);
 }
 
 /// <summary>
