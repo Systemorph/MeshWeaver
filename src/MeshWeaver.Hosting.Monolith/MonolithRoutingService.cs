@@ -1,4 +1,6 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -78,7 +80,15 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
             return null;
 
         var hubFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeHubFactory>();
-        node = await hubFactory.ResolveHubConfigurationAsync(node);
+
+        // Single Task bridge at the framework boundary (RouteImplAsync is
+        // Task<IMessageDelivery> by signature). The reactive chain inside
+        // ResolveHubConfiguration runs on the producer's scheduler — it does
+        // NOT capture this caller's synchronization context, so a CompileRequest
+        // routed back through this same RoutingService while we're awaiting
+        // here doesn't deadlock the way the previous Task-returning
+        // ResolveHubConfigurationAsync did.
+        node = await hubFactory.ResolveHubConfiguration(node).FirstAsync().ToTask();
 
         if (node.HubConfiguration is null)
             throw new InvalidOperationException(
