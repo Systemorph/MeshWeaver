@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 
@@ -80,7 +81,18 @@ public partial class NamedAreaView
                         Logger.LogDebug(error, "Suppressed teardown error in control stream for area {Area}", AreaToBeRendered);
                         return;
                     }
-                    Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
+
+                    // Access denied / validation failures / not-found are user-action
+                    // outcomes (the user lacks the right; the input was invalid; the
+                    // node was deleted) — not engineering errors. Log them as Warning
+                    // so production log dashboards don't page on every "user clicked
+                    // a thing they couldn't do". Real errors (NullReferenceException,
+                    // IO failures, runtime crashes) still land at Error level.
+                    if (IsExpectedUserActionFailure(error))
+                        Logger.LogWarning(error, "Expected user-action failure in control stream for area {Area}: {Message}",
+                            AreaToBeRendered, error.Message);
+                    else
+                        Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
                     try
                     {
                         InvokeAsync(() =>
@@ -104,5 +116,37 @@ public partial class NamedAreaView
         );
     }
 
-
+    /// <summary>
+    /// Classifies an exception as an expected user-action outcome (access
+    /// violation, validation rejection, not-found, etc.) versus an engineering
+    /// error (null deref, IO crash, etc.). Used to choose the log level so the
+    /// production log dashboard doesn't page on every "user clicked something
+    /// they couldn't do".
+    ///
+    /// <para>Looks through the exception chain — <see cref="DeliveryFailureException"/>
+    /// wraps the routing-layer failure message; <see cref="UnauthorizedAccessException"/>
+    /// is the .NET-standard access-denied. Message-based matching for the
+    /// rest because <c>DeliveryFailure.ErrorType</c> is internal to the
+    /// messaging assembly and we don't expose it.</para>
+    /// </summary>
+    private static bool IsExpectedUserActionFailure(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is UnauthorizedAccessException) return true;
+            if (e is DeliveryFailureException)
+            {
+                var msg = e.Message ?? string.Empty;
+                if (msg.Contains("Access denied", StringComparison.OrdinalIgnoreCase)) return true;
+                if (msg.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)) return true;
+                if (msg.Contains("Forbidden", StringComparison.OrdinalIgnoreCase)) return true;
+                if (msg.StartsWith("No node found", StringComparison.OrdinalIgnoreCase)) return true;
+                if (msg.Contains("Validation failed", StringComparison.OrdinalIgnoreCase)) return true;
+                if (msg.Contains("Validation error", StringComparison.OrdinalIgnoreCase)) return true;
+                if (msg.Contains("not allowed", StringComparison.OrdinalIgnoreCase)) return true;
+                if (msg.Contains("permission", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
+    }
 }
