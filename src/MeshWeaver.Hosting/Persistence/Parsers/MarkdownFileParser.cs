@@ -57,26 +57,34 @@ public partial class MarkdownFileParser : IFileFormatParser
         }
 
         // Defensive NodeType extractor: if structured YAML deserialization didn't
-        // fill in NodeType (parser threw, returned null, or the property simply
-        // wasn't bound), pull it out of the raw YAML with a flat regex. This is
-        // strictly additive — only runs when frontMatter is null or missing
-        // NodeType, never overrides a successful parse. Catches the CI-Linux
-        // case where samples/Graph/Data/ACME/index.md's `NodeType: Organization`
-        // frontmatter wasn't binding through the structured path.
-        if (rawYaml is not null && string.IsNullOrEmpty(frontMatter?.NodeType))
+        // fill in NodeType (Markdig didn't recognize the block, parser threw,
+        // returned null, or the property simply wasn't bound), pull it out of
+        // the file content with a flat regex. Strictly additive — only runs
+        // when frontMatter is null or missing NodeType, never overrides a
+        // successful parse. Catches the CI-Linux case where Markdig's
+        // YamlFrontMatterBlock detection silently fails on the sample
+        // `samples/Graph/Data/ACME/index.md` even though the file starts with
+        // a valid `---\nNodeType: Organization\n---` block.
+        if (string.IsNullOrEmpty(frontMatter?.NodeType))
         {
-            var match = System.Text.RegularExpressions.Regex.Match(
-                rawYaml,
-                @"^\s*NodeType\s*:\s*(?<value>[^\r\n#]+?)\s*$",
-                System.Text.RegularExpressions.RegexOptions.Multiline
-                | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            if (match.Success)
+            // Search the raw YAML if Markdig found one, else search the leading
+            // frontmatter section of the file (between the first two `---` markers).
+            var searchScope = rawYaml ?? ExtractLeadingFrontmatter(content);
+            if (!string.IsNullOrEmpty(searchScope))
             {
-                var nodeTypeValue = match.Groups["value"].Value.Trim().Trim('"', '\'');
-                if (!string.IsNullOrEmpty(nodeTypeValue))
+                var match = System.Text.RegularExpressions.Regex.Match(
+                    searchScope,
+                    @"^\s*NodeType\s*:\s*(?<value>[^\r\n#]+?)\s*$",
+                    System.Text.RegularExpressions.RegexOptions.Multiline
+                    | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (match.Success)
                 {
-                    frontMatter ??= new MarkdownFrontMatter();
-                    frontMatter.NodeType = nodeTypeValue;
+                    var nodeTypeValue = match.Groups["value"].Value.Trim().Trim('"', '\'');
+                    if (!string.IsNullOrEmpty(nodeTypeValue))
+                    {
+                        frontMatter ??= new MarkdownFrontMatter();
+                        frontMatter.NodeType = nodeTypeValue;
+                    }
                 }
             }
         }
@@ -298,6 +306,58 @@ public partial class MarkdownFileParser : IFileFormatParser
         return Enum.TryParse<MeshNodeState>(state, true, out var result)
             ? result
             : MeshNodeState.Active;
+    }
+
+    /// <summary>
+    /// Extracts the YAML frontmatter section from the start of a markdown file.
+    /// Returns the content between the first two `---` markers, or null if no
+    /// frontmatter block is found. Used as a Markdig-independent fallback when
+    /// the structured frontmatter detection silently fails (CI-Linux YAML
+    /// extension quirks vs. the structurally identical file on Windows).
+    /// </summary>
+    private static string? ExtractLeadingFrontmatter(string content)
+    {
+        if (string.IsNullOrEmpty(content)) return null;
+        // Skip an optional UTF-8 BOM, then leading whitespace.
+        var i = 0;
+        if (content.Length > 0 && content[0] == '﻿') i = 1;
+        while (i < content.Length && (content[i] == '\n' || content[i] == '\r' || content[i] == ' '))
+            i++;
+        // Must start with a `---` line.
+        if (i + 3 > content.Length || content[i] != '-' || content[i + 1] != '-' || content[i + 2] != '-')
+            return null;
+        // Advance past the `---` and any chars until the end of that line.
+        i += 3;
+        while (i < content.Length && content[i] != '\n') i++;
+        if (i >= content.Length) return null;
+        i++; // past the newline
+        var startOfYaml = i;
+        // Scan for a closing `---` on its own line.
+        while (i < content.Length)
+        {
+            // Find the start of a line.
+            var lineStart = i;
+            // Skip any leading spaces on the line.
+            while (i < content.Length && content[i] == ' ') i++;
+            if (i + 3 <= content.Length
+                && content[i] == '-' && content[i + 1] == '-' && content[i + 2] == '-')
+            {
+                // Confirm it's a closing marker (followed by EOL or whitespace+EOL).
+                var afterDashes = i + 3;
+                while (afterDashes < content.Length
+                    && (content[afterDashes] == ' ' || content[afterDashes] == '\t'))
+                    afterDashes++;
+                if (afterDashes >= content.Length
+                    || content[afterDashes] == '\n' || content[afterDashes] == '\r')
+                {
+                    return content.Substring(startOfYaml, lineStart - startOfYaml);
+                }
+            }
+            // Advance to next line.
+            while (i < content.Length && content[i] != '\n') i++;
+            if (i < content.Length) i++;
+        }
+        return null;
     }
 
     /// <summary>
