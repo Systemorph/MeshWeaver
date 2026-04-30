@@ -616,7 +616,18 @@ internal class MeshNodeCompilationService(
                 var assembly = cacheService.LoadAssembly(nodeName);
                 if (assembly == null)
                 {
-                    logger.LogWarning("Failed to load assembly for {NodePath}", node.Path);
+                    // Promoted from Warning → Error: this is the root cause that
+                    // cascades into every downstream "SubscribeRequest timed out"
+                    // for hubs of this NodeType. Log noise from the cascade was
+                    // hiding this single offender — make it stand out so the
+                    // operator sees the cause, not the symptoms.
+                    logger.LogError(
+                        "Failed to load assembly for {NodePath} — the per-node hub for this " +
+                        "NodeType (and every instance of it) cannot activate. Subscribe / GetData " +
+                        "calls to its grains will time out. Common causes: corrupt cached .dll " +
+                        "(delete .mesh-cache to force recompile), source compilation error " +
+                        "(check the Code node's diagnostics), or missing dependency.",
+                        node.Path);
                     return new NodeCompilationResult(assemblyLocation, [],
                         AppendError(log, $"Failed to load assembly at {assemblyLocation}."));
                 }
