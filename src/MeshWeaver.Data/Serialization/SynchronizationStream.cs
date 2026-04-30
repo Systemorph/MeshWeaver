@@ -143,7 +143,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         catch (Exception e)
         {
-            logger.LogWarning(e, "[SYNC_STREAM] Exception setting current value for {Address}", Hub.Address);
+            logger.LogWarning(e, "[SYNC_STREAM] Exception setting current value for {Address}", Hub?.Address);
         }
     }
 
@@ -199,9 +199,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 logger.LogDebug(ex, "[SYNC_STREAM] Exception from Store.OnError propagation for {StreamId}", StreamId);
             }
-            // Always fault startup and open gate, even if Store.OnError throws
-            Hub.FailStartup(error);
-            Hub.OpenGate(SynchronizationGate);
+            // Always fault startup and open gate, even if Store.OnError throws.
+            // Dead-stream guard: Hub may be null on a stream constructed against
+            // a disposing parent — there's nothing to fault or unblock there.
+            if (Hub is not null)
+            {
+                Hub.FailStartup(error);
+                Hub.OpenGate(SynchronizationGate);
+            }
         }
         else
         {
@@ -209,11 +214,29 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
     }
 
-    public void RegisterForDisposal(IDisposable disposable) => Hub
-        .RegisterForDisposal(_ => disposable.Dispose());
+    public void RegisterForDisposal(IDisposable disposable)
+    {
+        if (isDisposed || Hub is null)
+        {
+            // Dead stream — no hub to register on. Dispose the registrant
+            // immediately so the caller doesn't leak it. The caller's intent
+            // (couple this disposable to the stream's lifetime) is satisfied
+            // because the stream is already terminal.
+            try { disposable.Dispose(); } catch { /* best-effort */ }
+            return;
+        }
+        Hub.RegisterForDisposal(_ => disposable.Dispose());
+    }
 
-    public IMessageDelivery DeliverMessage(IMessageDelivery delivery) =>
-        Hub.DeliverMessage(delivery.ForwardTo(Hub.Address));
+    public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
+    {
+        if (isDisposed || Hub is null)
+        {
+            logger.LogDebug("[SYNC_STREAM] DeliverMessage skipped for {StreamId} — stream is dead/disposed", StreamId);
+            return delivery.Failed("Stream is disposed");
+        }
+        return Hub.DeliverMessage(delivery.ForwardTo(Hub.Address));
+    }
 
 
     public void OnNext(ChangeItem<TStream> value)
@@ -430,9 +453,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger.LogDebug("[SYNC_STREAM] UpdateStream called for {StreamId}, ChangeType={ChangeType}, Version={Version}, MessageId={MessageId}",
             StreamId, delivery.Message.ChangeType, delivery.Message.Version, delivery.Id);
 
-        if (Hub.Disposal is not null)
+        if (Hub is null || Hub.Disposal is not null)
         {
-            logger.LogDebug("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing", StreamId);
+            logger.LogDebug("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing/dead", StreamId);
             return;
         }
 
@@ -529,7 +552,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         Store.OnCompleted();
         Store.Dispose();
-        if (Hub.RunLevel <= MessageHubRunLevel.Started)
+        if (Hub is not null && Hub.RunLevel <= MessageHubRunLevel.Started)
             Hub.Dispose();
     }
     private ConcurrentDictionary<string, object?> Properties { get; } = new();
