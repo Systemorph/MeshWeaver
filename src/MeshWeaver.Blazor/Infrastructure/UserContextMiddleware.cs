@@ -163,13 +163,26 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
 
         var email = user.FindFirstValue(ClaimTypes.Email)
                     ?? user.FindFirstValue("email")
-                    ?? user.FindFirstValue("preferred_username")
                     ?? string.Empty;
+
+        // ObjectId = the User MeshNode's Id (e.g., "rbuergi"), NOT the email.
+        // ApiTokenAuthenticationHandler puts UserId in preferred_username
+        // explicitly so the principal already carries the resolved username;
+        // OIDC providers (Microsoft, Google) use preferred_username for the
+        // tenant-scoped UPN. Prefer that, fall back to NameIdentifier (also
+        // set by the API token handler), then email as a last resort.
+        // Without this, downstream code routes to User/<email> instead of
+        // User/<username> ("Delivery failed to User/rbuergi@systemorph.com").
+        // CircuitAccessHandler.TryLoadMeshUser then re-resolves email→username
+        // when needed (interactive OIDC flows that don't pre-set this claim).
+        var objectId = user.FindFirstValue("preferred_username")
+                    ?? user.FindFirstValue(ClaimTypes.NameIdentifier)
+                    ?? email;
 
         return new AccessContext
         {
             Name = user.FindFirstValue(ClaimTypes.Name) ?? user.FindFirstValue("name") ?? string.Empty,
-            ObjectId = email,
+            ObjectId = objectId,
             Email = email,
             Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
         };
