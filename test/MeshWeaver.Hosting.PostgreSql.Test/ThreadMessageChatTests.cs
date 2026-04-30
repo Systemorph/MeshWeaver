@@ -373,8 +373,15 @@ public class ThreadMessageChatTests : IAsyncLifetime
     {
         var ct = TestContext.Current.CancellationToken;
 
-        // Seed threads
-        await _threadAdapter.WriteAsync(new MeshNode("chat-q1", "User/alice/_Thread")
+        // Seed threads with unique ids so the assertion can target them
+        // specifically — the schema is shared across tests in this class and
+        // other tests write threads under "User/alice/_Thread" too. Filtering
+        // by the ids we just wrote keeps this test isolated from sibling
+        // accumulation without paying for a per-test schema cleanup.
+        var id1 = $"chat-q1-{Guid.NewGuid():N}"[..16];
+        var id2 = $"chat-q2-{Guid.NewGuid():N}"[..16];
+
+        await _threadAdapter.WriteAsync(new MeshNode(id1, "User/alice/_Thread")
         {
             Name = "First Chat",
             NodeType = "Thread",
@@ -382,7 +389,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread()
         }, _options, ct);
 
-        await _threadAdapter.WriteAsync(new MeshNode("chat-q2", "User/alice/_Thread")
+        await _threadAdapter.WriteAsync(new MeshNode(id2, "User/alice/_Thread")
         {
             Name = "Second Chat",
             NodeType = "Thread",
@@ -401,9 +408,12 @@ public class ThreadMessageChatTests : IAsyncLifetime
         await foreach (var item in query.QueryAsync(request, _options, ct))
             results.Add((MeshNode)item);
 
-        results.Should().HaveCount(2, "should find both threads in the satellite table");
-        results.Should().Contain(n => n.Name == "First Chat");
-        results.Should().Contain(n => n.Name == "Second Chat");
+        // Filter to the threads we just wrote, then assert specifics — the
+        // assertion is now insensitive to other tests' leftover rows.
+        var ours = results.Where(n => n.Id == id1 || n.Id == id2).ToList();
+        ours.Should().HaveCount(2, "should find both threads in the satellite table");
+        ours.Should().Contain(n => n.Name == "First Chat");
+        ours.Should().Contain(n => n.Name == "Second Chat");
     }
 
     /// <summary>
