@@ -502,8 +502,15 @@ internal class UnifiedReferenceAutocompleteProvider(
 
     private IObservable<AutocompleteResponse?> GetCompletionsViaHub(string nodePath, string currentSegment)
     {
+        // Target the per-node hub at nodePath. Without an explicit target, the
+        // request goes to the local hub which runs the AutocompleteRequest
+        // aggregator — and the aggregator re-invokes every IAutocompleteProvider
+        // including THIS one. Under any concurrent load that re-entrance
+        // deadlocks the ActionBlock (the original handler is still pumping when
+        // the delegated request arrives, action block has MaxDegreeOfParallelism=1).
+        // The dispatch *must* land on a different hub.
         var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
-        return hub.Observe(request)
+        return hub.Observe(request, o => o.WithTarget(new Address(nodePath)))
             .FirstAsync()
             .Select(d => d.Message as AutocompleteResponse)
             .Catch<AutocompleteResponse?, Exception>(_ => Observable.Return<AutocompleteResponse?>(null));
