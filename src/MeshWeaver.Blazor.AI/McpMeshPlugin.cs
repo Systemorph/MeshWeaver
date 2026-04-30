@@ -244,6 +244,18 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
         => ops.Recycle(path).FirstAsync().ToTask();
 
     [McpServerTool]
+    [Description(@"Triggers a compile for a NodeType WITHOUT blocking on the result. Posts a PatchDataRequest that flips the NodeType's `compilationStatus` to `Pending`; the framework's CompileWatcher then runs Roslyn and writes back `Ok`/`Error` plus `lastCompilationActivityPath` on the NodeType.
+
+Returns immediately with `{status:'Triggered', path, version}`. The caller observes progress by polling:
+  • `get @nodeTypePath`  — read `content.compilationStatus`, `content.compilationError`, `content.lastCompilationActivityPath`
+  • `get @<lastCompilationActivityPath>`  — full ActivityLog with executed source queries, matched Code paths, Roslyn output
+
+Use this instead of `Patch` when you only have Create permission on the target — `Compile` only needs the per-node hub to accept a PatchDataRequest, not the persistence-layer Update.")]
+    public Task<string> Compile(
+        [Description("Path to the NodeType (e.g., @User/me/MyType or @Systemorph/SocialMedia/Profile). Must point at a NodeType definition node, not an instance.")] string path)
+        => ops.Compile(path).FirstAsync().ToTask();
+
+    [McpServerTool]
     [Description("Runs an executable Code node's C# through the kernel (Microsoft.DotNet.Interactive) and returns stdout / return value / errors. The target node must have `CodeConfiguration.IsExecutable == true`. Blocks until the kernel signals completion (side-effects — e.g. mesh.CreateNode calls inside the script — have happened by the time this returns). Use to run import/test scripts from MCP without needing a UI click.")]
     public Task<string> ExecuteScript(
         [Description("Path to an executable Code node (e.g., @Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Script/ImportLargeClaims). Must be `IsExecutable=true`.")] string path,
