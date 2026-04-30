@@ -192,4 +192,14 @@ public record NodeTypeDefinition
     /// across replicas.
     /// </summary>
     public long? LastCompiledVersion { get; init; }
+
+    /// <summary>
+    /// Path of the most recent compilation <see cref="ActivityLog"/> persisted under
+    /// <c>{nodeTypePath}/_activity/{logId}</c>. Set by the compile watcher every time a
+    /// compile completes (success or failure) so the layout area can render a clickable
+    /// "Last compilation" link, and so anyone observing the NodeType remote stream can
+    /// jump straight to the executed-source-queries / matched-Code-paths / Roslyn-output
+    /// trace without re-running the pipeline. <c>null</c> until the first compile finishes.
+    /// </summary>
+    public string? LastCompilationActivityPath { get; init; }
 }
