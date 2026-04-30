@@ -4,7 +4,6 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
@@ -190,7 +189,32 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (!Store.IsDisposed)
         {
-            logger.LogWarning(error, "[SYNC_STREAM] OnError for {StreamId} (Reference={Reference}, Owner={Owner})", StreamId, Reference, Owner);
+            // Classify the failure to avoid the log dashboard pageant where every
+            // teardown / transient-timeout cascade dumps full stack traces 5×.
+            // ObjectDisposedException — benign teardown; never log (Debug only).
+            // TimeoutException — transient hub failure (the 30s SubscribeRequest
+            //   timeout); already surfaced as a single LogWarning at the
+            //   subscribe site. Don't repeat the stack trace here — Information,
+            //   message-only, no exception object.
+            // Everything else — real failure; LogWarning with full context.
+            if (IsObjectDisposed(error))
+            {
+                logger.LogDebug(error,
+                    "[SYNC_STREAM] OnError (disposed) for {StreamId} (Reference={Reference}, Owner={Owner})",
+                    StreamId, Reference, Owner);
+            }
+            else if (IsTransientHubTimeout(error))
+            {
+                logger.LogInformation(
+                    "[SYNC_STREAM] OnError (transient timeout) for {StreamId} (Reference={Reference}, Owner={Owner}): {Message}",
+                    StreamId, Reference, Owner, error.Message);
+            }
+            else
+            {
+                logger.LogWarning(error,
+                    "[SYNC_STREAM] OnError for {StreamId} (Reference={Reference}, Owner={Owner})",
+                    StreamId, Reference, Owner);
+            }
             try
             {
                 Store.OnError(error);
@@ -210,8 +234,38 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         else
         {
-            logger.LogWarning("[SYNC_STREAM] OnError skipped for {StreamId} - Store is disposed", StreamId);
+            // Store already disposed — benign during teardown, never log Warning.
+            logger.LogDebug("[SYNC_STREAM] OnError skipped for {StreamId} - Store is disposed", StreamId);
         }
+    }
+
+    /// <summary>
+    /// True if <paramref name="error"/> (or any exception in its chain) is an
+    /// <see cref="ObjectDisposedException"/> — i.e. a benign teardown artifact.
+    /// </summary>
+    private static bool IsObjectDisposed(Exception? error)
+    {
+        for (var e = error; e != null; e = e.InnerException)
+            if (e is ObjectDisposedException) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// True if <paramref name="error"/> (or any exception in its chain) is a
+    /// transient hub failure — <see cref="TimeoutException"/> from the
+    /// SubscribeRequest 30s wait, or a wrapped Orleans/Task cancellation. These
+    /// are usually self-healing on the next subscription cycle and don't warrant
+    /// a stack-trace-bearing Warning per occurrence.
+    /// </summary>
+    private static bool IsTransientHubTimeout(Exception? error)
+    {
+        for (var e = error; e != null; e = e.InnerException)
+        {
+            if (e is TimeoutException) return true;
+            if (e is TaskCanceledException) return true;
+            if (e is OperationCanceledException) return true;
+        }
+        return false;
     }
 
     public void RegisterForDisposal(IDisposable disposable)
