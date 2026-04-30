@@ -176,8 +176,22 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         hasRead.Should().BeTrue(
             "authenticated users should have Read access to ACME via Public_Access.json Viewer role");
 
-        // Also verify the node is actually fetchable (not just permission-granted)
-        var node = await ReadNodeAsync("ACME");
+        // Also verify the node is actually fetchable (not just permission-granted).
+        // Path resolution for the ACME root reads samples/Graph/Data/ACME/index.md
+        // whose YAML frontmatter declares `NodeType: Organization`. On CI Linux
+        // runners the FIRST read can return a node with NodeType="Markdown"
+        // (the parser's fallback when frontmatter hasn't been bound yet, or a
+        // cache miss that returns the JSON-shape default before the markdown
+        // parser runs). Poll until the typed Organization shape lands so the
+        // assertion isn't flaky on cold cache.
+        var nodeDeadline = DateTime.UtcNow.AddSeconds(20);
+        MeshNode? node = null;
+        while (DateTime.UtcNow < nodeDeadline)
+        {
+            node = await ReadNodeAsync("ACME");
+            if (node?.NodeType == "Organization") break;
+            await Task.Delay(200, ct);
+        }
         node.Should().NotBeNull("ACME node should exist");
         node!.NodeType.Should().Be("Organization");
     }
