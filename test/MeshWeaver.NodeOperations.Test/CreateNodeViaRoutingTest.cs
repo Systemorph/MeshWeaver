@@ -40,6 +40,23 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
+    /// SecurityService's synced query over AccessAssignment satellites populates
+    /// asynchronously. After creating an AccessAssignment, polling until
+    /// HasPermissionAsync reports the granted permission absorbs the
+    /// index-propagation race that flakes the impersonation tests on slow CI.
+    /// </summary>
+    private async Task WaitForPermissionAsync(string path, string objectId, Permission permission)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await Mesh.HasPermissionAsync(path, objectId, permission, TestTimeout))
+                return;
+            await Task.Delay(200, TestTimeout);
+        }
+    }
+
+    /// <summary>
     /// Creates a new MeshNode with valid content via CreateNodeRequest.
     /// The node should be persisted and retrievable.
     /// </summary>
@@ -146,6 +163,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate")).FirstAsync().ToTask(TestTimeout);
+        await WaitForPermissionAsync("Impersonate", meshAddress, Permission.Create);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";
@@ -184,6 +202,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate")).FirstAsync().ToTask(TestTimeout);
+        await WaitForPermissionAsync("Impersonate", meshAddress, Permission.Create);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";
@@ -240,6 +259,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshAddress = Mesh.Address.ToFullString();
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate")).FirstAsync().ToTask(TestTimeout);
+        await WaitForPermissionAsync("Impersonate", meshAddress, Permission.Create);
 
         var nodeId = $"Md_{Guid.NewGuid().AsString()}";
         var nodePath = $"Impersonate/{nodeId}";
