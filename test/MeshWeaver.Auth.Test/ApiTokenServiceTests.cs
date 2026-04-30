@@ -33,7 +33,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact]
     public async Task CreateToken_ReturnsTokenWithCorrectPrefix()
     {
-        var (rawToken, node) = await GetService().CreateTokenAsync(
+        var (rawToken, node) = await GetService().CreateToken(
             "user1", "Test User", "test@example.com", "Test Label");
 
         rawToken.Should().StartWith("mw_");
@@ -43,7 +43,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact]
     public async Task CreateToken_StoresNodeWithHashedContent()
     {
-        var (rawToken, node) = await GetService().CreateTokenAsync(
+        var (rawToken, node) = await GetService().CreateToken(
             "user1", "Test User", "test@example.com", "My Token");
 
         node.Should().NotBeNull();
@@ -65,7 +65,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task CreateToken_PersistsNodeToStorage()
     {
         var service = GetService();
-        var (rawToken, node) = await service.CreateTokenAsync(
+        var (rawToken, node) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Test");
 
         var stored = await ReadNodeAsync(node.Path!, TestContext.Current.CancellationToken);
@@ -77,7 +77,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task ValidateToken_ValidToken_ReturnsApiToken()
     {
         var service = GetService();
-        var (rawToken, _) = await service.CreateTokenAsync(
+        var (rawToken, _) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Valid Token");
 
         var result = await service.ValidateToken(rawToken).FirstAsync().ToTask(TestContext.Current.CancellationToken);
@@ -121,7 +121,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task ValidateToken_ExpiredToken_ReturnsNull()
     {
         var service = GetService();
-        var (rawToken, _) = await service.CreateTokenAsync(
+        var (rawToken, _) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Expired",
             expiresAt: DateTimeOffset.UtcNow.AddDays(-1));
 
@@ -134,7 +134,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task ValidateToken_RevokedToken_ReturnsNull()
     {
         var service = GetService();
-        var (rawToken, node) = await service.CreateTokenAsync(
+        var (rawToken, node) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "To Revoke");
 
         await service.RevokeTokenAsync(node.Path);
@@ -160,7 +160,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task RevokeToken_ExistingToken_ReturnsTrue()
     {
         var service = GetService();
-        var (_, node) = await service.CreateTokenAsync(
+        var (_, node) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "To Revoke");
 
         var result = await service.RevokeTokenAsync(node.Path);
@@ -180,9 +180,9 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task GetTokensForUser_ReturnsOnlyUserTokens()
     {
         var service = GetService();
-        await service.CreateTokenAsync("user1", "User One", "u1@test.com", "Token A");
-        await service.CreateTokenAsync("user1", "User One", "u1@test.com", "Token B");
-        await service.CreateTokenAsync("user2", "User Two", "u2@test.com", "Token C");
+        await service.CreateToken("user1", "User One", "u1@test.com", "Token A");
+        await service.CreateToken("user1", "User One", "u1@test.com", "Token B");
+        await service.CreateToken("user2", "User Two", "u2@test.com", "Token C");
 
         var user1Tokens = await service.GetTokensForUserAsync("user1");
         var user2Tokens = await service.GetTokensForUserAsync("user2");
@@ -198,7 +198,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task GetTokensForUser_NeverExposesFullHash()
     {
         var service = GetService();
-        var (rawToken, _) = await service.CreateTokenAsync(
+        var (rawToken, _) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Test");
 
         var tokens = await service.GetTokensForUserAsync("user1");
@@ -242,7 +242,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task CreateToken_WithExpiry_SetsExpiresAt()
     {
         var expiry = DateTimeOffset.UtcNow.AddDays(30);
-        var (_, node) = await GetService().CreateTokenAsync(
+        var (_, node) = await GetService().CreateToken(
             "user1", "Test User", "test@example.com", "Expiring",
             expiresAt: expiry);
 
@@ -253,7 +253,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact]
     public async Task CreateToken_WithoutExpiry_ExpiresAtIsNull()
     {
-        var (_, node) = await GetService().CreateTokenAsync(
+        var (_, node) = await GetService().CreateToken(
             "user1", "Test User", "test@example.com", "No Expiry");
 
         var apiToken = node.Content as ApiToken;
@@ -264,9 +264,9 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task CreateToken_EachTokenIsUnique()
     {
         var service = GetService();
-        var (token1, _) = await service.CreateTokenAsync(
+        var (token1, _) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Token 1");
-        var (token2, _) = await service.CreateTokenAsync(
+        var (token2, _) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Token 2");
 
         token1.Should().NotBe(token2);
@@ -276,7 +276,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task ValidateToken_FutureExpiry_ReturnsApiToken()
     {
         var service = GetService();
-        var (rawToken, _) = await service.CreateTokenAsync(
+        var (rawToken, _) = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Future",
             expiresAt: DateTimeOffset.UtcNow.AddDays(30));
 

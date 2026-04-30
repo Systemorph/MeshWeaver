@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
@@ -177,7 +179,7 @@ public class OAuthConnectController(
     /// </summary>
     [HttpPost("connect/token")]
     [AllowAnonymous]
-    public async Task<IActionResult> ExchangeToken([FromForm] TokenRequest request)
+    public Task<IActionResult> ExchangeToken([FromForm] TokenRequest request, CancellationToken ct)
     {
         logger.LogInformation(
             "OAuth /token: grant_type={GrantType}, client_id={ClientId}, redirect_uri={RedirectUri}, has_code={HasCode}, has_verifier={HasVerifier}",
@@ -187,13 +189,13 @@ public class OAuthConnectController(
         if (request.grant_type != "authorization_code")
         {
             logger.LogWarning("OAuth /token rejected: unsupported grant_type={GrantType}", request.grant_type);
-            return BadRequest(new { error = "unsupported_grant_type" });
+            return Task.FromResult<IActionResult>(BadRequest(new { error = "unsupported_grant_type" }));
         }
 
         if (string.IsNullOrEmpty(request.code) || string.IsNullOrEmpty(request.client_id) || string.IsNullOrEmpty(request.redirect_uri))
         {
             logger.LogWarning("OAuth /token rejected: missing code/client_id/redirect_uri");
-            return BadRequest(new { error = "invalid_request" });
+            return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_request" }));
         }
 
         var entry = CodeStore.ExchangeCode(
@@ -205,7 +207,7 @@ public class OAuthConnectController(
         if (entry == null)
         {
             logger.LogWarning("OAuth token exchange failed: invalid or expired code for client {ClientId}", request.client_id);
-            return BadRequest(new { error = "invalid_grant" });
+            return Task.FromResult<IActionResult>(BadRequest(new { error = "invalid_grant" }));
         }
 
         // Create an mw_ API token via the existing token service. Lifetime
@@ -214,21 +216,29 @@ public class OAuthConnectController(
         // days surprises users who connect once and come back months later.
         // Refresh-token flow isn't implemented yet; until it is, default to
         // 1 year. Bump if needed via TokenLifetime below.
-        var (rawToken, _) = await TokenService.CreateTokenAsync(
-            userId: entry.UserId,
-            userName: entry.UserName,
-            userEmail: entry.UserEmail,
-            label: $"OAuth: {request.client_id}",
-            expiresAt: DateTimeOffset.UtcNow.Add(TokenLifetime));
-
-        logger.LogInformation("Issued OAuth access token for user {Email}, client {ClientId}", entry.UserEmail, request.client_id);
-
-        return Ok(new
-        {
-            access_token = rawToken,
-            token_type = "Bearer",
-            expires_in = (int)TokenLifetime.TotalSeconds,
-        });
+        //
+        // No await: pull IObservable up to the controller's return type.
+        // Single bridge to Task happens at .ToTask(ct) — passing the
+        // request's cancellation token so a client disconnect tears down
+        // the reactive subscription.
+        return TokenService.CreateToken(
+                userId: entry.UserId,
+                userName: entry.UserName,
+                userEmail: entry.UserEmail,
+                label: $"OAuth: {request.client_id}",
+                expiresAt: DateTimeOffset.UtcNow.Add(TokenLifetime))
+            .Select(creation =>
+            {
+                logger.LogInformation("Issued OAuth access token for user {Email}, client {ClientId}", entry.UserEmail, request.client_id);
+                return (IActionResult)Ok(new
+                {
+                    access_token = creation.RawToken,
+                    token_type = "Bearer",
+                    expires_in = (int)TokenLifetime.TotalSeconds,
+                });
+            })
+            .FirstAsync()
+            .ToTask(ct);
     }
 
     /// <summary>

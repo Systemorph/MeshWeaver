@@ -1,4 +1,7 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
+using System.Threading;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,7 +22,7 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
     /// Creates a new API token. Returns the raw token once — it cannot be retrieved again.
     /// </summary>
     [HttpPost]
-    public async Task<IActionResult> CreateToken([FromBody] CreateTokenRequest request)
+    public Task<IActionResult> CreateToken([FromBody] CreateTokenRequest request, CancellationToken ct)
     {
         var userId = User.FindFirstValue("preferred_username")
                      ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
@@ -32,23 +35,29 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
                         ?? "";
 
         if (string.IsNullOrEmpty(userId))
-            return Unauthorized("No user identity found");
+            return Task.FromResult<IActionResult>(Unauthorized("No user identity found"));
 
         DateTimeOffset? expiresAt = request.ExpiresInDays > 0
             ? DateTimeOffset.UtcNow.AddDays(request.ExpiresInDays.Value)
             : null;
 
-        var (rawToken, node) = await tokenService.CreateTokenAsync(
-            userId, userName, userEmail, request.Label ?? "API Token", expiresAt);
+        var label = request.Label ?? "API Token";
 
-        return Ok(new CreateTokenResponse
-        {
-            RawToken = rawToken,
-            NodePath = node.Path,
-            Label = request.Label ?? "API Token",
-            CreatedAt = DateTimeOffset.UtcNow,
-            ExpiresAt = expiresAt,
-        });
+        // No await: pull IObservable up to the controller's return type. The
+        // single bridge to Task happens at .ToTask(ct) — passing the
+        // request's cancellation token so a client disconnect tears down the
+        // reactive subscription instead of orphaning it.
+        return tokenService.CreateToken(userId, userName, userEmail, label, expiresAt)
+            .Select(creation => (IActionResult)Ok(new CreateTokenResponse
+            {
+                RawToken = creation.RawToken,
+                NodePath = creation.Node.Path,
+                Label = label,
+                CreatedAt = DateTimeOffset.UtcNow,
+                ExpiresAt = expiresAt,
+            }))
+            .FirstAsync()
+            .ToTask(ct);
     }
 
     /// <summary>

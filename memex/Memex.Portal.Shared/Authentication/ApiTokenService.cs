@@ -94,15 +94,34 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
                     },
                 };
 
-                // Index writes require System identity (users don't have Create on ApiToken/).
+                // Index writes require System identity — the global ApiToken/
+                // namespace is a separately-gated partition for security
+                // infrastructure that ordinary users don't have Create on. The
+                // previous shape
+                //     using (accessService.SwitchAccessContext(System))
+                //         indexObs = nodeFactory.CreateNode(indexNode);
+                // looked right but was broken: MeshService.CreateNode is
+                // Observable.Defer whose CaptureContext() runs at SUBSCRIBE
+                // time. The using-block disposed synchronously, so by the time
+                // SelectMany below subscribes, the System context had already
+                // been reverted — the deferred CaptureContext returned the
+                // user's context and CreateNodeRequest went out under user
+                // identity → "Create permission required for node
+                // 'ApiToken/{hashPrefix}'".
+                //
+                // Fix: move the SwitchAccessContext INSIDE Observable.Defer
+                // and tie its lifetime to the inner observable via .Finally so
+                // the System context is active during CaptureContext but
+                // reverted promptly when the create completes.
                 IObservable<MeshNode> indexObs;
                 if (accessService != null)
                 {
-                    using (accessService.SwitchAccessContext(
-                        new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" }))
+                    indexObs = Observable.Defer(() =>
                     {
-                        indexObs = nodeFactory.CreateNode(indexNode);
-                    }
+                        var disp = accessService.SwitchAccessContext(
+                            new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" });
+                        return nodeFactory.CreateNode(indexNode).Finally(() => disp.Dispose());
+                    });
                 }
                 else
                 {
@@ -116,81 +135,6 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             });
     }
 
-    public async Task<(string RawToken, MeshNode Node)> CreateTokenAsync(
-        string userId, string userName, string userEmail, string label, DateTimeOffset? expiresAt = null)
-    {
-        var rawBytes = RandomNumberGenerator.GetBytes(TokenByteLength);
-        var rawToken = TokenPrefix + Convert.ToBase64String(rawBytes)
-            .Replace("+", "-").Replace("/", "_").TrimEnd('=');
-
-        var hash = HashToken(rawToken);
-        var hashPrefix = hash[..12];
-
-        // Capture caller's current roles — see comment on the reactive overload above.
-        var creatorAccessService = hub.ServiceProvider.GetService<AccessService>();
-        var creatorContext = creatorAccessService?.Context ?? creatorAccessService?.CircuitContext;
-        var capturedRoles = creatorContext?.Roles is { Count: > 0 } existingRoles
-            ? existingRoles.ToArray()
-            : Array.Empty<string>();
-
-        var apiToken = new ApiToken
-        {
-            TokenHash = hash,
-            UserId = userId,
-            UserName = userName,
-            UserEmail = userEmail,
-            Label = label,
-            CreatedAt = DateTimeOffset.UtcNow,
-            ExpiresAt = expiresAt,
-            Roles = capturedRoles,
-        };
-
-        // Store the full token under the user's namespace
-        var userTokenNamespace = $"User/{userId}/{ApiTokenNamespace}";
-        var userNode = new MeshNode(hashPrefix, userTokenNamespace)
-        {
-            Name = $"API Token: {label}",
-            NodeType = NodeTypeApiToken,
-            State = MeshNodeState.Active,
-            Content = apiToken,
-        };
-
-        var created = await nodeFactory.CreateNode(userNode);
-
-        // Store a lightweight index pointer at the original location for O(1) validation lookup.
-        // Promote to System identity — users don't have Create permission on the top-level
-        // ApiToken/ namespace, but this index is infrastructure (not user data) so it must
-        // always be creatable as part of token issuance.
-        var indexNode = new MeshNode(hashPrefix, ApiTokenNamespace)
-        {
-            Name = $"API Token: {label}",
-            NodeType = NodeTypeApiToken,
-            State = MeshNodeState.Active,
-            Content = new ApiTokenIndex
-            {
-                TokenHash = hash,
-                TokenPath = created.Path,
-            },
-        };
-
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        if (accessService != null)
-        {
-            using (accessService.SwitchAccessContext(new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" }))
-            {
-                await nodeFactory.CreateNode(indexNode);
-            }
-        }
-        else
-        {
-            await nodeFactory.CreateNode(indexNode);
-        }
-
-        logger.LogInformation("Created API token {Label} for user {UserId} (hash prefix {HashPrefix})",
-            label, userId, hashPrefix);
-
-        return (rawToken, created);
-    }
 
     /// <summary>
     /// Queries nodes using the system identity to bypass access control.

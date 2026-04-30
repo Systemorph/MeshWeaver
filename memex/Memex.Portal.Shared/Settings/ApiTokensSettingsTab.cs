@@ -58,7 +58,7 @@ public static class ApiTokensSettingsTab
             ["label"] = "",
             ["expiryDays"] = 365
         });
-        // NOTE: Do NOT initialize resultDataId here — CreateTokenAsync saves a MeshNode
+        // NOTE: Do NOT initialize resultDataId here — CreateToken saves a MeshNode
         // which triggers the workspace stream, causing the Settings page to rebuild.
         // If we set resultDataId="" here, the rebuild would overwrite the token display
         // that the click handler just set. Instead, the reactive view uses .StartWith().
