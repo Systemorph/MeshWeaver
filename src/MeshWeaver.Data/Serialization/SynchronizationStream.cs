@@ -209,10 +209,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         ReduceManager<TStream> ReduceManager,
         Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>>? configuration)
     {
-        if (Host.RunLevel > MessageHubRunLevel.Started)
-            throw new ObjectDisposedException($"ParentHub {Host.Address} is disposing. Cannot create synchronization stream for {Reference}.");
-
-
         this.Host = Host;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
 
@@ -225,6 +221,26 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Reference = Reference;
 
         logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
+
+        // Disposing parent hub: don't throw — that surfaced as an unhandled
+        // ObjectDisposedException at every call site (including Blazor circuit
+        // teardowns where the IDE breaks on user-unhandled). The stream is
+        // dead-on-arrival; mark it disposed so any Subscribe completes
+        // immediately and any Update is a no-op. Callers walking the parent's
+        // disposal chain will dispose this child too via the registration
+        // chain — this is just defensive belt-and-braces for the late-arrival
+        // race where someone calls Reduce on a parent that just started
+        // disposing.
+        if (Host.RunLevel > MessageHubRunLevel.Started)
+        {
+            logger.LogDebug(
+                "[SYNC_STREAM] Parent hub {Host} disposing (RunLevel={RunLevel}); creating dead stream for {Reference}",
+                Host.Address, Host.RunLevel, Reference);
+            isDisposed = true;
+            Store.OnCompleted();
+            return;
+        }
+
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
         Hub = Host.GetHostedHub(SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub);
