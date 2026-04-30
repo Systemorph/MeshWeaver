@@ -39,100 +39,153 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var hash = HashToken(rawToken);
         var hashPrefix = hash[..12];
 
-        // Capture the caller's currently-assigned roles (from cookie / OAuth
-        // claim auth — populated by UserContextMiddleware for UI sessions). At
-        // validation time these are stamped onto AccessContext.Roles so the
-        // SecurityService claim-based role path resolves on per-node hubs,
-        // where the synced AccessAssignment query is intentionally not
-        // registered (SecurityServiceExtensions:44-50). Without this, an API
-        // token would have ObjectId but no roles → 0 perms → IsApiToken gate
-        // strips → DENY, even when the creator is admin on the target scope.
-        var creatorAccessService = hub.ServiceProvider.GetService<AccessService>();
-        var creatorContext = creatorAccessService?.Context ?? creatorAccessService?.CircuitContext;
-        var capturedRoles = creatorContext?.Roles is { Count: > 0 } existingRoles
-            ? existingRoles.ToArray()
-            : Array.Empty<string>();
-
-        var apiToken = new ApiToken
-        {
-            TokenHash = hash,
-            UserId = userId,
-            UserName = userName,
-            UserEmail = userEmail,
-            Label = label,
-            CreatedAt = DateTimeOffset.UtcNow,
-            ExpiresAt = expiresAt,
-            Roles = capturedRoles,
-        };
-
+        // Capture the caller's roles for the issued token. The previous shape
+        // read AccessContext.Roles from the cookie/OAuth principal — but
+        // Microsoft OAuth doesn't populate ClaimTypes.Role for personal
+        // accounts by default, so the captured set was empty for most users
+        // and the resulting API token couldn't do anything. Read the user's
+        // self-scope AccessAssignment instead — that's the source-of-truth
+        // for "what roles does rbuergi have on User/rbuergi". The assignment
+        // sits at User/{userId}/_Access/{userId}_Access (per
+        // SecurityCollections convention). Stamped at validation time onto
+        // AccessContext.Roles so SecurityService.GetEffectivePermissions
+        // resolves them via the claim-based role path on per-node hubs (where
+        // the synced AccessAssignment query is intentionally not registered —
+        // SecurityServiceExtensions:44-50, recursion avoidance). Empty if no
+        // self-scope assignment exists; the token still gets ObjectId so
+        // self-owned reads still work, but writes will deny — which is the
+        // correct outcome (a user with no role grants no role to their token).
         var userTokenNamespace = $"User/{userId}/{ApiTokenNamespace}";
-        var userNode = new MeshNode(hashPrefix, userTokenNamespace)
+        var assignmentPath = $"User/{userId}/_Access/{userId}_Access";
+
+        var rolesObs = ResolveSelfScopeRoles(assignmentPath);
+
+        return rolesObs.SelectMany(capturedRoles =>
         {
-            Name = $"API Token: {label}",
-            NodeType = NodeTypeApiToken,
-            State = MeshNodeState.Active,
-            Content = apiToken,
-        };
-
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-
-        // Reactive chain: create user node (as current user), then create index node
-        // (promoted to System identity). Emits the raw token + created node once both
-        // writes commit, or errors on the first failure.
-        return nodeFactory.CreateNode(userNode)
-            .SelectMany(created =>
+            var apiToken = new ApiToken
             {
-                var indexNode = new MeshNode(hashPrefix, ApiTokenNamespace)
+                TokenHash = hash,
+                UserId = userId,
+                UserName = userName,
+                UserEmail = userEmail,
+                Label = label,
+                CreatedAt = DateTimeOffset.UtcNow,
+                ExpiresAt = expiresAt,
+                Roles = capturedRoles,
+            };
+
+            var userNode = new MeshNode(hashPrefix, userTokenNamespace)
+            {
+                Name = $"API Token: {label}",
+                NodeType = NodeTypeApiToken,
+                State = MeshNodeState.Active,
+                Content = apiToken,
+            };
+
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+            return nodeFactory.CreateNode(userNode)
+                .SelectMany(created =>
                 {
-                    Name = $"API Token: {label}",
-                    NodeType = NodeTypeApiToken,
-                    State = MeshNodeState.Active,
-                    Content = new ApiTokenIndex
+                    var indexNode = new MeshNode(hashPrefix, ApiTokenNamespace)
                     {
-                        TokenHash = hash,
-                        TokenPath = created.Path,
-                    },
-                };
+                        Name = $"API Token: {label}",
+                        NodeType = NodeTypeApiToken,
+                        State = MeshNodeState.Active,
+                        Content = new ApiTokenIndex
+                        {
+                            TokenHash = hash,
+                            TokenPath = created.Path,
+                        },
+                    };
 
-                // Index writes require System identity — the global ApiToken/
-                // namespace is a separately-gated partition for security
-                // infrastructure that ordinary users don't have Create on. The
-                // previous shape
-                //     using (accessService.SwitchAccessContext(System))
-                //         indexObs = nodeFactory.CreateNode(indexNode);
-                // looked right but was broken: MeshService.CreateNode is
-                // Observable.Defer whose CaptureContext() runs at SUBSCRIBE
-                // time. The using-block disposed synchronously, so by the time
-                // SelectMany below subscribes, the System context had already
-                // been reverted — the deferred CaptureContext returned the
-                // user's context and CreateNodeRequest went out under user
-                // identity → "Create permission required for node
-                // 'ApiToken/{hashPrefix}'".
-                //
-                // Fix: move the SwitchAccessContext INSIDE Observable.Defer
-                // and tie its lifetime to the inner observable via .Finally so
-                // the System context is active during CaptureContext but
-                // reverted promptly when the create completes.
-                IObservable<MeshNode> indexObs;
-                if (accessService != null)
-                {
-                    indexObs = Observable.Defer(() =>
+                    // Index writes require System identity — the global ApiToken/
+                    // namespace is a separately-gated partition for security
+                    // infrastructure that ordinary users don't have Create on. The
+                    // previous shape
+                    //     using (accessService.SwitchAccessContext(System))
+                    //         indexObs = nodeFactory.CreateNode(indexNode);
+                    // looked right but was broken: MeshService.CreateNode is
+                    // Observable.Defer whose CaptureContext() runs at SUBSCRIBE
+                    // time. The using-block disposed synchronously, so by the time
+                    // SelectMany below subscribes, the System context had already
+                    // been reverted — the deferred CaptureContext returned the
+                    // user's context and CreateNodeRequest went out under user
+                    // identity → "Create permission required for node
+                    // 'ApiToken/{hashPrefix}'".
+                    //
+                    // Fix: move the SwitchAccessContext INSIDE Observable.Defer
+                    // and tie its lifetime to the inner observable via .Finally so
+                    // the System context is active during CaptureContext but
+                    // reverted promptly when the create completes.
+                    IObservable<MeshNode> indexObs;
+                    if (accessService != null)
                     {
-                        var disp = accessService.SwitchAccessContext(
-                            new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" });
-                        return nodeFactory.CreateNode(indexNode).Finally(() => disp.Dispose());
-                    });
-                }
-                else
+                        indexObs = Observable.Defer(() =>
+                        {
+                            var disp = accessService.SwitchAccessContext(
+                                new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" });
+                            return nodeFactory.CreateNode(indexNode).Finally(() => disp.Dispose());
+                        });
+                    }
+                    else
+                    {
+                        indexObs = nodeFactory.CreateNode(indexNode);
+                    }
+
+                    logger.LogInformation("Creating API token {Label} for user {UserId} (hash prefix {HashPrefix})",
+                        label, userId, hashPrefix);
+
+                    return indexObs.Select(_ => new TokenCreationResult(rawToken, created));
+                });
+        });
+    }
+
+    /// <summary>
+    /// Reads the user's self-scope <see cref="AccessAssignment"/> at
+    /// <c>User/{userId}/_Access/{userId}_Access</c> and emits the (non-denied)
+    /// role IDs assigned there. Read is performed under System identity so
+    /// it succeeds regardless of whether the calling user has Read on
+    /// AccessAssignments. Emits an empty array when the assignment doesn't
+    /// exist or the read fails — token creation continues with no captured
+    /// roles, which is the correct outcome for a user with no role grants
+    /// (the issued token has identity but no permissions).
+    /// </summary>
+    private IObservable<IReadOnlyCollection<string>> ResolveSelfScopeRoles(string assignmentPath)
+    {
+        return Observable.FromAsync(async () =>
+        {
+            try
+            {
+                await foreach (var node in QueryAsSystemAsync($"path:{assignmentPath}"))
                 {
-                    indexObs = nodeFactory.CreateNode(indexNode);
+                    AccessAssignment? assignment = node.Content as AccessAssignment;
+                    if (assignment == null && node.Content is System.Text.Json.JsonElement je)
+                    {
+                        try
+                        {
+                            assignment = System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(
+                                je.GetRawText(), hub.JsonSerializerOptions);
+                        }
+                        catch { /* fall through */ }
+                    }
+                    if (assignment == null) continue;
+                    var roles = assignment.Roles
+                        .Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role))
+                        .Select(r => r.Role)
+                        .Distinct()
+                        .ToArray();
+                    return (IReadOnlyCollection<string>)roles;
                 }
-
-                logger.LogInformation("Creating API token {Label} for user {UserId} (hash prefix {HashPrefix})",
-                    label, userId, hashPrefix);
-
-                return indexObs.Select(_ => new TokenCreationResult(rawToken, created));
-            });
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Failed to resolve self-scope roles from {Path} for token creation; continuing with empty role set",
+                    assignmentPath);
+            }
+            return (IReadOnlyCollection<string>)Array.Empty<string>();
+        });
     }
 
 
