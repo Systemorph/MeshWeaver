@@ -477,9 +477,24 @@ using MeshWeaver.Messaging;
     }
 
     /// <summary>
-    /// Sync handler — composes via <c>Observable.FromAsync</c> + <c>Subscribe</c>; no <c>await</c>.
+    /// Async handler — awaits the kernel work so consecutive SubmitCodeRequests on
+    /// the same kernel hub are processed serially. The hub's action block blocks
+    /// while the kernel runs, which is the correct serialization point for shared
+    /// kernel state: submission #2 must not start compiling before submission #1
+    /// has finished defining its symbols, otherwise variables from #1 are not in
+    /// scope when #2 is parsed (the InteractiveMarkdownExecutionTest
+    /// MultipleBlocks_ShareKernelState_ViaSharedAddress regression).
+    ///
+    /// <para>
+    /// Awaiting <see cref="SubmitCommandAsync"/> does NOT post back through this
+    /// hub — it's a pure call into Microsoft.DotNet.Interactive — so blocking
+    /// the action block here can't deadlock against itself. This is one of the
+    /// sanctioned async-handler shapes (long-running CPU/IO work that doesn't
+    /// re-enter the hub during execution; see Doc/Architecture/AsynchronousCalls.md
+    /// "Blocking Execution (AI Streaming)").
+    /// </para>
     /// </summary>
-    public IMessageDelivery HandleKernelCommand(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request)
+    public async Task<IMessageDelivery> HandleKernelCommand(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request, CancellationToken ct)
     {
         subscriptions.Add(request.Sender);
         var submissionId = request.Message.Id;
@@ -490,47 +505,35 @@ using MeshWeaver.Messaging;
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
 
-        // Compose the kernel work in an observable chain. The handler returns Processed
-        // immediately; the response is posted from the Subscribe callback when the kernel
-        // completes (success or error).
-        Observable.FromAsync(async ct =>
-            {
-                // If the caller passed an ActivityLogPath, swap the script's `Log` global
-                // to a logger that appends to that node. Messages stream through the node's
-                // MeshNodeReference for subscribers watching the run.
-                ActivityLogLogger? activityLogger = null;
-                if (!string.IsNullOrEmpty(request.Message.ActivityLogPath))
-                {
-                    activityLogger = new ActivityLogLogger(hub, request.Message.ActivityLogPath!);
-                    var kernelInstance = await hub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
-                    await Task.WhenAll(kernelInstance.ChildKernels.OfType<CSharpKernel>()
-                        .Select(k => k.SetValueAsync("Log", activityLogger, typeof(ILogger))));
-                }
+        // If the caller passed an ActivityLogPath, swap the script's `Log` global
+        // to a logger that appends to that node. Messages stream through the node's
+        // MeshNodeReference for subscribers watching the run.
+        ActivityLogLogger? activityLogger = null;
+        if (!string.IsNullOrEmpty(request.Message.ActivityLogPath))
+        {
+            activityLogger = new ActivityLogLogger(hub, request.Message.ActivityLogPath!);
+            var kernelInstance = await hub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
+            await Task.WhenAll(kernelInstance.ChildKernels.OfType<CSharpKernel>()
+                .Select(k => k.SetValueAsync("Log", activityLogger, typeof(ILogger))));
+        }
 
-                string? error = null;
-                try
-                {
-                    await SubmitCommandAsync(hub, ct, command);
-                }
-                catch (Exception ex)
-                {
-                    error = ex.Message;
-                    activityLogger?.LogError(ex, "Script dispatch failed");
-                }
+        string? error = null;
+        try
+        {
+            await SubmitCommandAsync(hub, ct, command);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            activityLogger?.LogError(ex, "Script dispatch failed");
+        }
 
-                // Finalize the activity log: flush pending messages and flip the terminal
-                // status on the node so subscribers see the run as Succeeded / Failed.
-                activityLogger?.Complete(error is null ? ActivityStatus.Succeeded : ActivityStatus.Failed);
+        // Finalize the activity log: flush pending messages and flip the terminal
+        // status on the node so subscribers see the run as Succeeded / Failed.
+        activityLogger?.Complete(error is null ? ActivityStatus.Succeeded : ActivityStatus.Failed);
 
-                return error;
-            })
-            .Subscribe(
-                error => hub.Post(
-                    new SubmitCodeResponse(submissionId, error is null) { Error = error },
-                    o => o.ResponseFor(request)),
-                ex => hub.Post(
-                    new SubmitCodeResponse(submissionId, false) { Error = ex.Message },
-                    o => o.ResponseFor(request)));
+        hub.Post(new SubmitCodeResponse(submissionId, error is null) { Error = error },
+            o => o.ResponseFor(request));
 
         return request.Processed();
     }
