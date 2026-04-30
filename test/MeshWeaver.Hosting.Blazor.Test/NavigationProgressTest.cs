@@ -78,23 +78,38 @@ public class NavigationProgressTest
     // -- Test #1: initial subscribers see a non-empty LookingUp message. ----------
 
     [Fact]
-    public void Status_BeforeInitialize_EmitsNonEmptyLookingUpMessage()
+    public async Task Status_AfterInitialize_EmitsNonEmptyLookingUpMessageWithPath()
     {
-        // The BehaviorSubject must start with a status that tells the user
-        // something â€” never a silent initial state that renders as a spinner
-        // with no label.
+        // After InitializeAsync runs, subscribers must see "Looking up <path>"
+        // rather than a silent / generic spinner. The constructor deliberately
+        // emits LookingUp(null) — reading NavigationManager.Uri at DI
+        // construction time throws "RemoteNavigationManager has not been
+        // initialized" first-chance every circuit start. The path lands the
+        // moment InitializeAsync runs (from a safe component lifecycle).
         _navigationManager.SetUri("http://localhost/FutuRe/EuropeRe");
+        // Stub a never-resolving path resolver so the LookingUp emission
+        // sticks (otherwise the resolution would race and Status would flip
+        // to Redirecting / NotFound before the assertion).
+        _pathResolver.ResolvePath(Arg.Any<string>())
+            .Returns(System.Reactive.Subjects.Subject.Synchronize(
+                new System.Reactive.Subjects.Subject<AddressResolution?>()));
+
         var service = CreateService();
 
-        NavigationStatus? initial = null;
-        service.Status.Subscribe(s => { initial = s; });
+        NavigationStatus? lookingUp = null;
+        service.Status.Subscribe(s =>
+        {
+            if (s.Phase == NavigationPhase.LookingUp && s.Message.Contains("FutuRe"))
+                lookingUp = s;
+        });
 
-        initial.Should().NotBeNull("BehaviorSubject must always have a current value");
-        initial!.Message.Should().NotBeNullOrWhiteSpace("no spinner without a descriptive label");
-        initial.Phase.Should().Be(NavigationPhase.LookingUp,
-            "before resolution completes we should tell the user we're looking up");
-        initial.Message.Should().Contain("FutuRe/EuropeRe",
-            "the current path should be named in the initial status");
+        await service.InitializeAsync();
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        lookingUp.Should().NotBeNull("after InitializeAsync the LookingUp emission must carry the path");
+        lookingUp!.Message.Should().NotBeNullOrWhiteSpace("no spinner without a descriptive label");
+        lookingUp.Message.Should().Contain("FutuRe/EuropeRe",
+            "the current path should be named in the LookingUp status");
     }
 
     // -- Test #2: during initial resolution the status says "Looking up <path>". --
