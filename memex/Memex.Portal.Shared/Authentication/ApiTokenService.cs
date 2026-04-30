@@ -39,6 +39,20 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var hash = HashToken(rawToken);
         var hashPrefix = hash[..12];
 
+        // Capture the caller's currently-assigned roles (from cookie / OAuth
+        // claim auth — populated by UserContextMiddleware for UI sessions). At
+        // validation time these are stamped onto AccessContext.Roles so the
+        // SecurityService claim-based role path resolves on per-node hubs,
+        // where the synced AccessAssignment query is intentionally not
+        // registered (SecurityServiceExtensions:44-50). Without this, an API
+        // token would have ObjectId but no roles → 0 perms → IsApiToken gate
+        // strips → DENY, even when the creator is admin on the target scope.
+        var creatorAccessService = hub.ServiceProvider.GetService<AccessService>();
+        var creatorContext = creatorAccessService?.Context ?? creatorAccessService?.CircuitContext;
+        var capturedRoles = creatorContext?.Roles is { Count: > 0 } existingRoles
+            ? existingRoles.ToArray()
+            : Array.Empty<string>();
+
         var apiToken = new ApiToken
         {
             TokenHash = hash,
@@ -48,6 +62,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             Label = label,
             CreatedAt = DateTimeOffset.UtcNow,
             ExpiresAt = expiresAt,
+            Roles = capturedRoles,
         };
 
         var userTokenNamespace = $"User/{userId}/{ApiTokenNamespace}";
@@ -111,6 +126,13 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var hash = HashToken(rawToken);
         var hashPrefix = hash[..12];
 
+        // Capture caller's current roles — see comment on the reactive overload above.
+        var creatorAccessService = hub.ServiceProvider.GetService<AccessService>();
+        var creatorContext = creatorAccessService?.Context ?? creatorAccessService?.CircuitContext;
+        var capturedRoles = creatorContext?.Roles is { Count: > 0 } existingRoles
+            ? existingRoles.ToArray()
+            : Array.Empty<string>();
+
         var apiToken = new ApiToken
         {
             TokenHash = hash,
@@ -120,6 +142,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             Label = label,
             CreatedAt = DateTimeOffset.UtcNow,
             ExpiresAt = expiresAt,
+            Roles = capturedRoles,
         };
 
         // Store the full token under the user's namespace
