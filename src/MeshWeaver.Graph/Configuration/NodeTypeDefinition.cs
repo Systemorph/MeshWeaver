@@ -202,4 +202,31 @@ public record NodeTypeDefinition
     /// trace without re-running the pipeline. <c>null</c> until the first compile finishes.
     /// </summary>
     public string? LastCompilationActivityPath { get; init; }
+
+    /// <summary>
+    /// Snapshot of <c>{sourceNodePath → MeshNode.Version}</c> for every Code/Test
+    /// node that participated in the most recent successful compile. Written by the
+    /// compile watcher when <see cref="CompilationStatus"/> settles to
+    /// <see cref="Mesh.Services.CompilationStatus.Ok"/>.
+    ///
+    /// <para>The snapshot is the persistent, cross-restart, cross-silo answer to
+    /// "is the cached assembly still valid?": comparing the live versions of the
+    /// source nodes against this dictionary catches the three change shapes the
+    /// LastModified-only check misses:
+    /// <list type="bullet">
+    ///   <item><b>Source added</b> — a new path appears in the current set that
+    ///     was absent from the snapshot.</item>
+    ///   <item><b>Source removed</b> — a path is present in the snapshot but
+    ///     missing from the current set; the cached DLL still embeds the deleted
+    ///     code and must be rebuilt.</item>
+    ///   <item><b>Source modified</b> — same path exists in both, but its version
+    ///     bumped.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para><c>null</c> until the first successful compile completes; cleared when the
+    /// NodeType moves to <see cref="Mesh.Services.CompilationStatus.Error"/> so an
+    /// error-state NodeType always re-runs source discovery on the next compile.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, long>? CompiledSources { get; init; }
 }
