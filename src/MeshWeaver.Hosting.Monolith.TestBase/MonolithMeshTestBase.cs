@@ -138,6 +138,79 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private static int _criticalEmitted;
 
     /// <summary>
+    /// Static caches reflected at runtime so a growing one shows up in the trace
+    /// without us having to recompile. Each entry is a tuple of (label, lambda
+    /// returning current count). Lambdas use reflection to avoid creating a
+    /// runtime dependency from the test base on every project that owns a
+    /// suspect static. Add new suspects here when you find them — the cost is
+    /// one reflection lookup per MEM line and a string append.
+    /// </summary>
+    private static readonly (string Label, Func<int?> Reader)[] KnownStaticCaches =
+    {
+        ("agentCache", () => GetStaticDictCount("MeshWeaver.AI.ThreadExecution, MeshWeaver.AI", "AgentCache")),
+        ("execCancels", () => GetStaticDictCount("MeshWeaver.AI.ThreadExecution, MeshWeaver.AI", "ExecutionCancellations")),
+        ("complCallbk", () => GetStaticDictCount("MeshWeaver.AI.ThreadExecution, MeshWeaver.AI", "CompletionCallbacks")),
+        ("nodeTypeReg", () => GetStaticDictCount("MeshWeaver.Graph.Configuration.NodeTypeRegistry, MeshWeaver.Graph", "Nodes")),
+        ("dynTypeCache", () => GetStaticDictCount("MeshWeaver.Blazor.DynamicTypeGenerator, MeshWeaver.Blazor", "TypeCache")),
+        ("nonVirtThunks", () => GetStaticDictCount("MeshWeaver.BusinessRules.DefaultImplementationOfInterfacesExtensions, MeshWeaver.BusinessRules", "NonVirtualInvocationThunks")),
+        ("storageSnaps", () => GetStaticDictCount("MeshWeaver.Hosting.Persistence.CachingStorageAdapter, MeshWeaver.Hosting", "SharedSnapshots")),
+        ("aclAttrCache", () => GetStaticDictCount("MeshWeaver.Hosting.Security.AccessControlPipeline, MeshWeaver.Hosting", "AttributeCache")),
+        ("apiTokenVal", () => GetStaticDictCount("MeshWeaver.Graph.Configuration.ApiTokenNodeType, MeshWeaver.Graph", "ValidationCache")),
+        ("xunitOutHelpers", () => GetStaticDictCount("MeshWeaver.Fixture.XUnitFileOutputRegistry, MeshWeaver.Fixture", "_activeOutputHelpers")),
+        ("testAccessNodes", () => GetStaticDictCount("MeshWeaver.Hosting.Monolith.TestBase.TestAccessNodeProvider, MeshWeaver.Hosting.Monolith.TestBase", "Nodes")),
+    };
+
+    /// <summary>
+    /// Reads <c>Count</c> off a private static <c>ConcurrentDictionary</c> /
+    /// <c>ConcurrentBag</c> / <c>Dictionary</c> field by reflection. Returns null
+    /// if the type or field can't be resolved (project not loaded, field renamed,
+    /// not a counted collection) — the trace just omits that label rather than
+    /// throwing out of the test pipeline.
+    /// </summary>
+    private static int? GetStaticDictCount(string assemblyQualifiedTypeName, string fieldName)
+    {
+        try
+        {
+            var type = Type.GetType(assemblyQualifiedTypeName, throwOnError: false);
+            if (type is null) return null;
+            var field = type.GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
+            if (field is null) return null;
+            var value = field.GetValue(null);
+            if (value is null) return null;
+            // ConcurrentDictionary, Dictionary, ConcurrentBag, HashSet all expose Count.
+            var countProp = value.GetType().GetProperty("Count", BindingFlags.Public | BindingFlags.Instance);
+            if (countProp is null) return null;
+            return (int?)countProp.GetValue(value);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// One-line snapshot of all known static-cache sizes. Format: <c>cache=N</c>
+    /// for each, with unresolved entries omitted. A leak shows as monotonically
+    /// growing values across INIT_MEM lines.
+    /// </summary>
+    private static string SnapshotKnownStaticCaches()
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var (label, reader) in KnownStaticCaches)
+        {
+            try
+            {
+                var count = reader();
+                if (count is null) continue;
+                if (sb.Length > 0) sb.Append(' ');
+                sb.Append(label).Append('=').Append(count);
+            }
+            catch { /* skip this label */ }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Read selected fields out of <c>/proc/self/status</c> so we can tell native
     /// heap growth from mmap'd-file growth from total virtual size. Linux-only —
     /// returns empty string on Windows / macOS (Process Manager / Activity Monitor
@@ -274,7 +347,8 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 + $" rss={rss / 1024 / 1024}MiB Δ{(rssDelta >= 0 ? "+" : "")}{rssDelta / 1024 / 1024}MiB"
                 + (string.IsNullOrEmpty(nativeBreakdown) ? "" : $" {nativeBreakdown}")
                 + $" alc={alcCount} asm={asmCount}"
-                + $" gc0={GC.CollectionCount(0)} gc1={GC.CollectionCount(1)} gc2={GC.CollectionCount(2)}";
+                + $" gc0={GC.CollectionCount(0)} gc1={GC.CollectionCount(1)} gc2={GC.CollectionCount(2)}"
+                + $" {SnapshotKnownStaticCaches()}";
             TestPhaseTrace(testClass, phase, extra: extra);
         }
         catch
