@@ -404,7 +404,15 @@ public static class MeshDataSourceExtensions
                                     CompilationError = null,
                                     LastCompileSucceededAt = DateTimeOffset.UtcNow,
                                     LastCompiledVersion = curr.Version,
-                                    LastCompilationActivityPath = activityPath
+                                    LastCompilationActivityPath = activityPath,
+                                    // Persist the per-source snapshot the compile actually
+                                    // consumed. Future recompile-needed checks read this back
+                                    // and compare against the live source-node versions —
+                                    // the answer survives portal restart, silo move, and
+                                    // change-feed gaps. Empty dict if discovery returned
+                                    // nothing (e.g., NodeType with no Sources).
+                                    CompiledSources = outcome.Result.CompiledSources
+                                        ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty
                                 },
                                 AssemblyLocation = outcome.Result.AssemblyLocation
                             };
@@ -422,7 +430,12 @@ public static class MeshDataSourceExtensions
                             {
                                 CompilationStatus = CompilationStatus.Error,
                                 CompilationError = errorSummary,
-                                LastCompilationActivityPath = activityPath
+                                LastCompilationActivityPath = activityPath,
+                                // Clear the snapshot — an error-state NodeType has nothing
+                                // valid to compare against; force the next attempt to
+                                // re-discover sources rather than spuriously short-circuit
+                                // because the previous (now-stale) snapshot still matches.
+                                CompiledSources = null
                             }
                         };
                     });

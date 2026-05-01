@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Data;
 
 namespace MeshWeaver.Mesh.Services;
@@ -7,11 +8,17 @@ namespace MeshWeaver.Mesh.Services;
 /// <see cref="Log"/> carries the executed-query / matched-source-paths /
 /// compiler-output trace so the consumer can surface "compile saw N source
 /// files" without re-running the pipeline.
+/// <see cref="CompiledSources"/> is the per-source <c>{path → version}</c>
+/// snapshot the compile actually consumed — empty when the cache hit short-
+/// circuited the recompile; populated to the full input set otherwise. The
+/// compile watcher persists it onto the NodeType MeshNode so the next
+/// recompile-needed check is a data comparison instead of a timing guess.
 /// </summary>
 public record NodeCompilationResult(
     string? AssemblyLocation,
     IReadOnlyList<NodeTypeConfiguration> NodeTypeConfigurations,
-    ActivityLog? Log = null);
+    ActivityLog? Log = null,
+    ImmutableDictionary<string, long>? CompiledSources = null);
 
 /// <summary>
 /// Service for on-demand compilation of dynamic MeshNode assemblies.

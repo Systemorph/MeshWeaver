@@ -328,6 +328,43 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
+    /// Captures <c>{path → MeshNode.Version}</c> for every source Code/Test node
+    /// that feeds a compile of <paramref name="ntDef"/>. Sibling to
+    /// <see cref="DiscoverSourceMaxLastModified"/> — same storage enumeration,
+    /// different aggregation. Used by the compile watcher to populate
+    /// <c>NodeTypeDefinition.CompiledSources</c> on success so a future
+    /// recompile-needed check is a data comparison (added/removed/version-bumped)
+    /// instead of a max-LastModified timing guess.
+    /// </summary>
+    public IObservable<ImmutableDictionary<string, long>> DiscoverSourceVersionSnapshot(
+        NodeTypeDefinition? ntDef, string selfPath)
+    {
+        var meshStorage = hub.ServiceProvider.GetService<IMeshStorage>();
+        if (meshStorage == null)
+            return Observable.Return(ImmutableDictionary<string, long>.Empty);
+
+        var queries = CodeQueryResolver
+            .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
+            .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
+            .ToArray();
+
+        if (queries.Length == 0)
+            return Observable.Return(ImmutableDictionary<string, long>.Empty);
+
+        IObservable<ImmutableDictionary<string, long>> chain =
+            Observable.Return(ImmutableDictionary<string, long>.Empty);
+        foreach (var q in queries)
+        {
+            var (queryPath, isSubtree, queryNodeType) = ParseSourceQuery(q);
+            chain = chain.SelectMany(current =>
+                EnumerateStorageSources(meshStorage, queryPath, isSubtree, queryNodeType)
+                    .Aggregate(current, (acc, n) =>
+                        string.IsNullOrEmpty(n.Path) ? acc : acc.SetItem(n.Path, n.Version)));
+        }
+        return chain;
+    }
+
+    /// <summary>
     /// Parses a <see cref="CodeQueryResolver"/>-shaped query string into the
     /// (path, scope, nodeType) tuple needed for storage-direct enumeration.
     /// CodeQueryResolver always emits one of three shapes:
@@ -603,11 +640,26 @@ internal class MeshNodeCompilationService(
 
     /// <inheritdoc />
     public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(MeshNode node)
-        => GetAssemblyLocationWithLog(node).Select(t =>
+        => GetAssemblyLocationWithLog(node).SelectMany(t =>
         {
             var (assemblyLocation, log) = t;
             if (string.IsNullOrEmpty(assemblyLocation))
-                return (NodeCompilationResult?)new NodeCompilationResult(null, [], log);
+                return Observable.Return((NodeCompilationResult?)new NodeCompilationResult(null, [], log));
+
+            // Capture the per-source version snapshot AFTER the compile resolved
+            // its source set so the snapshot reflects the same storage enumeration
+            // the cache check uses. Compose via SelectMany so the observable chain
+            // stays reactive (no Task bridges, no .Result deadlocks).
+            var ntDef = node.Content as NodeTypeDefinition;
+            var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
+            return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "")
+                .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot));
+        });
+
+    private NodeCompilationResult? CompileResultFromAssembly(
+        MeshNode node, string assemblyLocation, ActivityLog log,
+        ImmutableDictionary<string, long> compiledSources)
+    {
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
 
@@ -629,7 +681,8 @@ internal class MeshNodeCompilationService(
                         "(check the Code node's diagnostics), or missing dependency.",
                         node.Path);
                     return new NodeCompilationResult(assemblyLocation, [],
-                        AppendError(log, $"Failed to load assembly at {assemblyLocation}."));
+                        AppendError(log, $"Failed to load assembly at {assemblyLocation}."),
+                        compiledSources);
                 }
 
                 var configurations = new List<NodeTypeConfiguration>();
@@ -662,15 +715,16 @@ internal class MeshNodeCompilationService(
                 logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
                     configurations.Count, assemblyLocation);
 
-                return new NodeCompilationResult(assemblyLocation, configurations, log);
+                return new NodeCompilationResult(assemblyLocation, configurations, log, compiledSources);
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {AssemblyLocation}", assemblyLocation);
                 return new NodeCompilationResult(assemblyLocation, [],
-                    AppendError(log, $"Failed to extract configurations: {ex.Message}"));
+                    AppendError(log, $"Failed to extract configurations: {ex.Message}"),
+                    compiledSources);
             }
-        });
+    }
 
     /// <summary>
     /// Compiles CodeConfiguration into an assembly using Roslyn.

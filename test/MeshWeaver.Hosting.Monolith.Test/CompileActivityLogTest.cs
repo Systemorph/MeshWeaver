@@ -103,4 +103,62 @@ public class CompileActivityLogTest(ITestOutputHelper output) : MonolithMeshTest
         response.Error.Should().NotBeNullOrEmpty(
             "the response must surface the human-readable failure summary");
     }
+
+    /// <summary>
+    /// <see cref="NodeCompilationResult.CompiledSources"/> must capture every
+    /// source Code node that fed the compile, keyed by full path with the value
+    /// being the source node's <c>MeshNode.Version</c>. The compile watcher
+    /// persists this onto the NodeType MeshNode as
+    /// <see cref="NodeTypeDefinition.CompiledSources"/> so future
+    /// recompile-needed checks survive portal restart and silo move.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task SuccessfulCompile_PopulatesCompiledSourcesSnapshot()
+    {
+        const string nodeTypeId = "SnapStory";
+        const string nodeTypePath = "type/SnapStory";
+        var typeNode = MeshNode.FromPath(nodeTypePath) with
+        {
+            Name = nodeTypeId,
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Configuration = "config => config.WithContentType<SnapStory>()"
+            },
+            State = MeshNodeState.Active
+        };
+        await MeshService.CreateNode(typeNode).FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
+
+        await MeshService.CreateNode(new MeshNode("code", $"{nodeTypePath}/Source")
+        {
+            NodeType = "Code",
+            Name = "code",
+            Content = new CodeConfiguration
+            {
+                Code = "public record SnapStory { public string Title { get; init; } = string.Empty; }",
+                Language = "csharp"
+            },
+            State = MeshNodeState.Active
+        }).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+
+        // Drive the compile through the same service the watcher uses. The
+        // result carries the snapshot directly — no need to wait for the
+        // separate watcher → UpdateMeshNode round-trip.
+        var compilationService = Mesh.ServiceProvider
+            .GetRequiredService<IMeshNodeCompilationService>();
+        var result = await compilationService.CompileAndGetConfigurations(typeNode)
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+
+        result.Should().NotBeNull();
+        result!.AssemblyLocation.Should().NotBeNullOrEmpty(
+            "compile should succeed and produce an assembly");
+
+        result.CompiledSources.Should().NotBeNull(
+            "CompiledSources must be set whenever the compile produces an assembly");
+        result.CompiledSources!.Should().ContainKey($"{nodeTypePath}/Source/code",
+            "the snapshot must include every source Code node the compile consumed");
+        result.CompiledSources[$"{nodeTypePath}/Source/code"].Should().BeGreaterThanOrEqualTo(0,
+            "snapshot value is the source MeshNode.Version (always non-negative)");
+    }
 }
