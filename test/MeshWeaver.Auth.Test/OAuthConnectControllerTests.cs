@@ -389,7 +389,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             client_id = reg.ClientId,
             redirect_uri = "https://claude.ai/cb",
             code_verifier = verifier,
-        }) as OkObjectResult;
+        }, TestContext.Current.CancellationToken) as OkObjectResult;
 
         tokenResult.Should().NotBeNull();
         var body = tokenResult!.Value!;
@@ -420,7 +420,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             client_id = "c1",
             redirect_uri = "https://claude.ai/cb",
             code_verifier = "the-WRONG-verifier-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
-        }) as BadRequestObjectResult;
+        }, TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         result.Should().NotBeNull();
         result!.Value!.GetType().GetProperty("error")!.GetValue(result.Value).Should().Be("invalid_grant");
@@ -442,7 +442,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             code = Uri.UnescapeDataString(code),
             client_id = "client-B",
             redirect_uri = "https://claude.ai/cb",
-        }) as BadRequestObjectResult;
+        }, TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         result.Should().NotBeNull();
         result!.Value!.GetType().GetProperty("error")!.GetValue(result.Value).Should().Be("invalid_grant");
@@ -463,7 +463,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             code = Uri.UnescapeDataString(code),
             client_id = "c1",
             redirect_uri = "https://other.example.com/cb",
-        }) as BadRequestObjectResult;
+        }, TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         result.Should().NotBeNull();
         result!.Value!.GetType().GetProperty("error")!.GetValue(result.Value).Should().Be("invalid_grant");
@@ -483,14 +483,14 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         {
             grant_type = "authorization_code", code = code,
             client_id = "c1", redirect_uri = "https://claude.ai/cb",
-        });
+        }, TestContext.Current.CancellationToken);
         first.Should().BeOfType<OkObjectResult>();
 
         var second = await controller.ExchangeToken(new TokenRequest
         {
             grant_type = "authorization_code", code = code,
             client_id = "c1", redirect_uri = "https://claude.ai/cb",
-        }) as BadRequestObjectResult;
+        }, TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         second.Should().NotBeNull();
         second!.Value!.GetType().GetProperty("error")!.GetValue(second.Value).Should().Be("invalid_grant");
@@ -501,7 +501,9 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
     {
         var controller = CreateController();
 
-        var result = await controller.ExchangeToken(new TokenRequest { grant_type = "client_credentials" })
+        var result = await controller.ExchangeToken(
+                new TokenRequest { grant_type = "client_credentials" },
+                TestContext.Current.CancellationToken)
             as BadRequestObjectResult;
 
         result.Should().NotBeNull();
@@ -519,7 +521,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             code = "",
             client_id = "c1",
             redirect_uri = "https://claude.ai/cb",
-        }) as BadRequestObjectResult;
+        }, TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         result.Should().NotBeNull();
         result!.Value!.GetType().GetProperty("error")!.GetValue(result.Value).Should().Be("invalid_request");
@@ -536,7 +538,7 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             code = "this-code-was-never-issued",
             client_id = "c1",
             redirect_uri = "https://claude.ai/cb",
-        }) as BadRequestObjectResult;
+        }, TestContext.Current.CancellationToken) as BadRequestObjectResult;
 
         result.Should().NotBeNull();
         result!.Value!.GetType().GetProperty("error")!.GetValue(result.Value).Should().Be("invalid_grant");
