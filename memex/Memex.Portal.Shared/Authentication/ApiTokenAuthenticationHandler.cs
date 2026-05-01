@@ -40,10 +40,29 @@ public class ApiTokenAuthenticationHandler(
         if (apiToken == null)
             return AuthenticateResult.Fail("Invalid or expired API token");
 
+        var claims = BuildClaims(apiToken);
+        var identity = new ClaimsIdentity(claims, SchemeName);
+        var principal = new ClaimsPrincipal(identity);
+        var ticket = new AuthenticationTicket(principal, SchemeName);
+
+        return AuthenticateResult.Success(ticket);
+    }
+
+    /// <summary>
+    /// Builds the claim list for an authenticated API token. Public + static
+    /// so unit tests can assert the claim shape (in particular: that
+    /// <see cref="MeshWeaver.Mesh.Security.ApiToken.Roles"/> become
+    /// <see cref="ClaimTypes.Role"/> claims) without needing an HTTP host.
+    /// Mirrors what <c>UserContextMiddleware.ExtractUserContext()</c> reads
+    /// back into <see cref="MeshWeaver.Messaging.AccessContext"/>.
+    /// </summary>
+    public static IReadOnlyList<Claim> BuildClaims(MeshWeaver.Mesh.Security.ApiToken apiToken)
+    {
         // Build claims matching UserContextMiddleware.ExtractUserContext():
         //   ObjectId = preferred_username
         //   Name     = ClaimTypes.Name or "name"
         //   Email    = ClaimTypes.Email or "email"
+        //   Roles    = each ClaimTypes.Role claim → AccessContext.Roles
         var claims = new List<Claim>
         {
             new("preferred_username", apiToken.UserId),
@@ -55,10 +74,21 @@ public class ApiTokenAuthenticationHandler(
             new("token_label", apiToken.Label),
         };
 
-        var identity = new ClaimsIdentity(claims, SchemeName);
-        var principal = new ClaimsPrincipal(identity);
-        var ticket = new AuthenticationTicket(principal, SchemeName);
+        // Stamp the token's Roles list as ClaimTypes.Role claims. Without
+        // this, UserContextMiddleware sets AccessContext.Roles to an empty
+        // list and SecurityService.GetEffectivePermissions can't resolve
+        // claim-based Admin — every API-token request that depended on a
+        // role grant rather than a static AccessAssignment got denied.
+        // The token's Roles surface is exactly the right vehicle: the
+        // creator chose them at token creation; the validator preserves
+        // them through ValidateTokenResponse.Roles; the auth handler
+        // mints them onto the principal here.
+        foreach (var role in apiToken.Roles)
+        {
+            if (!string.IsNullOrEmpty(role))
+                claims.Add(new Claim(ClaimTypes.Role, role));
+        }
 
-        return AuthenticateResult.Success(ticket);
+        return claims;
     }
 }
