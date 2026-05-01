@@ -32,6 +32,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("SamplesGraphData")]
 public class ContentCollectionReferenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static string GetSamplesGraphPath()
     {
         var currentDir = Directory.GetCurrentDirectory();
