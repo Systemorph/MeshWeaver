@@ -38,6 +38,9 @@ public class PatchDataRequestTest : MonolithMeshTestBase
 
     public PatchDataRequestTest(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/SP across [Fact]s.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder
             .UseMonolithMesh()

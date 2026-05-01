@@ -34,6 +34,9 @@ public class AgentChatClientTest : MonolithMeshTestBase
     {
     }
 
+    // Share Mesh/SP across [Fact]s.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return builder

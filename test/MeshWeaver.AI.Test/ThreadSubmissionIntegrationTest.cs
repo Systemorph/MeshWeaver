@@ -36,6 +36,9 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
     public ThreadSubmissionIntegrationTest(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/SP across [Fact]s.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .ConfigureServices(services =>

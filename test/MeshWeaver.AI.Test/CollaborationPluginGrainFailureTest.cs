@@ -30,6 +30,9 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Share Mesh/SP across [Fact]s.
+    protected override bool ShareMeshAcrossTests => true;
+
     private CancellationToken TestTimeout => new CancellationTokenSource(15.Seconds()).Token;
 
     /// <summary>
