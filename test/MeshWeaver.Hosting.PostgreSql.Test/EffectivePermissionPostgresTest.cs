@@ -78,4 +78,54 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         permissions.Should().Be(Permission.All,
             "Admin role grants all permissions");
     }
+
+    /// <summary>
+    /// Postgres-backed regression for the 2026-05-01 cleanup-session bug:
+    /// runtime AccessAssignment created via the proper write path
+    /// (<see cref="IMeshService.CreateNode"/>) must propagate to permission
+    /// checks within the synced-query settle window. This is the PG analogue of
+    /// the in-memory <c>RuntimeCreateNode_AccessAssignment_GrantsPermission</c>
+    /// — the in-memory path passes; this test confirms the same end-to-end
+    /// against Postgres-backed persistence with pg_notify-driven change feed.
+    ///
+    /// If it fails: the synced query's Postgres path has a bug specific to
+    /// distributed mode that the in-memory test cannot catch.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task RuntimeCreateNode_AccessAssignment_PgBacked_GrantsPermission()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var savedContext = accessService.CircuitContext;
+
+        const string userId = "pg-runtime-assignee";
+        const string scope = "PgRuntimeOrg";
+
+        try
+        {
+            var before = await Mesh.GetPermissionAsync(scope, userId, TestTimeout);
+            before.Should().Be(Permission.None);
+
+            // Admin (statically seeded as global Admin via SetupAccessRightsAsync)
+            // creates the assignment. AccessContext is captured at call time by
+            // the underlying CreateNodeRequest pipeline.
+            accessService.SetCircuitContext(new AccessContext
+            {
+                ObjectId = TestUsers.Admin.ObjectId,
+                Name = TestUsers.Admin.Name
+            });
+
+            var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
+            await meshService.CreateNode(assignment).FirstAsync().ToTask(TestTimeout);
+
+            var after = await Mesh.GetPermissionAsync(scope, userId,
+                until: p => p.HasFlag(Permission.Read), TestTimeout);
+            after.Should().Be(Permission.All);
+        }
+        finally
+        {
+            accessService.SetCircuitContext(savedContext);
+        }
+    }
+
 }
