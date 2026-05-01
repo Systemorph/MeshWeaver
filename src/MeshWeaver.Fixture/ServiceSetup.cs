@@ -11,8 +11,8 @@ public class ServiceSetup
 {
     public readonly ServiceCollection Services = CreateServiceCollection();
     public readonly List<Action<IServiceProvider>> Initializations = new();
-    public IServiceProvider ServiceProvider { get; private set; } = null!;
-    public IConfiguration Configuration { get; private set; } = null!;
+    public IServiceProvider ServiceProvider { get; protected set; } = null!;
+    public IConfiguration Configuration { get; protected set; } = null!;
 
     protected static ServiceCollection CreateServiceCollection()
     {

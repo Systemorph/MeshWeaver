@@ -40,6 +40,11 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
     public AgentToolWiringIntegrationTest(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/ServiceProvider across all [Fact]s in this class so the per-test
+    // Autofac-container compile cost (~190 MiB native heap, never reclaimed) is
+    // paid once per testhost run instead of once per test method.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return builder

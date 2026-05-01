@@ -37,6 +37,10 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
     public AttachmentContextTest(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/ServiceProvider across all [Fact]s in this class — saves the
+    // ~190 MiB native heap that would otherwise leak per test method.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return builder

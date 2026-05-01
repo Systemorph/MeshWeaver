@@ -52,6 +52,10 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     public McpReadYourWritesTest(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/ServiceProvider across all [Fact]s in this class — saves the
+    // ~190 MiB native heap that would otherwise leak per test method.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder
             .UseMonolithMesh()

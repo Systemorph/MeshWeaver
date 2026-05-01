@@ -42,6 +42,11 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
 
     public AgentWriteFailureTests(ITestOutputHelper output) : base(output) { }
 
+    // Share Mesh/ServiceProvider across all [Fact]s in this class — see
+    // MonolithMeshTestBase.ShareMeshAcrossTests for the rationale (~190 MiB native
+    // heap leak per per-test mesh otherwise).
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return builder
