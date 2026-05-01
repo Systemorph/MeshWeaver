@@ -100,6 +100,63 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         }
     }
 
+    // Per-process baseline so MEM lines carry process-lifetime deltas, not just
+    // the last-class delta. The leak hunter wants to see "class X added 200 MiB
+    // and never gave it back" across the whole run.
+    private static long _lastManagedHeapBytes;
+    private static long _lastWorkingSetBytes;
+    private static readonly object _memLock = new();
+
+    /// <summary>
+    /// Append one MEM line: managed heap, process RSS, GC counts, and deltas vs
+    /// the previous MEM line. Called at end of INIT and end of DISPOSE for every
+    /// test class that goes through this base. With CI's 7 GB cap, the test class
+    /// that hangs CI is the one whose post-DISPOSE managed-heap delta stays
+    /// positive instead of returning to ~baseline.
+    ///
+    /// <para><c>forceGc:true</c> at dispose forces a full collection so retained
+    /// allocations stand out from in-flight collectible garbage. Skip the GC at
+    /// init (post-init memory naturally includes mesh + hosted hubs that should
+    /// be live).</para>
+    /// </summary>
+    private static void TestMemTrace(string testClass, string phase, bool forceGc)
+    {
+        try
+        {
+            if (forceGc)
+            {
+                // Two passes — finalizers may queue more work the first time round.
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            }
+
+            var managed = GC.GetTotalMemory(forceFullCollection: false);
+            long rss;
+            try { rss = Process.GetCurrentProcess().WorkingSet64; }
+            catch { rss = 0; }
+
+            long managedDelta, rssDelta;
+            lock (_memLock)
+            {
+                managedDelta = _lastManagedHeapBytes == 0 ? 0 : managed - _lastManagedHeapBytes;
+                rssDelta = _lastWorkingSetBytes == 0 ? 0 : rss - _lastWorkingSetBytes;
+                _lastManagedHeapBytes = managed;
+                _lastWorkingSetBytes = rss;
+            }
+
+            var extra =
+                $"managed={managed / 1024 / 1024}MiB Δ{(managedDelta >= 0 ? "+" : "")}{managedDelta / 1024 / 1024}MiB"
+                + $" rss={rss / 1024 / 1024}MiB Δ{(rssDelta >= 0 ? "+" : "")}{rssDelta / 1024 / 1024}MiB"
+                + $" gc0={GC.CollectionCount(0)} gc1={GC.CollectionCount(1)} gc2={GC.CollectionCount(2)}";
+            TestPhaseTrace(testClass, phase, extra: extra);
+        }
+        catch
+        {
+            // Memory tracing must never throw out of the test pipeline.
+        }
+    }
+
     /// <summary>
     /// Called after ServiceProvider is built. Logs in the default admin user (DevLogin),
     /// pre-warms NodeType hubs that runtime CreateNode calls would otherwise try to
@@ -127,6 +184,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
             await SetupAccessRightsAsync();
             TestPhaseTrace(name, "INIT_DONE", sw.ElapsedMilliseconds);
+            TestMemTrace(name, "INIT_MEM", forceGc: false);
         }
         catch (Exception ex)
         {
@@ -493,6 +551,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         finally
         {
             await base.DisposeAsync();
+            // Force a full GC + finalizers + a second collection so any short-lived
+            // garbage is gone and the MEM line shows what actually survived this
+            // class. Across the run, look for classes whose post-DISPOSE managed
+            // delta stays positive — those are the leaks driving CI's OOM.
+            TestMemTrace(testName, "DISPOSE_MEM", forceGc: true);
         }
 
         if (disposeException != null)
