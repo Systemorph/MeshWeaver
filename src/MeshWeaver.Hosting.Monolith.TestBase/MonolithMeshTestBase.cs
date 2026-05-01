@@ -11,6 +11,8 @@ using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -67,15 +69,51 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
     protected MonolithMeshTestBase(ITestOutputHelper output) : base(output)
     {
-        var builder = ConfigureMesh(
-            new(
-                c => c.Invoke(Services),
-                AddressExtensions.CreateMeshAddress()
-            )
-        );
-        Services.AddSingleton(builder.BuildHub);
+        // In shared-mesh mode, ConfigureMesh runs only on the FIRST instance of
+        // this test class — the SP is cached statically and re-used by every
+        // subsequent [Fact]. Skip the BuildHub registration on later instances
+        // so their per-instance Services don't try to re-register the singleton
+        // (and the wasted ConfigureMesh + builder allocation is avoided).
+        if (!ShareMeshAcrossTests || !_sharedProviders.ContainsKey(GetType()))
+        {
+            var builder = ConfigureMesh(
+                new(
+                    c => c.Invoke(Services),
+                    AddressExtensions.CreateMeshAddress()
+                )
+            );
+            Services.AddSingleton(builder.BuildHub);
+        }
         TestPhaseTrace(GetType().Name, "CTOR");
     }
+
+    /// <summary>
+    /// Opt-in: when overridden to <c>true</c>, the test class's
+    /// <see cref="IServiceProvider"/> + <see cref="IMessageHub"/> are built once
+    /// for the whole test class and reused for every <c>[Fact]</c>. This avoids
+    /// the ~190 MiB native-heap leak per test method that otherwise piles up
+    /// from Autofac's per-container Reflection.Emit-compiled service factories.
+    ///
+    /// <para><strong>Trade-off:</strong> tests in a class that opts in see
+    /// shared mesh state — nodes/threads created in one test are visible in the
+    /// next. Tests must use unique paths per test (Guids in node names is the
+    /// typical pattern) and must not assume a clean slate. Tests that mutate
+    /// shared state in incompatible ways must keep this off.</para>
+    ///
+    /// <para>Default <c>false</c>: existing tests get a fresh mesh per
+    /// <c>[Fact]</c> as before. Opt in by overriding to <c>true</c> on the
+    /// derived class.</para>
+    /// </summary>
+    protected virtual bool ShareMeshAcrossTests => false;
+
+    /// <summary>
+    /// Cached <see cref="IServiceProvider"/> per test-class type, populated on
+    /// the first instance of a class that opts in via
+    /// <see cref="ShareMeshAcrossTests"/>. Never cleared during the testhost
+    /// process — the cached SP outlives every test instance, which is exactly
+    /// what avoids the per-test JIT compilation leak.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, IServiceProvider> _sharedProviders = new();
 
     /// <summary>
     /// Cross-process per-test phase trace. Single line per event into a fixed
@@ -395,6 +433,35 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
+    /// Override <see cref="ServiceSetup.Initialize"/> so that test classes
+    /// opting in via <see cref="ShareMeshAcrossTests"/> reuse a cached
+    /// <see cref="IServiceProvider"/> across every <c>[Fact]</c>. The first
+    /// instance of the class builds the SP normally and stores it in the
+    /// static cache; every subsequent instance grabs that same SP and skips
+    /// <see cref="ServiceSetup.BuildServiceProvider"/> entirely.
+    ///
+    /// <para><c>Buildup(this)</c> still runs per-instance because <c>[Inject]</c>
+    /// fields/properties live on the test instance, not the SP.</para>
+    /// </summary>
+    protected override void Initialize()
+    {
+        if (ShareMeshAcrossTests)
+        {
+            ServiceProvider = _sharedProviders.GetOrAdd(GetType(), _ =>
+            {
+                base.Initialize();              // builds SP from this instance's Services
+                return ServiceProvider;          // cache the result
+            });
+            // Per-instance buildup of [Inject] members on `this` — even when SP
+            // is shared, the test instance's fields need filling.
+            Configuration = ServiceProvider.GetRequiredService<IConfiguration>();
+            ServiceProvider.Buildup(this);
+            return;
+        }
+        base.Initialize();
+    }
+
+    /// <summary>
     /// Pre-creates the NodeType-definition hubs for built-in types whose
     /// instances are likely to be created at test runtime
     /// (<c>AccessAssignment</c>, <c>PartitionAccessPolicy</c>, …). Without
@@ -697,6 +764,26 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         var sw = Stopwatch.StartNew();
         Exception? disposeException = null;
         TestPhaseTrace(testName, "DISPOSE_START");
+
+        // Shared-mesh classes never dispose the Mesh per-test — that's the entire
+        // point of opting in (avoid rebuilding the Autofac container's compiled
+        // factories for every [Fact]). The mesh outlives the testhost and
+        // process exit reclaims it. Per-test base teardown (FileOutput unregister
+        // etc.) still runs.
+        if (ShareMeshAcrossTests)
+        {
+            TestPhaseTrace(testName, "DISPOSE_SHARED_SKIP", sw.ElapsedMilliseconds);
+            try { await base.DisposeAsync(); }
+            catch (Exception ex)
+            {
+                TestPhaseTrace(testName, "DISPOSE_BASE_ERROR", sw.ElapsedMilliseconds,
+                    $"{ex.GetType().Name}: {ex.Message}");
+                throw;
+            }
+            TestMemTrace(testName, "DISPOSE_MEM", forceGc: true);
+            return;
+        }
+
         try
         {
             FileOutput.WriteLine($"[DISPOSE] {testName}: Mesh.Dispose() invoking on {Mesh.Address}");
