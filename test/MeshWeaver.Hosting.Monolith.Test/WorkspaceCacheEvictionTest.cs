@@ -28,6 +28,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class WorkspaceCacheEvictionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     [Fact(Timeout = 30000)]
     public async Task NewSubscriber_AfterUpdate_GetsFreshSnapshot()
     {
