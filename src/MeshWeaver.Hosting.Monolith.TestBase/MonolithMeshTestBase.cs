@@ -1,6 +1,8 @@
 ﻿using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -135,6 +137,46 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// </summary>
     private static int _criticalEmitted;
 
+    /// <summary>
+    /// Read selected fields out of <c>/proc/self/status</c> so we can tell native
+    /// heap growth from mmap'd-file growth from total virtual size. Linux-only —
+    /// returns empty string on Windows / macOS (Process Manager / Activity Monitor
+    /// can do equivalent introspection there if needed).
+    /// <list type="bullet">
+    ///   <item><c>VmSize</c> — total virtual address space.</item>
+    ///   <item><c>RssAnon</c> — anonymous pages (native heap, JIT code, stacks).</item>
+    ///   <item><c>RssFile</c> — file-backed pages (mmap'd .dll/.so files — including
+    ///     ALC-loaded assemblies). Growing RssFile across INIT_MEM lines is the
+    ///     fingerprint of the ALC-not-unloading leak we're hunting.</item>
+    /// </list>
+    /// </summary>
+    private static string ReadProcSelfStatus()
+    {
+        try
+        {
+            if (!File.Exists("/proc/self/status")) return string.Empty;
+            long vmSize = 0, rssAnon = 0, rssFile = 0;
+            foreach (var line in File.ReadLines("/proc/self/status"))
+            {
+                if (line.StartsWith("VmSize:", StringComparison.Ordinal)) vmSize = ParseKb(line);
+                else if (line.StartsWith("RssAnon:", StringComparison.Ordinal)) rssAnon = ParseKb(line);
+                else if (line.StartsWith("RssFile:", StringComparison.Ordinal)) rssFile = ParseKb(line);
+            }
+            return $"vmsz={vmSize / 1024}MiB rssAnon={rssAnon / 1024}MiB rssFile={rssFile / 1024}MiB";
+        }
+        catch
+        {
+            return string.Empty;
+        }
+
+        static long ParseKb(string line)
+        {
+            // Format: "VmSize:    12345 kB"
+            var parts = line.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length >= 2 && long.TryParse(parts[1], out var kb) ? kb : 0L;
+        }
+    }
+
     private static readonly Timer _memWatchdog = new(_ =>
     {
         try
@@ -210,9 +252,28 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 _lastWorkingSetBytes = rss;
             }
 
+            // Native-memory breakdown so we can tell ALC pin (RssFile growth from mmap'd
+            // assembly .dll files) from native heap (RssAnon growth) from raw VmSize
+            // expansion. On Windows this returns blanks — only Linux exposes this in
+            // /proc/self/status, which is exactly the platform that's leaking.
+            var nativeBreakdown = ReadProcSelfStatus();
+
+            // ALC count and loaded-assembly count — if ALCs grow monotonically across
+            // INIT_MEM lines, the leak is unloadable assembly-load contexts retaining
+            // their native code/metadata pages. Each Roslyn compile or per-test
+            // assembly load that doesn't unload bumps these counters.
+            int alcCount = 0;
+            try { foreach (var _ in AssemblyLoadContext.All) alcCount++; }
+            catch { /* All is rarely-throwing but tolerate */ }
+            int asmCount = 0;
+            try { asmCount = AppDomain.CurrentDomain.GetAssemblies().Length; }
+            catch { /* same */ }
+
             var extra =
                 $"managed={managed / 1024 / 1024}MiB Δ{(managedDelta >= 0 ? "+" : "")}{managedDelta / 1024 / 1024}MiB"
                 + $" rss={rss / 1024 / 1024}MiB Δ{(rssDelta >= 0 ? "+" : "")}{rssDelta / 1024 / 1024}MiB"
+                + (string.IsNullOrEmpty(nativeBreakdown) ? "" : $" {nativeBreakdown}")
+                + $" alc={alcCount} asm={asmCount}"
                 + $" gc0={GC.CollectionCount(0)} gc1={GC.CollectionCount(1)} gc2={GC.CollectionCount(2)}";
             TestPhaseTrace(testClass, phase, extra: extra);
         }
