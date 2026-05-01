@@ -108,6 +108,71 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private static readonly object _memLock = new();
 
     /// <summary>
+    /// Soft warning threshold. Classes whose RSS pushes past this are at risk of
+    /// the OOM that was fingerprinted on CI's 7 GB ubuntu-latest runner. Sized
+    /// well below the cap so the WATCHDOG line lands BEFORE swap-thrashing
+    /// silences xUnit output (the symptom that disguises OOM as "fixture-init
+    /// hang" past the 6 m wallclock cap).
+    /// </summary>
+    private const long MemPressureBytes = 4L * 1024 * 1024 * 1024; // 4 GiB
+
+    /// <summary>
+    /// Hard warning. Anything past this on a 7 GB runner is moments from SIGKILL.
+    /// </summary>
+    private const long MemCriticalBytes = 6L * 1024 * 1024 * 1024; // 6 GiB
+
+    /// <summary>
+    /// Cadence for the watchdog poll — small enough to land at least one MEM_*
+    /// line per test class even for the fast ones (median class ~1-3 s), large
+    /// enough to add no measurable runtime overhead.
+    /// </summary>
+    private static readonly TimeSpan WatchdogInterval = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Tracks whether we already emitted the one-shot CRITICAL line so we don't
+    /// spam the trace once memory parks above the threshold (which it will if
+    /// the leak is permanent — every subsequent class would re-fire otherwise).
+    /// </summary>
+    private static int _criticalEmitted;
+
+    private static readonly Timer _memWatchdog = new(_ =>
+    {
+        try
+        {
+            var managed = GC.GetTotalMemory(forceFullCollection: false);
+            long rss;
+            try { rss = Process.GetCurrentProcess().WorkingSet64; }
+            catch { return; }
+
+            // Always emit a low-noise heartbeat so that even when the per-class
+            // INIT_MEM/DISPOSE_MEM lines stop arriving (e.g. the ctor of the
+            // *next* class is hanging mid-build) we still see the memory
+            // trajectory in the trace file and can correlate it with the last
+            // CTOR/INIT_START line above it.
+            var line = $"managed={managed / 1024 / 1024}MiB rss={rss / 1024 / 1024}MiB";
+            TestPhaseTrace("watchdog", "MEM_WATCHDOG", extra: line);
+
+            if (rss >= MemCriticalBytes && Interlocked.Exchange(ref _criticalEmitted, 1) == 0)
+            {
+                TestPhaseTrace("watchdog", "MEM_CRITICAL",
+                    extra: $"rss={rss / 1024 / 1024}MiB threshold={MemCriticalBytes / 1024 / 1024}MiB " +
+                           "— OOM imminent. The class active at this line (see preceding " +
+                           "INIT_START or CTOR) is the one driving the leak.");
+            }
+            else if (rss >= MemPressureBytes)
+            {
+                TestPhaseTrace("watchdog", "MEM_PRESSURE",
+                    extra: $"rss={rss / 1024 / 1024}MiB threshold={MemPressureBytes / 1024 / 1024}MiB");
+            }
+        }
+        catch
+        {
+            // Watchdog must never throw — it's hosted on the .NET timer queue
+            // and an unhandled exception here would kill the process.
+        }
+    }, state: null, dueTime: WatchdogInterval, period: WatchdogInterval);
+
+    /// <summary>
     /// Append one MEM line: managed heap, process RSS, GC counts, and deltas vs
     /// the previous MEM line. Called at end of INIT and end of DISPOSE for every
     /// test class that goes through this base. With CI's 7 GB cap, the test class
