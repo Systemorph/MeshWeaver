@@ -156,19 +156,146 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().HaveFlag(Permission.Update);
     }
 
-    [Fact(Timeout = 20000, Skip = "In-memory CreateNode + DeleteNode runtime lifecycle has an AsyncSubject race against the synced query subscription that can leave CreateNode's response observable empty. Verified end-to-end on PG via SyncedQueryPgTest.")]
+    [Fact(Timeout = 20000)]
     public async Task RemoveUserRole_RemovesAssignment()
     {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var savedContext = accessService.CircuitContext;
+        try
+        {
+            // Use globaladmin to authorize the create + delete of a runtime AccessAssignment.
+            accessService.SetCircuitContext(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
 
-        // Create a temporary assignment then remove it via DeleteNode
-        var assignment = AssignmentNodeFactory.UserRole("removetest", "Admin", "org/removeproject");
-        await meshService.CreateNode(assignment).FirstAsync().ToTask(TestTimeout);
+            var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        await meshService.DeleteNode(assignment.Path!).FirstAsync().ToTask(TestTimeout);
+            // Create a temporary assignment then remove it via DeleteNode
+            var assignment = AssignmentNodeFactory.UserRole("removetest", "Admin", "org/removeproject");
+            await meshService.CreateNode(assignment).FirstAsync().ToTask(TestTimeout);
 
-        var permissions = await Mesh.GetPermissionAsync("org/removeproject", "removetest", TestTimeout);
-        permissions.Should().Be(Permission.None);
+            // Verify the assignment took effect first (so the test fails on a hung
+            // CREATE, not a hung DELETE).
+            var afterCreate = await Mesh.GetPermissionAsync("org/removeproject", "removetest",
+                until: p => p.HasFlag(Permission.Read), TestTimeout);
+            afterCreate.Should().Be(Permission.All);
+
+            await meshService.DeleteNode(assignment.Path!).FirstAsync().ToTask(TestTimeout);
+
+            // Wait for the synced query to drop the deleted node (eventual consistency).
+            var afterDelete = await Mesh.GetPermissionAsync("org/removeproject", "removetest",
+                until: p => p == Permission.None, TestTimeout);
+            afterDelete.Should().Be(Permission.None);
+        }
+        finally
+        {
+            accessService.SetCircuitContext(savedContext);
+        }
+    }
+
+    /// <summary>
+    /// Regression for the 2026-05-01 cleanup-session bug:
+    /// AccessAssignment created at runtime (via <see cref="IMeshService.CreateNode"/>)
+    /// must propagate to <see cref="ISecurityService.GetEffectivePermissions"/>.
+    /// Previously the synced AccessAssignment query was set up lazily inside
+    /// <c>GetUserScopeRolesStream</c> with a per-user keep-alive subscription —
+    /// when no permission check had been issued for that user yet, the synced
+    /// query had no live subscriber and runtime emissions silently dropped on the
+    /// floor. This test forces the failing path: subscribe before any check, then
+    /// create an AccessAssignment, then check permissions.
+    ///
+    /// We seed `globaladmin` (already in <c>ConfigureMesh</c>) and use that
+    /// identity to create the runtime assignment — the bug under test is whether
+    /// the new node propagates to the synced query, not whether anyone can
+    /// create it.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task RuntimeCreateNode_AccessAssignment_GrantsPermission()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var savedContext = accessService.CircuitContext;
+
+        const string userId = "runtime-assignee";
+        const string scope = "org/runtimeproject";
+
+        try
+        {
+            // Pre-condition: the user has no permissions on the scope (no static seed).
+            var before = await Mesh.GetPermissionAsync(scope, userId, TestTimeout);
+            before.Should().Be(Permission.None,
+                "the user has no static AccessAssignment for this scope");
+
+            // Switch to globaladmin (statically seeded with Admin at root) to
+            // create the new AccessAssignment. The IMeshService captures the
+            // identity at call time, so this only authorizes the create itself.
+            accessService.SetCircuitContext(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
+
+            var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
+            await meshService.CreateNode(assignment).FirstAsync().ToTask(TestTimeout);
+
+            // The new assignment must now be visible to permission checks. Use
+            // the wait-for-predicate overload so the test is robust against the
+            // synced-query emitting one stale snapshot before the new assignment
+            // lands — but bounded at 5 s so a real regression fails loudly.
+            var after = await Mesh.GetPermissionAsync(scope, userId,
+                until: p => p.HasFlag(Permission.Read), TestTimeout);
+            after.Should().Be(Permission.All,
+                "Admin role on the scope grants every permission once the synced query observes the new node");
+        }
+        finally
+        {
+            accessService.SetCircuitContext(savedContext);
+        }
+    }
+
+    /// <summary>
+    /// Companion regression: the new AccessAssignment must also be observable
+    /// through <see cref="ISecurityService.HasPermission(string, string, Permission)"/> —
+    /// the path the AccessControlPipeline actually calls. (The bug surfaced as
+    /// MCP <c>compile</c> being denied because HasPermission returned false even
+    /// though the AccessAssignment row existed in the database.)
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task RuntimeCreateNode_AccessAssignment_HasPermissionReturnsTrue()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var savedContext = accessService.CircuitContext;
+
+        const string userId = "runtime-assignee2";
+        const string scope = "org/runtimeproject2";
+
+        try
+        {
+            // Sanity: no permission before creating the assignment.
+            (await Mesh.HasPermissionAsync(scope, userId, Permission.Read, TestTimeout))
+                .Should().BeFalse();
+
+            accessService.SetCircuitContext(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
+
+            var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
+            await meshService.CreateNode(assignment).FirstAsync().ToTask(TestTimeout);
+
+            // After CreateNode completes, HasPermission must observe the new role.
+            // Allow up to 5 s for the synced query to settle (matches the
+            // production AccessControlPipeline timeout).
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            bool granted;
+            do
+            {
+                granted = await Mesh.HasPermissionAsync(scope, userId, Permission.Read, TestTimeout);
+                if (granted) break;
+                await Task.Delay(100, TestTimeout);
+            } while (DateTime.UtcNow < deadline);
+
+            granted.Should().BeTrue(
+                "Admin role granted at runtime via CreateNode must be visible to HasPermission " +
+                "within 5 s — otherwise AccessControlPipeline rejects every message that " +
+                "would have been authorized by that assignment.");
+        }
+        finally
+        {
+            accessService.SetCircuitContext(savedContext);
+        }
     }
 
     [Fact(Timeout = 20000)]
