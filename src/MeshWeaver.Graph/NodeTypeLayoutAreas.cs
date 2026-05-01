@@ -31,6 +31,7 @@ public static class NodeTypeLayoutAreas
     public const string ConfigurationArea = "Configuration";
     public const string HubConfigViewArea = "HubConfig";
     public const string HubConfigEditArea = "HubConfigEdit";
+    public const string ReleasesArea = "Releases";
 
     // Data keys for data section
     private const string DefinitionDataId = "definition";
@@ -326,6 +327,14 @@ public static class NodeTypeLayoutAreas
             navMenu = navMenu.WithNavGroup(depsGroup);
         }
 
+        // Releases — list of compile activities for this NodeType. Each compile
+        // (success or failure) writes an ActivityLog under {nodeTypePath}/_activity/{logId};
+        // the Releases pane lists them with status + timestamp + a link to drill in.
+        var releasesHref = new LayoutAreaReference(ReleasesArea).ToHref(hubAddress);
+        navMenu = navMenu.WithView(
+            new NavLinkControl("Releases", FluentIcons.History(), releasesHref)
+        );
+
         // Search at the bottom — inlines with the MeshSearch children listing.
         var searchHref = new LayoutAreaReference(SearchArea).ToHref(hubAddress);
         navMenu = navMenu.WithView(
@@ -528,7 +537,61 @@ public static class NodeTypeLayoutAreas
             .WithWidth("100%")
             .WithStyle("padding: 24px; height: 100%; overflow: auto; gap: 20px;");
 
-        stack = stack.WithView(Controls.H2(node.Name ?? nodeId ?? "Unknown").WithStyle("margin: 0;"));
+        // Header row: title + Create Release action. The button flips
+        // CompilationStatus to Pending via the canonical workspace.UpdateMeshNode
+        // — the InstallCompileWatcher subscriber on this hub picks up Pending
+        // and runs the Roslyn pipeline. Same path MeshOperations.Compile uses.
+        var headerRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("justify-content: space-between; align-items: center; gap: 16px;")
+            .WithView(Controls.H2(node.Name ?? nodeId ?? "Unknown").WithStyle("margin: 0;"));
+
+        var releaseButton = Controls.Button("Create Release")
+            .WithAppearance(Appearance.Accent)
+            .WithIconStart(FluentIcons.Play())
+            .WithClickAction(ctx =>
+            {
+                // Reactive trigger: stream.Update flips Pending; CompileWatcher
+                // (registered in MeshDataSource.InstallCompileWatcher) reacts on
+                // the next emission and starts Roslyn. No await, no Task bridge.
+                ctx.Host.Workspace.UpdateMeshNode(curr =>
+                    curr.Content is NodeTypeDefinition def
+                        ? curr with
+                        {
+                            Content = def with
+                            {
+                                CompilationStatus = CompilationStatus.Pending,
+                                LastCompileStartedAt = DateTimeOffset.UtcNow
+                            }
+                        }
+                        : curr);
+                return Task.CompletedTask;
+            });
+
+        // Inline status badge so the user sees their click landed and where the
+        // compile is in its lifecycle. Live observable — re-emits on every
+        // status transition the watcher writes back.
+        var statusStream = host.Workspace.GetMeshNodeStream()
+            .Select(n => (n?.Content as NodeTypeDefinition)?.CompilationStatus)
+            .DistinctUntilChanged();
+        var statusBadge = (LayoutAreaHost h, RenderingContext rc) => statusStream.Select(status =>
+            (UiControl)Controls.Body(status switch
+            {
+                CompilationStatus.Pending => "Compiling…",
+                CompilationStatus.Compiling => "Compiling…",
+                CompilationStatus.Ok => "Last compile: Ok",
+                CompilationStatus.Error => "Last compile: Error",
+                _ => ""
+            }).WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;"));
+
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 12px; align-items: center;")
+            .WithView(statusBadge, "CompileStatusBadge")
+            .WithView(releaseButton);
+
+        headerRow = headerRow.WithView(actions);
+        stack = stack.WithView(headerRow);
 
         // Editable settings form — auto-saves to MeshNode.Content as NodeTypeDefinition.
         var dataId = $"nodeTypeConfig_{node.Path.Replace('/', '_')}";
