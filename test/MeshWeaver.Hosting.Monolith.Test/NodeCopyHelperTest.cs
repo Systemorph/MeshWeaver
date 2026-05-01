@@ -25,8 +25,8 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
-    protected override bool ShareMeshAcrossTests => true;
+    // NOTE: not opted into ShareMeshAcrossTests — multiple tests create the same
+    // "org/Acme" path and would collide on the shared mesh.
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddGraph();
