@@ -34,6 +34,44 @@ gh pr merge PR_NUMBER --merge
 
 **If these fail with `FORBIDDEN`**, the token lacks write scope — do it from the GitHub UI or re-authenticate with `! gh auth login`.
 
+## 🚨 Postgres schemas: one per partition (READ THIS BEFORE QUERYING THE DB)
+
+**`public.mesh_nodes` is empty by design.** Every mesh node lives in a per-partition schema:
+
+| Path | Schema |
+|---|---|
+| `ACME/Project/Foo` | `acme.mesh_nodes` |
+| `rbuergi/Notes` | `rbuergi.mesh_nodes` (post-v10: per-user schema) |
+| `Cornerstone/Pricing` | `cornerstone.mesh_nodes` |
+
+When a "row isn't there", the first thing to check is the schema. The discovery query is:
+
+```sql
+SELECT schema_name FROM information_schema.schemata s
+WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes')
+  AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+  AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\';
+```
+
+**Satellite tables are routed by path segment, not nodeType.** Same per-partition schema, different table:
+
+| Path segment in namespace | Lands in table |
+|---|---|
+| `…/_Access/…` | `access` |
+| `…/_Thread/…` | `threads` (also `ThreadMessage` children of any `_Thread/{id}/…`) |
+| `…/_Activity/…` | `activities` |
+| `…/_Comment/…`, `_Approval`, `_Tracking` | `annotations` |
+| `…/Source/…` or `…/Test/…` | `code` |
+| (no satellite suffix) | `mesh_nodes` |
+
+Wrong path segment → wrong table → triggers (especially `access_changed`) never fire → silent permission denial. Repair v1 in `memex/aspire/Memex.Database.Migration/Program.cs` exists because of this exact bug.
+
+**`namespace` keeps the partition prefix — do NOT strip it.** Inside `{partition}.mesh_nodes`, the `namespace` column is `rbuergi/ApiToken` (full), not bare `ApiToken`. The generated `path` is `namespace || '/' || id` — no auto-prepending. Stripping the prefix breaks dashboard queries (`namespace:rbuergi/ApiToken nodeType:ApiToken`), `ApiTokenIndex.tokenPath` lookups, and any code that builds full-path queries. (The user-identity row at `namespace='', id='rbuergi'` is a special case, not the rule.)
+
+**Never run raw `psql UPDATE` against a live portal to fix paths.** Direct SQL bypasses the workspace stream → portal serves stale rows from cache → MCP `get` returns "not found" while search hits the new path; token validation 401s after the 5-min cache expires; recompile-on-edit doesn't fire. Use `MoveNodeRequest` (proper hub round-trip) or add a Repair vN to `Memex.Database.Migration` and restart Aspire. If you must SQL-edit a live portal, restart `Memex.Portal.Distributed` afterwards (Aspire respawns it).
+
+Full reference: `Doc/Architecture/PostgresSchemaArchitecture.md`. Postmortem of the demo this avoidance was extracted from: `Doc/Architecture/Postmortems/PostmortemDavDemo.md`.
+
 ## Documentation
 
 Documentation is embedded in `src/MeshWeaver.Documentation/` and served under the `Doc/` namespace at runtime.
@@ -186,6 +224,47 @@ dotnet run --project memex/aspire/Memex.AppHost
 refactor to `IObservable<T>`, and submit a PR without the async. "But this is a small
 helper" / "just a one-liner wrapper" / "the MCP SDK needs Task" are all traps — the
 wrapper either becomes part of the hot path or someone copies it into one.**
+
+### Reactive in click actions: use `stream.Update`, not `Take(1) + Subscribe + UpdateMeshNode`
+
+**Wrong (still works, but reaches into the wrong part of the API surface):**
+
+```csharp
+// Reads form data manually inside the click action.
+.WithClickAction(ctx =>
+{
+    ctx.Host.Stream.GetDataStream<MyForm>(formId)
+        .Take(1)
+        .Subscribe(form =>
+        {
+            ctx.Host.Workspace.UpdateMeshNode(curr =>
+                curr with { Content = ((MyContent)curr.Content!) with { Field = form.Field } });
+        });
+    return Task.CompletedTask;
+})
+```
+
+**Right (form auto-saves; click only flips the trigger field):**
+
+```csharp
+// In the form setup, debounce-write form fields onto the MeshNode via
+// workspace.UpdateMeshNode (composed inside SetupAutoSave).
+SetupAutoSave(host, dataId, form, node);
+
+// In the click action, read NOTHING. Just flip the trigger field — form data
+// arrived earlier through the auto-save subscription.
+.WithClickAction(ctx =>
+{
+    ctx.Host.Workspace.UpdateMeshNode(curr =>
+        curr with { Content = ((MyContent)curr.Content!) with { Status = "Pending" } });
+    return Task.CompletedTask;
+})
+```
+
+The auto-save → click split is the canonical pattern: form fields update the
+MeshNode through `stream.UpdateMeshNode` debounced; the click action runs in O(1)
+and never reads from a data stream. No `Take(1)` on a hot stream just to peek at
+"current value" — the value is already on the node.
 
 ## 🚨 CQRS — never query for a single node's content
 
