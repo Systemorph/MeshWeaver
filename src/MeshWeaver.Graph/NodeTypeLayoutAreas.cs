@@ -73,6 +73,7 @@ public static class NodeTypeLayoutAreas
                 .WithView(ConfigurationArea, Configuration)
                 .WithView(HubConfigViewArea, HubConfigView)
                 .WithView(HubConfigEditArea, HubConfigEdit)
+                .WithView(ReleasesArea, Releases)
                 // UCR special areas for unified content references
                 .WithView(MeshNodeLayoutAreas.DataArea, MeshNodeLayoutAreas.Data)
                 .WithView(MeshNodeLayoutAreas.SchemaArea, MeshNodeLayoutAreas.Schema)
@@ -527,6 +528,141 @@ public static class NodeTypeLayoutAreas
     /// auto-save, plus a read-only preview of the Configuration lambda with an Edit
     /// button that opens the dedicated Monaco editor.
     /// </summary>
+    /// <summary>
+    /// Renders the Releases area for a NodeType — the chronological list of
+    /// compile activities (one per "Create Release" click). Each entry shows
+    /// the release status, timestamp, the user who triggered it, and any
+    /// release notes captured on the activity log. Compile state lives at
+    /// <c>{nodeTypePath}/_activity/{logId}</c> and is written by the
+    /// CompileWatcher in <c>MeshDataSource.InstallCompileWatcher</c> on every
+    /// success-or-failure transition.
+    /// </summary>
+    [Browsable(false)]
+    public static UiControl Releases(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubAddress = host.Hub.Address;
+        var hubPath = hubAddress.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+
+        // Live observable of activity nodes under {nodeTypePath}/_activity. We
+        // filter to category=Compilation client-side because the activity store
+        // keeps every category (compile, save, delete) in the same satellite
+        // table — releases are only the compile entries.
+        var activityStream = meshQuery == null
+            ? Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>())
+            : meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{hubPath}/_activity nodeType:Activity"))
+                .Select(change => (IReadOnlyList<MeshNode>)change.Items)
+                .Catch<IReadOnlyList<MeshNode>, Exception>(_ =>
+                    Observable.Return((IReadOnlyList<MeshNode>)Array.Empty<MeshNode>()));
+
+        return Controls.Splitter
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal)
+                .WithWidth("100%").WithHeight("calc(100vh - 100px)"))
+            .WithView(
+                (h, c) => GetNodeStream(host)
+                    .CombineLatest(activityStream, (def, list) => (def, list))
+                    .Select(t => t.def == null
+                        ? RenderLoading("Loading…")
+                        : BuildLeftMenu(host, hubAddress, t.def, null, null, null, null)),
+                skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
+            )
+            .WithView(
+                (h, c) => activityStream.Select(items => BuildReleasesPane(hubAddress, items)),
+                skin => skin.WithSize("*")
+            );
+    }
+
+    private static UiControl BuildReleasesPane(object hubAddress, IReadOnlyList<MeshNode> activities)
+    {
+        var stack = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 24px; gap: 16px;");
+
+        stack = stack.WithView(Controls.H2("Releases").WithStyle("margin: 0;"));
+        stack = stack.WithView(Controls.Body(
+            "Every Create Release click writes an activity log here — successes, " +
+            "failures, and the executed-source-queries trace. Click any row to " +
+            "drill into the full log.")
+            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
+
+        // Filter to compile activities and order newest-first. Other categories
+        // (e.g. data-change activities) live in the same _activity namespace but
+        // aren't releases. ActivityLog.Category is the only reliable filter —
+        // path/id naming isn't enforced.
+        var compileActivities = activities
+            .Where(n => n.Content is ActivityLog log && log.Category == ActivityCategory.Compilation)
+            .OrderByDescending(n => (n.Content as ActivityLog)?.Start ?? DateTime.MinValue)
+            .ToList();
+
+        if (compileActivities.Count == 0)
+        {
+            stack = stack.WithView(Controls.Body(
+                "No releases yet. Click 'Create Release' on the Configuration view " +
+                "to compile this NodeType — the activity will appear here.")
+                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
+            return stack;
+        }
+
+        // One row per release: status badge, user, timestamp, notes excerpt,
+        // navigate-to link to the full activity log.
+        foreach (var activityNode in compileActivities)
+        {
+            if (activityNode.Content is not ActivityLog log)
+                continue;
+
+            var statusLabel = log.Status switch
+            {
+                ActivityStatus.Failed => "Error",
+                ActivityStatus.Warning => "Warning",
+                _ => "Ok"
+            };
+            var statusColor = log.Status switch
+            {
+                ActivityStatus.Failed => "var(--error)",
+                ActivityStatus.Warning => "var(--warning)",
+                _ => "var(--accent-fill-rest)"
+            };
+            var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
+
+            // Release-notes messages: every Info message prefixed "Release
+            // notes: " written by the Create Release click. We render every
+            // matching line so a multi-line note is preserved verbatim.
+            const string notesPrefix = "Release notes:";
+            var notesLines = log.Messages
+                .Where(m => m.Message.StartsWith(notesPrefix, StringComparison.Ordinal))
+                .Select(m => m.Message[notesPrefix.Length..].Trim())
+                .Where(s => !string.IsNullOrEmpty(s));
+            var notes = string.Join("\n", notesLines);
+
+            var activityHref = $"/{activityNode.Path}";
+            var rowHtml = $"<a href=\"{System.Net.WebUtility.HtmlEncode(activityHref)}\" " +
+                $"style=\"display: block; padding: 12px 16px; margin-bottom: 8px; " +
+                $"background: var(--neutral-layer-2); border-radius: 4px; " +
+                $"text-decoration: none; color: inherit; border-left: 3px solid {statusColor};\">" +
+                $"<div style=\"display: flex; align-items: center; gap: 12px;\">" +
+                $"<span style=\"font-weight: 600; padding: 2px 10px; border-radius: 12px; " +
+                $"background: {statusColor}20; color: {statusColor}; font-size: 0.85rem;\">" +
+                $"{System.Net.WebUtility.HtmlEncode(statusLabel)}</span>" +
+                $"<span style=\"flex: 1;\">{System.Net.WebUtility.HtmlEncode(userName)}</span>" +
+                $"<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">" +
+                $"{log.Start:g}</span>" +
+                $"</div>";
+
+            if (!string.IsNullOrWhiteSpace(notes))
+            {
+                rowHtml += $"<div style=\"margin-top: 6px; color: var(--neutral-foreground); " +
+                    $"font-size: 0.9rem; line-height: 1.4;\">" +
+                    $"{System.Net.WebUtility.HtmlEncode(notes)}</div>";
+            }
+
+            rowHtml += "</a>";
+            stack = stack.WithView(Controls.Html(rowHtml));
+        }
+
+        return stack;
+    }
+
     private static UiControl BuildConfigurationPane(LayoutAreaHost host, object hubAddress, MeshNode node)
     {
         var definition = node.Content as NodeTypeDefinition;
@@ -541,6 +677,9 @@ public static class NodeTypeLayoutAreas
         // CompilationStatus to Pending via the canonical workspace.UpdateMeshNode
         // — the InstallCompileWatcher subscriber on this hub picks up Pending
         // and runs the Roslyn pipeline. Same path MeshOperations.Compile uses.
+        // ReleaseNotes is already auto-saved through the form binding below
+        // (SetupNodeTypeConfigAutoSave), so the click just flips status — no
+        // Take(1) on a data stream, no manual read inside the action.
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; gap: 16px;")
@@ -551,9 +690,11 @@ public static class NodeTypeLayoutAreas
             .WithIconStart(FluentIcons.Play())
             .WithClickAction(ctx =>
             {
-                // Reactive trigger: stream.Update flips Pending; CompileWatcher
-                // (registered in MeshDataSource.InstallCompileWatcher) reacts on
-                // the next emission and starts Roslyn. No await, no Task bridge.
+                // Reactive trigger: stream.Update flips Pending; the
+                // CompileWatcher (MeshDataSource.InstallCompileWatcher) reacts
+                // on the next emission and starts Roslyn. ReleaseNotes is
+                // preserved as-is — it already arrived via the form auto-save
+                // before the user clicked.
                 ctx.Host.Workspace.UpdateMeshNode(curr =>
                     curr.Content is NodeTypeDefinition def
                         ? curr with
@@ -652,6 +793,19 @@ public static class NodeTypeLayoutAreas
             DataContext = dataPointer
         }.WithRows(4));
 
+        // Release notes — what changed in the next compile. The form-debounce
+        // (SetupNodeTypeConfigAutoSave) writes this onto NodeTypeDefinition.
+        // ReleaseNotes via stream.UpdateMeshNode the moment the user stops
+        // typing; the Create Release click reads no data — it just flips
+        // CompilationStatus to Pending. Pure stream wiring, no Take(1).
+        stack = stack.WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeConfigForm.ReleaseNotes)))
+        {
+            Label = "Release notes",
+            Placeholder = "What changed in the next compile? Shown on each row in the Releases pane.",
+            Immediate = true,
+            DataContext = dataPointer
+        }.WithRows(3));
+
         // Configuration lambda — read-only preview, with button to open the dedicated editor.
         var configHeader = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -735,6 +889,7 @@ public static class NodeTypeLayoutAreas
                             ChildrenQuery = string.IsNullOrWhiteSpace(form.ChildrenQuery) ? null : form.ChildrenQuery,
                             DefaultNamespace = string.IsNullOrWhiteSpace(form.DefaultNamespace) ? null : form.DefaultNamespace,
                             PageMaxWidth = string.IsNullOrWhiteSpace(form.PageMaxWidth) ? null : form.PageMaxWidth,
+                            ReleaseNotes = string.IsNullOrWhiteSpace(form.ReleaseNotes) ? null : form.ReleaseNotes,
                         };
                         return liveNode with
                         {
@@ -1100,6 +1255,7 @@ public record NodeTypeConfigForm
     public string? ChildrenQuery { get; init; }
     public string? DefaultNamespace { get; init; }
     public string? PageMaxWidth { get; init; }
+    public string? ReleaseNotes { get; init; }
 
     public static NodeTypeConfigForm FromNode(MeshNode node, NodeTypeDefinition? def) => new()
     {
@@ -1109,5 +1265,6 @@ public record NodeTypeConfigForm
         ChildrenQuery = def?.ChildrenQuery,
         DefaultNamespace = def?.DefaultNamespace,
         PageMaxWidth = def?.PageMaxWidth,
+        ReleaseNotes = def?.ReleaseNotes,
     };
 }

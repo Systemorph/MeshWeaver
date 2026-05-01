@@ -204,6 +204,15 @@ public record NodeTypeDefinition
     public string? LastCompilationActivityPath { get; init; }
 
     /// <summary>
+    /// Free-form release notes captured next to the "Create Release" button on
+    /// the Configuration view. Auto-saved through the same form-debounce path
+    /// every other editable field uses (no manual read-on-click). Surfaced on
+    /// the Releases pane alongside each historical compile activity so the
+    /// user sees what changed in each release without opening the activity log.
+    /// </summary>
+    public string? ReleaseNotes { get; init; }
+
+    /// <summary>
     /// Snapshot of <c>{sourceNodePath → MeshNode.Version}</c> for every Code/Test
     /// node that participated in the most recent successful compile. Written by the
     /// compile watcher when <see cref="CompilationStatus"/> settles to
