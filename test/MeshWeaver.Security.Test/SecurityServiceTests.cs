@@ -248,6 +248,74 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
+    /// Regression for the 2026-05-01 distributed-mode permission denial.
+    /// When the synced AccessAssignment query is wedged (or simply slow on
+    /// first call) and never produces a first emission inside its replay
+    /// buffer, every permission check used to block until the
+    /// AccessControlPipeline timed out at 10 s and failed closed — even when
+    /// the requesting user's bearer token carried <c>Roles=["Admin"]</c>
+    /// claim that should have authorised the call regardless of the
+    /// assignment lookup. The fix puts a 2 s timeout on the
+    /// <c>GetUserScopeRolesStream</c> upstream so the chain falls back to
+    /// "no synced roles" and folds in <c>AccessContext.Roles</c> via the
+    /// claim-based path.
+    ///
+    /// <para>This test exercises a user that has NO static AccessAssignment
+    /// at all (so the synced-query path returns an empty dict for them),
+    /// stamps an Admin role onto the AccessContext via
+    /// <see cref="AccessService.SetCircuitContext"/> the way the API token
+    /// middleware does, and asserts the call completes with
+    /// <see cref="Permission.All"/> within 5 s — well under the
+    /// AccessControlPipeline's 10 s deadline.</para>
+    /// </summary>
+    [Fact(Timeout = 10_000)]
+    public async Task ClaimBasedAdmin_GrantsImmediately_EvenWhenNoStaticAssignment()
+    {
+        // Resolve a scoped SecurityService directly so the AccessContext we
+        // set is the one it reads — the test helper GetPermissionAsync
+        // creates its own scope and resets the AccessContext, dropping any
+        // Roles we'd set. The API token middleware in production stamps
+        // Roles onto the SAME scope where SecurityService runs.
+        using var scope = Mesh.ServiceProvider.CreateScope();
+        var accessService = scope.ServiceProvider.GetRequiredService<AccessService>();
+        var sec = scope.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string userId = "claim-only-admin";
+
+        // Sanity: this user has NO static AccessAssignment in ConfigureMesh.
+        // Without claim-based roles the synced-query / static-seed path
+        // produces an empty role set for them.
+        accessService.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+        var bareline = await sec.GetEffectivePermissions("any/scope", userId)
+            .FirstAsync().ToTask(TestTimeout);
+        bareline.Should().Be(Permission.None,
+            "without claim-based roles, the user has no permissions");
+
+        // Stamp Admin via AccessContext.Roles — the same path the API token
+        // middleware uses (UserContextMiddleware copies the validated token's
+        // Roles into AccessContext.Roles). The synced-query / static-seed
+        // pipeline still produces nothing for this user; the Admin grant has
+        // to flow purely through the claim-based code path inside
+        // GetEffectivePermissions.
+        accessService.SetCircuitContext(new AccessContext
+        {
+            ObjectId = userId,
+            Name = userId,
+            Roles = new[] { "Admin" }
+        });
+
+        // Must resolve well under the AccessControlPipeline's 10 s deadline.
+        // With the synced-query timeout fallback, total wait is bounded by
+        // 2 s (timeout) + role compute (synchronous). Without the fallback
+        // a wedged synced query would hang the whole 10 s.
+        var perms = await sec.GetEffectivePermissions("any/scope", userId)
+            .FirstAsync().ToTask(TestTimeout);
+        perms.Should().Be(Permission.All,
+            "claim-based Admin must grant all permissions regardless of the " +
+            "synced-query state");
+    }
+
+    /// <summary>
     /// Companion regression: the new AccessAssignment must also be observable
     /// through <see cref="ISecurityService.HasPermission(string, string, Permission)"/> —
     /// the path the AccessControlPipeline actually calls. (The bug surfaced as

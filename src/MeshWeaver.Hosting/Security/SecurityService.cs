@@ -150,7 +150,36 @@ internal class SecurityService : ISecurityService
         // AccessAssignment query (cached + refcounted, refreshed on each
         // assignment change). All permission checks for this user share the
         // same subscription/computation per synced-query emission.
+        //
+        // Defense-in-depth bound: if the synced query data source is wedged
+        // (the distributed-mode failure mode where the per-workspace
+        // SyncedQueryRegistry never gets a first emission from its underlying
+        // mesh-query backend), fall back to an EMPTY scope-roles map after
+        // 2 s so the rest of the chain can fold in claim-based roles from
+        // AccessContext.Roles (the API token middleware path) and the static
+        // seeds collected at construction time. Without this fallback, every
+        // permission check on a wedged silo blocks until the 10 s
+        // AccessControlPipeline timeout and fails closed — even when the
+        // bearer-token claim would have authorized the call. We explicitly
+        // do NOT StartWith because Take(1) inside the pipeline would then
+        // see the empty snapshot first, lose any Admin assignment that
+        // resolved a few hundred ms later (see commit history), and deny
+        // legitimate users. Catch-Timeout-with-empty preserves the "wait for
+        // real data when it's coming" semantics.
         return GetUserScopeRolesStream(userId)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Catch<ImmutableDictionary<string, ImmutableHashSet<string>>, Exception>(ex =>
+            {
+                _logger.LogWarning(ex,
+                    "GetUserScopeRolesStream timed out for {UserId} — falling back to empty " +
+                    "scope-roles map. Claim-based roles from AccessContext (e.g. API token) " +
+                    "and static AccessAssignment seeds still apply downstream. " +
+                    "If this fires repeatedly, the workspace's SyncedQueryRegistry for " +
+                    "AccessAssignment isn't producing a first emission — investigate the " +
+                    "underlying mesh-query backend wiring on this hub.",
+                    userId);
+                return Observable.Return(ImmutableDictionary<string, ImmutableHashSet<string>>.Empty);
+            })
             .Select(scopeToRoles =>
             {
                 var roleIds = ImmutableHashSet<string>.Empty;
