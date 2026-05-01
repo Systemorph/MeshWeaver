@@ -50,6 +50,9 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     {
     }
 
+    // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
+    protected override bool ShareMeshAcrossTests => true;
+
     private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
         // Create Story type for testing content changes

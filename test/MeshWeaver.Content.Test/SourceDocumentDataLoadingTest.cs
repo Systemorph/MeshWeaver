@@ -37,6 +37,9 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     {
     }
 
+    // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         builder
             .UseMonolithMesh()
