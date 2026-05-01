@@ -28,6 +28,7 @@ public class NodeTypeConfigFormTest
             ChildrenQuery = "nodeType:Story scope:descendants",
             DefaultNamespace = "Acme",
             PageMaxWidth = "960px",
+            ReleaseNotes = "v2: drop legacy Status enum",
             Configuration = "config => config"
         };
 
@@ -39,6 +40,8 @@ public class NodeTypeConfigFormTest
         form.ChildrenQuery.Should().Be("nodeType:Story scope:descendants");
         form.DefaultNamespace.Should().Be("Acme");
         form.PageMaxWidth.Should().Be("960px");
+        form.ReleaseNotes.Should().Be("v2: drop legacy Status enum",
+            "release notes captured for the next compile must round-trip through the form");
     }
 
     [Fact]
@@ -72,5 +75,23 @@ public class NodeTypeConfigFormTest
         form.ChildrenQuery.Should().BeNull();
         form.DefaultNamespace.Should().BeNull();
         form.PageMaxWidth.Should().BeNull();
+        form.ReleaseNotes.Should().BeNull();
+    }
+
+    [Fact]
+    public void FromNode_RoundTripPreservesReleaseNotes()
+    {
+        // Multi-line notes captured by the user must survive the form round-trip
+        // verbatim — the Releases pane renders every line from the activity log,
+        // so trimming whitespace inside the form would lose intentional structure.
+        var node = new MeshNode("Project");
+        var def = new NodeTypeDefinition
+        {
+            ReleaseNotes = "Line one\nLine two\n  - Bullet"
+        };
+
+        var form = NodeTypeConfigForm.FromNode(node, def);
+
+        form.ReleaseNotes.Should().Be("Line one\nLine two\n  - Bullet");
     }
 }
