@@ -114,6 +114,17 @@ jobs:
         mkdir -p collected-logs
         # Find all test-logs directories and collect their contents without renaming
         find . -path "*/bin/*/test-logs/*.log" -type f -exec cp {} collected-logs/ \; 2>/dev/null || true
+        # The MonolithMeshTestBase phase trace + dispose trace live in the
+        # process tempdir (Path.GetTempPath() == /tmp on the runner). They
+        # carry the per-class INIT_MEM / DISPOSE_MEM lines that pinpoint
+        # which test class drives the AI.Test / Autocomplete.Test / Content.Test
+        # / Hosting.Monolith.Test OOM. Copy with rename so they don't collide.
+        if [ -f /tmp/meshweaver-test-trace.log ]; then
+          cp /tmp/meshweaver-test-trace.log collected-logs/_meshweaver-test-trace.log
+        fi
+        if [ -f /tmp/meshweaver-dispose-trace.log ]; then
+          cp /tmp/meshweaver-dispose-trace.log collected-logs/_meshweaver-dispose-trace.log
+        fi
     - name: Publish Test Results
 #      uses: EnricoMi/publish-unit-test-result-action/composite@v2
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
