@@ -2,6 +2,7 @@
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -66,6 +67,15 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // Set per-request AsyncLocal only. CircuitAccessHandler handles
             // per-circuit persistence via CreateInboundActivityHandler.
             userService.SetContext(userContext);
+
+            // Track the login event in the activity stream — covers both
+            // Bearer and cookie/OAuth uniformly because both flows land here.
+            // Fire-and-forget: a missing or mid-restart hub must never break
+            // authentication. The handler dedupes on encoded NodePath so
+            // repeated logins from the same user just bump the existing
+            // record's AccessCount + LastAccessedAt — not a flood of new
+            // entries.
+            TrackLogin(userContext, hub);
         }
         else
         {
@@ -73,6 +83,32 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         }
 
         await next(context);
+    }
+
+    /// <summary>
+    /// Posts a fire-and-forget <see cref="TrackActivityRequest"/> with
+    /// <see cref="ActivityType.Login"/> for the just-resolved user. Exits
+    /// silently on any failure — auth must never depend on activity tracking.
+    /// </summary>
+    private static void TrackLogin(AccessContext userContext, IMessageHub hub)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(userContext.ObjectId))
+                return;
+            hub.Post(new TrackActivityRequest(
+                NodePath: userContext.ObjectId,
+                UserId: userContext.ObjectId,
+                NodeName: userContext.Name,
+                NodeType: "User",
+                Namespace: ""
+            )
+            { ActivityType = ActivityType.Login });
+        }
+        catch
+        {
+            // Activity tracking is best-effort.
+        }
     }
 
     /// <summary>
