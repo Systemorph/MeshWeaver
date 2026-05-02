@@ -21,6 +21,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class CopyModifyCopyBackTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     // Use flat namespaces: source at TestData/Orig, copy at TestData/Copy
     private const string OrigNs = "TestData/Orig";
     private const string CopyNs = "TestData/Copy";

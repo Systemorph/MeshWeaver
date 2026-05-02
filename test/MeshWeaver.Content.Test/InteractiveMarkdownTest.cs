@@ -21,6 +21,9 @@ namespace MeshWeaver.Content.Test;
 /// </summary>
 public class InteractiveMarkdownTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddSingleton<IFileFormatParser, MarkdownFileParser>());

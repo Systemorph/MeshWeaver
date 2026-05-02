@@ -26,6 +26,9 @@ namespace MeshWeaver.Content.Test;
 /// </summary>
 public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static readonly string CacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverCompilationErrorTests",

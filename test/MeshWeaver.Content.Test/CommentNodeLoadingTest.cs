@@ -24,6 +24,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("CommentNodeLoading")]
 public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string DocPartitionCommentPath = "Doc/DataMesh/CollaborativeEditing/_Comment/c1";
     private const string DocPartitionNamespace = "Doc/DataMesh/CollaborativeEditing/_Comment";
 

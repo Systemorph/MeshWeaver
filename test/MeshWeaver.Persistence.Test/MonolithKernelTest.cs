@@ -27,6 +27,9 @@ namespace MeshWeaver.Persistence.Test;
 [Collection("KernelTests")]
 public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const int DefaultTimeoutMs = 30000;
 
     // AddKernel() is already included via AddGraph() in base class
