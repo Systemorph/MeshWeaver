@@ -124,8 +124,7 @@ internal class MeshNodeCompilationService(
         return await ResolveCodeIncludesAsync(code, meshStorage, resolved, ct);
     }
 
-    private IObservable<string> ResolveCodeIncludes(
-        string code, IMeshService meshQuery, HashSet<string> resolved)
+    private IObservable<string> ResolveCodeIncludes(string code, HashSet<string> resolved)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
             return Observable.Return(code);
@@ -155,7 +154,7 @@ internal class MeshNodeCompilationService(
                             && !string.IsNullOrWhiteSpace(cf.Code))
                         {
                             logger.LogDebug("Resolved code include @@{Path}", path);
-                            return ResolveCodeIncludes(cf.Code, meshQuery, resolved)
+                            return ResolveCodeIncludes(cf.Code, resolved)
                                 .Select(resolvedInner => current.Replace(matchValue, resolvedInner));
                         }
                         logger.LogWarning("Could not resolve code include @@{Path}", path);
@@ -295,253 +294,131 @@ internal class MeshNodeCompilationService(
         => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Error)) };
 
     /// <summary>
-    /// Returns the maximum <c>LastModified</c> across all source Code nodes that
-    /// would feed a compile of <paramref name="ntDef"/>. Uses the same storage
-    /// enumeration as <see cref="CompileCore"/> so cache invalidation tracks the
-    /// exact same set of files the compile reads. Returns
-    /// <see cref="DateTimeOffset.MinValue"/> if there are no sources.
+    /// Source-set discovery via the workspace SyncedQuery registry — one
+    /// long-lived, cached, replayed <see cref="IObservable{T}"/> per
+    /// <paramref name="selfPath"/>. The first call spins up a single
+    /// <see cref="IMeshQueryCore.ObserveQuery"/> per NodeType-resolved query
+    /// (union of <c>Sources</c> + <c>Tests</c>); subsequent compiles for the
+    /// same NodeType hit the registry's <c>Replay(1).RefCount()</c> cache and
+    /// skip the Initial re-fetch entirely. Live updates flow through too —
+    /// when a Source/Test Code node changes, the cached collection re-emits.
     /// </summary>
-    private IObservable<DateTimeOffset> DiscoverSourceMaxLastModified(
+    private IObservable<IEnumerable<MeshNode>> GetSourceCollection(
         NodeTypeDefinition? ntDef, string selfPath)
     {
-        var meshStorage = hub.ServiceProvider.GetService<IMeshStorage>();
-        if (meshStorage == null)
-            return Observable.Return(DateTimeOffset.MinValue);
-
         var queries = CodeQueryResolver
             .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
             .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
             .ToArray();
 
         if (queries.Length == 0)
-            return Observable.Return(DateTimeOffset.MinValue);
+            return Observable.Return(Enumerable.Empty<MeshNode>());
 
-        IObservable<DateTimeOffset> chain = Observable.Return(DateTimeOffset.MinValue);
-        foreach (var q in queries)
-        {
-            var (queryPath, isSubtree, queryNodeType) = ParseSourceQuery(q);
-            chain = chain.SelectMany(currentMax =>
-                EnumerateStorageSources(meshStorage, queryPath, isSubtree, queryNodeType)
-                    .Aggregate(currentMax, (acc, n) => n.LastModified > acc ? n.LastModified : acc));
-        }
-        return chain;
+        var workspace = hub.GetWorkspace();
+        var id = $"compile-sources:{selfPath}";
+        return workspace.GetQuery(id, queries);
     }
+
+    /// <summary>
+    /// Returns the maximum <c>LastModified</c> across all source Code nodes that
+    /// would feed a compile of <paramref name="ntDef"/>. Reads from the cached
+    /// SyncedQuery so cache invalidation tracks the exact same set of files the
+    /// compile reads. Returns <see cref="DateTimeOffset.MinValue"/> if there are
+    /// no sources.
+    /// </summary>
+    private IObservable<DateTimeOffset> DiscoverSourceMaxLastModified(
+        NodeTypeDefinition? ntDef, string selfPath) =>
+        GetSourceCollection(ntDef, selfPath)
+            .Take(1)
+            .Select(nodes => nodes.Aggregate(
+                DateTimeOffset.MinValue,
+                (acc, n) => n.LastModified > acc ? n.LastModified : acc));
 
     /// <summary>
     /// Captures <c>{path → MeshNode.Version}</c> for every source Code/Test node
     /// that feeds a compile of <paramref name="ntDef"/>. Sibling to
-    /// <see cref="DiscoverSourceMaxLastModified"/> — same storage enumeration,
-    /// different aggregation. Used by the compile watcher to populate
+    /// <see cref="DiscoverSourceMaxLastModified"/> — same SyncedQuery, different
+    /// aggregation. Used by the compile watcher to populate
     /// <c>NodeTypeDefinition.CompiledSources</c> on success so a future
     /// recompile-needed check is a data comparison (added/removed/version-bumped)
     /// instead of a max-LastModified timing guess.
     /// </summary>
     public IObservable<ImmutableDictionary<string, long>> DiscoverSourceVersionSnapshot(
-        NodeTypeDefinition? ntDef, string selfPath)
-    {
-        var meshStorage = hub.ServiceProvider.GetService<IMeshStorage>();
-        if (meshStorage == null)
-            return Observable.Return(ImmutableDictionary<string, long>.Empty);
-
-        var queries = CodeQueryResolver
-            .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
-            .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
-            .ToArray();
-
-        if (queries.Length == 0)
-            return Observable.Return(ImmutableDictionary<string, long>.Empty);
-
-        IObservable<ImmutableDictionary<string, long>> chain =
-            Observable.Return(ImmutableDictionary<string, long>.Empty);
-        foreach (var q in queries)
-        {
-            var (queryPath, isSubtree, queryNodeType) = ParseSourceQuery(q);
-            chain = chain.SelectMany(current =>
-                EnumerateStorageSources(meshStorage, queryPath, isSubtree, queryNodeType)
-                    .Aggregate(current, (acc, n) =>
-                        string.IsNullOrEmpty(n.Path) ? acc : acc.SetItem(n.Path, n.Version)));
-        }
-        return chain;
-    }
+        NodeTypeDefinition? ntDef, string selfPath) =>
+        GetSourceCollection(ntDef, selfPath)
+            .Take(1)
+            .Select(nodes => nodes
+                .Where(n => !string.IsNullOrEmpty(n.Path))
+                .Aggregate(
+                    ImmutableDictionary<string, long>.Empty,
+                    (acc, n) => acc.SetItem(n.Path, n.Version)));
 
     /// <summary>
-    /// Parses a <see cref="CodeQueryResolver"/>-shaped query string into the
-    /// (path, scope, nodeType) tuple needed for storage-direct enumeration.
-    /// CodeQueryResolver always emits one of three shapes:
-    /// <list type="bullet">
-    ///   <item><description><c>namespace:X scope:subtree nodeType:Y</c></description></item>
-    ///   <item><description><c>path:X nodeType:Y</c></description></item>
-    ///   <item><description><c>{namespace:X scope:subtree} nodeType:Y</c></description></item>
-    /// </list>
-    /// </summary>
-    private static (string Path, bool IsSubtree, string? NodeType) ParseSourceQuery(string query)
-    {
-        string path = "";
-        bool isSubtree = false;
-        string? nodeType = null;
-        foreach (var token in query.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (token.StartsWith("namespace:", StringComparison.Ordinal))
-            {
-                path = token["namespace:".Length..];
-                isSubtree = true;
-            }
-            else if (token.StartsWith("path:", StringComparison.Ordinal))
-            {
-                path = token["path:".Length..];
-            }
-            else if (token.Equals("scope:subtree", StringComparison.Ordinal)
-                     || token.Equals("scope:descendants", StringComparison.Ordinal))
-            {
-                isSubtree = true;
-            }
-            else if (token.StartsWith("nodeType:", StringComparison.Ordinal))
-            {
-                nodeType = token["nodeType:".Length..];
-            }
-        }
-        return (path, isSubtree, nodeType);
-    }
-
-    /// <summary>
-    /// Enumerates source nodes via <see cref="IMeshStorage"/> directly.
-    /// Storage is the canonical source of truth; the read-side query index is
-    /// eventually consistent and may lag fresh writes (see
-    /// <c>Doc/Architecture/CqrsAndContentAccess.md</c>) — the compile pipeline
-    /// is one of the two sanctioned places to read storage directly.
-    /// </summary>
-    private static IObservable<MeshNode> EnumerateStorageSources(
-        IMeshStorage storage, string path, bool isSubtree, string? nodeType)
-    {
-        if (string.IsNullOrEmpty(path))
-            return Observable.Empty<MeshNode>();
-
-        var self = storage.GetNode(path)
-            .Where(n => n != null
-                && (nodeType == null
-                    || string.Equals(n.NodeType, nodeType, StringComparison.Ordinal)))
-            .Select(n => n!);
-
-        if (!isSubtree)
-            return self;
-
-        var descendants = Observable.Create<MeshNode>(async (observer, ct) =>
-        {
-            try
-            {
-                await foreach (var d in storage.GetAllDescendantsAsync(path).WithCancellation(ct))
-                {
-                    if (nodeType == null
-                        || string.Equals(d.NodeType, nodeType, StringComparison.Ordinal))
-                        observer.OnNext(d);
-                }
-                observer.OnCompleted();
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-            }
-        });
-
-        return self.Concat(descendants);
-    }
-
-    /// <summary>
-    /// IObservable end-to-end. The only Task→Observable bridge in this method is the
-    /// Roslyn compile call itself — every other leaf already exposes an IObservable
-    /// surface (<c>meshService.ObserveQuery</c> for source discovery,
-    /// <c>ResolveCodeIncludes</c> for @@ resolution). No <c>Observable.FromAsync</c>,
-    /// no <c>await</c> on hub round-trips — both are the canonical deadlock patterns
-    /// documented in <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// IObservable end-to-end. Source discovery rides the cached SyncedQuery
+    /// registered for this NodeType; @@ include resolution composes via
+    /// <see cref="ResolveCodeIncludes"/>. The only Task→Observable bridge is
+    /// the Roslyn <see cref="CompileAsync"/> call. No <c>Observable.FromAsync</c>,
+    /// no <c>await</c> on hub round-trips — both are the canonical deadlock
+    /// patterns documented in <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
     private IObservable<(string? Path, ActivityLog Log)> CompileCore(
         MeshNode node, NodeTypeDefinition? ntDef, string selfPath, ActivityLog log)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         var dllPath = cacheService.GetDllPath(nodeName);
-        var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
-        var meshStorage = hub.ServiceProvider.GetService<IMeshStorage>();
-        var executedQueries = new List<string>();
+        var executedQueries = CodeQueryResolver
+            .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
+            .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
+            .ToList();
         var matchedCodePaths = new List<string>();
 
-        IObservable<List<CodeConfiguration>> discoverCodeFiles;
-        if (meshStorage == null)
-        {
-            discoverCodeFiles = Observable.Return(new List<CodeConfiguration>());
-        }
-        else
-        {
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var queriesToRun = CodeQueryResolver
-                .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
-                .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
-                .ToArray();
-
-            // Source discovery: enumerate via IMeshStorage directly. The read-side
-            // query index is eventually consistent (see Doc/Architecture/CqrsAndContentAccess.md);
-            // a Code node written milliseconds before the compile request may not be
-            // visible through ObserveQuery yet. Storage is the canonical source of
-            // truth and is one of the two sanctioned places to read directly from.
-            // Wrapped in Observable.Create so the IAsyncEnumerable enumeration is the
-            // leaf — the chain stays IObservable end-to-end above this point.
-            IObservable<List<CodeConfiguration>> chain = Observable.Return(new List<CodeConfiguration>());
-            foreach (var finalQuery in queriesToRun)
+        // Source discovery: pull the live (replayed-and-cached) collection from
+        // the workspace SyncedQuery registry. First call registers + subscribes
+        // upstream once; subsequent compiles for the same NodeType hit the
+        // Replay(1).RefCount() cache and skip the Initial re-fetch.
+        var discoverCodeFiles = GetSourceCollection(ntDef, selfPath)
+            .Take(1)
+            .Select(matches =>
             {
-                var q = finalQuery;
-                executedQueries.Add(q);
-                var (queryPath, isSubtree, queryNodeType) = ParseSourceQuery(q);
-
-                chain = chain.SelectMany(acc =>
-                    EnumerateStorageSources(meshStorage, queryPath, isSubtree, queryNodeType)
-                        .ToList()
-                        .Select(matches =>
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var acc = new List<CodeConfiguration>();
+                foreach (var n in matches)
+                {
+                    if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path))
+                        continue;
+                    if (n.Content is CodeConfiguration cf
+                        && !string.IsNullOrWhiteSpace(cf.Code))
+                    {
+                        // Skip executable scripts — they run via the kernel
+                        // (ExecuteScriptRequest), not folded into the parent
+                        // NodeType's Roslyn unit. Top-level statements would
+                        // collide with class declarations from Source/ siblings
+                        // ("Top-level statements must precede namespace and
+                        // type declarations"). Test/ commonly mixes both
+                        // shapes; this filter lets both coexist.
+                        if (cf.IsExecutable)
                         {
-                            var matched = 0;
-                            foreach (var n in matches)
-                            {
-                                if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path))
-                                    continue;
-                                if (n.Content is CodeConfiguration cf
-                                    && !string.IsNullOrWhiteSpace(cf.Code))
-                                {
-                                    // Skip executable scripts — they're meant
-                                    // to run through the kernel via
-                                    // ExecuteScriptRequest, not to be folded
-                                    // into the parent NodeType's Roslyn unit.
-                                    // Top-level statements in scripts collide
-                                    // with class declarations from Source/
-                                    // siblings ("Top-level statements must
-                                    // precede namespace and type
-                                    // declarations"). The Test/ tree commonly
-                                    // mixes both shapes; this filter lets
-                                    // both coexist.
-                                    if (cf.IsExecutable)
-                                    {
-                                        logger.LogDebug(
-                                            "Source discovery for {NodePath}: skipping executable Code {CodePath} — runs via kernel only",
-                                            node.Path, n.Path);
-                                        continue;
-                                    }
-                                    acc.Add(cf);
-                                    matchedCodePaths.Add(n.Path);
-                                    matched++;
-                                }
-                            }
                             logger.LogDebug(
-                                "Source discovery for {NodePath}: query '{Query}' matched {Count} Code nodes",
-                                node.Path, q, matched);
-                            return acc;
-                        }));
-            }
-            discoverCodeFiles = chain;
-        }
+                                "Source discovery for {NodePath}: skipping executable Code {CodePath} — runs via kernel only",
+                                node.Path, n.Path);
+                            continue;
+                        }
+                        acc.Add(cf);
+                        matchedCodePaths.Add(n.Path);
+                    }
+                }
+                logger.LogDebug(
+                    "Source discovery for {NodePath}: matched {Count} Code nodes from {QueryCount} queries",
+                    node.Path, matchedCodePaths.Count, executedQueries.Count);
+                return acc;
+            });
 
         return discoverCodeFiles
             .SelectMany(codeFiles =>
             {
                 // Stage: resolve @@ include references reactively. Each include lookup
                 // composes via ResolveCodeIncludes (already an IObservable<string>). No await.
-                if (meshQuery == null || codeFiles.Count == 0)
+                if (codeFiles.Count == 0)
                     return Observable.Return(codeFiles);
 
                 IObservable<List<CodeConfiguration>> includeChain =
@@ -550,7 +427,7 @@ internal class MeshNodeCompilationService(
                 {
                     var cf = codeFile;
                     includeChain = includeChain.SelectMany(acc =>
-                        ResolveCodeIncludes(cf.Code!, meshQuery, new HashSet<string>())
+                        ResolveCodeIncludes(cf.Code!, new HashSet<string>())
                             .Select(resolvedCode =>
                             {
                                 acc.Add(resolvedCode != cf.Code ? cf with { Code = resolvedCode } : cf);
