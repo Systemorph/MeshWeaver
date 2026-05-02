@@ -143,11 +143,9 @@ public static class MeshNodeExtensions
 
         var options = hub.JsonSerializerOptions;
         var encodedPath = req.NodePath.Replace("/", "_");
-        // Post-v10 layout: every user owns a top-level partition named after
-        // their userId; activity records live under {userId}/_UserActivity/{id}.
-        // The legacy User/{userId}/_UserActivity/... shape predates the
-        // per-user partition migration and routes to a partition that no
-        // longer exists.
+        // Activity records live under {userId}/_UserActivity/{id} — every user
+        // owns a top-level partition named after their userId, and the
+        // _UserActivity satellite holds their navigation/login records.
         var activityPath = $"{req.UserId}/_UserActivity/{encodedPath}";
         var now = DateTimeOffset.UtcNow;
 
