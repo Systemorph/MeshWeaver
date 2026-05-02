@@ -48,7 +48,24 @@ public class McpMeshPlugin
         IHttpContextAccessor? httpContextAccessor = null)
     {
         logger = hub.ServiceProvider.GetRequiredService<ILogger<McpMeshPlugin>>();
-        baseUrl = config?.Value.BaseUrl ?? "http://localhost:5000";
+        // Resolve the UI base URL in priority order. No hard-coded URLs:
+        //   1. Configured McpConfiguration.BaseUrl — Aspire AppHost passes the
+        //      portal's external HTTPS endpoint via env var (Mcp__BaseUrl) so
+        //      the deployment topology owns this; no per-environment patching
+        //      of source. Same mechanism in prod / test / local.
+        //   2. Current HTTP request's scheme + host — the live answer when MCP
+        //      is invoked over the same portal that serves the UI; correct for
+        //      any port Aspire allocates dynamically without any config.
+        //   3. Empty (signals "no base URL resolvable") — surfaces in the URL
+        //      string returned by GetBaseUrl / NavigateTo so the caller sees
+        //      a clearly-broken value instead of a quietly-wrong localhost
+        //      one. Better to fail loud than to ship the wrong URL.
+        var requestUrl = httpContextAccessor?.HttpContext?.Request is { } req
+            ? $"{req.Scheme}://{req.Host.Value}".TrimEnd('/')
+            : null;
+        baseUrl = config?.Value.BaseUrl
+            ?? requestUrl
+            ?? string.Empty;
         var routingService = hub.ServiceProvider.GetRequiredService<IRoutingService>();
 
         var sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, routingService, logger);
@@ -244,13 +261,14 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
         => ops.Recycle(path).FirstAsync().ToTask();
 
     [McpServerTool]
-    [Description(@"Triggers a compile for a NodeType WITHOUT blocking on the result. Posts a PatchDataRequest that flips the NodeType's `compilationStatus` to `Pending`; the framework's CompileWatcher then runs Roslyn and writes back `Ok`/`Error` plus `lastCompilationActivityPath` on the NodeType.
+    [Description(@"Compiles a NodeType and waits for the result inline. Flips the NodeType's `compilationStatus` to `Pending` via the canonical remote-stream `Update` (no PatchDataRequest, no Update permission required), then subscribes to the NodeType's MeshNode stream and waits up to 60s for the framework's CompileWatcher to settle the status to `Ok` or `Error`.
 
-Returns immediately with `{status:'Triggered', path, version}`. The caller observes progress by polling:
-  • `get @nodeTypePath`  — read `content.compilationStatus`, `content.compilationError`, `content.lastCompilationActivityPath`
-  • `get @<lastCompilationActivityPath>`  — full ActivityLog with executed source queries, matched Code paths, Roslyn output
+Returns a structured result:
+  • `{status:'Ok', path, activityPath, message:'Compile SUCCEEDED.'}` — assembly cached, ready to use.
+  • `{status:'Error', path, error, activityPath, message:'Compile FAILED ...'}` — `error` carries the Roslyn diagnostics inline.
+  • `{status:'Pending', path, message:'... did not settle within deadline'}` — fallback only on timeout; `get @nodeTypePath` to poll.
 
-Use this instead of `Patch` when you only have Create permission on the target — `Compile` only needs the per-node hub to accept a PatchDataRequest, not the persistence-layer Update.")]
+For the full source-discovery + matched-Code-paths + Roslyn trace, `get @<activityPath>` after the call returns.")]
     public Task<string> Compile(
         [Description("Path to the NodeType (e.g., @User/me/MyType or @Systemorph/SocialMedia/Profile). Must point at a NodeType definition node, not an instance.")] string path)
         => ops.Compile(path).FirstAsync().ToTask();
@@ -349,5 +367,5 @@ public class McpConfiguration
     /// <summary>
     /// Base URL for the MeshWeaver UI. Used for generating NavigateTo URLs.
     /// </summary>
-    public string BaseUrl { get; set; } = "http://localhost:5000";
+    public string BaseUrl { get; set; } = string.Empty;
 }
