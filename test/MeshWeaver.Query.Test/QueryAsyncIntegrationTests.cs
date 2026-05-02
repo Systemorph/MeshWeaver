@@ -17,6 +17,8 @@ namespace MeshWeaver.Query.Test;
 
 public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddAI();
 

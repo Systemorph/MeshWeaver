@@ -15,6 +15,8 @@ namespace MeshWeaver.Query.Test;
 
 public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // NOTE: Not opted into ShareMeshAcrossTests — tests use hardcoded paths
+    // (ACME/Project1 etc.) that collide if SP is reused across [Fact]s.
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(10);
 
     private IMeshService Query => MeshQuery;
