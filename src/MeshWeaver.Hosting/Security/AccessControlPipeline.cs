@@ -69,25 +69,26 @@ public static class AccessControlPipeline
                 // so SecurityService.GetEffectivePermissions — which reads claim-based
                 // roles from _accessService.Context.Roles — can resolve them. Without
                 // this, the per-node hub processes deliveries in a fresh async flow
-                // where AsyncLocal.Context is null even though delivery.AccessContext
-                // is fully populated by the sender's PostPipeline. The result was
-                // every API-token request being denied because Admin role on the
-                // bearer token never reached the claim-based grant path: the
-                // synced-query path returned no roles, and the chain's later
-                // `if (context.Roles != null && context.ObjectId == userId)` saw a
-                // null context.
+                // where AsyncLocal.Context is the hub's own impersonation address
+                // (set by PostPipeline at startup) even though delivery.AccessContext
+                // is fully populated by the sender's PostPipeline with the originating
+                // user. The result was every API-token request being denied because
+                // Admin role on the bearer token never reached the claim-based grant
+                // path: the synced-query path returned no roles, and the chain's later
+                // `if (context.Roles != null && context.ObjectId == userId)` saw the
+                // hub's identity (no Roles), not the user's.
                 //
-                // Gated on IsApiToken: this is the only delivery class that carries
-                // claim-based roles (API token middleware stamps them onto the
-                // outgoing AccessContext from the validated token). Hub-impersonation
-                // deliveries (PostPipeline fallback when no user context exists) and
-                // Blazor-cookie deliveries don't go through this branch — overriding
-                // their scope context would corrupt the synced-AccessAssignment
-                // recursion guard (validators would see "user X reading
-                // AccessAssignments as themselves" and re-enter the pipeline).
-                if (delivery.AccessContext is { IsApiToken: true })
+                // Trigger condition: delivery carries non-empty user Roles AND its
+                // ObjectId is NOT the receiving hub's own address (i.e. it's a real
+                // user, not hub-impersonation). When both hold, override scope context.
+                // Hub-impersonation deliveries (no user, ObjectId=hubAddress) and
+                // synced-query subscribes from the data source's own hub keep the
+                // existing scope so the recursion guard stays in place.
+                var hubAddressString = hub.Address.ToFullString();
+                if (delivery.AccessContext is { Roles: { Count: > 0 } } userCtx
+                    && !string.Equals(userCtx.ObjectId, hubAddressString, StringComparison.Ordinal))
                 {
-                    accessService.SetContext(delivery.AccessContext);
+                    accessService.SetContext(userCtx);
                 }
 
                 // Log identity resolution details for debugging access issues
