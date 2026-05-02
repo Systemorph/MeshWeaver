@@ -40,19 +40,23 @@ namespace MeshWeaver.Autocomplete.Test;
 [Collection("AutocompleteMultiSourceTest")]
 public class AutocompleteMultiSourceTest : MonolithMeshTestBase
 {
-    private readonly string _contentDir;
-    private readonly string _cacheDir;
-
-    public AutocompleteMultiSourceTest(ITestOutputHelper output) : base(output)
+    private static readonly string _contentDir =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverMultiSrcContent", Guid.NewGuid().ToString());
+    private static readonly string _cacheDir =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverMultiSrc", Guid.NewGuid().ToString());
+    static AutocompleteMultiSourceTest()
     {
-        _cacheDir = Path.Combine(Path.GetTempPath(), "MeshWeaverMultiSrc", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_cacheDir);
-
-        _contentDir = Path.Combine(Path.GetTempPath(), "MeshWeaverMultiSrcContent", Guid.NewGuid().ToString());
         CreateContentFiles();
     }
 
-    private void CreateContentFiles()
+    protected override bool ShareMeshAcrossTests => true;
+
+    public AutocompleteMultiSourceTest(ITestOutputHelper output) : base(output)
+    {
+    }
+
+    private static void CreateContentFiles()
     {
         // Create content files for ACME/ProductLaunch
         var prodLaunchContent = Path.Combine(_contentDir, "ACME", "ProductLaunch");
@@ -125,12 +129,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
             .ConfigureHub(hub => hub.AddMeshNavigation());
     }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-        try { if (Directory.Exists(_contentDir)) Directory.Delete(_contentDir, true); } catch { }
-        try { if (Directory.Exists(_cacheDir)) Directory.Delete(_cacheDir, true); } catch { }
-    }
+    // Cache + content dirs are class-static + shared SP — never deleted between tests.
 
     private new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private IChatCompletionOrchestrator Orchestrator => Mesh.ServiceProvider.GetRequiredService<IChatCompletionOrchestrator>();

@@ -38,12 +38,14 @@ namespace MeshWeaver.Autocomplete.Test;
 [Collection("AutocompleteDelegationDeadlockTest")]
 public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
 {
-    private readonly string _cacheDirectory;
+    private static readonly string _cacheDirectory =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverDelegateDeadlock", Guid.NewGuid().ToString());
+    static AutocompleteDelegationDeadlockTest() => Directory.CreateDirectory(_cacheDirectory);
+
+    protected override bool ShareMeshAcrossTests => true;
 
     public AutocompleteDelegationDeadlockTest(ITestOutputHelper output) : base(output)
     {
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverDelegateDeadlock", Guid.NewGuid().ToString());
-        Directory.CreateDirectory(_cacheDirectory);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -59,15 +61,7 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
             .AddGraph()
             .ConfigureHub(hub => hub.AddMeshNavigation());
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-        if (Directory.Exists(_cacheDirectory))
-        {
-            try { Directory.Delete(_cacheDirectory, recursive: true); }
-            catch { /* best effort */ }
-        }
-    }
+    // Cache dir is class-static + shared SP — never deleted between tests.
 
     private IAutocompleteProvider GetUnifiedReferenceProvider()
     {
