@@ -28,6 +28,11 @@ namespace MeshWeaver.Query.Test;
 /// </summary>
 public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // NOTE: NOT opted into ShareMeshAcrossTests — LatestThreads_FindsThreads-
+    // AcrossNamespaces_ByCreator does a global "all threads by user X" query
+    // and asserts a specific count. With shared mesh, prior tests' threads
+    // pollute the result.
+
     /// <summary>
     /// The ObjectId from TestUsers.Admin (set by MonolithMeshTestBase.InitializeAsync).
     /// </summary>
