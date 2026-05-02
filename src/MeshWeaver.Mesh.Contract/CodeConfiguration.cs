@@ -25,4 +25,13 @@ public record CodeConfiguration
     /// aren't marked executable stay read-only.
     /// </summary>
     public bool IsExecutable { get; init; }
+
+    /// <summary>
+    /// UTC timestamp of the most recent successful execution kicked off via the
+    /// Run button or <c>ExecuteScriptRequest</c>. Surfaced on the Code node's
+    /// Content area as "Last executed: …" with a link to the full activity
+    /// history (every run writes an <c>ActivityLog</c> child under
+    /// <c>{codePath}/_activity/{id}</c>). <c>null</c> until the first run finishes.
+    /// </summary>
+    public DateTimeOffset? LastExecutedAt { get; init; }
 }
