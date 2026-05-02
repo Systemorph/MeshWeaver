@@ -182,11 +182,19 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// snapshots and waits for the first change carrying an item. Timeout
     /// falls back to null instead of hanging.</para>
     /// </summary>
-    private static IObservable<MeshNode?> FindUserByEmail(
+    /// <summary>
+    /// Public reactive User-by-email lookup for callers outside this
+    /// middleware (e.g. <c>ApiTokenAuthenticationHandler</c> needs the
+    /// same shape to enrich Bearer logins with DB-resolved roles). Same
+    /// timeout + null-fallback shape as the original private impl.
+    /// </summary>
+    internal static IObservable<MeshNode?> FindUserByEmail(
         IMeshQueryCore meshQuery, IMessageHub hub, string email)
     {
+        // Post-v10: User identity nodes live at root namespace (id = userId).
+        // Pre-v10 layout under namespace=User no longer exists.
         var request = MeshQueryRequest.FromQuery(
-            $"nodeType:User namespace:User content.email:{email} limit:1",
+            $"nodeType:User content.email:{email} limit:1",
             WellKnownUsers.System);
 
         return meshQuery.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
@@ -204,7 +212,13 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     /// Timeout the empty set on failure. No <c>.ToTask()</c>, no <c>await</c>;
     /// the only Task bridge in this file is at the middleware boundary.
     /// </summary>
-    private static IObservable<IReadOnlyCollection<string>> LoadUserRoles(
+    /// <summary>
+    /// Public reactive role-loader for the same reason
+    /// <see cref="FindUserByEmail"/> is public — Bearer auth needs to enrich
+    /// the principal with DB-resolved AccessAssignment roles, not just whatever
+    /// roles were stamped on the API token at creation time.
+    /// </summary>
+    internal static IObservable<IReadOnlyCollection<string>> LoadUserRoles(
         IMeshQueryCore meshQuery, IMessageHub hub, string username)
     {
         var request = MeshQueryRequest.FromQuery(

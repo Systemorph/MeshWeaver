@@ -143,7 +143,12 @@ public static class MeshNodeExtensions
 
         var options = hub.JsonSerializerOptions;
         var encodedPath = req.NodePath.Replace("/", "_");
-        var activityPath = $"User/{req.UserId}/_UserActivity/{encodedPath}";
+        // Post-v10 layout: every user owns a top-level partition named after
+        // their userId; activity records live under {userId}/_UserActivity/{id}.
+        // The legacy User/{userId}/_UserActivity/... shape predates the
+        // per-user partition migration and routes to a partition that no
+        // longer exists.
+        var activityPath = $"{req.UserId}/_UserActivity/{encodedPath}";
         var now = DateTimeOffset.UtcNow;
 
         // Reactive chain: read existing → fold into new record → save. No await,
@@ -172,7 +177,7 @@ public static class MeshNodeExtensions
                 {
                     NodeType = "UserActivity",
                     Name = req.NodeName ?? encodedPath,
-                    MainNode = $"User/{req.UserId}",
+                    MainNode = req.UserId,
                     State = MeshNodeState.Active,
                     Content = record
                 };

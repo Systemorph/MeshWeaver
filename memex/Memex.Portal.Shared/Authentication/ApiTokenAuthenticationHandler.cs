@@ -3,7 +3,6 @@ using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using MeshWeaver.Messaging;
-using MeshWeaver.Mesh.Activity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -42,42 +41,40 @@ public class ApiTokenAuthenticationHandler(
         if (apiToken == null)
             return AuthenticateResult.Fail("Invalid or expired API token");
 
-        var claims = BuildClaims(apiToken);
+        var claims = BuildClaims(apiToken).ToList();
+
+        // Enrich with DB-resolved AccessAssignment roles so Bearer requests
+        // see the same role set as cookie/OAuth sessions. Without this, the
+        // principal only carries roles that were stamped on the API token at
+        // creation time — any AccessAssignment granted to the user later
+        // (e.g. an admin promotion after the token was minted) would silently
+        // not apply for MCP requests, even though the same user logging in
+        // through the browser would see them. Live mesh query, bounded so a
+        // wedged data source can't slow auth.
+        try
+        {
+            var dbRoles = await UserRoleResolver.LoadDbRolesAsync(serviceProvider, apiToken.UserId);
+            foreach (var role in dbRoles)
+            {
+                if (string.IsNullOrEmpty(role)) continue;
+                if (claims.Any(c => c.Type == ClaimTypes.Role && c.Value == role))
+                    continue;
+                claims.Add(new Claim(ClaimTypes.Role, role));
+            }
+        }
+        catch
+        {
+            // Role enrichment is best-effort; the token's own Roles still apply.
+        }
+
         var identity = new ClaimsIdentity(claims, SchemeName);
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, SchemeName);
 
-        // Track the login event so it appears in the user's activity stream.
-        // Bearer/MCP requests skip OnboardingMiddleware (which is browser-only),
-        // so without this every API-token authentication was invisible — the
-        // user could not tell from the audit trail when their token was used.
-        // Fire-and-forget post: a failure to write the activity record must
-        // never break authentication.
-        TrackLogin(apiToken, serviceProvider);
-
+        // Login tracking lives in UserContextMiddleware so it fires for both
+        // Bearer and cookie authentication on the same code path — see
+        // UserContextMiddleware.TrackLogin.
         return AuthenticateResult.Success(ticket);
-    }
-
-    private static void TrackLogin(MeshWeaver.Mesh.Security.ApiToken token, IServiceProvider services)
-    {
-        try
-        {
-            var hub = services.GetService<IMessageHub>();
-            if (hub is null) return;
-            hub.Post(new TrackActivityRequest(
-                NodePath: token.UserId,
-                UserId: token.UserId,
-                NodeName: token.UserName,
-                NodeType: "User",
-                Namespace: ""
-            )
-            { ActivityType = ActivityType.Login });
-        }
-        catch
-        {
-            // Activity tracking is best-effort. Auth must succeed even if the
-            // hub is unavailable / disposed / mid-restart.
-        }
     }
 
     /// <summary>
