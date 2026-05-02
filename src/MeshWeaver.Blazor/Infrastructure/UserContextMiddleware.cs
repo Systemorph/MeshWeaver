@@ -96,6 +96,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         {
             if (string.IsNullOrEmpty(userContext.ObjectId))
                 return;
+
             hub.Post(new TrackActivityRequest(
                 NodePath: userContext.ObjectId,
                 UserId: userContext.ObjectId,
