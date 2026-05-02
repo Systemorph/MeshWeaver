@@ -112,86 +112,127 @@ public static class CodeNodeType
                 // it reliably. The originating Code node is preserved on MainNode
                 // + ActivityLog.HubPath, so the link back is intact regardless of
                 // where the activity is stored.
-                var activityId = submissionId;
-                var activityParentPath = code.ActivityParentPath
-                    ?? (hub.Address.Segments.Length > 0 ? hub.Address.Segments[0] : hub.Address.Path);
-                var activityNamespace = $"{activityParentPath}/_Activity";
-                var activityPath = $"{activityNamespace}/{activityId}";
-                // MainNode points to the activity's PARENT (the user's home or
-                // configured ActivityParentPath). The originating Code node
-                // is preserved on ActivityLog.HubPath, but access control for
-                // the activity itself goes through the SatelliteAccessRule
-                // which delegates to MainNode — so this needs to be a node the
-                // viewer actually has read access to. The user's home is the
-                // safe default.
-                var activityNode = new MeshNode(activityId, activityNamespace)
-                {
-                    Name = $"Script run {activityId[..Math.Min(8, activityId.Length)]}",
-                    NodeType = ActivityNodeType.NodeType,
-                    MainNode = activityParentPath,
-                    State = MeshNodeState.Active,
-                    Content = new ActivityLog("ScriptExecution")
-                    {
-                        Id = activityId,
-                        HubPath = hub.Address.Path,
-                        Status = ActivityStatus.Running
-                    }
-                };
+                // Resolve where to write the activity. Three layers, in order:
+                //   1. Code-node config: code.ActivityParentPath wins if set.
+                //   2. Partition-level: PartitionDefinition.DefaultActivityParentPath
+                //      via the Replay-cached PartitionRegistry observable.
+                //   3. Default: the partition root (first segment of the Code path).
+                // The "{viewer}" sentinel at any layer expands to the calling
+                // user's home (so docs partition can route runs into whoever's
+                // browsing them). Resolution composes into the create-activity
+                // chain — the per-partition lookup is async (workspace query)
+                // so we keep it observable end-to-end.
+                var accessService = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
+                var viewerHome = accessService?.Context?.ObjectId
+                                 ?? accessService?.CircuitContext?.ObjectId;
+                var partitionRoot = hub.Address.Segments.Length > 0 ? hub.Address.Segments[0] : hub.Address.Path;
+
+                var partitionRegistry = hub.ServiceProvider.GetService<PartitionRegistry>();
+                var partitionDefaultStream = partitionRegistry?.GetPartition(partitionRoot)
+                    ?? Observable.Return<PartitionDefinition?>(null);
 
                 var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-                meshService.CreateNode(activityNode).Subscribe(
-                    _ =>
+                partitionDefaultStream
+                    .Take(1)
+                    .Select(partition =>
                     {
-                        // Node created. Fire SubmitCodeRequest at the Activity hub
-                        // (which now hosts the kernel handlers).
-                        hub.Post(
-                            new SubmitCodeRequest(code.Code ?? string.Empty)
-                            {
-                                Id = submissionId,
-                                ActivityLogPath = activityPath
-                            },
-                            o => o.WithTarget(new Address(activityPath)));
-
-                        // Stamp LastExecutedAt onto the Code MeshNode so the
-                        // Content area can show "Last executed: …" without a
-                        // separate query of activity children. Reactive write
-                        // via the canonical workspace.UpdateMeshNode — same
-                        // path the CompileWatcher uses on the NodeType.
-                        try
+                        var unresolved = code.ActivityParentPath ?? partition?.DefaultActivityParentPath;
+                        return unresolved switch
                         {
-                            var workspace = hub.GetWorkspace();
-                            workspace.UpdateMeshNode(curr =>
-                                curr.Content is CodeConfiguration cfg
-                                    ? curr with { Content = cfg with { LastExecutedAt = DateTimeOffset.UtcNow } }
-                                    : curr);
-                        }
-                        catch
-                        {
-                            // Workspace might not be ready (cold-start race) —
-                            // missing LastExecutedAt is a UI nicety, not a
-                            // correctness invariant. Activity log is still written.
-                        }
-
-                        hub.Post(
-                            new ExecuteScriptResponse
-                            {
-                                Success = true,
-                                SubmissionId = submissionId,
-                                OutputAreaReference = submissionId,
-                                ActivityLog = activityPath
-                            },
-                            o => o.ResponseFor(request));
-                    },
-                    err =>
+                            null => partitionRoot,
+                            "{viewer}" when !string.IsNullOrEmpty(viewerHome) => viewerHome!,
+                            "{viewer}" => partitionRoot,
+                            var p => p
+                        };
+                    })
+                    .SelectMany(activityParentPath =>
                     {
-                        hub.Post(
-                            new ExecuteScriptResponse
+                        var activityId = submissionId;
+                        var activityNamespace = $"{activityParentPath}/_Activity";
+                        var activityPath = $"{activityNamespace}/{activityId}";
+                        // MainNode points to the activity's PARENT — the user's
+                        // home or configured target. SatelliteAccessRule delegates
+                        // access to MainNode, so this must be a node the viewer
+                        // can read. ActivityLog.HubPath preserves the originating
+                        // Code node so the link back is intact.
+                        var activityNode = new MeshNode(activityId, activityNamespace)
+                        {
+                            Name = $"Script run {activityId[..Math.Min(8, activityId.Length)]}",
+                            NodeType = ActivityNodeType.NodeType,
+                            MainNode = activityParentPath,
+                            State = MeshNodeState.Active,
+                            Content = new ActivityLog("ScriptExecution")
                             {
-                                Success = false,
-                                Error = $"Failed to create ActivityLog node: {err.Message}"
-                            },
-                            o => o.ResponseFor(request));
-                    });
+                                Id = activityId,
+                                HubPath = hub.Address.Path,
+                                Status = ActivityStatus.Running
+                            }
+                        };
+                        return meshService.CreateNode(activityNode)
+                            .Select(created => (created, activityPath));
+                    })
+                    .Subscribe(
+                        tuple =>
+                        {
+                            var (_, activityPath) = tuple;
+                            // Node created. Fire SubmitCodeRequest at the Activity
+                            // hub (which now hosts the kernel handlers).
+                            hub.Post(
+                                new SubmitCodeRequest(code.Code ?? string.Empty)
+                                {
+                                    Id = submissionId,
+                                    ActivityLogPath = activityPath
+                                },
+                                o => o.WithTarget(new Address(activityPath)));
+
+                            // Stamp Last{ExecutedAt,ExecutedBy,ActivityPath} onto
+                            // the Code MeshNode so the Content area can show
+                            // "Last executed: <when> by <who>" and embed the last
+                            // activity's Progress area for the Output pane —
+                            // without separately querying activity children.
+                            try
+                            {
+                                var workspace = hub.GetWorkspace();
+                                workspace.UpdateMeshNode(curr =>
+                                    curr.Content is CodeConfiguration cfg
+                                        ? curr with
+                                        {
+                                            Content = cfg with
+                                            {
+                                                LastExecutedAt = DateTimeOffset.UtcNow,
+                                                LastExecutedBy = viewerHome,
+                                                LastActivityPath = activityPath
+                                            }
+                                        }
+                                        : curr);
+                            }
+                            catch
+                            {
+                                // Workspace might not be ready (cold-start race)
+                                // — missing fields are a UI nicety, not a
+                                // correctness invariant. Activity log still written.
+                            }
+
+                            hub.Post(
+                                new ExecuteScriptResponse
+                                {
+                                    Success = true,
+                                    SubmissionId = submissionId,
+                                    OutputAreaReference = submissionId,
+                                    ActivityLog = activityPath
+                                },
+                                o => o.ResponseFor(request));
+                        },
+                        err =>
+                        {
+                            hub.Post(
+                                new ExecuteScriptResponse
+                                {
+                                    Success = false,
+                                    Error = $"Failed to create ActivityLog node: {err.Message}"
+                                },
+                                o => o.ResponseFor(request));
+                        });
             });
         return request.Processed();
     }

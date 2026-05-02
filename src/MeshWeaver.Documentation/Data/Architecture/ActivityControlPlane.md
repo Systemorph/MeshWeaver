@@ -139,6 +139,42 @@ The pattern inside scripts (and inside any worker hub doing long-running work):
 
 Subscribers (UI stripes, activity-details views, agents that watch their job) read the same content via `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` and project whichever field they care about (`Messages.Count`, `Status`, `RequestedStatus`, your own progress field). One source of truth, one observation pattern, no parallel "events" channel.
 
+## Routing activities to a different partition
+
+By default a script's activity lands at `{partitionRoot}/_Activity/{guid}` — the partition the Code node lives in. For shared / read-only partitions (the docs partition is the canonical example) you usually want each viewer's runs to land in the viewer's own home instead, so each user's activity feed shows their own history independent of who else is browsing.
+
+Two layered hooks resolve this, in order:
+
+1. **Per Code node:** set `CodeConfiguration.ActivityParentPath` on the Code node itself. The literal sentinel `"{viewer}"` expands to the calling user's home (their `AccessContext.ObjectId`); any other value is taken as-is.
+2. **Per partition:** set `PartitionDefinition.DefaultActivityParentPath` on the partition's `Admin/Partition/{Name}` node. Applies to every Code node in that partition that doesn't override #1. Same `"{viewer}"` sentinel rule.
+3. **Default:** the partition root.
+
+The partition lookup is reactive — `PartitionRegistry.GetPartition(namespace)` returns an `IObservable<PartitionDefinition?>` cached via `Replay(1).RefCount()`, composed into the create-activity chain. Updating a partition's `DefaultActivityParentPath` at runtime takes effect immediately for subsequent runs.
+
+### Wiring example: docs partition routes to user
+
+The built-in MeshWeaver documentation partition does this exactly:
+
+```csharp
+builder.AddMeshNodes(new MeshNode("Documentation", "Admin/Partition")
+{
+    NodeType = "Partition",
+    Name = "MeshWeaver Documentation",
+    State = MeshNodeState.Active,
+    Content = new PartitionDefinition
+    {
+        Namespace = "Doc",
+        DataSource = "EmbeddedResource",
+        Versioned = false,
+        DefaultActivityParentPath = "{viewer}"   // ← every script run lands in the caller's home
+    }
+});
+```
+
+After this, any executable Code node under `Doc/...` that a viewer triggers writes its activity to `{viewer}/_Activity/{guid}` — e.g. `rbuergi/_Activity/abc...` for the user `rbuergi`. The viewer sees the run in their own activity stripe, the originating Code node's `LastActivityPath` field still points back to the cross-partition activity for the Output pane.
+
+Use this any time the partition is shared (docs, demos, reference data) and the runs are user-specific. Skip it for partitions where the runs themselves belong to the partition (a per-tenant data pipeline whose runs are tenant-scoped, not viewer-scoped).
+
 ## When to break the rule
 
 - **Cross-hub one-shot triggers** that don't belong to a long-lived entity (e.g. "render this report once") may still be plain request/response — there's no living state to patch.

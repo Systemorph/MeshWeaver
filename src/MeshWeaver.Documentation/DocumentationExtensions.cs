@@ -30,6 +30,11 @@ public static class DocumentationExtensions
             "Built-in MeshWeaver platform documentation");
 
         // Surface the partition in Global Settings.
+        // DefaultActivityParentPath = "{viewer}" — every script run kicked off
+        // from a Doc Code node lands in the calling user's home rather than in
+        // the docs partition itself. Per the Activity Control Plane pattern,
+        // the "{viewer}" sentinel is resolved per-call by CodeNodeType from
+        // the AccessContext.
         builder.AddMeshNodes(new MeshNode("Documentation", "Admin/Partition")
         {
             NodeType = "Partition",
@@ -40,7 +45,8 @@ public static class DocumentationExtensions
                 Namespace = DocumentationNodeProvider.RootNamespace,
                 DataSource = "EmbeddedResource",
                 Description = "Built-in MeshWeaver platform documentation",
-                Versioned = false
+                Versioned = false,
+                DefaultActivityParentPath = "{viewer}"
             }
         });
 

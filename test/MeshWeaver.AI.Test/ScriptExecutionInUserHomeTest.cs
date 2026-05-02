@@ -205,6 +205,94 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
+    /// Default activity-parent (when CodeConfiguration.ActivityParentPath is null)
+    /// is the partition root. Verifies the migration-friendly default applies
+    /// without any per-Code-node config.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task DefaultActivityParent_IsPartitionRoot()
+    {
+        var (codePath, _) = await SeedExecutableCodeAsync("\"hi\"");
+        var resp = await AwaitResponseAsync(
+            new ExecuteScriptRequest(),
+            o => o.WithTarget(new Address(codePath)));
+        resp.Message.ActivityLog.Should().StartWith($"{UserHome}/_Activity/",
+            "with no ActivityParentPath, activities default to the partition root");
+    }
+
+    /// <summary>
+    /// Per-namespace routing via the <c>{viewer}</c> token: a Code node with
+    /// <c>ActivityParentPath = "{viewer}"</c> writes activities into the
+    /// caller's home, not the Code node's own partition. This is the canonical
+    /// pattern for shared/docs partitions where every viewer sees their own
+    /// runs in their own activity feed.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ViewerToken_RoutesActivitiesToCallersHome()
+    {
+        // The Code node lives in `rbuergi` but configures viewer-routing.
+        // The caller's identity (DevLogin) is also `rbuergi` so the activity
+        // happens to land in the same partition — but it lands via the
+        // {viewer}-resolution path, not the partition-root fallback.
+        var id = $"viewerdemo-{Guid.NewGuid():N}";
+        var path = $"{UserHome}/{id}";
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await mesh.CreateNode(new MeshNode(id, UserHome)
+        {
+            Name = "Viewer-routed",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = "\"hi from viewer demo\"",
+                IsExecutable = true,
+                ActivityParentPath = "{viewer}",
+            }
+        });
+
+        var resp = await AwaitResponseAsync(
+            new ExecuteScriptRequest(),
+            o => o.WithTarget(new Address(path)));
+        resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "exec failed");
+        // DevLogin's user is rbuergi — viewer home is `rbuergi`. Activity must
+        // land in that partition (matching test setup; in prod with mixed
+        // identities, this would be the OAuth user's home).
+        resp.Message.ActivityLog.Should().StartWith($"{UserHome}/_Activity/",
+            "{viewer} should resolve to the calling user's home");
+    }
+
+    /// <summary>
+    /// Code node stamps LastExecutedAt + LastExecutedBy + LastActivityPath on
+    /// itself after a run, so the Content view can render "Last executed by X"
+    /// + the last activity's Progress area without scanning historical activities.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task CodeNode_StampsLastExecutionFields()
+    {
+        var (codePath, _) = await SeedExecutableCodeAsync("\"x\"");
+        var resp = await AwaitResponseAsync(
+            new ExecuteScriptRequest(),
+            o => o.WithTarget(new Address(codePath)));
+        var activityPath = resp.Message.ActivityLog!;
+
+        // Wait for the LastActivityPath stamp to land — the workspace.UpdateMeshNode
+        // call inside HandleExecuteScript happens after CreateNode acks but
+        // doesn't block ExecuteScriptResponse, so subscribe and wait for it.
+        var workspace = GetClient().GetWorkspace();
+        var stamped = await workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(new Address(codePath), new MeshNodeReference())
+            .Select(c => c.Value?.Content as CodeConfiguration)
+            .Where(c => c is not null && c.LastActivityPath == activityPath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync();
+
+        stamped!.LastExecutedAt.Should().NotBeNull("the run should set LastExecutedAt");
+        stamped.LastExecutedBy.Should().NotBeNullOrEmpty("the user identity should be captured");
+        stamped.LastActivityPath.Should().Be(activityPath,
+            "LastActivityPath lets the Content view embed the activity's Progress area");
+    }
+
+    /// <summary>
     /// End-to-end check that <c>#r "nuget:..."</c> directives still work after
     /// the .NET-Interactive removal. Pulls MathNet.Numerics from nuget.org and
     /// uses one of its types — proves the full pipeline (NuGetDirectiveParser

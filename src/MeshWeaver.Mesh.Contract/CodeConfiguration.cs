@@ -35,6 +35,21 @@ public record CodeConfiguration
     public DateTimeOffset? LastExecutedAt { get; init; }
 
     /// <summary>
+    /// User identifier (typically the AccessContext ObjectId / username) of the
+    /// person who triggered the most recent run. <c>null</c> if the run was
+    /// system-initiated or the identity wasn't available.
+    /// </summary>
+    public string? LastExecutedBy { get; init; }
+
+    /// <summary>
+    /// Full path of the <c>Activity</c> MeshNode for the most recent run. The
+    /// Code node's Content view subscribes to this activity's <c>Progress</c>
+    /// area so the "Output" pane shows the last run's log immediately on page
+    /// load — instead of waiting forever on a kernel area that may not exist.
+    /// </summary>
+    public string? LastActivityPath { get; init; }
+
+    /// <summary>
     /// Parent path under which <c>Activity</c> nodes are created
     /// when this Code node executes. The activity lives at
     /// <c>{ActivityParentPath}/_Activity/{guid}</c>.

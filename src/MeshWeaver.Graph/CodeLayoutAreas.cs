@@ -72,30 +72,26 @@ public static class CodeLayoutAreas
         var codeConfig = node?.Content as CodeConfiguration;
         var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
-        // Header with title and action buttons. Right-side actions stacked horizontally
-        // so Run (when executable) sits to the left of the existing Edit button, both
-        // fully on the right via `justify-content: space-between` on the outer stack.
         var title = node?.Name ?? node?.Id ?? "Code";
         var isExecutable = codeConfig?.IsExecutable == true;
         var canExecute = callerPermissions.HasFlag(Permission.Execute);
 
-        // Stable kernel address per Code node — same id across clicks so script state
-        // (variables, using directives) persists between runs. The kernel auto-disposes
-        // after 15 min idle and re-creates on the next Run.
-        var kernelAddress = AddressExtensions.CreateKernelAddress(
-            "code-" + hubAddress.ToString().Replace('/', '-'));
-
+        // Header: title gets flex:1 so the action group is pushed hard-right.
+        // (justify-content: space-between alone wasn't doing it because the
+        // H1 has its own intrinsic width and the actions were docking
+        // immediately after it.)
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; align-items: center;");
+            .WithStyle("gap: 8px; align-items: center; margin-left: auto;");
 
-        if (isExecutable && canExecute)
+        if (isExecutable)
         {
-            // Per AsynchronousCalls.md: no await inside click action. Post the
-            // ExecuteScriptRequest to the Code node's own hub — the handler creates
-            // the ActivityLog node, dispatches to the kernel, and responds with the
-            // log's path. The result pane below subscribes to that path's
-            // MeshNodeReference stream for live progress.
+            // Always render Run when the node is executable. The server-side
+            // ExecuteScriptRequest handler enforces Permission.Execute — clients
+            // without it get back a DeliveryFailure (Unauthorized). Hiding the
+            // button client-side hid it even from admins when the live
+            // permission stream had a transient empty emission, which is exactly
+            // the state we just spent a session debugging.
             actions = actions.WithView(Controls.Button("Run")
                 .WithIconStart(FluentIcons.Play())
                 .WithAppearance(Appearance.Accent)
@@ -115,39 +111,39 @@ public static class CodeLayoutAreas
 
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
-            .WithView(Controls.H1(title))
+            .WithStyle("display: flex; align-items: center; gap: 12px; margin-bottom: 16px;")
+            .WithView(Controls.H1(title).WithStyle("flex: 1; margin: 0;"))
             .WithView(actions);
 
         stack = stack.WithView(headerRow);
 
-        // Language badge + last-executed timestamp + link to activity history.
-        // The activities list lives at {hubPath}/_activity (one Activity node per
-        // run, written by HandleExecuteScript). The link routes through the
-        // standard mesh search area pre-filtered to this node's activities so
-        // operators can browse historical runs without leaving the Code page.
+        // Language + last-executed (when, by whom). No <a href> for activity
+        // history — the dedicated activities list area below replaces it.
         var language = codeConfig?.Language ?? "csharp";
-        var hubPathStr = hubAddress.ToString();
-        var activitiesHref = $"/{hubPathStr}/_activity/*";
-        var infoLineHtml = $"<div style=\"display: flex; align-items: baseline; gap: 16px; " +
-            $"color: var(--neutral-foreground-hint); margin-bottom: 16px; font-size: 0.85rem;\">" +
-            $"<span>Language: <span style=\"font-family: monospace;\">{System.Net.WebUtility.HtmlEncode(language)}</span></span>";
-        if (isExecutable && codeConfig?.LastExecutedAt is { } lastRun)
+        var infoBits = new List<string>
         {
-            infoLineHtml += $"<span>Last executed: <span title=\"{lastRun:O}\">{lastRun:g} UTC</span></span>" +
-                $"<a href=\"{System.Net.WebUtility.HtmlEncode(activitiesHref)}\" " +
-                $"style=\"color: var(--accent-fill-rest); text-decoration: none;\">View activity history</a>";
-        }
-        else if (isExecutable)
+            $"Language: <span style=\"font-family: monospace;\">{System.Net.WebUtility.HtmlEncode(language)}</span>",
+        };
+        if (isExecutable)
         {
-            // Executable but never run — surface the link anyway so the
-            // user can verify no historical runs exist (or remember they
-            // need to click Run).
-            infoLineHtml += $"<span style=\"font-style: italic;\">Never executed</span>" +
-                $"<a href=\"{System.Net.WebUtility.HtmlEncode(activitiesHref)}\" " +
-                $"style=\"color: var(--accent-fill-rest); text-decoration: none;\">View activity history</a>";
+            if (codeConfig?.LastExecutedAt is { } lastRun)
+            {
+                var when = $"<span title=\"{lastRun:O}\">{lastRun:g} UTC</span>";
+                var by = !string.IsNullOrEmpty(codeConfig.LastExecutedBy)
+                    ? $" by <strong>{System.Net.WebUtility.HtmlEncode(codeConfig.LastExecutedBy)}</strong>"
+                    : "";
+                infoBits.Add($"Last executed: {when}{by}");
+            }
+            else
+            {
+                infoBits.Add("<span style=\"font-style: italic;\">Never executed</span>");
+            }
         }
-        infoLineHtml += "</div>";
+        var infoLineHtml =
+            "<div style=\"display: flex; align-items: baseline; gap: 16px; " +
+            "color: var(--neutral-foreground-hint); margin-bottom: 16px; font-size: 0.85rem;\">" +
+            string.Join("", infoBits.Select(b => $"<span>{b}</span>")) +
+            "</div>";
         stack = stack.WithView(Controls.Html(infoLineHtml));
 
         // Code block
@@ -162,19 +158,59 @@ public static class CodeLayoutAreas
                 .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
         }
 
-        // Result pane for executable Code nodes. The kernel hub serves any
-        // LayoutAreaReference via its area stream — we render the "output" area
-        // that the Run button writes to via SubmitCodeRequest.Id = "output".
-        // Every click replaces the previous output value (last-write-wins), which is
-        // the expected behaviour for a single-shot run.
         if (isExecutable)
         {
+            // Output: the LATEST activity's Progress area (log + inline cancel).
+            // No more polling a kernel/* address that may not exist — the
+            // activity hub serves its own Progress view, so the pane shows
+            // historical output immediately on page load.
             stack = stack.WithView(Controls.Html("<h3 style=\"margin-top: 32px;\">Output</h3>"));
-            stack = stack.WithView(new LayoutAreaControl(kernelAddress, new LayoutAreaReference("output"))
-                .WithStyle("margin-top: 8px; padding: 12px; background: var(--neutral-layer-3); border-radius: 4px; min-height: 48px;"));
+            if (!string.IsNullOrEmpty(codeConfig?.LastActivityPath))
+            {
+                stack = stack.WithView(new LayoutAreaControl(
+                        new Address(codeConfig.LastActivityPath!),
+                        new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
+                    .WithStyle("margin-top: 8px; padding: 12px; background: var(--neutral-layer-3); border-radius: 4px; min-height: 48px;"));
+            }
+            else
+            {
+                stack = stack.WithView(Controls.Html(
+                    "<div style=\"margin-top: 8px; padding: 12px; background: var(--neutral-layer-3); " +
+                    "border-radius: 4px; color: var(--neutral-foreground-hint); font-style: italic;\">" +
+                    "Click <strong>Run</strong> to see output here.</div>"));
+            }
+
+            // Activity history: a real searchable list of past runs scoped to
+            // this Code node's activity namespace. Replaces the dead
+            // /{path}/_activity/* deep-link.
+            var activityNamespace = ResolveActivityNamespace(hubAddress, codeConfig);
+            stack = stack.WithView(Controls.Html("<h3 style=\"margin-top: 32px;\">Activity history</h3>"));
+            stack = stack.WithView(Controls.MeshSearch
+                .WithNamespace(activityNamespace)
+                .WithHiddenQuery($"nodeType:Activity")
+                .WithPlaceholder("Search past runs…")
+                .WithExcludeBasePath(true));
         }
 
         return stack;
+    }
+
+    /// <summary>
+    /// Mirror of the resolution rule in
+    /// <c>CodeNodeType.HandleExecuteScript</c>: where activities for this Code
+    /// node are written. Used by the Content view so the activity-history
+    /// search points at the same place the runs land.
+    /// </summary>
+    private static string ResolveActivityNamespace(Address hubAddress, CodeConfiguration? code)
+    {
+        var partitionRoot = hubAddress.Segments.Length > 0 ? hubAddress.Segments[0] : hubAddress.Path;
+        var parent = code?.ActivityParentPath switch
+        {
+            null => partitionRoot,
+            "{viewer}" => partitionRoot, // viewer-specific runs spread across partitions; show the source partition
+            var p => p
+        };
+        return $"{parent}/_Activity";
     }
 
     /// <summary>
