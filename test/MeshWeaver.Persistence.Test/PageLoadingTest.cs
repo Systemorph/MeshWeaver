@@ -31,6 +31,9 @@ namespace MeshWeaver.Persistence.Test;
 [Collection("PageLoadingTests")]
 public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const int DefaultTimeoutSeconds = 20;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
