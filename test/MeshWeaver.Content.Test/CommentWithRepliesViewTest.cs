@@ -36,6 +36,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("SamplesGraphData")]
 public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string DocPath = "Doc/DataMesh/CollaborativeEditing";
     private const string CommentC1Path = DocPath + "/_Comment/c1";
     private const string ReplyPath = CommentC1Path + "/reply1";

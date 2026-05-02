@@ -32,6 +32,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 [Collection("SamplesGraphData")]
 public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverCreateLayoutTests",
