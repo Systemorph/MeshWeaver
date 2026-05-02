@@ -23,6 +23,10 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Each [Fact] uses a distinct visitor ID (visitor1/visitor2/visitor3),
+    // so SP-sharing is collision-safe.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddRowLevelSecurity();
