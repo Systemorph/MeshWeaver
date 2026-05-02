@@ -230,10 +230,10 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     [Fact(Timeout = 60_000)]
     public async Task ViewerToken_RoutesActivitiesToCallersHome()
     {
-        // The Code node lives in `rbuergi` but configures viewer-routing.
-        // The caller's identity (DevLogin) is also `rbuergi` so the activity
-        // happens to land in the same partition — but it lands via the
-        // {viewer}-resolution path, not the partition-root fallback.
+        // Code node in `rbuergi` (the test partition), but configured to
+        // route activities to the {viewer}'s home. The DevLogin admin user
+        // has ObjectId = "Roland" (see TestUsers.Admin), so {viewer}
+        // resolves to "Roland" — independent of where the Code node lives.
         var id = $"viewerdemo-{Guid.NewGuid():N}";
         var path = $"{UserHome}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -253,11 +253,10 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             new ExecuteScriptRequest(),
             o => o.WithTarget(new Address(path)));
         resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "exec failed");
-        // DevLogin's user is rbuergi — viewer home is `rbuergi`. Activity must
-        // land in that partition (matching test setup; in prod with mixed
-        // identities, this would be the OAuth user's home).
-        resp.Message.ActivityLog.Should().StartWith($"{UserHome}/_Activity/",
-            "{viewer} should resolve to the calling user's home");
+        var expectedViewerHome = MeshWeaver.Hosting.Monolith.TestBase.TestUsers.Admin.ObjectId;
+        resp.Message.ActivityLog.Should().StartWith($"{expectedViewerHome}/_Activity/",
+            "{viewer} should resolve to the calling user's AccessContext.ObjectId, " +
+            "regardless of which partition the Code node lives in");
     }
 
     /// <summary>
