@@ -114,19 +114,10 @@
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.7" />
     <PackageVersion Include="System.Text.Encodings.Web" Version="10.0.7" />
     <PackageVersion Include="System.Text.Json" Version="10.0.7" />
-    <!-- Bumped to 5.3.0 to match what Graph pulls in. Microsoft.DotNet.Interactive.CSharp's
-         transitive Microsoft.CodeAnalysis.Scripting 5.0.0 still pins CSharp.Scripting at
-         5.0.0 exact, so we override BOTH packages directly here AND with explicit
-         PackageReference in MeshWeaver.Hosting.Orleans.csproj. -->
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.3.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.3.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Scripting" Version="5.3.0" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.AspNetCore" Version="1.0.0-beta.25323.1" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive" Version="1.0.0-beta.26120.1" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.26120.1" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.Formatting" Version="1.0.0-beta.26120.1" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.PackageManagement" Version="1.0.0-beta.26120.1" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.7" />

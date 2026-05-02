@@ -105,14 +105,30 @@ public static class CodeNodeType
                 // adds AddKernelSubHubHandlers, so SubmitCodeRequest sent to the activity
                 // path lands inside the activity's own action block. Replies route
                 // through the standard MeshNode chain — no `kernel/*` standalone hub.
+                // Activities live under {ActivityParentPath}/_Activity/{guid}.
+                // ActivityParentPath defaults to the partition root (the user's home)
+                // when null — every script run shows up in the user's activity feed,
+                // and the satellite path is shallow enough that routing materialises
+                // it reliably. The originating Code node is preserved on MainNode
+                // + ActivityLog.HubPath, so the link back is intact regardless of
+                // where the activity is stored.
                 var activityId = submissionId;
-                var activityNamespace = $"{hub.Address.Path}/_Activity";
+                var activityParentPath = code.ActivityParentPath
+                    ?? (hub.Address.Segments.Length > 0 ? hub.Address.Segments[0] : hub.Address.Path);
+                var activityNamespace = $"{activityParentPath}/_Activity";
                 var activityPath = $"{activityNamespace}/{activityId}";
+                // MainNode points to the activity's PARENT (the user's home or
+                // configured ActivityParentPath). The originating Code node
+                // is preserved on ActivityLog.HubPath, but access control for
+                // the activity itself goes through the SatelliteAccessRule
+                // which delegates to MainNode — so this needs to be a node the
+                // viewer actually has read access to. The user's home is the
+                // safe default.
                 var activityNode = new MeshNode(activityId, activityNamespace)
                 {
                     Name = $"Script run {activityId[..Math.Min(8, activityId.Length)]}",
                     NodeType = ActivityNodeType.NodeType,
-                    MainNode = hub.Address.Path,
+                    MainNode = activityParentPath,
                     State = MeshNodeState.Active,
                     Content = new ActivityLog("ScriptExecution")
                     {

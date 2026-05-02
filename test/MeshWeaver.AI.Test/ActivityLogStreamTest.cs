@@ -12,6 +12,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -37,12 +38,18 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
 
     // Use the standard MonolithMeshTestBase.ConfigureMesh so DevLogin (rbuergi)
     // + AddGraph + AddSampleUsers are wired the same way as MonolithKernelTest.
-    // Tests below put their Code nodes at `rbuergi/<id>` so the Activity at
-    // `rbuergi/<id>/_Activity/<guid>` lands in the rbuergi partition (which
-    // is a registered partition route — without this the Activity grain
-    // never activates and SubscribeRequest times out with "target hub was
-    // not found").
+    // Tests below put their Code nodes at `rbuergi/<id>`; activities land at
+    // `rbuergi/_Activity/<guid>` (top-level, per CodeNodeType's default).
     private const string ScriptsPartition = "rbuergi";
+
+    /// <summary>
+    /// Client config that adds layout / data so subscribers can use
+    /// <c>workspace.GetRemoteStream(...)</c>. Without <see cref="Layout.LayoutExtensions.AddLayoutClient"/>,
+    /// <c>GetWorkspace()</c> throws "AddData was not called" — and posting from
+    /// the mesh hub directly leaves <c>SubscribeRequest</c> without a return route.
+    /// </summary>
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration).AddLayoutClient();
 
     [Fact(Timeout = 60_000)]
     public async Task Script_Log_Messages_Land_On_ActivityLog_Node()
@@ -77,7 +84,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
 
         // Subscribe to the activity log's MeshNodeReference and wait until both
         // messages are present. Give the kernel up to 30 s to compile + run.
-        var workspace = Mesh.GetWorkspace();
+        var workspace = GetClient().GetWorkspace();
         var observed = await workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(exec.ActivityLog!), new MeshNodeReference())
@@ -134,7 +141,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         // Collect every distinct snapshot we observe up to and including the
         // 4-message terminal state. Each snapshot is the full ActivityLog at
         // that moment; the count of messages grows monotonically.
-        var workspace = Mesh.GetWorkspace();
+        var workspace = GetClient().GetWorkspace();
         // Stream every distinct message-count. Close as soon as we observe the
         // terminal snapshot (4 messages) by using TakeUntil — and re-include
         // that final emission via the wrapping Concat.
@@ -190,7 +197,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
 
         // Stream the log until Status flips out of Running. Before-throw must be
         // present even though the script raised — Log is best-effort and survives.
-        var workspace = Mesh.GetWorkspace();
+        var workspace = GetClient().GetWorkspace();
         var observed = await workspace
             .GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(exec.ActivityLog!), new MeshNodeReference())

@@ -1,43 +1,35 @@
-﻿using MeshWeaver.Messaging;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Kernel;
 
-public record KernelEventEnvelope(string Envelope);
-
-public record KernelCommandEnvelope(string Command)
-{
-    public string? IFrameUrl { get; init; }
-    public string ViewId { get; init; } = Guid.NewGuid().AsString();
-}
-
+/// <summary>
+/// Submit a script for execution on the addressed kernel host.
+/// Progress, stdout, return values, and errors all stream into the host's
+/// <c>ActivityLog</c> content — subscribe via
+/// <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;(activityAddress, new MeshNodeReference())</c>
+/// to observe in real time. There is no separate event-envelope channel.
+/// </summary>
 public record SubmitCodeRequest(string Code) : IRequest<SubmitCodeResponse>
 {
     public string? IFrameUrl { get; init; }
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
     /// <summary>
-    /// Path to the <c>ActivityLog</c> MeshNode created by the caller before dispatch.
-    /// The kernel resolves an ILogger targeting this node and injects it as the
-    /// script's <c>Log</c> global — all <c>Log.LogInformation(...)</c> etc. calls
-    /// append to the node's <c>Messages</c> list, and subscribers to the node's
-    /// <c>MeshNodeReference</c> stream see them land live.
+    /// Optional explicit ActivityLog node to write progress into. If null, the
+    /// kernel writes progress into its own host hub's ActivityLog content
+    /// (the implicit, common case — the host hub IS the activity).
     /// </summary>
     public string? ActivityLogPath { get; init; }
 }
 
 /// <summary>
 /// Posted by the kernel hub after <see cref="SubmitCodeRequest"/> finishes executing.
-/// <c>Success</c> is <c>true</c> when the kernel command ran without a diagnostic error;
-/// <c>Error</c> carries the failure message otherwise. Callers use this as the completion
-/// signal for <c>RegisterCallback</c> — the kernel's Processed state alone does not
-/// round-trip back to the source hub.
+/// <c>Success</c> is <c>true</c> when the script ran without an error; <c>Error</c>
+/// carries the failure message otherwise. For full progress, subscribe to the
+/// host's ActivityLog via <c>GetRemoteStream</c> instead of waiting on this response.
 /// </summary>
 public record SubmitCodeResponse(string SubmissionId, bool Success)
 {
     public string? Error { get; init; }
 }
-
-public record SubscribeKernelEventsRequest;
-public record UnsubscribeKernelEventsRequest;
-
