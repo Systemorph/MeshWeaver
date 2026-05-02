@@ -26,6 +26,10 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Each [Fact] uses a distinct VUser name (testVUser / anonUser / guest42 /
+    // guest99); SecuredHub is fixture-time and never mutated. Safe to share.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
