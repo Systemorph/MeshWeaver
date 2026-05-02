@@ -94,16 +94,19 @@ public static class CodeNodeType
                 }
 
                 var submissionId = request.Message.SubmissionId ?? Guid.NewGuid().ToString("N");
-                var kernelAddress = AddressExtensions.CreateKernelAddress(
-                    "code-" + hub.Address.Path.Replace('/', '-'));
 
                 // Create an ActivityLog MeshNode for this run — scripts'
                 // Log.LogInformation(...) calls will append to it, and callers
                 // subscribe via GetRemoteStream<MeshNode, MeshNodeReference> to
                 // watch progress live. Created via IMeshService.CreateNode so it
                 // flows through the standard create pipeline (RLS, persistence).
+                //
+                // The Activity hub also HOSTS the kernel: ActivityNodeType.HubConfiguration
+                // adds AddKernelSubHubHandlers, so SubmitCodeRequest sent to the activity
+                // path lands inside the activity's own action block. Replies route
+                // through the standard MeshNode chain — no `kernel/*` standalone hub.
                 var activityId = submissionId;
-                var activityNamespace = $"{hub.Address.Path}/_activity";
+                var activityNamespace = $"{hub.Address.Path}/_Activity";
                 var activityPath = $"{activityNamespace}/{activityId}";
                 var activityNode = new MeshNode(activityId, activityNamespace)
                 {
@@ -123,14 +126,15 @@ public static class CodeNodeType
                 meshService.CreateNode(activityNode).Subscribe(
                     _ =>
                     {
-                        // Node created. Fire SubmitCodeRequest carrying the log path.
+                        // Node created. Fire SubmitCodeRequest at the Activity hub
+                        // (which now hosts the kernel handlers).
                         hub.Post(
                             new SubmitCodeRequest(code.Code ?? string.Empty)
                             {
                                 Id = submissionId,
                                 ActivityLogPath = activityPath
                             },
-                            o => o.WithTarget(kernelAddress));
+                            o => o.WithTarget(new Address(activityPath)));
 
                         // Stamp LastExecutedAt onto the Code MeshNode so the
                         // Content area can show "Last executed: …" without a

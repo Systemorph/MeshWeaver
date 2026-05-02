@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,7 +14,9 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Markdown.Test;
@@ -37,11 +40,33 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
 
+    /// <summary>
+    /// Materialises a per-test Activity MeshNode whose hub hosts the kernel
+    /// handlers (post-migration: kernel runs inside ActivityNodeType's hub).
+    /// </summary>
+    private async Task<Address> CreateKernelSessionAsync()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var kernelId = Guid.NewGuid().ToString("N");
+        const string ownerPath = "rbuergi";
+        var activityNamespace = $"{ownerPath}/_Activity";
+        var activityNode = new MeshNode($"markdown-{kernelId}", activityNamespace)
+        {
+            Name = "Test markdown kernel",
+            NodeType = "Activity",
+            MainNode = ownerPath,
+            State = MeshNodeState.Active,
+            Content = new ActivityLog("MarkdownExecution") { Status = ActivityStatus.Running }
+        };
+        await meshService.CreateNode(activityNode).FirstAsync().ToTask();
+        return new Address($"{activityNamespace}/markdown-{kernelId}");
+    }
+
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task ExecuteBlock_RoutesThroughMarkdownViewLogic_ReachesKernel()
     {
         var client = GetClient();
-        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         const string markdown = """
             ```csharp --render demo-area
@@ -71,7 +96,7 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
     public async Task MultipleBlocks_ShareKernelState_ViaSharedAddress()
     {
         var client = GetClient();
-        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         const string markdown = """
             ```csharp --execute
@@ -113,7 +138,7 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
     public async Task CodeSubmissions_SurviveJsonElementRoundTripAndDispatch()
     {
         var client = GetClient();
-        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         const string markdown = """
             ```csharp --render wire-test
@@ -161,7 +186,7 @@ public class InteractiveMarkdownExecutionTest(ITestOutputHelper output) : Monoli
     public async Task ExtractCodeSubmissions_Fallback_DispatchesCorrectly()
     {
         var client = GetClient();
-        var kernelAddress = AddressExtensions.CreateKernelAddress();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         const string markdown = """
             ```csharp --render fallback

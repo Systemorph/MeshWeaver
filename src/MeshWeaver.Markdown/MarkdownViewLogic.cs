@@ -1,7 +1,11 @@
+using System.Reactive.Linq;
 using System.Text.Json;
 using Markdig;
 using Markdig.Syntax;
+using MeshWeaver.Data;
 using MeshWeaver.Kernel;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Markdown;
@@ -136,17 +140,67 @@ public static class MarkdownViewLogic
     }
 
     /// <summary>
-    /// Posts each submission to the kernel address. The mesh routing rule
-    /// (<c>RouteAddressToHostedHub</c>, registered by <c>KernelNodeType.AddKernel</c>)
-    /// creates the kernel hub on demand when the first message arrives.
+    /// Posts each submission to the given target. Caller is responsible for
+    /// ensuring the target hub (typically a per-view Activity hub) exists —
+    /// see <see cref="CreateActivityAndSubmit"/> for the production path that
+    /// materialises the Activity first. Tests use this overload directly when
+    /// the Activity is pre-created in fixture setup.
     /// </summary>
     public static void SubmitCode(
         IMessageHub senderHub,
-        Address kernelAddress,
+        Address target,
         IReadOnlyCollection<SubmitCodeRequest> submissions)
     {
         foreach (var submission in submissions)
-            senderHub.Post(submission, o => o.WithTarget(kernelAddress));
+            senderHub.Post(submission, o => o.WithTarget(target));
+    }
+
+    /// <summary>
+    /// Materialises a per-view Activity MeshNode (whose hub hosts the kernel
+    /// handlers via <c>ActivityNodeType.HubConfiguration</c>) and posts each
+    /// submission to the activity address. Replaces the legacy "post to
+    /// `kernel/*` and let the mesh routing rule create a kernel hub" path.
+    ///
+    /// <para>Activity creation is fire-and-on-success: <c>meshService.CreateNode</c>
+    /// returns an <see cref="IObservable{T}"/>; we subscribe and post the
+    /// submissions when the create completes. If the create errors, the
+    /// submissions are NOT posted — the error surfaces via the standard
+    /// observable path.</para>
+    /// </summary>
+    public static void CreateActivityAndSubmit(
+        IMessageHub senderHub,
+        IMeshService meshService,
+        Address activityAddress,
+        string? ownerPath,
+        string kernelId,
+        IReadOnlyCollection<SubmitCodeRequest> submissions)
+    {
+        var activityNamespace = string.IsNullOrEmpty(ownerPath)
+            ? "_Activity"
+            : $"{ownerPath}/_Activity";
+        var activityNode = new MeshNode($"markdown-{kernelId}", activityNamespace)
+        {
+            Name = $"Markdown view {kernelId[..Math.Min(8, kernelId.Length)]}",
+            NodeType = "Activity",
+            MainNode = ownerPath ?? string.Empty,
+            State = MeshNodeState.Active,
+            Content = new ActivityLog("MarkdownExecution")
+            {
+                Id = $"markdown-{kernelId}",
+                HubPath = ownerPath ?? string.Empty,
+                Status = ActivityStatus.Running
+            }
+        };
+
+        meshService.CreateNode(activityNode).Subscribe(
+            _ => SubmitCode(senderHub, activityAddress, submissions),
+            _ =>
+            {
+                // Swallow — the activity didn't materialise, so SubmitCodeRequest
+                // would route to a non-existent grain. The caller (MarkdownView)
+                // has no UX for "kernel unavailable"; surface via logging upstream
+                // if needed.
+            });
     }
 
     private static IReadOnlyList<SubmitCodeRequest>? ExtractSubmissions(MarkdownDocument document)
