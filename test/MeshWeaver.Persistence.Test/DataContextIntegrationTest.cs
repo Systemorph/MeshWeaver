@@ -61,8 +61,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     {
     }
 
-    // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
-    protected override bool ShareMeshAcrossTests => true;
+    // NOTE: not opted into ShareMeshAcrossTests — Persistence_CanUpdateNodeWithContent
+    // throws NRE under shared mesh (per-Fact tests rely on a clean DataContext).
 
     private static readonly JsonSerializerOptions SetupJsonOptions = new();
 
