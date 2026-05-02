@@ -16,9 +16,10 @@ public static class ActivityLayoutAreas
 {
     public const string OverviewArea = "Overview";
     public const string ThumbnailArea = "Thumbnail";
+    public const string CancelArea = "Cancel";
 
     /// <summary>
-    /// Registers the Activity-specific views (Overview, Thumbnail).
+    /// Registers the Activity-specific views (Overview, Thumbnail, Progress, Cancel).
     /// </summary>
     public static MessageHubConfiguration AddActivityViews(this MessageHubConfiguration configuration)
         => configuration
@@ -26,7 +27,8 @@ public static class ActivityLayoutAreas
                 .WithDefaultArea(OverviewArea)
                 .WithView(OverviewArea, Overview)
                 .WithView(ThumbnailArea, Thumbnail)
-                .WithView(ProgressArea, Progress));
+                .WithView(ProgressArea, Progress)
+                .WithView(CancelArea, CancelButton));
 
     public const string ProgressArea = "Progress";
 
@@ -49,10 +51,29 @@ public static class ActivityLayoutAreas
                     .WithView(Controls.Html(BuildHeaderHtml(log)))
                     .WithView(Controls.Html(BuildMessagesHtml(log)));
 
+                // While running: Cancel button. Per the Activity Control Plane
+                // pattern (Doc/Architecture/ActivityControlPlane.md), cancellation
+                // is a property patch on the activity's content — NOT a separate
+                // CancelXRequest message. The activity hub's own watcher
+                // (KernelContainer.StartActivityControlPlane) translates the
+                // RequestedStatus = Cancelled patch into the internal cancel.
+                if (log.Status == ActivityStatus.Running && log.RequestedStatus != ActivityStatus.Cancelled)
+                {
+                    stack = stack.WithView(Controls.Button("Cancel")
+                        .WithIconStart(FluentIcons.Dismiss())
+                        .WithClickAction(ctx =>
+                        {
+                            ctx.Host.Workspace.UpdateMeshNode(curr =>
+                                curr.Content is ActivityLog active
+                                    ? curr with { Content = active with { RequestedStatus = ActivityStatus.Cancelled } }
+                                    : curr);
+                            return Task.CompletedTask;
+                        }));
+                }
                 // Re-run button when the activity is finished and the originating
                 // hub is known. Click posts ExecuteScriptRequest back to the
                 // originating hub, which creates a fresh sibling Activity.
-                if (!string.IsNullOrEmpty(log.HubPath) && log.Status != ActivityStatus.Running)
+                else if (!string.IsNullOrEmpty(log.HubPath) && log.Status != ActivityStatus.Running)
                 {
                     var originAddress = new Address(log.HubPath);
                     stack = stack.WithView(Controls.Button("Re-run")
@@ -71,10 +92,48 @@ public static class ActivityLayoutAreas
     }
 
     /// <summary>
+    /// Standalone Cancel-button view. Renders just the button (no log, no header).
+    /// While the activity is running, click patches <c>RequestedStatus = Cancelled</c>
+    /// per the <see href="xref:Architecture/ActivityControlPlane">Activity Control Plane</see>
+    /// pattern; once terminal, renders nothing.
+    ///
+    /// <para>Embed in interactive markdown via <c>--render Cancel</c> (when
+    /// rendered within an activity's own layout) or as
+    /// <c>Controls.NamedArea(activityAddress, ActivityLayoutAreas.CancelArea)</c>
+    /// when embedding from another hub's layout.</para>
+    /// </summary>
+    public static IObservable<UiControl?> CancelButton(LayoutAreaHost host, RenderingContext _)
+    {
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node =>
+            {
+                if (node?.Content is not ActivityLog log) return null;
+                if (log.Status != ActivityStatus.Running) return null;
+                var disabled = log.RequestedStatus == ActivityStatus.Cancelled;
+                var button = Controls.Button("Cancel")
+                    .WithIconStart(FluentIcons.Dismiss())
+                    .WithStyle(disabled ? "opacity: 0.5;" : "");
+                if (!disabled)
+                {
+                    button = button.WithClickAction(ctx =>
+                    {
+                        ctx.Host.Workspace.UpdateMeshNode(curr =>
+                            curr.Content is ActivityLog l
+                                ? curr with { Content = l with { RequestedStatus = ActivityStatus.Cancelled } }
+                                : curr);
+                        return Task.CompletedTask;
+                    });
+                }
+                return (UiControl?)button;
+            });
+    }
+
+    /// <summary>
     /// Compact running-progress view for embedding next to an executable Code
     /// node (or anywhere a caller wants live script feedback). Streams the same
     /// ActivityLog content as <see cref="Overview"/> but trims chrome and shows
-    /// only the messages + status badge — no header, no Re-run button.
+    /// only the messages + inline Cancel button (while running) + status badge.
+    /// No header, no Re-run.
     /// </summary>
     public static IObservable<UiControl?> Progress(LayoutAreaHost host, RenderingContext _)
     {
@@ -83,7 +142,28 @@ public static class ActivityLayoutAreas
             {
                 if (node?.Content is not ActivityLog log)
                     return (UiControl?)Controls.Html("<em>No activity yet.</em>");
-                return (UiControl?)Controls.Html(BuildMessagesHtml(log));
+
+                var stack = Controls.Stack
+                    .WithStyle("gap: 8px;")
+                    .WithView(Controls.Html(BuildMessagesHtml(log)));
+
+                // Inline Cancel: same content-patch pattern as the Overview's
+                // button. Only rendered while the activity is actually running
+                // and not already cancelling.
+                if (log.Status == ActivityStatus.Running && log.RequestedStatus != ActivityStatus.Cancelled)
+                {
+                    stack = stack.WithView(Controls.Button("Cancel")
+                        .WithIconStart(FluentIcons.Dismiss())
+                        .WithClickAction(ctx =>
+                        {
+                            ctx.Host.Workspace.UpdateMeshNode(curr =>
+                                curr.Content is ActivityLog l
+                                    ? curr with { Content = l with { RequestedStatus = ActivityStatus.Cancelled } }
+                                    : curr);
+                            return Task.CompletedTask;
+                        }));
+                }
+                return (UiControl?)stack;
             });
     }
 

@@ -137,6 +137,119 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
+    /// Cancel-via-property: per the Activity Control Plane pattern
+    /// (Doc/Architecture/ActivityControlPlane.md), users cancel a running
+    /// activity by patching its content's <c>RequestedStatus = Cancelled</c>
+    /// — NOT by posting a CancelXRequest message. The Activity hub watches its
+    /// own MeshNodeReference and dispatches the internal cancellation when it
+    /// observes the patch.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Cancel_Via_RequestedStatus_Patch_Cancels_Running_Script()
+    {
+        // Script uses Task.Delay(ms, Ct) so the Ct global (rebound per
+        // submission) actually interrupts the wait mid-flight when the user
+        // patches RequestedStatus = Cancelled. The 800 ms is long enough for
+        // the test thread to subscribe + patch, but short enough not to slow
+        // the suite when the cancel mechanism breaks (the test would block on
+        // the cancellation timeout, not on this wait).
+        var (codePath, _) = await SeedExecutableCodeAsync("""
+            Log.LogInformation("starting");
+            await System.Threading.Tasks.Task.Delay(800, Ct);
+            Log.LogInformation("if you see this, cancel did not work");
+            "should not get here"
+        """);
+
+        var execResponse = await AwaitResponseAsync(
+            new ExecuteScriptRequest(),
+            o => o.WithTarget(new Address(codePath)));
+        execResponse.Message.Success.Should().BeTrue();
+        var activityPath = new Address(execResponse.Message.ActivityLog!);
+
+        var workspace = GetClient().GetWorkspace();
+        var activityStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+            activityPath, new MeshNodeReference());
+
+        // Wait until the script has actually started (first message landed).
+        await activityStream
+            .Select(c => c.Value?.Content as ActivityLog)
+            .Where(l => l is not null && l.Messages.Count >= 1)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync();
+
+        // The canonical cancel: patch RequestedStatus on the activity content.
+        // No CancelScriptRequest, no message types — just workspace.UpdateMeshNode.
+        workspace.UpdateMeshNode(curr =>
+            curr.Content is ActivityLog log
+                ? curr with { Content = log with { RequestedStatus = ActivityStatus.Cancelled } }
+                : curr,
+            nodePath: activityPath.Path);
+
+        // The activity hub's control-plane watcher sees the patch, dispatches
+        // the internal cancel, the script throws OperationCanceledException, and
+        // the Activity Status flips out of Running.
+        var terminal = await activityStream
+            .Select(c => c.Value?.Content as ActivityLog)
+            .Where(l => l is not null && l.Status != ActivityStatus.Running)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync();
+
+        terminal!.Status.Should().Be(ActivityStatus.Failed,
+            "cancellation surfaces as Failed status (with the cancellation message in Messages)");
+        terminal.Messages.Select(m => m.Message)
+            .Should().Contain(m => m.Contains("starting"), "earlier log entries survive cancellation")
+            .And.NotContain(m => m.Contains("if you see this"),
+                "the post-sleep log line must not have run");
+    }
+
+    /// <summary>
+    /// End-to-end check that <c>#r "nuget:..."</c> directives still work after
+    /// the .NET-Interactive removal. Pulls MathNet.Numerics from nuget.org and
+    /// uses one of its types — proves the full pipeline (NuGetDirectiveParser
+    /// → INuGetAssemblyResolver → MetadataReference → CSharpScript +
+    /// AssemblyLoadContext probing for transitive deps) compiles, resolves,
+    /// and runs against a real third-party package.
+    ///
+    /// <para>Requires network. First run downloads the package to the global
+    /// NuGet cache; subsequent runs hit the cache and complete in seconds.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task NuGetDirective_DownloadsPackage_AndScriptUsesIt()
+    {
+        var (codePath, _) = await SeedExecutableCodeAsync("""
+            #r "nuget:MathNet.Numerics, 5.0.0"
+            using MathNet.Numerics;
+            Log.LogInformation("MathNet pi/4 via series: {Result}", SpecialFunctions.Erf(1.0));
+            $"erf(1) = {SpecialFunctions.Erf(1.0):F6}"
+        """);
+
+        var execResponse = await AwaitResponseAsync(
+            new ExecuteScriptRequest(),
+            o => o.WithTarget(new Address(codePath)));
+        execResponse.Message.Success.Should().BeTrue(execResponse.Message.Error ?? "exec failed");
+
+        var workspace = GetClient().GetWorkspace();
+        var final = await workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(execResponse.Message.ActivityLog!), new MeshNodeReference())
+            .Select(c => c.Value?.Content as ActivityLog)
+            .Where(l => l is not null && l!.Status != ActivityStatus.Running)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(120))
+            .FirstAsync();
+
+        final!.Status.Should().Be(ActivityStatus.Succeeded,
+            "MathNet.Numerics should resolve from nuget.org and the script should compile + run");
+        // erf(1) ≈ 0.8427... — the script logs this twice (once via Log, once
+        // as the return value which the kernel echoes onto the activity log).
+        final.Messages.Select(m => m.Message)
+            .Should().Contain(m => m.Contains("0.8427") || m.Contains("erf"),
+                "the script's MathNet call should produce the well-known erf(1) value");
+    }
+
+    /// <summary>
     /// Re-running creates a NEW activity. The previous activity is untouched —
     /// historical runs accumulate as siblings under <c>{codePath}/_Activity/*</c>.
     /// </summary>

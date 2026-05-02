@@ -15,6 +15,23 @@ public record ActivityLog(string Category)
     public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
     public ActivityStatus Status { get; init; }
+
+    /// <summary>
+    /// The status the user (or an automated control plane) is requesting the
+    /// activity transition into. Patched via <c>workspace.UpdateMeshNode</c>
+    /// on the activity to drive the state machine — e.g. set to
+    /// <see cref="ActivityStatus.Cancelled"/> to cancel a running script.
+    /// The activity hub observes its own content and reacts.
+    ///
+    /// <para>Decouples request from current state: <see cref="Status"/> is
+    /// "what's actually happening", <see cref="RequestedStatus"/> is "what the
+    /// user wants to happen". Once the requested state is reached, the activity
+    /// clears or aligns this field.</para>
+    ///
+    /// <para>This is the canonical activity-control pattern — see
+    /// <c>Doc/Architecture/ActivityControlPlane.md</c>.</para>
+    /// </summary>
+    public ActivityStatus? RequestedStatus { get; init; }
     public DateTime? End { get; init; }
     public UserInfo? User { get; init; }
     public string? HubPath { get; init; }

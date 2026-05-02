@@ -38,6 +38,13 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
 
     private readonly SemaphoreSlim executionLock = new(1, 1);
 
+    // Cancellation source for the script currently inside ExecuteAsync. Replaced
+    // on each submission. CancelScriptRequest cancels it; the script's
+    // CancellationToken trips at the next await point, RunAsync/ContinueWithAsync
+    // throws OperationCanceledException, the activity log flips to Failed.
+    private CancellationTokenSource? activeCancellation;
+    private readonly object cancellationLock = new();
+
     private ILogger Logger => publicHub.ServiceProvider.GetRequiredService<ILoggerFactory>()
         .CreateLogger<KernelExecutor>();
 
@@ -45,7 +52,19 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     {
         config.TypeRegistry.WithType(typeof(SubmitCodeRequest), nameof(SubmitCodeRequest));
         config.TypeRegistry.WithType(typeof(SubmitCodeResponse), nameof(SubmitCodeResponse));
-        return config.WithHandler<SubmitCodeRequest>(HandleSubmitCodeRequest);
+        config.TypeRegistry.WithType(typeof(CancelScriptRequest), nameof(CancelScriptRequest));
+        return config
+            .WithHandler<SubmitCodeRequest>(HandleSubmitCodeRequest)
+            .WithHandler<CancelScriptRequest>(HandleCancelRequest);
+    }
+
+    private IMessageDelivery HandleCancelRequest(IMessageHub _, IMessageDelivery<CancelScriptRequest> request)
+    {
+        lock (cancellationLock)
+        {
+            activeCancellation?.Cancel();
+        }
+        return request.Processed();
     }
 
     /// <summary>
@@ -63,22 +82,47 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             : publicHub.Address.ToString();
         var activityLogger = new ActivityLogLogger(hub, activityPath);
 
-        Observable.FromAsync(ct => ExecuteAsync(hub, msg.Code, msg.Id, activityLogger, ct))
+        // Pair each submission with its own CancellationTokenSource. The handler
+        // for CancelScriptRequest cancels whatever's currently active.
+        var cts = new CancellationTokenSource();
+        lock (cancellationLock) { activeCancellation = cts; }
+
+        Observable.FromAsync(_ => ExecuteAsync(hub, msg.Code, msg.Id, activityLogger, cts.Token))
             .Subscribe(
                 _ =>
                 {
+                    ClearCancellationIf(cts);
                     activityLogger.Complete(ActivityStatus.Succeeded);
                     hub.Post(new SubmitCodeResponse(msg.Id, true), o => o.ResponseFor(request));
                 },
                 ex =>
                 {
-                    activityLogger.LogError(ex, "Script dispatch failed");
-                    activityLogger.Complete(ActivityStatus.Failed);
-                    hub.Post(new SubmitCodeResponse(msg.Id, false) { Error = ex.Message },
+                    ClearCancellationIf(cts);
+                    var canceled = ex is OperationCanceledException;
+                    if (canceled)
+                        activityLogger.LogWarning("Script execution cancelled by user");
+                    else
+                        activityLogger.LogError(ex, "Script dispatch failed");
+                    activityLogger.Complete(canceled ? ActivityStatus.Failed : ActivityStatus.Failed);
+                    hub.Post(
+                        new SubmitCodeResponse(msg.Id, false)
+                        {
+                            Error = canceled ? "Cancelled" : ex.Message
+                        },
                         o => o.ResponseFor(request));
                 });
 
         return request.Processed();
+    }
+
+    private void ClearCancellationIf(CancellationTokenSource cts)
+    {
+        lock (cancellationLock)
+        {
+            if (ReferenceEquals(activeCancellation, cts))
+                activeCancellation = null;
+        }
+        cts.Dispose();
     }
 
     private async Task ExecuteAsync(
@@ -97,6 +141,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             // Swap the script logger for this submission so user-script
             // Log.LogInformation lands on the requested ActivityLog.
             scriptLogger!.Set(scriptOutputLogger);
+            // Rebind the per-submission CancellationToken on the shared globals
+            // object so `Task.Delay(ms, Ct)` etc. inside the script see THIS
+            // submission's cancellation source.
+            scriptGlobals!.Ct = ct;
 
             // Capture stdout into the same logger so Console.WriteLine ends up
             // on the activity log alongside Log.LogInformation calls.

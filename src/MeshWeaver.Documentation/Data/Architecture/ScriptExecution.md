@@ -75,7 +75,49 @@ Agents call the same path as `ExecuteScriptRequest` but through the MCP tool sur
 
 ## Writing progress in scripts
 
-Scripts get two globals: `Mesh` (the live `IMessageHub`) and `Log` (an `ILogger`). **Every `Log.LogInformation(...)` call appends a `LogMessage` to the activity's `ActivityLog.Messages` list and flushes a snapshot through the activity hub's workspace** — subscribers see it land within milliseconds of the call.
+Scripts get three globals:
+- **`Mesh`** — the live `IMessageHub` for posting messages, subscribing to streams, anything mesh-side.
+- **`Log`** — an `ILogger` whose every entry appends to the activity's `ActivityLog.Messages` and flushes a snapshot through the activity hub's workspace. **Subscribers see it land within milliseconds of the call.**
+- **`Ct`** — a `CancellationToken` rebound per submission. **Pass it to every cancellable async API** (`Task.Delay(ms, Ct)`, `HttpClient.GetAsync(url, Ct)`, reactive `FirstAsync(predicate).ToTask(Ct)`) so a user-initiated cancel via the Activity Control Plane actually interrupts long-running work mid-flight.
+
+### Reactive waiting (reporting status back to the UI)
+
+Don't `Thread.Sleep` and don't `Task.Delay(ms)` without the cancellation token. Both block the work cleanly enough but neither responds to a user clicking Cancel until the wait completes. The right shape uses **reactive subscriptions on the workspace** — both for waiting on external state and for reporting status back to the UI as it changes:
+
+```csharp
+// Wait for a downstream node to flip to a target status — and the wait is
+// cancellable mid-flight if the user clicks Cancel.
+Log.LogInformation("Waiting for downstream job to finish…");
+await Mesh.GetWorkspace()
+    .GetMeshNodeStream("rbuergi/downstream-job")
+    .Where(n => (n?.Content as JobContent)?.Status == JobStatus.Succeeded)
+    .Take(1)
+    .ToTask(Ct);                          // ← Ct propagates Cancel
+Log.LogInformation("Downstream finished — proceeding");
+```
+
+This is the canonical pattern. Pair it with `Log.LogInformation(...)` checkpoints so the user sees what the script is waiting for. Don't loop-poll; subscribe and let the workspace push you the next emission.
+
+For longer waits with periodic heartbeats, combine `Observable.Interval` with `TakeUntil`:
+
+```csharp
+Log.LogInformation("Crunching…");
+using var cts = System.Threading.CancellationTokenSource
+    .CreateLinkedTokenSource(Ct);
+var heartbeat = System.Reactive.Linq.Observable
+    .Interval(TimeSpan.FromSeconds(5))
+    .Subscribe(t => Log.LogInformation($"Still working — {t * 5}s elapsed"));
+try
+{
+    await DoLongWork(cts.Token);
+}
+finally
+{
+    heartbeat.Dispose();
+}
+```
+
+Every `Log.LogInformation(...)` snapshot lands on the activity log within milliseconds of the call — that's how the user's UI stripe + activity-details view stay live without polling.
 
 ```csharp
 Log.LogInformation("Starting import...");
