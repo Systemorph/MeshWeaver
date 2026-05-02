@@ -12,7 +12,6 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -34,27 +33,25 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class ActivityLogStreamTest : MonolithMeshTestBase
 {
-    private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData-activity");
-
     public ActivityLogStreamTest(ITestOutputHelper output) : base(output) { }
 
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => builder
-            .UseMonolithMesh()
-            .AddFileSystemPersistence(TestDataPath)
-            .AddGraph();
+    // Use the standard MonolithMeshTestBase.ConfigureMesh so DevLogin (rbuergi)
+    // + AddGraph + AddSampleUsers are wired the same way as MonolithKernelTest.
+    // Tests below put their Code nodes at `rbuergi/<id>` so the Activity at
+    // `rbuergi/<id>/_Activity/<guid>` lands in the rbuergi partition (which
+    // is a registered partition route — without this the Activity grain
+    // never activates and SubscribeRequest times out with "target hub was
+    // not found").
+    private const string ScriptsPartition = "rbuergi";
 
-    [Fact(Timeout = 60_000, Skip = "Plumbing in place (Code hub creates activity node, kernel sets ActivityLogLogger " +
-        "as Log global, logger fires DataChangeRequest to the activity hub). E2E still times out — script side doesn't " +
-        "appear to flush messages through DataChangeRequest.Update in Monolith within 30s. Needs targeted kernel-trace " +
-        "debug session; all infrastructure assertions (permission, node creation, response path) are covered by other tests.")]
+    [Fact(Timeout = 60_000)]
     public async Task Script_Log_Messages_Land_On_ActivityLog_Node()
     {
         // Seed a Code node with a script that logs two lines.
         var id = $"logrun-{Guid.NewGuid():N}";
-        var path = $"Scripts/{id}";
+        var path = $"{ScriptsPartition}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNode(new MeshNode(id, "Scripts")
+        await mesh.CreateNode(new MeshNode(id, ScriptsPartition)
         {
             Name = "Log test",
             NodeType = "Code",
@@ -95,16 +92,83 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
             .And.Contain(m => m.Contains("step-two"));
     }
 
-    [Fact(Timeout = 60_000, Skip = "Plumbing in place (Code hub creates activity node, kernel sets ActivityLogLogger " +
-        "as Log global, logger fires DataChangeRequest to the activity hub). E2E still times out — script side doesn't " +
-        "appear to flush messages through DataChangeRequest.Update in Monolith within 30s. Needs targeted kernel-trace " +
-        "debug session; all infrastructure assertions (permission, node creation, response path) are covered by other tests.")]
+    /// <summary>
+    /// Polling progress: a script writes 4 log lines spaced ~150 ms apart. Subscribers
+    /// of the ActivityLog stream must see the message count grow GRADUALLY — not just
+    /// the final 4-message snapshot. Proves the Activity-hosted kernel publishes
+    /// intermediate snapshots via <c>DataChangeRequest.Update</c> as the script runs,
+    /// instead of buffering everything until the script returns.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Progress_Messages_Stream_Gradually_Not_Just_At_The_End()
+    {
+        var id = $"progress-{Guid.NewGuid():N}";
+        var path = $"{ScriptsPartition}/{id}";
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await mesh.CreateNode(new MeshNode(id, ScriptsPartition)
+        {
+            Name = "Progress test",
+            NodeType = "Code",
+            Content = new CodeConfiguration
+            {
+                Code = """
+                       Log.LogInformation("step-1");
+                       System.Threading.Thread.Sleep(200);
+                       Log.LogInformation("step-2");
+                       System.Threading.Thread.Sleep(200);
+                       Log.LogInformation("step-3");
+                       System.Threading.Thread.Sleep(200);
+                       Log.LogInformation("step-4");
+                       """,
+                IsExecutable = true
+            }
+        });
+
+        var execResponse = await AwaitResponseAsync(
+            new ExecuteScriptRequest(),
+            o => o.WithTarget(new Address(path)));
+        var exec = execResponse.Message;
+        exec.Success.Should().BeTrue(exec.Error ?? "exec failed");
+        exec.ActivityLog.Should().NotBeNullOrEmpty();
+
+        // Collect every distinct snapshot we observe up to and including the
+        // 4-message terminal state. Each snapshot is the full ActivityLog at
+        // that moment; the count of messages grows monotonically.
+        var workspace = Mesh.GetWorkspace();
+        // Stream every distinct message-count. Close as soon as we observe the
+        // terminal snapshot (4 messages) by using TakeUntil — and re-include
+        // that final emission via the wrapping Concat.
+        var counts = workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(exec.ActivityLog!), new MeshNodeReference())
+            .Select(change => change.Value?.Content as ActivityLog)
+            .Where(log => log is not null)
+            .Select(log => log!.Messages.Count)
+            .DistinctUntilChanged();
+
+        var snapshots = await counts
+            .Where(c => c <= 4)
+            .TakeUntil(c => c >= 4)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToList()
+            .ToTask();
+
+        // Gradual streaming → at least 3 distinct snapshots before we hit 4.
+        // (We allow batching of two adjacent log calls but not all-at-once.)
+        snapshots.Should().HaveCountGreaterThanOrEqualTo(3,
+            "ActivityLog should publish intermediate snapshots as messages land — " +
+            "not buffer everything until script completion. Snapshots seen: [" +
+            string.Join(", ", snapshots) + "]");
+        snapshots.Last().Should().Be(4, "terminal snapshot must contain all 4 log lines");
+    }
+
+    [Fact(Timeout = 60_000)]
     public async Task Script_Failure_Flips_ActivityLog_Status_To_Failed()
     {
         var id = $"logfail-{Guid.NewGuid():N}";
-        var path = $"Scripts/{id}";
+        var path = $"{ScriptsPartition}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await mesh.CreateNode(new MeshNode(id, "Scripts")
+        await mesh.CreateNode(new MeshNode(id, ScriptsPartition)
         {
             Name = "Failing script",
             NodeType = "Code",

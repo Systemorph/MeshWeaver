@@ -92,9 +92,25 @@ public class KernelContainer(IServiceProvider serviceProvider)
     /// <summary>
     /// Hub configuration for kernel sub-hubs (local subhosts).
     /// Includes AddLayout for layout area subscriptions but omits AddMeshTypes/WithRoutes.
+    ///
+    /// <para>Registers kernel message types on this hub's own TypeRegistry. The
+    /// hub may live in a different silo from the one where <c>KernelNodeType.AddKernel</c>
+    /// ran (e.g. an Activity grain on the silo hosting <c>rbuergi</c> while
+    /// <c>AddKernel</c> ran on the mesh hub of a different silo); type-registry
+    /// inheritance does NOT span silos, so SubmitCodeResponse / KernelEventEnvelope
+    /// would otherwise fail to deserialize on arrival ("type X is not registered
+    /// in this hub's TypeRegistry"). Registering them locally is idempotent and
+    /// safe even when inheritance does work.</para>
     /// </summary>
     public MessageHubConfiguration ConfigureSubHub(MessageHubConfiguration config)
     {
+        config.TypeRegistry.WithType(typeof(SubmitCodeRequest), nameof(SubmitCodeRequest));
+        config.TypeRegistry.WithType(typeof(SubmitCodeResponse), nameof(SubmitCodeResponse));
+        config.TypeRegistry.WithType(typeof(KernelEventEnvelope), nameof(KernelEventEnvelope));
+        config.TypeRegistry.WithType(typeof(KernelCommandEnvelope), nameof(KernelCommandEnvelope));
+        config.TypeRegistry.WithType(typeof(SubscribeKernelEventsRequest), nameof(SubscribeKernelEventsRequest));
+        config.TypeRegistry.WithType(typeof(UnsubscribeKernelEventsRequest), nameof(UnsubscribeKernelEventsRequest));
+
         return config
             .AddLayout(layout =>
                 layout.WithView(_ => true,
