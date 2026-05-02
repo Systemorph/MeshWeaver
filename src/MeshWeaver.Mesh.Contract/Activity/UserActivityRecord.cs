@@ -79,5 +79,15 @@ public enum ActivityType
     /// <summary>
     /// User deleted a node.
     /// </summary>
-    Delete
+    Delete,
+
+    /// <summary>
+    /// User logged in. NodePath holds the path of the User MeshNode the
+    /// session resolved to (e.g. <c>rbuergi</c>). Issued by the auth
+    /// middleware on every successful authentication — including Bearer /
+    /// API-token requests that skip OnboardingMiddleware — so login events
+    /// always appear in the user's activity stream regardless of whether
+    /// the request came from a browser session or an MCP client.
+    /// </summary>
+    Login,
 }

@@ -2,6 +2,8 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using MeshWeaver.Messaging;
+using MeshWeaver.Mesh.Activity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -45,7 +47,37 @@ public class ApiTokenAuthenticationHandler(
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, SchemeName);
 
+        // Track the login event so it appears in the user's activity stream.
+        // Bearer/MCP requests skip OnboardingMiddleware (which is browser-only),
+        // so without this every API-token authentication was invisible — the
+        // user could not tell from the audit trail when their token was used.
+        // Fire-and-forget post: a failure to write the activity record must
+        // never break authentication.
+        TrackLogin(apiToken, serviceProvider);
+
         return AuthenticateResult.Success(ticket);
+    }
+
+    private static void TrackLogin(MeshWeaver.Mesh.Security.ApiToken token, IServiceProvider services)
+    {
+        try
+        {
+            var hub = services.GetService<IMessageHub>();
+            if (hub is null) return;
+            hub.Post(new TrackActivityRequest(
+                NodePath: token.UserId,
+                UserId: token.UserId,
+                NodeName: token.UserName,
+                NodeType: "User",
+                Namespace: ""
+            )
+            { ActivityType = ActivityType.Login });
+        }
+        catch
+        {
+            // Activity tracking is best-effort. Auth must succeed even if the
+            // hub is unavailable / disposed / mid-restart.
+        }
     }
 
     /// <summary>
