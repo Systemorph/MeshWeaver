@@ -78,9 +78,18 @@ jobs:
           # legitimate project today (FutuRe ~5 min) with headroom; defense-in-
           # depth backstop in case any of the skipped Linux-hang projects gets
           # re-enabled or another regresses to the same pattern.
+          # blame-hang-timeout: 90 s of test-runner inactivity before blame
+          # collects a hang dump and aborts the test host. The previous 30 s
+          # was firing on legitimate teardown — multiple projects (Hosting.Blazor,
+          # Hosting.Orleans, Autocomplete, NodeOperations) showed all tests
+          # passing in <5 s but the testhost taking 30+ s in finalizer/dispose
+          # cleanup of hosted hubs / static caches, then getting killed and
+          # reported as "Test host process crashed" exit=1. 90 s gives genuine
+          # teardown enough room without masking real hangs (the per-project
+          # 6 m wall-clock cap below is the hard backstop).
           timeout --signal=TERM --kill-after=30s 6m \
             dotnet test "$csproj" --no-build --verbosity minimal -l:trx \
-              --blame-hang-timeout 30s --blame-hang-dump-type mini
+              --blame-hang-timeout 90s --blame-hang-dump-type mini
           rc=$?
           if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
             marker="[CI] $name exit=$rc TIMEOUT (6m wall-clock cap hit — likely fixture/init hang)"
