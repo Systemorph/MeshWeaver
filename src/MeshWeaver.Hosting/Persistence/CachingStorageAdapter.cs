@@ -56,11 +56,22 @@ public class CachingStorageAdapter : IStorageAdapter
 
             Directories[""] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var file in Directory.GetFiles(baseDirectory, "*.*", SearchOption.AllDirectories))
+            // Parallel file read: a samples/Graph directory has ~hundreds of
+            // .md/.cs/.json files. Sequential File.ReadAllBytes per file
+            // serialised the cold-start scan and on CI's 2-CPU runner that
+            // compounded to >15 s — long enough that test queries polling the
+            // catalog ran past their 20 s deadline before the adapter snapshot
+            // landed. Parallel.ForEach distributes the I/O across threads
+            // (default DegreeOfParallelism = process count) and the underlying
+            // ConcurrentDictionary is already safe for this workload. No await,
+            // no sync-context capture — the call site is a synchronous ctor.
+            var supported = new HashSet<string>(SupportedExtensions, StringComparer.OrdinalIgnoreCase);
+            var allFiles = Directory.GetFiles(baseDirectory, "*.*", SearchOption.AllDirectories);
+            Parallel.ForEach(allFiles, file =>
             {
                 var ext = Path.GetExtension(file).ToLowerInvariant();
-                if (ext is not ".json" and not ".md" and not ".cs")
-                    continue;
+                if (!supported.Contains(ext))
+                    return;
 
                 var relativePath = Path.GetRelativePath(baseDirectory, file)
                     .Replace(Path.DirectorySeparatorChar, '/');
@@ -68,7 +79,7 @@ public class CachingStorageAdapter : IStorageAdapter
 
                 var dir = Path.GetDirectoryName(relativePath)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
                 EnsureDirectoryEntry(dir, relativePath);
-            }
+            });
 
             foreach (var dir in Directory.GetDirectories(baseDirectory, "*", SearchOption.AllDirectories))
             {
@@ -87,11 +98,12 @@ public class CachingStorageAdapter : IStorageAdapter
             var parts = dir;
             while (true)
             {
-                if (!Directories.TryGetValue(parts, out var entries))
-                {
-                    entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    Directories[parts] = entries;
-                }
+                // GetOrAdd is atomic — under Parallel.ForEach two workers can
+                // race the prior TryGetValue+set pattern and clobber each
+                // other's HashSet. The indexer/lock that followed only
+                // protected the AddItem, not the TryGetValue→assign window.
+                var entries = Directories.GetOrAdd(parts,
+                    static _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 lock (entries) entries.Add(entry);
 
                 if (string.IsNullOrEmpty(parts)) break;

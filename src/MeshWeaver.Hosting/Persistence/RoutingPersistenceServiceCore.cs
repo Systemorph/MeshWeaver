@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
@@ -101,34 +102,67 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
 
     /// <summary>
-    /// Discovers partitions not yet provisioned, provisions each, and yields its key and query provider.
-    /// Already-provisioned partitions are skipped. Safe to call concurrently.
+    /// Discovers partitions not yet provisioned, provisions each, and yields its
+    /// key and query provider. Already-provisioned partitions are skipped. Safe
+    /// to call concurrently.
+    ///
+    /// <para>Reactive shape: returns <see cref="IObservable{T}"/> so subscribers
+    /// can compose without <c>await</c>. Inner <see cref="Observable.FromAsync{TResult}(Func{Task{TResult}})"/>
+    /// runs the factory calls on the default scheduler (thread pool) — they
+    /// never capture the caller's synchronization context, so a hub action
+    /// block calling this won't deadlock waiting for its own pump. The
+    /// <see cref="Observable.SelectMany{TSource,TResult}(IObservable{TSource},Func{TSource,IObservable{TResult}})"/>
+    /// fan-out provisions partitions in parallel; each emits as its store is
+    /// ready (so the slowest partition doesn't block the fastest).</para>
+    /// </summary>
+    internal IObservable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProviders(CancellationToken ct = default)
+    {
+        // 30 s startup ceiling, composed with caller's token. The Observable.FromAsync
+        // calls below pass `ct` through; the timeout is enforced via Observable.Timeout.
+        return Observable
+            .FromAsync(token => _factory.DiscoverPartitionsAsync(token), Scheduler.Default)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .SelectMany(partitions => partitions.ToObservable())
+            .Where(segment => !_stores.ContainsKey(segment))
+            .SelectMany(segment =>
+                Observable.FromAsync(token => _factory.CreateStoreAsync(segment, token), Scheduler.Default)
+                    .Select(partition =>
+                    {
+                        var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+                        if (!_stores.TryAdd(segment, core))
+                            return ((string, IMeshQueryProvider)?)null;
+                        var queryProvider = partition.QueryProvider
+                            ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                        _queryProviders[segment] = queryProvider;
+                        if (partition.VersionQuery != null)
+                            _versionQueries[segment] = partition.VersionQuery;
+                        return (segment, queryProvider);
+                    }))
+            .Where(t => t.HasValue)
+            .Select(t => t!.Value);
+    }
+
+    /// <summary>
+    /// Backwards-compatible <see cref="IAsyncEnumerable{T}"/> wrapper around
+    /// <see cref="DiscoverNewProviders"/> for existing <c>await foreach</c>
+    /// callers. New code should prefer the observable form — see
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
     internal async IAsyncEnumerable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProvidersAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
-        // Link caller's token with a 30s startup timeout
-        using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        startupCts.CancelAfter(TimeSpan.FromSeconds(30));
-        var startupCt = startupCts.Token;
-        var partitions = await _factory.DiscoverPartitionsAsync(startupCt);
+        // Bridge: subscribe the observable, push each emission into a channel,
+        // and yield from the channel as the consumer awaits.
+        var ch = System.Threading.Channels.Channel.CreateUnbounded<(string, IMeshQueryProvider)>();
+        using var sub = DiscoverNewProviders(ct).Subscribe(
+            value => ch.Writer.TryWrite(value),
+            ex => ch.Writer.Complete(ex),
+            () => ch.Writer.Complete());
 
-        foreach (var segment in partitions)
+        while (await ch.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
         {
-            if (_stores.ContainsKey(segment))
-                continue;
-
-            var partition = await _factory.CreateStoreAsync(segment, startupCt);
-            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
-            if (_stores.TryAdd(segment, core))
-            {
-                var queryProvider = partition.QueryProvider
-                    ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
-                _queryProviders[segment] = queryProvider;
-                if (partition.VersionQuery != null)
-                    _versionQueries[segment] = partition.VersionQuery;
-                yield return (segment, queryProvider);
-            }
+            while (ch.Reader.TryRead(out var item))
+                yield return item;
         }
     }
 
