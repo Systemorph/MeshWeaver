@@ -77,17 +77,15 @@ public static class AccessControlPipeline
                 // `if (context.Roles != null && context.ObjectId == userId)` saw a
                 // null context.
                 //
-                // Only stamp if the scope's context is currently null. The synced
-                // AccessAssignment query's data source posts SubscribeRequest with
-                // its own System / hub-impersonation identity; overriding their
-                // scope context with the originating user would corrupt the
-                // recursion guard (validators see "user X reading AccessAssignments"
-                // and re-enter the pipeline). A null scope context means this is a
-                // fresh delivery on a per-node hub that hasn't yet adopted any
-                // identity; the delivery's AccessContext is the right answer.
-                if (delivery.AccessContext is not null
-                    && delivery.AccessContext.Roles is { Count: > 0 }
-                    && accessService.Context is null)
+                // Gated on IsApiToken: this is the only delivery class that carries
+                // claim-based roles (API token middleware stamps them onto the
+                // outgoing AccessContext from the validated token). Hub-impersonation
+                // deliveries (PostPipeline fallback when no user context exists) and
+                // Blazor-cookie deliveries don't go through this branch — overriding
+                // their scope context would corrupt the synced-AccessAssignment
+                // recursion guard (validators would see "user X reading
+                // AccessAssignments as themselves" and re-enter the pipeline).
+                if (delivery.AccessContext is { IsApiToken: true })
                 {
                     accessService.SetContext(delivery.AccessContext);
                 }
