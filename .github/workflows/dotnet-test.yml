@@ -38,6 +38,13 @@ jobs:
       env:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
+        # Workstation GC uses smaller heap segments — less memory pressure on
+        # 7 GB ubuntu-latest runners than server GC's per-core heaps. Tests
+        # that pile up Autofac Reflection.Emit factories (non-shared-mesh
+        # classes) hit the OOM ceiling later under workstation GC.
+        DOTNET_gcServer: '0'
+        DOTNET_GCConcurrent: '1'
+        DOTNET_GCRetainVM: '0'
       run: |
         # Only Cosmos is excluded — needs the Cosmos emulator which is heavy to
         # set up on a runner. Everything else runs (PostgreSql via Testcontainers
