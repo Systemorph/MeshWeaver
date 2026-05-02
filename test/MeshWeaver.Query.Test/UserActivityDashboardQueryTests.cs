@@ -25,6 +25,10 @@ namespace MeshWeaver.Query.Test;
 /// </summary>
 public class UserActivityDashboardQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Each [Fact] uses a distinct partition prefix (af / afEmpty / rv / …),
+    // so SP-sharing is collision-safe.
+    protected override bool ShareMeshAcrossTests => true;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddAI();
 
