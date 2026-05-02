@@ -20,6 +20,12 @@ namespace MeshWeaver.Persistence.Test;
 /// </summary>
 public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Mesh state is shared across [Fact]s — the actual test data is held in
+    // the per-instance _persistence + _testDirectory below, fully independent
+    // of the shared mesh (Mesh is only consulted for JsonSerializerOptions).
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private readonly string _testDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", Guid.NewGuid().ToString());
     private FileSystemStorageAdapter? _storageAdapterInstance;
     private FileSystemStorageAdapter _storageAdapter => _storageAdapterInstance ??= CreateStorageAdapter();
