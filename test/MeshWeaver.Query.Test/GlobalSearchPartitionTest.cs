@@ -26,6 +26,10 @@ namespace MeshWeaver.Query.Test;
 /// </summary>
 public class GlobalSearchPartitionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Each [Fact] uses a distinct partition name (TestCorp / AcmeCorp / MegaCorp / …)
+    // so SP can safely be shared across [Fact]s without path collisions.
+    protected override bool ShareMeshAcrossTests => true;
+
     private CancellationToken TestTimeout => new CancellationTokenSource(25.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
