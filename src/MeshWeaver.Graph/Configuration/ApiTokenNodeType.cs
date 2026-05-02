@@ -49,7 +49,10 @@ public static class ApiTokenNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "API Token",
-        IsSatelliteType = true,
+        // Treated as a regular content type (not a satellite). We rely on
+        // MainNode = userId on each token row + the per-user-partition own-scope
+        // shortcut in RlsNodeValidator to gate Create/Read.
+        IsSatelliteType = false,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(ApiTokenNodeType).Assembly.Location,
         HubConfiguration = config => config
