@@ -65,6 +65,33 @@ public static class AccessControlPipeline
 
                 var userId = ResolveIdentity(delivery, accessService);
 
+                // Restore the sender's AccessContext onto this scope's AccessService
+                // so SecurityService.GetEffectivePermissions — which reads claim-based
+                // roles from _accessService.Context.Roles — can resolve them. Without
+                // this, the per-node hub processes deliveries in a fresh async flow
+                // where AsyncLocal.Context is null even though delivery.AccessContext
+                // is fully populated by the sender's PostPipeline. The result was
+                // every API-token request being denied because Admin role on the
+                // bearer token never reached the claim-based grant path: the
+                // synced-query path returned no roles, and the chain's later
+                // `if (context.Roles != null && context.ObjectId == userId)` saw a
+                // null context.
+                //
+                // Only stamp if the scope's context is currently null. The synced
+                // AccessAssignment query's data source posts SubscribeRequest with
+                // its own System / hub-impersonation identity; overriding their
+                // scope context with the originating user would corrupt the
+                // recursion guard (validators see "user X reading AccessAssignments"
+                // and re-enter the pipeline). A null scope context means this is a
+                // fresh delivery on a per-node hub that hasn't yet adopted any
+                // identity; the delivery's AccessContext is the right answer.
+                if (delivery.AccessContext is not null
+                    && delivery.AccessContext.Roles is { Count: > 0 }
+                    && accessService.Context is null)
+                {
+                    accessService.SetContext(delivery.AccessContext);
+                }
+
                 // Log identity resolution details for debugging access issues
                 if (string.IsNullOrEmpty(userId))
                     logger?.LogWarning(

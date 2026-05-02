@@ -268,6 +268,51 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// <see cref="Permission.All"/> within 5 s — well under the
     /// AccessControlPipeline's 10 s deadline.</para>
     /// </summary>
+    /// <summary>
+    /// Cross-scope regression: the sender stamps Admin onto delivery.AccessContext
+    /// (via the PostPipeline), routes a message to a per-node hub, and the
+    /// per-node hub's AccessControlPipeline must read those claim-based roles
+    /// when calling SecurityService.HasPermission. Before the fix, the receiver
+    /// only saw the userId — not the Roles — because AccessService.Context was
+    /// null in the receiver's scope, leaving the claim-based grant path with
+    /// nothing to fold in. Every API-token request that didn't have a static
+    /// AccessAssignment was denied as a result.
+    /// </summary>
+    [Fact(Timeout = 10_000)]
+    public async Task DeliveryAccessContext_RolesFlow_ToReceiverPermissionCheck()
+    {
+        using var scope = Mesh.ServiceProvider.CreateScope();
+        var accessService = scope.ServiceProvider.GetRequiredService<AccessService>();
+        var sec = scope.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        const string userId = "delivery-admin";
+
+        // Receiver scope starts clean — context is null. This mirrors the
+        // production shape where the per-node hub processes a delivery in a
+        // fresh async flow with no inherited AsyncLocal.
+        accessService.SetContext(null);
+
+        // Pretend AccessControlPipeline restored the sender's AccessContext
+        // (this is exactly what the new pipeline-level fix does the moment a
+        // permission-gated delivery arrives).
+        accessService.SetContext(new AccessContext
+        {
+            ObjectId = userId,
+            Name = userId,
+            Roles = new[] { "Admin" }
+        });
+
+        // No static AccessAssignment exists for this user — the only signal is
+        // the claim-based Admin from the delivery context. The chain must still
+        // resolve Permission.All; if SecurityService didn't read claim-based
+        // roles, we'd see Permission.None.
+        var perms = await sec.GetEffectivePermissions("any/scope", userId)
+            .FirstAsync().ToTask(TestTimeout);
+        perms.Should().Be(Permission.All,
+            "claim-based Admin restored from delivery.AccessContext must grant " +
+            "all permissions on the receiver's permission check");
+    }
+
     [Fact(Timeout = 10_000)]
     public async Task ClaimBasedAdmin_GrantsImmediately_EvenWhenNoStaticAssignment()
     {
