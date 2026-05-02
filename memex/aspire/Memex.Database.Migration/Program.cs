@@ -72,6 +72,7 @@ var migrations = new IMigration[]
     // v12 was retired — see V13_RebuildPermissionsForApiBitmask for context.
     new V13_RebuildPermissionsForApiBitmask(),
     new V14_AddPartitionPrefixToNamespaces(),
+    new V15_FinalUserSchemaCleanup(),
 };
 
 var ctx = new MigrationContext(dataSource, connectionString, options, logger, initResult.IsFreshDb);
