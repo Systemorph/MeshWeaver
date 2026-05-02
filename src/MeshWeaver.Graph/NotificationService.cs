@@ -25,7 +25,7 @@ public static class NotificationService
         string? createdBy)
     {
         var notificationId = Guid.NewGuid().AsString();
-        var parentPath = $"User/{targetUserId}";
+        var parentPath = targetUserId;
 
         var notification = new Notification
         {

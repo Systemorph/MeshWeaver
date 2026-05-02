@@ -52,12 +52,15 @@ public class RlsNodeValidator : INodeValidator
                 && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
                 return Observable.Return(NodeValidationResult.Valid());
 
+            // Per-user own-scope shortcut: every user owns the partition
+            // named after their userId. A node at `{userId}` or `{userId}/…`
+            // is in their own partition, granted unconditionally without
+            // walking the access-rule chain.
             var nodePath = context.Node.Path;
             if (!string.IsNullOrEmpty(nodePath))
             {
-                var userScopePath = $"User/{userId}";
-                if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
-                    || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
+                if (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
+                    || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase))
                     return Observable.Return(NodeValidationResult.Valid());
             }
         }

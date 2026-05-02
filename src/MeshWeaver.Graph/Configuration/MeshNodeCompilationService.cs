@@ -504,6 +504,24 @@ internal class MeshNodeCompilationService(
                                 if (n.Content is CodeConfiguration cf
                                     && !string.IsNullOrWhiteSpace(cf.Code))
                                 {
+                                    // Skip executable scripts — they're meant
+                                    // to run through the kernel via
+                                    // ExecuteScriptRequest, not to be folded
+                                    // into the parent NodeType's Roslyn unit.
+                                    // Top-level statements in scripts collide
+                                    // with class declarations from Source/
+                                    // siblings ("Top-level statements must
+                                    // precede namespace and type
+                                    // declarations"). The Test/ tree commonly
+                                    // mixes both shapes; this filter lets
+                                    // both coexist.
+                                    if (cf.IsExecutable)
+                                    {
+                                        logger.LogDebug(
+                                            "Source discovery for {NodePath}: skipping executable Code {CodePath} — runs via kernel only",
+                                            node.Path, n.Path);
+                                        continue;
+                                    }
                                     acc.Add(cf);
                                     matchedCodePaths.Add(n.Path);
                                     matched++;

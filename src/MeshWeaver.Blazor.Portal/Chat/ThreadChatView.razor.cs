@@ -418,8 +418,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 : !string.IsNullOrEmpty(initialContext)
                     ? initialContext
                     : !string.IsNullOrEmpty(createdBy)
-                        ? $"User/{createdBy}"
-                        : "User";
+                        ? createdBy
+                        : "";
 
             var ctx = new SubmitContext
             {
@@ -778,7 +778,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             var accessService = Hub.ServiceProvider.GetService<AccessService>();
             var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-            ns = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : null;
+            ns = userId;
         }
 
         var hiddenQuery = string.IsNullOrEmpty(ns)

@@ -37,7 +37,9 @@ public static class PinLayoutArea
     {
         if (string.IsNullOrEmpty(viewerId))
             return null;
-        if (hubPath.Equals($"User/{viewerId}", StringComparison.OrdinalIgnoreCase))
+        // Don't show "Pin" on the user's own home page — they don't pin
+        // themselves to themselves.
+        if (hubPath.Equals(viewerId, StringComparison.OrdinalIgnoreCase))
             return null;
         return new("Pin", PinArea,
             Icon: "Bookmark",
@@ -99,7 +101,7 @@ public static class PinLayoutArea
         // The click handler mutates PinnedPaths on the viewer's User node via workspace.UpdateMeshNode,
         // which dispatches remotely since the viewer's hub differs from this item's hub.
         // The viewer's dashboard observes the user stream and re-renders — the card disappears.
-        var userPath = $"User/{viewerId}";
+        var userPath = viewerId;
         var userAddress = new Address(userPath);
         var unpinButton = Controls.Button("")
             .WithIconStart(FluentIcons.Dismiss())
@@ -145,7 +147,7 @@ public static class PinLayoutArea
                 "You must be signed in to pin nodes.",
                 backHref));
 
-        var userPath = $"User/{viewerId}";
+        var userPath = viewerId;
         var userAddress = new Address(userPath);
 
         // Single-op remote write: one-shot read via GetDataRequest, apply the

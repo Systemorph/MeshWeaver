@@ -181,8 +181,10 @@ public class PostgreSqlSqlGenerator
 
         if (isAccessedQuery)
         {
-            // JOIN with UserActivity nodes stored in the user_activities satellite table
-            parameters["@actUserNs"] = $"User/{activityUserId}/_UserActivity";
+            // JOIN with UserActivity nodes stored in the user_activities
+            // satellite table — they live under {userId}/_UserActivity per the
+            // post-v10 per-user partition layout.
+            parameters["@actUserNs"] = $"{activityUserId}/_UserActivity";
             sql.Append($" INNER JOIN {userActivityTable} ua ON ua.namespace = @actUserNs" +
                         " AND ua.node_type = 'UserActivity'" +
                         " AND REPLACE(n.path, '/', '_') = ua.id");
