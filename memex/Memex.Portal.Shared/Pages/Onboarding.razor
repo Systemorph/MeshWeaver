@@ -235,6 +235,26 @@ else
 
                 await NodeFactory.CreateNode(node);
 
+                // Self-AccessAssignment in the user's own partition so they can
+                // create/update content in their own scope. Post-v10 each user
+                // has their own Postgres schema; this assignment lives there
+                // (namespace = "{username}/_Access") and grants Admin on the
+                // user's whole partition. Without this, ApiToken creation,
+                // settings writes, etc. all fail with "Create permission required".
+                var selfAssignment = new MeshNode($"{username}_Access", $"{username}/_Access")
+                {
+                    NodeType = "AccessAssignment",
+                    Name = $"{username} Access",
+                    MainNode = username,
+                    Content = new AccessAssignment
+                    {
+                        AccessObject = username,
+                        DisplayName = username,
+                        Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
+                    }
+                };
+                NodeFactory.CreateNode(selfAssignment).Subscribe();
+
                 // First user becomes global Admin — write the AccessAssignment node
                 // directly via IMeshService.CreateNode (replaces the obsolete
                 // ISecurityService.AddUserRoleAsync). Subscribe + fire-and-forget; the

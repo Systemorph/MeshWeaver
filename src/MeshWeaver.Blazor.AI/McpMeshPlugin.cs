@@ -77,11 +77,28 @@ public class McpMeshPlugin
         // with kernel-sub-hub handlers. Each MCP tool invocation thus runs on its own
         // ActionBlock — no serialisation on the session hub, no bleed of state between
         // concurrent calls. Cleanup happens when the session hub disposes.
+        //
+        // CRITICAL: register the per-call kernel hub with the routing service too.
+        // Without this, a response posted from a remote silo (e.g. the Code hub
+        // running ExecuteScriptRequest) targeted at this hub's address has no
+        // registration to find — the Orleans router can't route to "kernel/mcp-…"
+        // because only the session hub ("portal/mcp-…") is in the registry. The
+        // session hub's `RouteAddressToHostedHub("kernel", …)` rule only fires
+        // for messages already inside the session hub's pipeline; it does not
+        // claim addresses globally. Registering the request hub explicitly makes
+        // the routing service know "kernel/mcp-… lives at this stream", so
+        // ExecuteScriptResponse / SubmitCodeResponse round-trips work end-to-end.
         var requestKernelAddress = AddressExtensions.CreateKernelAddress(
             "mcp-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         var requestHub = sessionHub.GetHostedHub(
             requestKernelAddress,
-            c => c.AddKernelSubHubHandlers(),
+            c => c
+                .AddKernelSubHubHandlers()
+                .WithInitialization(async (hub, _) =>
+                {
+                    var registry = await routingService.RegisterStreamAsync(hub);
+                    hub.RegisterForDisposal(registry);
+                }),
             HostedHubCreation.Always)!;
         logger.LogInformation("Materialising MCP request hub at {Address}", requestHub.Address);
 

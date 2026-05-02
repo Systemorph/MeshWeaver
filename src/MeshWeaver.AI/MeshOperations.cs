@@ -1303,21 +1303,21 @@ public class MeshOperations
     /// <summary>
     /// Triggers a compile for a NodeType by flipping its
     /// <see cref="NodeTypeDefinition.CompilationStatus"/> to
-    /// <see cref="CompilationStatus.Pending"/> via a <see cref="PatchDataRequest"/>
-    /// targeted at the NodeType's hub. The request is fire-and-forget from the
-    /// caller's perspective — this method returns as soon as the patch is
-    /// acknowledged. The CompileWatcher (installed by <c>AddMeshDataSource</c>)
-    /// observes the Pending state on its own MeshNode stream and runs Roslyn,
-    /// then writes back <see cref="CompilationStatus.Ok"/> or
-    /// <see cref="CompilationStatus.Error"/> plus
+    /// <see cref="CompilationStatus.Pending"/> via the canonical remote-stream
+    /// write path: <see cref="MeshNodeStreamExtensions.UpdateMeshNode"/> opens a
+    /// <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> against the
+    /// owning per-node hub and pushes a <see cref="ChangeItem{T}"/> patch through
+    /// the synchronization protocol. The CompileWatcher (installed by
+    /// <c>AddMeshDataSource</c>) observes the Pending state on its own MeshNode
+    /// stream and runs Roslyn, then writes back <see cref="CompilationStatus.Ok"/>
+    /// or <see cref="CompilationStatus.Error"/> plus
     /// <see cref="NodeTypeDefinition.LastCompilationActivityPath"/>.
     ///
-    /// <para>Why a dedicated tool: <see cref="Patch"/> requires both Read (to merge
-    /// the existing node) and Update permission on the target node. A caller that
-    /// owns the NodeType but only has Create scope on its container couldn't trigger
-    /// a recompile via Patch. <c>Compile</c> bypasses the merge by sending a raw
-    /// JSON delta straight to the per-node hub via <see cref="PatchDataRequest"/>;
-    /// the hub applies it to its own workspace state and the watcher fires.</para>
+    /// <para>Why a dedicated tool over <see cref="Patch"/>: Patch requires both
+    /// Read (to merge the existing node) and Update permission on the target node.
+    /// <c>Compile</c> only needs the per-node hub to accept the synchronisation
+    /// patch — caller drives the same hub that the CompileWatcher listens on, so
+    /// state transitions never bottleneck on a routing service.</para>
     ///
     /// <para>Observe progress: poll <c>get @nodeTypePath</c> for
     /// <c>compilationStatus</c> transitions, then once it settles to Ok/Error
@@ -1339,33 +1339,155 @@ public class MeshOperations
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
-        // JSON merge patch — PatchDataRequest applies this delta to the hub's
-        // own MeshNodeReference. Setting only the compilationStatus field
-        // preserves the rest of the NodeTypeDefinition. The default-string
-        // form of CompilationStatus matches the enum's [JsonStringEnumConverter]
-        // serialisation used by NodeTypeDefinition.
-        const string patchJson = """{"content":{"compilationStatus":"Pending"}}""";
+        return Observable.Defer(() =>
+        {
+            IWorkspace workspace;
+            try { workspace = hub.GetWorkspace(); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Compile: workspace unavailable for {Path}", resolvedPath);
+                return Observable.Return(JsonSerializer.Serialize(
+                    new { status = "Error", path = resolvedPath, message = ex.Message },
+                    hub.JsonSerializerOptions));
+            }
 
-        return PatchViaDataRequest(resolvedPath, patchJson)
-            .Select(version => JsonSerializer.Serialize(
-                new
+            // Subscribe to the NodeType's stream BEFORE flipping Pending so we
+            // don't miss the watcher's status transitions. The stream emits the
+            // current node first (whatever status it's in); we wait for a
+            // settled Ok/Error after the trigger.
+            var stream = workspace.GetMeshNodeStream(resolvedPath);
+
+            try
+            {
+                workspace.UpdateMeshNode(node => node with
                 {
-                    status = "Triggered",
-                    path = resolvedPath,
-                    version,
-                    message = "Compile triggered. Poll `get " + resolvedPath
-                        + "` to watch CompilationStatus settle to Ok/Error and "
-                        + "LastCompilationActivityPath populate. Then `get` that "
-                        + "activity path for the full Roslyn trace."
-                },
-                hub.JsonSerializerOptions))
-            .Catch((Exception ex) =>
+                    Content = WithPendingCompilationStatus(node.Content)
+                }, resolvedPath);
+            }
+            catch (Exception ex)
             {
                 logger.LogWarning(ex, "Compile trigger failed for {Path}", resolvedPath);
                 return Observable.Return(JsonSerializer.Serialize(
                     new { status = "Error", path = resolvedPath, message = ex.Message },
                     hub.JsonSerializerOptions));
-            });
+            }
+
+            // Wait for the watcher to write back Ok or Error (60s budget — Roslyn
+            // first compile of a moderate node is 5-15s; bigger trees can take
+            // longer; some hubs may take ~5s to emit a settled state after the
+            // initial Pending). Then return a structured result with the error
+            // body inline if Error — agents/humans get the diagnostic without a
+            // second polling round-trip.
+            return stream
+                .Where(n =>
+                {
+                    var status = ReadCompilationStatusFromNode(n);
+                    return status == CompilationStatus.Ok || status == CompilationStatus.Error;
+                })
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(60))
+                .Select(n =>
+                {
+                    var status = ReadCompilationStatusFromNode(n);
+                    var error = ReadCompilationError(n);
+                    var activityPath = ReadActivityPath(n);
+                    return JsonSerializer.Serialize(
+                        new
+                        {
+                            status = status?.ToString() ?? "Unknown",
+                            path = resolvedPath,
+                            error,
+                            activityPath,
+                            message = status == CompilationStatus.Ok
+                                ? "Compile SUCCEEDED."
+                                : "Compile FAILED — see `error` for Roslyn diagnostics. "
+                                  + "Full source-discovery + matched-Code-paths trace lives at "
+                                  + (activityPath ?? "(no activity log written)") + "."
+                        },
+                        hub.JsonSerializerOptions);
+                })
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "Compile: timeout / observer error waiting for {Path} to settle", resolvedPath);
+                    return Observable.Return(JsonSerializer.Serialize(
+                        new
+                        {
+                            status = "Pending",
+                            path = resolvedPath,
+                            message = "Compile triggered but did not settle within the deadline. "
+                                + "Poll `get " + resolvedPath + "` for `compilationStatus` and "
+                                + "`lastCompilationActivityPath`. Underlying error: " + ex.Message
+                        },
+                        hub.JsonSerializerOptions));
+                });
+        });
+    }
+
+    private static CompilationStatus? ReadCompilationStatusFromNode(MeshNode? node)
+    {
+        if (node?.Content is Graph.Configuration.NodeTypeDefinition def)
+            return def.CompilationStatus;
+        if (node?.Content is JsonElement json && json.TryGetProperty("compilationStatus", out var p))
+        {
+            if (p.ValueKind == JsonValueKind.String && Enum.TryParse<CompilationStatus>(p.GetString(), true, out var parsed))
+                return parsed;
+        }
+        return null;
+    }
+
+    private static string? ReadCompilationError(MeshNode? node)
+    {
+        if (node?.Content is Graph.Configuration.NodeTypeDefinition def)
+            return def.CompilationError;
+        if (node?.Content is JsonElement json && json.TryGetProperty("compilationError", out var p))
+            return p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+        return null;
+    }
+
+    private static string? ReadActivityPath(MeshNode? node)
+    {
+        if (node?.Content is Graph.Configuration.NodeTypeDefinition def)
+            return def.LastCompilationActivityPath;
+        if (node?.Content is JsonElement json && json.TryGetProperty("lastCompilationActivityPath", out var p))
+            return p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+        return null;
+    }
+
+    /// <summary>
+    /// Returns a new <c>Content</c> object with <c>compilationStatus</c> set to
+    /// <c>Pending</c>. Handles both strongly-typed
+    /// <see cref="Graph.Configuration.NodeTypeDefinition"/> (own hub registered
+    /// the type) and <see cref="JsonElement"/> (remote hub passed it through
+    /// untyped). Other content shapes are returned unchanged with a warning —
+    /// this method is only meaningful on a NodeType node.
+    /// </summary>
+    private object? WithPendingCompilationStatus(object? content)
+    {
+        switch (content)
+        {
+            case Graph.Configuration.NodeTypeDefinition def:
+                return def with { CompilationStatus = CompilationStatus.Pending };
+
+            case JsonElement json:
+            {
+                var node = JsonNode.Parse(json.GetRawText()) as JsonObject ?? new JsonObject();
+                node["compilationStatus"] = "Pending";
+                return JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
+            }
+
+            case null:
+            {
+                var node = new JsonObject { ["compilationStatus"] = "Pending" };
+                return JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
+            }
+
+            default:
+                logger.LogWarning(
+                    "Compile: unexpected content type {Type} on NodeType node — wrapping",
+                    content.GetType().Name);
+                return content;
+        }
     }
 
     /// <summary>

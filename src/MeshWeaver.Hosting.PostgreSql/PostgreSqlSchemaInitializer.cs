@@ -407,11 +407,11 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 127
-                            WHEN 'PlatformAdmin' THEN 127
-                            WHEN 'Editor' THEN 119
-                            WHEN 'Viewer' THEN 33
-                            WHEN 'Commenter' THEN 49
+                            WHEN 'Admin' THEN 511
+                            WHEN 'PlatformAdmin' THEN 511
+                            WHEN 'Editor' THEN 503
+                            WHEN 'Viewer' THEN 161
+                            WHEN 'Commenter' THEN 145
                             ELSE 0
                         END
                     ) AS permissions
@@ -425,6 +425,8 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->>'accessObject' IS NOT NULL
@@ -470,11 +472,11 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 127
-                            WHEN 'PlatformAdmin' THEN 127
-                            WHEN 'Editor' THEN 119
-                            WHEN 'Viewer' THEN 33
-                            WHEN 'Commenter' THEN 49
+                            WHEN 'Admin' THEN 511
+                            WHEN 'PlatformAdmin' THEN 511
+                            WHEN 'Editor' THEN 503
+                            WHEN 'Viewer' THEN 161
+                            WHEN 'Commenter' THEN 145
                             ELSE 0
                         END
                     ) AS permissions
@@ -488,6 +490,8 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
@@ -611,9 +615,9 @@ public static class PostgreSqlSchemaInitializer
                         (SELECT (rn.content->>'permissions')::int FROM mesh_nodes rn
                          WHERE rn.node_type = 'Role' AND rn.id = role_entry->>'role' LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 127 WHEN 'PlatformAdmin' THEN 127
-                            WHEN 'Editor' THEN 119 WHEN 'Viewer' THEN 33
-                            WHEN 'Commenter' THEN 49 ELSE 0
+                            WHEN 'Admin' THEN 511 WHEN 'PlatformAdmin' THEN 511
+                            WHEN 'Editor' THEN 503 WHEN 'Viewer' THEN 161
+                            WHEN 'Commenter' THEN 145 ELSE 0
                         END
                     ) AS permissions
                 ) r
@@ -626,6 +630,8 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->>'accessObject' = p_user_id
@@ -659,9 +665,9 @@ public static class PostgreSqlSchemaInitializer
                         (SELECT (rn.content->>'permissions')::int FROM mesh_nodes rn
                          WHERE rn.node_type = 'Role' AND rn.id = role_entry->>'role' LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 127 WHEN 'PlatformAdmin' THEN 127
-                            WHEN 'Editor' THEN 119 WHEN 'Viewer' THEN 33
-                            WHEN 'Commenter' THEN 49 ELSE 0
+                            WHEN 'Admin' THEN 511 WHEN 'PlatformAdmin' THEN 511
+                            WHEN 'Editor' THEN 503 WHEN 'Viewer' THEN 161
+                            WHEN 'Commenter' THEN 145 ELSE 0
                         END
                     ) AS permissions
                 ) r
@@ -674,6 +680,8 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
@@ -968,11 +976,11 @@ public static class PostgreSqlSchemaInitializer
                          LIMIT 1),
                         -- Fallback: built-in role lookup
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 127
-                            WHEN 'PlatformAdmin' THEN 127
-                            WHEN 'Editor' THEN 119
-                            WHEN 'Viewer' THEN 33
-                            WHEN 'Commenter' THEN 49
+                            WHEN 'Admin' THEN 511
+                            WHEN 'PlatformAdmin' THEN 511
+                            WHEN 'Editor' THEN 503
+                            WHEN 'Viewer' THEN 161
+                            WHEN 'Commenter' THEN 145
                             ELSE 0
                         END
                     ) AS permissions
@@ -986,6 +994,8 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->>'accessObject' IS NOT NULL
@@ -1032,11 +1042,11 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 127
-                            WHEN 'PlatformAdmin' THEN 127
-                            WHEN 'Editor' THEN 119
-                            WHEN 'Viewer' THEN 33
-                            WHEN 'Commenter' THEN 49
+                            WHEN 'Admin' THEN 511
+                            WHEN 'PlatformAdmin' THEN 511
+                            WHEN 'Editor' THEN 503
+                            WHEN 'Viewer' THEN 161
+                            WHEN 'Commenter' THEN 145
                             ELSE 0
                         END
                     ) AS permissions
@@ -1050,6 +1060,8 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
@@ -1176,9 +1188,9 @@ public static class PostgreSqlSchemaInitializer
                         (SELECT (rn.content->>'permissions')::int FROM mesh_nodes rn
                          WHERE rn.node_type = 'Role' AND rn.id = role_entry->>'role' LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 127 WHEN 'PlatformAdmin' THEN 127
-                            WHEN 'Editor' THEN 119 WHEN 'Viewer' THEN 33
-                            WHEN 'Commenter' THEN 49 ELSE 0
+                            WHEN 'Admin' THEN 511 WHEN 'PlatformAdmin' THEN 511
+                            WHEN 'Editor' THEN 503 WHEN 'Viewer' THEN 161
+                            WHEN 'Commenter' THEN 145 ELSE 0
                         END
                     ) AS permissions
                 ) r
@@ -1191,6 +1203,8 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->>'accessObject' = p_user_id
@@ -1224,9 +1238,9 @@ public static class PostgreSqlSchemaInitializer
                         (SELECT (rn.content->>'permissions')::int FROM mesh_nodes rn
                          WHERE rn.node_type = 'Role' AND rn.id = role_entry->>'role' LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 127 WHEN 'PlatformAdmin' THEN 127
-                            WHEN 'Editor' THEN 119 WHEN 'Viewer' THEN 33
-                            WHEN 'Commenter' THEN 49 ELSE 0
+                            WHEN 'Admin' THEN 511 WHEN 'PlatformAdmin' THEN 511
+                            WHEN 'Editor' THEN 503 WHEN 'Viewer' THEN 161
+                            WHEN 'Commenter' THEN 145 ELSE 0
                         END
                     ) AS permissions
                 ) r
@@ -1239,6 +1253,8 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 128) > 0 THEN ARRAY['Api'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 256) > 0 THEN ARRAY['Export'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL

@@ -88,8 +88,9 @@ public static class UserActivityLayoutAreas
         content = content.WithView(BuildLatestThreads(nodePath, nodeOwnerId),
             skin => skin.WithXs(12));
 
-        // My Items — full width
-        content = content.WithView(BuildChildren(nodePath),
+        // My Items — full width. Items live in the user's own partition
+        // (rbuergi.* post-v10), not under the User/-prefixed dashboard path.
+        content = content.WithView(BuildChildren(nodeOwnerId),
             skin => skin.WithXs(12));
 
         // Activity Feed — 2/3 width on desktop, full on mobile
@@ -116,6 +117,10 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static UiControl BuildVisitorProfile(string nodePath, string ownerName, MeshNode? ownerNode)
     {
+        // Compute owner partition path (post-v10 each user has their own
+        // partition; legacy /User/{userid}/... maps to {userid}/... content)
+        var nodeOwnerId = nodePath.StartsWith("User/") ? nodePath[5..] : nodePath;
+
         // Extract User content fields (bio, email) if available
         string? email = null;
         string? bio = null;
@@ -148,10 +153,13 @@ public static class UserActivityLayoutAreas
         var content = Controls.Stack
             .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; " + ThinScrollbar);
 
-        // Recent activity by this user
+        // Recent activity by this user. Per-user content lives at the user's
+        // own partition path (post-v10: nodeOwnerId = "rbuergi"), not under
+        // the User-prefixed dashboard path. Both Items and Activity queries
+        // scope to nodeOwnerId so the legacy User/ path doesn't leak.
         content = content.WithView(Controls.MeshSearch
             .WithTitle("Recent Activity")
-            .WithHiddenQuery($"source:activity namespace:{nodePath} scope:subtree is:main sort:LastModified-desc")
+            .WithHiddenQuery($"source:activity namespace:{nodeOwnerId} scope:subtree is:main sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
@@ -165,7 +173,7 @@ public static class UserActivityLayoutAreas
         // Visible child nodes — security service automatically filters to viewer-visible nodes
         content = content.WithView(Controls.MeshSearch
             .WithTitle("Items")
-            .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{nodeOwnerId} is:main context:search scope:descendants sort:LastModified-desc")
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             .WithSectionCounts(true)

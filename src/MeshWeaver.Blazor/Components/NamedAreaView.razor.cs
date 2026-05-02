@@ -98,35 +98,14 @@ public partial class NamedAreaView
                     // forever consuming circuit bandwidth.
                     if (IsTransientHubFailure(error))
                     {
+                        // Transient hub failure (timeout, undeliverable). Log only;
+                        // do NOT replace the existing content with a "Loading…"
+                        // placeholder — keeping the previous render in place is
+                        // less disruptive than swapping to a placeholder that
+                        // sometimes lingers when the upstream never recovers.
                         Logger.LogWarning(error,
-                            "Transient hub failure on area {Area} — surfaced as 'Compiling…' placeholder to avoid the framework's hostile error markdown. Hub={Message}",
+                            "Transient hub failure on area {Area} — keeping previous render. Hub={Message}",
                             AreaToBeRendered, error.Message);
-                        try
-                        {
-                            InvokeAsync(() =>
-                            {
-                                if (IsViewDisposed) return;
-                                try
-                                {
-                                    // Replace the previous content with a soft, non-error
-                                    // placeholder. Three plausible causes map onto one user
-                                    // message: (1) NodeType is still compiling on first
-                                    // access; (2) per-node hub is bootstrapping its security
-                                    // data sources; (3) the upstream hub genuinely went
-                                    // away. The user's recovery action is the same in all
-                                    // three: wait briefly + reload. Displaying a Roslyn-
-                                    // level "No response received in hub …" is hostile and
-                                    // unactionable.
-                                    RootControl = new MarkdownControl(
-                                        "⏳ **Loading…** — the page's NodeType is still warming up "
-                                        + "(or finishing its first compilation). This usually clears "
-                                        + "within a few seconds. Reload the page if it persists.");
-                                    RequestStateChange();
-                                }
-                                catch (ObjectDisposedException) { /* renderer gone */ }
-                            });
-                        }
-                        catch (ObjectDisposedException) { /* renderer gone */ }
                         return;
                     }
 
