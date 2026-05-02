@@ -29,15 +29,18 @@ namespace MeshWeaver.Autocomplete.Test;
 [Collection("UnifiedReferenceAutocompleteProviderTest")]
 public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 {
-    private readonly string _cacheDirectory;
+    private static readonly string _cacheDirectory =
+        Path.Combine(Path.GetTempPath(), "MeshWeaverUcrTests", Guid.NewGuid().ToString());
+    static UnifiedReferenceAutocompleteProviderTest() => Directory.CreateDirectory(_cacheDirectory);
+
+    protected override bool ShareMeshAcrossTests => true;
+
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
     private MeshConfiguration MeshConfig => Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
 
     public UnifiedReferenceAutocompleteProviderTest(ITestOutputHelper output) : base(output)
     {
-        _cacheDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverUcrTests", Guid.NewGuid().ToString());
-        Directory.CreateDirectory(_cacheDirectory);
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -55,16 +58,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             .ConfigureHub(hub => hub.AddMeshNavigation());  // Register the autocomplete provider
     }
 
-    public override async ValueTask DisposeAsync()
-    {
-        await base.DisposeAsync();
-
-        if (Directory.Exists(_cacheDirectory))
-        {
-            try { Directory.Delete(_cacheDirectory, recursive: true); }
-            catch { /* Ignore cleanup errors */ }
-        }
-    }
+    // Cache dir is class-static + shared SP — never deleted between tests.
 
     #region Configuration Validation Tests
 
