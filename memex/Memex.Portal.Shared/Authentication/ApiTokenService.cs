@@ -55,8 +55,13 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         // self-scope assignment exists; the token still gets ObjectId so
         // self-owned reads still work, but writes will deny — which is the
         // correct outcome (a user with no role grants no role to their token).
-        var userTokenNamespace = $"User/{userId}/{ApiTokenNamespace}";
-        var assignmentPath = $"User/{userId}/_Access/{userId}_Access";
+        // Per-user content lives in the user's own partition (Repair v10): paths
+        // like rbuergi/ApiToken/{hashPrefix}, NOT User/rbuergi/ApiToken/{hashPrefix}.
+        // The dedicated `apitoken` partition still holds the central index node
+        // (see indexNode below) — token validation reads the index first then
+        // dereferences into the user's own partition.
+        var userTokenNamespace = $"{userId}/{ApiTokenNamespace}";
+        var assignmentPath = $"{userId}/_Access/{userId}_Access";
 
         var rolesObs = ResolveSelfScopeRoles(assignmentPath);
 
@@ -79,6 +84,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
                 Name = $"API Token: {label}",
                 NodeType = NodeTypeApiToken,
                 State = MeshNodeState.Active,
+                MainNode = userId,
                 Content = apiToken,
             };
 
@@ -391,10 +397,10 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
     {
         var tokens = new List<ApiTokenInfo>();
 
-        // Query user-scoped tokens (new format)
+        // Query user-scoped tokens (post-v10 path: per-user partition).
         // ApiToken is a satellite type (MainNode != Path), so we need nodeType: condition
         // to trigger GetAllChildrenAsync which includes satellites in the results.
-        var userTokenNamespace = $"User/{userId}/{ApiTokenNamespace}";
+        var userTokenNamespace = $"{userId}/{ApiTokenNamespace}";
         await foreach (var node in QueryAsSystemAsync($"namespace:{userTokenNamespace} nodeType:{NodeTypeApiToken}"))
         {
             var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
