@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Messaging;
-using Microsoft.DotNet.Interactive.Formatting;
 
 namespace MeshWeaver.Layout.Composition;
 
@@ -39,7 +38,6 @@ public class UiControlService : IUiControlService
         if (instance is IRenderableObject ro)
             return ro.ToControl();
 
-        var mimeType = Formatter.GetPreferredMimeTypesFor(instance?.GetType()).FirstOrDefault();
-        return Controls.Html(instance!.ToDisplayString(mimeType));
+        return Controls.Html(System.Net.WebUtility.HtmlEncode(instance?.ToString() ?? string.Empty));
     }
 }

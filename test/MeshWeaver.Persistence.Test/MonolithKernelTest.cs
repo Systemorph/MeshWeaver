@@ -1,7 +1,6 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
@@ -19,8 +18,6 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.DotNet.Interactive.Commands;
-using Microsoft.DotNet.Interactive.Events;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MdExtensions = MeshWeaver.Markdown.MarkdownExtensions;
@@ -63,30 +60,38 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         return new Address($"{activityNamespace}/markdown-{kernelId}");
     }
 
+    /// <summary>
+    /// Subscribe to the activity log MeshNode and wait for the next snapshot
+    /// matching <paramref name="predicate"/>. Mirrors the canonical pattern from
+    /// the docs (workspace.GetRemoteStream + Where + Take(1)).
+    /// </summary>
+    private async Task<ActivityLog> WaitForActivityLogAsync(
+        IMessageHub client, Address activityAddress, Func<ActivityLog, bool> predicate, TimeSpan? timeout = null)
+        => await client.GetWorkspace()
+            .GetRemoteStream<MeshNode, MeshNodeReference>(activityAddress, new MeshNodeReference())
+            .Select(change => change.Value?.Content as ActivityLog)
+            .Where(log => log is not null && predicate(log!))
+            .Select(log => log!)
+            .Take(1)
+            .Timeout(timeout ?? 15.Seconds())
+            .FirstAsync();
+
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task HelloWorld()
     {
         var client = GetClient();
         var kernelAddress = await CreateKernelSessionAsync();
 
-        var command = new SubmitCode("Console.WriteLine(\"Hello World\");");
         client.Post(
-            new KernelCommandEnvelope(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Serialize
-                (Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Create(command)))
-            {
-                IFrameUrl = "http://localhost/area"
-            },
+            new SubmitCodeRequest("Console.WriteLine(\"Hello World\");"),
             o => o.WithTarget(kernelAddress));
-        var kernelEvent = await kernelEventsStream
-            .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
-            .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
-            .ToArray()
-            .Timeout(15.Seconds())
-            .FirstAsync(x => x is not null);
 
-        var standardOutput = kernelEvent.OfType<StandardOutputValueProduced>().Single();
-        var value = standardOutput.FormattedValues.Single();
-        value.Value.TrimEnd('\n', '\r').Should().Be("Hello World");
+        // Stdout flows into the activity log via the kernel's LoggerTextWriter.
+        var log = await WaitForActivityLogAsync(client, kernelAddress,
+            l => l.Messages.Any(m => m.Message.Contains("Hello World")));
+
+        log.Messages.Select(m => m.Message)
+            .Should().Contain(m => m.Contains("Hello World"));
     }
 
     [Fact(Timeout = 10000)]
@@ -381,13 +386,6 @@ var wordFreq = corpus.Split(' ')
         }
     }
 
-    private readonly ReplaySubject<KernelEventEnvelope> kernelEventsStream = new();
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureClient(configuration).AddLayoutClient().WithHandler<KernelEventEnvelope>((_, e) =>
-        {
-            kernelEventsStream.OnNext(e.Message);
-            return e.Processed();
-        });
-    }
+        => base.ConfigureClient(configuration).AddLayoutClient();
 }

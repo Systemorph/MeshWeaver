@@ -30,8 +30,25 @@ public record CodeConfiguration
     /// UTC timestamp of the most recent successful execution kicked off via the
     /// Run button or <c>ExecuteScriptRequest</c>. Surfaced on the Code node's
     /// Content area as "Last executed: …" with a link to the full activity
-    /// history (every run writes an <c>ActivityLog</c> child under
-    /// <c>{codePath}/_activity/{id}</c>). <c>null</c> until the first run finishes.
+    /// history. <c>null</c> until the first run finishes.
     /// </summary>
     public DateTimeOffset? LastExecutedAt { get; init; }
+
+    /// <summary>
+    /// Parent path under which <c>Activity</c> nodes are created
+    /// when this Code node executes. The activity lives at
+    /// <c>{ActivityParentPath}/_Activity/{guid}</c>.
+    ///
+    /// <para>If null (the default), activities are created at the partition root —
+    /// i.e. <c>{firstSegmentOfCodePath}/_Activity/{guid}</c>. This puts every run
+    /// in the user's home activity feed, regardless of where in the partition
+    /// the Code node lives, and avoids deeply-nested satellite paths that race
+    /// the routing materialisation pipeline.</para>
+    ///
+    /// <para>Set explicitly for docs/sample Code nodes that want to log into a
+    /// different home (e.g. when a documentation page is showcasing a script
+    /// and wants the runs to appear in the *viewing user's* feed rather than
+    /// the doc partition's).</para>
+    /// </summary>
+    public string? ActivityParentPath { get; init; }
 }
