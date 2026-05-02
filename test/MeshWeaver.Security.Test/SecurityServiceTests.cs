@@ -662,6 +662,11 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
 /// </summary>
 public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // All [Fact]s do read-only permission checks (Mesh.HasPermissionAsync /
+    // Mesh.GetPermissionAsync) against statically-seeded role assignments —
+    // no test mutates the security state. Safe to share SP across tests.
+    protected override bool ShareMeshAcrossTests => true;
+
     private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
         new CancellationTokenSource(10.Seconds()).Token,
         TestContext.Current.CancellationToken).Token;
@@ -854,6 +859,10 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
 /// </summary>
 public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // NOTE: NOT opted into ShareMeshAcrossTests — static policy caps differ
+    // between fresh and reused SPs (probably an order-dependent registration
+    // of the policy). Tests fail with Permission.All when SP is reused.
+
     private CancellationToken TestTimeout => CancellationTokenSource.CreateLinkedTokenSource(
         new CancellationTokenSource(10.Seconds()).Token,
         TestContext.Current.CancellationToken).Token;
