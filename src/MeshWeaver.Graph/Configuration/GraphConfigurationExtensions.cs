@@ -125,6 +125,11 @@ public static class GraphConfigurationExtensions
                     services.AddSingleton<INodeTypeService, NodeTypeService>();
                     services.AddSingleton<INodeConfigurationResolver, NodeConfigurationResolver>();
                     services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
+                    // Replay-cached PartitionDefinition lookups, used by
+                    // CodeNodeType.HandleExecuteScript to resolve
+                    // PartitionDefinition.DefaultActivityParentPath without
+                    // bridging an async catalog query into the sync handler.
+                    services.AddSingleton<PartitionRegistry>();
                     return services;
                 })
                 .WithHandler<GetDataRequest>(HandleNodeTypeRequest));

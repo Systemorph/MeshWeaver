@@ -52,6 +52,21 @@ public record PartitionDefinition
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
     /// <summary>
+    /// Default <c>ActivityParentPath</c> applied to every executable Code node
+    /// in this partition that doesn't set its own. Most useful for shared /
+    /// read-only partitions (the docs partition is the canonical example):
+    /// set this to <c>"{viewer}"</c> so script runs initiated by a visitor
+    /// land in the visitor's home, not in the docs partition itself.
+    ///
+    /// <para>Per-Code-node config still wins. The resolution order in
+    /// <c>CodeNodeType.HandleExecuteScript</c> is:
+    /// (1) <c>CodeConfiguration.ActivityParentPath</c>,
+    /// (2) <see cref="DefaultActivityParentPath"/> on the partition,
+    /// (3) the partition root (current user-home default).</para>
+    /// </summary>
+    public string? DefaultActivityParentPath { get; init; }
+
+    /// <summary>
     /// Standard table mappings shared by all content partitions (User, org partitions).
     /// Satellite types (metadata attached to primary nodes): Activity and UserActivity
     /// get dedicated tables for high-volume, time-series queries; Thread and
