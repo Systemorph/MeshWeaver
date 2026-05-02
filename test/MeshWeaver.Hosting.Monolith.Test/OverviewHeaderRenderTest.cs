@@ -24,6 +24,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class OverviewHeaderRenderTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     /// <summary>
     /// Sanity check: the Overview area renders for a plain Markdown node. The refactored
     /// <see cref="MeshNodeLayoutAreas.BuildHeader"/> adds an action-button row and a meta

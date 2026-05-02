@@ -37,6 +37,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string NodeTypePath = "Systemorph/LinkedInProfile";
     private const string SourceNamespace = "Systemorph/LinkedInProfile/Source";
 

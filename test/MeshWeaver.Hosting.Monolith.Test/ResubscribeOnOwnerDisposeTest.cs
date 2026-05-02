@@ -27,6 +27,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class ResubscribeOnOwnerDisposeTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static readonly TimeSpan ShortHeartbeat = TimeSpan.FromMilliseconds(150);
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>

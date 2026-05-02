@@ -36,6 +36,9 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class MeshPluginContentAccessTest : MonolithMeshTestBase
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
     private static readonly string ContentBasePath = Path.Combine(Path.GetTempPath(), "MeshPluginContentAccessTest_" + Guid.NewGuid().ToString("N"));
     private readonly string _testId = Guid.NewGuid().ToString("N")[..8];

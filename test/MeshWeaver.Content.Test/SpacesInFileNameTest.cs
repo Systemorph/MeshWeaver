@@ -27,6 +27,9 @@ namespace MeshWeaver.Content.Test;
 [Collection("SpacesInFileNameTest")]
 public class SpacesInFileNameTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     #region Reference Extraction with Spaces
 
     [Theory]

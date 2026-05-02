@@ -48,6 +48,9 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class PatchWorkspaceAckTest : MonolithMeshTestBase
 {
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string TestNodeType = nameof(TestProduct);
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
 
