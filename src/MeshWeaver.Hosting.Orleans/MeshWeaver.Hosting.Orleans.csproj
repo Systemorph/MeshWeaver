@@ -5,6 +5,14 @@
 
     <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" />
+    <!-- Pin Microsoft.CodeAnalysis.{C,CS}.Scripting to 5.3.0 to match Graph.
+         Microsoft.DotNet.Interactive.CSharp transitively pulls
+         Microsoft.CodeAnalysis.Scripting 5.0.0 which itself pins
+         Microsoft.CodeAnalysis.CSharp.Scripting at exact 5.0.0 — referencing
+         BOTH packages directly here overrides the transitive constraint and
+         resolves NU1107. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Scripting" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
     <PackageReference Include="Microsoft.Orleans.Core" />
     <PackageReference Include="Microsoft.Orleans.Runtime" />
