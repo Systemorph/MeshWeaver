@@ -26,8 +26,10 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class MeshNodeCompilationIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
-    protected override bool ShareMeshAcrossTests => true;
+    // NOTE: not opted into ShareMeshAcrossTests — CompileWithMultipleSourceLocationsPullsInExternalCode
+    // expects fresh Source/Test Code nodes per [Fact]; under shared mesh, prior
+    // [Fact]s leave only 1 of 3 expected nodes in the partition and the cross-
+    // NodeType compile fails with "type or namespace 'Platform' could not be found".
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddGraph();

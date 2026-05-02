@@ -38,8 +38,10 @@ namespace MeshWeaver.Persistence.Test;
 [Collection("MapToToggleableControlPersistence")]
 public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
-    protected override bool ShareMeshAcrossTests => true;
+    // NOTE: not opted into ShareMeshAcrossTests — layout-area builders capture
+    // the first instance's ITestOutputHelper via Output.WriteLine; under shared
+    // SP that captured helper outlives the [Fact] that registered it and xUnit
+    // throws "There is no currently active test" on every subsequent [Fact].
 
     #region Test Domain
 
