@@ -60,12 +60,12 @@ var microsoftTenantIdValue = builder.Configuration["Parameters:microsoft-tenant-
 IResourceBuilder<ParameterResource>? microsoftTenantId = string.IsNullOrEmpty(microsoftTenantIdValue)
     ? null : builder.AddParameter("microsoft-tenant-id", secret: false);
 
-// Embedding, Google auth, and custom domain (non-secret optional — ACA accepts empty env vars)
+// Embedding, Google auth (non-secret optional — ACA accepts empty env vars,
+// so a hard-coded empty default is fine for parameters that are only projected
+// via WithEnvironment).
 var embeddingEndpoint = builder.AddParameter("embedding-endpoint", value: "", secret: false);
 var embeddingModel = builder.AddParameter("embedding-model", value: "", secret: false);
 var googleClientId = builder.AddParameter("google-client-id", value: "", secret: false);
-var customDomain = builder.AddParameter("custom-domain", value: "", secret: false);
-var certificateName = builder.AddParameter("certificate-name", value: "", secret: false);
 
 // Optional secrets/params: ACA rejects secrets with empty values; ConfigureCustomDomain
 // rejects empty hostnames. Read actual config values to guard optional registrations.
@@ -73,6 +73,15 @@ var embeddingKeyValue = builder.Configuration["Parameters:embedding-key"] ?? "";
 var googleClientSecretValue = builder.Configuration["Parameters:google-client-secret"] ?? "";
 var linkedinClientSecretValue = builder.Configuration["Parameters:linkedin-client-secret"] ?? "";
 var customDomainValue = builder.Configuration["Parameters:custom-domain"] ?? "";
+var certificateNameValue = builder.Configuration["Parameters:certificate-name"] ?? "";
+
+// Custom domain + cert: register parameters only when config has real values.
+// A hard-coded `value: ""` default would override user-secrets and ship an empty
+// hostname into the bicep template, which ACA rejects with `InvalidHostName`.
+IResourceBuilder<ParameterResource>? customDomain = string.IsNullOrEmpty(customDomainValue)
+    ? null : builder.AddParameter("custom-domain", secret: false);
+IResourceBuilder<ParameterResource>? certificateName = string.IsNullOrEmpty(certificateNameValue)
+    ? null : builder.AddParameter("certificate-name", secret: false);
 IResourceBuilder<ParameterResource>? embeddingKey = string.IsNullOrEmpty(embeddingKeyValue)
     ? null : builder.AddParameter("embedding-key", secret: true);
 IResourceBuilder<ParameterResource>? googleClientSecret = string.IsNullOrEmpty(googleClientSecretValue)
@@ -200,7 +209,7 @@ var portal = builder
     .PublishAsAzureContainerApp((module, app) =>
     {
         app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
-        if (!string.IsNullOrEmpty(customDomainValue))
+        if (customDomain is not null && certificateName is not null)
             app.ConfigureCustomDomain(customDomain, certificateName);
 
         // Scale: min 2 replicas (Orleans needs ≥2 for resilience), max 6 under load.
@@ -302,6 +311,12 @@ else
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
 }
+
+// Inject the portal's own external HTTPS endpoint as Mcp__BaseUrl so the
+// MCP plugin doesn't have to fall back to its HttpContext probe (or, worse,
+// a hard-coded localhost default). Aspire substitutes the actual allocated
+// URL at container/process start — works the same in prod/test/local.
+portal.WithEnvironment("Mcp__BaseUrl", portal.GetEndpoint("https"));
 
 var app = builder.Build();
 app.Run();
