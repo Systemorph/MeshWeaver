@@ -40,6 +40,11 @@ namespace MeshWeaver.Query.Test;
 public class SyncedQueryTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
+    // Each [Fact] uses distinct node IDs within the shared SubjectsNamespace
+    // (sanity/alpha/one/beta/keep/drop/...) and distinct GetQuery names
+    // ($add-test / $update-test / ...), so SP-sharing is collision-safe.
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string SubjectsNamespace = $"{TestPartition}/SyncedQuerySubjects";
 
     private static MeshNode MakeSubject(string id, string name)
