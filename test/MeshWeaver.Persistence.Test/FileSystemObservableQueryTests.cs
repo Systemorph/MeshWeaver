@@ -21,8 +21,9 @@ namespace MeshWeaver.Persistence.Test;
 /// </summary>
 public class FileSystemObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
-    protected override bool ShareMeshAcrossTests => true;
+    // NOTE: not opted into ShareMeshAcrossTests — multiple [Fact]s create
+    // nodes at hardcoded paths (e.g. "ACME/Project1") that collide under
+    // shared mesh. Tests fail with "Node already exists: ACME/Project1".
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
