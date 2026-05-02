@@ -1,8 +1,10 @@
 using MeshWeaver.Kernel;
 using MeshWeaver.Markdown;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components.Rendering;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -17,11 +19,27 @@ public partial class MarkdownView
     private IReadOnlyList<SubmitCodeRequest>? CodeSubmissions { get; set; }
     public bool ShowReferencesSection { get; set; } = true;
 
+    // Per-view kernel session id. Used as the Activity MeshNode id below.
     private readonly string _kernelId = Guid.NewGuid().AsString();
     private Address? _kernelAddress;
-    private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(_kernelId);
+
+    // The "kernel address" is now the per-view Activity path
+    // (`{owner}/_Activity/markdown-{kernelId}`). The Activity hub hosts the
+    // kernel handlers via `ActivityNodeType.HubConfiguration` +
+    // `AddKernelSubHubHandlers`. Replaces the legacy `kernel/*` standalone
+    // hub addressing — replies route through the standard MeshNode chain.
+    private Address KernelAddress => _kernelAddress ??= ResolveActivityAddress();
 
     private bool _codeSubmitted;
+
+    private Address ResolveActivityAddress()
+    {
+        var ownerPath = Stream?.Owner?.Path;
+        var activityNamespace = string.IsNullOrEmpty(ownerPath)
+            ? "_Activity"
+            : $"{ownerPath}/_Activity";
+        return new Address($"{activityNamespace}/markdown-{_kernelId}");
+    }
 
     protected override void BindData()
     {
@@ -62,7 +80,10 @@ public partial class MarkdownView
         if (firstRender && !_codeSubmitted && CodeSubmissions is { Count: > 0 })
         {
             _codeSubmitted = true;
-            MarkdownViewLogic.SubmitCode(Hub, KernelAddress, CodeSubmissions);
+            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var ownerPath = Stream?.Owner?.Path;
+            MarkdownViewLogic.CreateActivityAndSubmit(
+                Hub, meshService, KernelAddress, ownerPath, _kernelId, CodeSubmissions);
         }
     }
 

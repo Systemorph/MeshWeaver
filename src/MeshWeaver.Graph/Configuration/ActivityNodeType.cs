@@ -1,5 +1,6 @@
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Security;
+using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -35,9 +36,15 @@ public static class ActivityNodeType
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(ActivityNodeType).Assembly.Location,
+        // Activity hubs host the kernel directly: SubmitCodeRequest etc. land here,
+        // run inside this hub's action block, and write progress to the same
+        // ActivityLog node via DataChangeRequest.Update on the local workspace.
+        // Replaces the legacy `kernel/*` standalone hub addressing — replies route
+        // through the standard MeshNode path instead of three special routing rules.
         HubConfiguration = config => config
             .AddActivityViews()
             .AddMeshDataSource(source => source
                 .WithContentType<ActivityLog>())
+            .AddKernelSubHubHandlers()
     };
 }

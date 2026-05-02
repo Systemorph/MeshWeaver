@@ -23,11 +23,12 @@ public static class KernelNodeType
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
         builder
-            .ConfigureHub(config => AddKernelTypes(config)
-                // Route kernel addresses to local hosted hubs — never delegate to grains.
-                .WithRoutes(routes => routes.RouteAddressToHostedHub(
-                    AddressExtensions.KernelType,
-                    c => c.AddKernelSubHubHandlers())))
+            // Register kernel message types at mesh level so JSON deserialization
+            // works wherever a kernel-handler hub lives (Activity hub, markdown
+            // view sub-hub, future hosts). The legacy
+            // `RouteAddressToHostedHub("kernel", …)` rule is gone — kernel work
+            // runs inside the Activity MeshNode hub, addressed via its node path.
+            .ConfigureHub(AddKernelTypes)
             .ConfigureServices(services =>
             {
                 services.AddSingleton<INodeTypeAccessRule>(sp =>

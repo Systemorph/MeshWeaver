@@ -62,7 +62,6 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 )
             )
             .AddMeshTypes()
-            .WithRoutes(routes => routes.WithHandler((d, ct) => RouteToSubHubs(routes.Hub, d, ct)))
             .WithServices(services => services
                 .AddScoped(CreateKernelAsync)
                 .AddScoped(CreateAreaStream)
@@ -142,82 +141,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
     }
 
-    private Task<IMessageDelivery> RouteToSubHubs(IMessageHub kernelHub, IMessageDelivery request, CancellationToken cancellationToken)
-    {
-        Address? subAddress = null;
-
-        // Pattern 1: Host-based routing (existing, for backward compat)
-        if (request.Target?.Host != null && kernelHub.Address.Equals(request.Target.Host))
-        {
-            subAddress = request.Target with { Host = null };
-        }
-        // Pattern 2: Path-based routing via UnifiedPath (local subhost for interactive markdown)
-        // The delivery target is the full address (e.g., kernel/test-kernel-xxx).
-        // We use it as the sub-hub address so HierarchicalRouting recognizes the sub-hub
-        // as the correct target (targetWithoutHost == hub.Address).
-        else if (request.Target != null
-                 && request.Properties.TryGetValue("UnifiedPath", out var unifiedPath)
-                 && unifiedPath is string path && !string.IsNullOrEmpty(path))
-        {
-            subAddress = request.Target;
-        }
-
-        if (subAddress == null)
-            return Task.FromResult(request);
-
-        try
-        {
-            var hub = kernelHub.GetHostedHub(
-                subAddress,
-                config => new KernelContainer(config.ParentHub!.ServiceProvider).ConfigureSubHub(config),
-                HostedHubCreation.Always);
-
-            if (hub is not null)
-            {
-                // Clear UnifiedPath to prevent routing loop in the sub-hub's own RouteToSubHubs
-                hub.DeliverMessage(request.SetProperty("UnifiedPath", ""));
-                return Task.FromResult(request.Processed());
-            }
-
-            return Task.FromResult(DeliveryFailure(kernelHub, request, $"Could not create kernel sub-hub for {subAddress}"));
-        }
-        catch (ObjectDisposedException)
-        {
-            logger.LogInformation("Trying to invoke kernel command on disposed kernel: {Address}", kernelHub.Address);
-            kernelHub.Dispose();
-            return Task.FromResult(request.Failed("Kernel disposed"));
-        }
-        catch (Exception e)
-        {
-            kernelHub.Post(new DeliveryFailure(request)
-            {
-                ErrorType = ErrorType.Exception,
-                ExceptionType = e.GetType().Name,
-                Message = e.Message,
-            }, o => o.ResponseFor(request));
-            return Task.FromResult(request.Failed(e.Message));
-        }
-    }
-
-
     private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromMinutes(15);
-
-
-    private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, string message)
-    {
-        var deliveryFailure = new DeliveryFailure(request)
-        {
-            ExceptionType = "MeshNodeNotFound",
-            Message = message,
-        };
-        return DeliveryFailure(kernelHub, request, deliveryFailure);
-    }
-
-    private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, DeliveryFailure deliveryFailure)
-    {
-        kernelHub.Post(deliveryFailure, o => o.ResponseFor(request));
-        return request.Failed(deliveryFailure.Message ?? string.Empty);
-    }
 
     private void PublishEventToContext(IMessageHub hub, KernelEvent @event)
     {

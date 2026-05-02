@@ -53,12 +53,23 @@ public partial class CollaborativeMarkdownView
     private bool _showPageCommentInput;
     private string _pageCommentText = "";
 
-    // Interactive markdown (kernel execution)
+    // Interactive markdown (kernel execution). The "kernel address" is now a
+    // per-view Activity MeshNode path (`{owner}/_Activity/markdown-{kernelId}`)
+    // — its hub hosts the kernel handlers via ActivityNodeType.HubConfiguration.
     private readonly string _kernelId = Guid.NewGuid().AsString();
     private Address? _kernelAddress;
-    private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(_kernelId);
+    private Address KernelAddress => _kernelAddress ??= ResolveActivityAddress();
     private bool _codeSubmitted;
     private IReadOnlyCollection<SubmitCodeRequest>? _codeSubmissions;
+
+    private Address ResolveActivityAddress()
+    {
+        var ownerPath = BoundNodePath ?? Stream?.Owner?.Path;
+        var activityNamespace = string.IsNullOrEmpty(ownerPath)
+            ? "_Activity"
+            : $"{ownerPath}/_Activity";
+        return new Address($"{activityNamespace}/markdown-{_kernelId}");
+    }
 
     // Parsed data
     private string? _processedHtml;
@@ -228,11 +239,14 @@ public partial class CollaborativeMarkdownView
             await jsModule.InvokeVoidAsync("enableCommentSelection", containerRef, dotNetRef);
         }
 
-        // Submit code to kernel — the mesh routing rule creates the hub on demand.
+        // Submit code to the per-view Activity hub (which hosts the kernel).
         if (!_codeSubmitted && _codeSubmissions is { Count: > 0 })
         {
             _codeSubmitted = true;
-            MarkdownViewLogic.SubmitCode(Hub, KernelAddress, _codeSubmissions);
+            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var ownerPath = BoundNodePath ?? Stream?.Owner?.Path;
+            MarkdownViewLogic.CreateActivityAndSubmit(
+                Hub, meshService, KernelAddress, ownerPath, _kernelId, _codeSubmissions);
         }
     }
 

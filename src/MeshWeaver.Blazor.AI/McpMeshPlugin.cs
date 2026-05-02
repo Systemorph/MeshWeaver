@@ -68,41 +68,16 @@ public class McpMeshPlugin
             ?? string.Empty;
         var routingService = hub.ServiceProvider.GetRequiredService<IRoutingService>();
 
+        // The session hub IS the MCP-side actor: registered with the routing
+        // service so responses route back via the standard portal/* path.
+        // No per-call kernel hub — execute_script flows through the Code hub,
+        // which creates an Activity MeshNode whose hub hosts the kernel
+        // (see ActivityNodeType.HubConfiguration + AddKernelSubHubHandlers).
+        // Replies route through the standard MeshNode chain to portal/mcp-…
+        // — same routing every other MCP tool already uses (Get, Search, …).
         var sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, routingService, logger);
 
-        // Per-MCP-call hosted hub — same pattern as interactive markdown's per-view
-        // kernel (MarkdownView.razor.cs uses `AddressExtensions.CreateKernelAddress(guid)`).
-        // A fresh kernel-typed address means the session hub's
-        // `RouteAddressToHostedHub("kernel", …)` rule materialises a new hosted hub
-        // with kernel-sub-hub handlers. Each MCP tool invocation thus runs on its own
-        // ActionBlock — no serialisation on the session hub, no bleed of state between
-        // concurrent calls. Cleanup happens when the session hub disposes.
-        //
-        // CRITICAL: register the per-call kernel hub with the routing service too.
-        // Without this, a response posted from a remote silo (e.g. the Code hub
-        // running ExecuteScriptRequest) targeted at this hub's address has no
-        // registration to find — the Orleans router can't route to "kernel/mcp-…"
-        // because only the session hub ("portal/mcp-…") is in the registry. The
-        // session hub's `RouteAddressToHostedHub("kernel", …)` rule only fires
-        // for messages already inside the session hub's pipeline; it does not
-        // claim addresses globally. Registering the request hub explicitly makes
-        // the routing service know "kernel/mcp-… lives at this stream", so
-        // ExecuteScriptResponse / SubmitCodeResponse round-trips work end-to-end.
-        var requestKernelAddress = AddressExtensions.CreateKernelAddress(
-            "mcp-" + Guid.NewGuid().ToString("N").Substring(0, 8));
-        var requestHub = sessionHub.GetHostedHub(
-            requestKernelAddress,
-            c => c
-                .AddKernelSubHubHandlers()
-                .WithInitialization(async (hub, _) =>
-                {
-                    var registry = await routingService.RegisterStreamAsync(hub);
-                    hub.RegisterForDisposal(registry);
-                }),
-            HostedHubCreation.Always)!;
-        logger.LogInformation("Materialising MCP request hub at {Address}", requestHub.Address);
-
-        ops = new MeshOperations(requestHub);
+        ops = new MeshOperations(sessionHub);
     }
 
     private static IMessageHub ResolveSessionHub(
@@ -120,12 +95,10 @@ public class McpMeshPlugin
         var address = AddressExtensions.CreatePortalAddress("mcp-" + sessionId);
         logger.LogInformation("Materialising MCP session hub at {Address}", address);
 
-        // Mirrors PortalApplication.DefaultPortalConfig:
-        //   1. WithInitialization → RegisterStreamAsync registers the sub-hub
-        //      with the routing service so responses (kernel ack,
-        //      UpdateNodeResponse, etc.) find their way back.
-        //   2. WithRoutes → kernel addresses are resolved as local hosted hubs
-        //      rather than bouncing to Orleans grain activation.
+        // RegisterStreamAsync registers the session hub with the routing service
+        // so every MCP-bound response (Get / Search / Patch / ExecuteScript / …)
+        // routes back to this stream. No kernel route rule — kernel work runs
+        // inside the Activity MeshNode hub (per node), not here.
         return rootHub.GetHostedHub(
             address,
             sessionConfig => sessionConfig
@@ -133,10 +106,7 @@ public class McpMeshPlugin
                 {
                     var registry = await routingService.RegisterStreamAsync(hub);
                     hub.RegisterForDisposal(registry);
-                })
-                .WithRoutes(routes => routes.RouteAddressToHostedHub(
-                    AddressExtensions.KernelType,
-                    c => c.AddKernelSubHubHandlers())),
+                }),
             HostedHubCreation.Always)
             ?? throw new InvalidOperationException(
                 $"Failed to materialise MCP session hub at {address}.");

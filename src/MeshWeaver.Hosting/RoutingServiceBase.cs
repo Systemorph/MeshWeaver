@@ -51,16 +51,6 @@ namespace MeshWeaver.Hosting
                     return;
                 }
 
-                // Kernel addresses are always handled by local hosted hubs — never delegate to grains.
-                if (address.Type == AddressExtensions.KernelType)
-                {
-                    hostedHub = Mesh.GetHostedHub(address,
-                        config => config.AddKernelSubHubHandlers(),
-                        HostedHubCreation.Always);
-                    hostedHub?.DeliverMessage(delivery);
-                    return;
-                }
-
                 var hostAddress = GetHostAddress(address);
                 await RouteMessageAsync(delivery, hostAddress, cancellationToken);
             }
@@ -79,18 +69,6 @@ namespace MeshWeaver.Hosting
                 }
             }
         }
-
-        protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, Address address, CancellationToken ct)
-        {
-            var kernelId = GetKernelId(delivery, node, address);
-            var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
-            delivery = delivery.WithTarget(delivery.Target!.WithHost(kernelAddress));
-            RouteInMesh(delivery, ct);
-            return Task.FromResult(delivery.Forwarded(kernelAddress));
-        }
-
-        protected virtual string GetKernelId(IMessageDelivery delivery, MeshNode node, Address address)
-            => $"{address}".Replace('/', '-');
 
         private async Task<IMessageDelivery> RouteMessageAsync(
             IMessageDelivery delivery,

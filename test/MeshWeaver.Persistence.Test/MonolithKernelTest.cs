@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,9 +17,11 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Events;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MdExtensions = MeshWeaver.Markdown.MarkdownExtensions;
 
@@ -37,17 +40,34 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         base.ConfigureMesh(builder);
 
     /// <summary>
-    /// Returns a new kernel address. The mesh routing rule (RouteAddressToHostedHub)
-    /// creates the kernel hub on demand when the first message arrives.
+    /// Materialises a per-test Activity MeshNode whose hub hosts the kernel
+    /// handlers (via <c>ActivityNodeType.HubConfiguration</c> + <c>AddKernelSubHubHandlers</c>),
+    /// and returns its address. Replaces the legacy `kernel/*` standalone hub
+    /// addressing — every kernel session is now an Activity-hosted sub-hub.
     /// </summary>
-    private static Address CreateKernelSession()
-        => AddressExtensions.CreateKernelAddress();
+    private async Task<Address> CreateKernelSessionAsync()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var kernelId = Guid.NewGuid().ToString("N");
+        const string ownerPath = "rbuergi";
+        var activityNamespace = $"{ownerPath}/_Activity";
+        var activityNode = new MeshNode($"markdown-{kernelId}", activityNamespace)
+        {
+            Name = "Test kernel session",
+            NodeType = "Activity",
+            MainNode = ownerPath,
+            State = MeshNodeState.Active,
+            Content = new ActivityLog("KernelExecution") { Status = ActivityStatus.Running }
+        };
+        await meshService.CreateNode(activityNode).FirstAsync().ToTask();
+        return new Address($"{activityNamespace}/markdown-{kernelId}");
+    }
 
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task HelloWorld()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         var command = new SubmitCode("Console.WriteLine(\"Hello World\");");
         client.Post(
@@ -81,7 +101,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
 ";
         const string Area = nameof(Area);
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         client.Post(
             new SubmitCodeRequest(Code) { Id = Area },
@@ -117,7 +137,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     public async Task SubmitCodeRequest_ProducesLayoutAreaResult()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSessionAsync();
         const string viewId = "test-view-1";
 
         client.Post(
@@ -142,7 +162,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     public async Task MultipleSubmissions_ShareKernelState()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         // First submission: define a variable
         client.Post(
@@ -165,13 +185,15 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     }
 
     /// <summary>
-    /// Tests that each kernel session gets a unique address.
+    /// Tests that each kernel session gets a unique address. After the
+    /// kernel-as-Activity-sub-hub migration, "kernel session address" is the
+    /// per-Activity MeshNode path; uniqueness comes from the kernel-id GUID.
     /// </summary>
     [Fact]
-    public void MultipleKernelSessions_HaveUniqueAddresses()
+    public async Task MultipleKernelSessions_HaveUniqueAddresses()
     {
-        var address1 = CreateKernelSession();
-        var address2 = CreateKernelSession();
+        var address1 = await CreateKernelSessionAsync();
+        var address2 = await CreateKernelSessionAsync();
 
         address1.Should().NotBe(address2, "Each kernel session should have a unique address");
     }
@@ -184,7 +206,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     public async Task ThreeSubmissions_ShareState()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         client.Post(new SubmitCodeRequest("var sharedValue = 100;") { Id = "s1" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"first: {sharedValue}\")") { Id = "s2" }, o => o.WithTarget(kernelAddress));
@@ -211,7 +233,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
     public async Task InteractiveShowcase_VariablesPersistAcrossAllBlocks()
     {
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         // Act I — silent setup: variables, collections, and local functions
         const string actI = @"
@@ -323,7 +345,7 @@ var wordFreq = corpus.Split(' ')
         Output.WriteLine($"Parsed {submissions.Count} submissions from markdown");
 
         var client = GetClient();
-        var kernelAddress = CreateKernelSession();
+        var kernelAddress = await CreateKernelSessionAsync();
 
         // Post all submissions to the same kernel — exactly what MarkdownView does
         foreach (var submission in submissions)
