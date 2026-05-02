@@ -121,10 +121,34 @@ public static class CodeLayoutAreas
 
         stack = stack.WithView(headerRow);
 
-        // Language badge
+        // Language badge + last-executed timestamp + link to activity history.
+        // The activities list lives at {hubPath}/_activity (one Activity node per
+        // run, written by HandleExecuteScript). The link routes through the
+        // standard mesh search area pre-filtered to this node's activities so
+        // operators can browse historical runs without leaving the Code page.
         var language = codeConfig?.Language ?? "csharp";
-        stack = stack.WithView(Controls.Body($"Language: {language}")
-            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
+        var hubPathStr = hubAddress.ToString();
+        var activitiesHref = $"/{hubPathStr}/_activity/*";
+        var infoLineHtml = $"<div style=\"display: flex; align-items: baseline; gap: 16px; " +
+            $"color: var(--neutral-foreground-hint); margin-bottom: 16px; font-size: 0.85rem;\">" +
+            $"<span>Language: <span style=\"font-family: monospace;\">{System.Net.WebUtility.HtmlEncode(language)}</span></span>";
+        if (isExecutable && codeConfig?.LastExecutedAt is { } lastRun)
+        {
+            infoLineHtml += $"<span>Last executed: <span title=\"{lastRun:O}\">{lastRun:g} UTC</span></span>" +
+                $"<a href=\"{System.Net.WebUtility.HtmlEncode(activitiesHref)}\" " +
+                $"style=\"color: var(--accent-fill-rest); text-decoration: none;\">View activity history</a>";
+        }
+        else if (isExecutable)
+        {
+            // Executable but never run — surface the link anyway so the
+            // user can verify no historical runs exist (or remember they
+            // need to click Run).
+            infoLineHtml += $"<span style=\"font-style: italic;\">Never executed</span>" +
+                $"<a href=\"{System.Net.WebUtility.HtmlEncode(activitiesHref)}\" " +
+                $"style=\"color: var(--accent-fill-rest); text-decoration: none;\">View activity history</a>";
+        }
+        infoLineHtml += "</div>";
+        stack = stack.WithView(Controls.Html(infoLineHtml));
 
         // Code block
         if (!string.IsNullOrEmpty(codeConfig?.Code))

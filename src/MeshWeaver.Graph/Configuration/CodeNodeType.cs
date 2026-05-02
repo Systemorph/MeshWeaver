@@ -132,6 +132,26 @@ public static class CodeNodeType
                             },
                             o => o.WithTarget(kernelAddress));
 
+                        // Stamp LastExecutedAt onto the Code MeshNode so the
+                        // Content area can show "Last executed: …" without a
+                        // separate query of activity children. Reactive write
+                        // via the canonical workspace.UpdateMeshNode — same
+                        // path the CompileWatcher uses on the NodeType.
+                        try
+                        {
+                            var workspace = hub.GetWorkspace();
+                            workspace.UpdateMeshNode(curr =>
+                                curr.Content is CodeConfiguration cfg
+                                    ? curr with { Content = cfg with { LastExecutedAt = DateTimeOffset.UtcNow } }
+                                    : curr);
+                        }
+                        catch
+                        {
+                            // Workspace might not be ready (cold-start race) —
+                            // missing LastExecutedAt is a UI nicety, not a
+                            // correctness invariant. Activity log is still written.
+                        }
+
                         hub.Post(
                             new ExecuteScriptResponse
                             {
