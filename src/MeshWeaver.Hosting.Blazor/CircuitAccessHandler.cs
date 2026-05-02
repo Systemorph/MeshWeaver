@@ -161,8 +161,11 @@ public class CircuitAccessHandler : CircuitHandler
             if (meshQuery == null)
                 return null;
 
+            // Post-v10: each user owns their own partition, the User node lives
+            // at namespace='' / path=userid (NOT under "User/" anymore). Query
+            // by email + nodeType only — no namespace constraint.
             var request = MeshQueryRequest.FromQuery(
-                $"nodeType:User namespace:User content.email:{email} limit:1",
+                $"nodeType:User content.email:{email} limit:1",
                 Mesh.Security.WellKnownUsers.System);
 
             // IAsyncEnumerable + await foreach — pull-based protocol, no hub
