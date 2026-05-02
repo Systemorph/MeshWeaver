@@ -20,7 +20,7 @@
     <PackageVersion Include="Aspire.Npgsql" Version="13.2.4" />
     <!-- Pinned: Autofac.Extensions.DI 11.0.0 breaks TryAddEnumerable with factory delegates -->
     <PackageVersion Include="Autofac" Version="9.1.0" />
-    <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="11.0.0" />
     <PackageVersion Include="Azure.AI.Inference" Version="1.0.0-beta.5" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
     <PackageVersion Include="Azure.Core" Version="1.54.0" />
@@ -36,7 +36,7 @@
     <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.59.0" />
     <PackageVersion Include="BlazorMonaco" Version="3.4.0" />
     <PackageVersion Include="ClaudeAgentSdk" Version="0.2.1" />
-    <PackageVersion Include="Radzen.Blazor" Version="10.3.1" />
+    <PackageVersion Include="Radzen.Blazor" Version="10.3.2" />
     <PackageVersion Include="Castle.Core" Version="5.2.1" />
     <PackageVersion Include="DocSharp.Markdown" Version="0.18.1" />
     <PackageVersion Include="ClosedXML" Version="0.105.0" />
@@ -73,10 +73,10 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.7" />
     <PackageVersion Include="ModelContextProtocol" Version="1.2.0" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.5.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.5.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.5.1" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.5.1" />
     <PackageVersion Include="Microsoft.Extensions.AI.AzureAIInference" Version="10.0.0-preview.1.25559.3" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.5.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.5.1" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.14.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Hybrid" Version="10.5.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.7" />
@@ -89,8 +89,8 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.ApplicationInsights" Version="2.23.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Identity.Web" Version="4.8.0" />
-    <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.8.0" />
+    <PackageVersion Include="Microsoft.Identity.Web" Version="4.9.0" />
+    <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.9.0" />
     <PackageVersion Include="Microsoft.Orleans.BroadcastChannel" Version="10.1.0" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.1.0" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.1.0" />
@@ -115,9 +115,9 @@
     <PackageVersion Include="System.Text.Encodings.Web" Version="10.0.7" />
     <PackageVersion Include="System.Text.Json" Version="10.0.7" />
     <!-- Pinned at 5.0.0: Microsoft.DotNet.Interactive.CSharp requires exact-match CodeAnalysis.Scripting 5.0.0 -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.0.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.0.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.3.0" />
     <PackageVersion Include="Microsoft.DotNet.Interactive.AspNetCore" Version="1.0.0-beta.25323.1" />
     <PackageVersion Include="Microsoft.DotNet.Interactive" Version="1.0.0-beta.26120.1" />
     <PackageVersion Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.26120.1" />
@@ -179,7 +179,7 @@
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.2.4" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.2.4" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
     <PackageVersion Include="Verify.XunitV3" Version="31.16.2" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
