@@ -157,7 +157,10 @@ public static class MeshNodeExtensions
                     Id = encodedPath,
                     NodePath = req.NodePath,
                     UserId = req.UserId,
-                    ActivityType = ActivityType.Read,
+                    // Honour the request's ActivityType — Login events from the
+                    // auth middleware fold in here alongside Read events from
+                    // navigation. Same persistence path, different filter axis.
+                    ActivityType = req.ActivityType,
                     FirstAccessedAt = existingRecord?.FirstAccessedAt ?? now,
                     LastAccessedAt = now,
                     AccessCount = (existingRecord?.AccessCount ?? 0) + 1,
