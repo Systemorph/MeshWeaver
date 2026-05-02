@@ -48,6 +48,28 @@ MeshWeaver.Layout.Controls.Html(
     "</div>")
 ```
 
+## Pulling in a NuGet library
+
+`#r "nuget:..."` directives work the same as in `dotnet-script` and the old Polyglot Notebooks: the kernel resolves the package via NuGet, downloads it (cached after the first hit), and adds it as a Roslyn `MetadataReference` for the script. Transitive dependencies are loaded on demand via an `AssemblyLoadContext` probing hook.
+
+```csharp --render MathDemo --show-code
+#r "nuget:MathNet.Numerics, 5.0.0"
+using MathNet.Numerics;
+
+// erf(1) ≈ 0.8427 — the canonical first-row value from any error-function table.
+var erfOne = SpecialFunctions.Erf(1.0);
+Log.LogInformation("MathNet.Numerics resolved. erf(1) = {Value:F6}", erfOne);
+
+MeshWeaver.Layout.Controls.Markdown(
+    $"**MathNet.Numerics** (loaded via `#r \"nuget:...\"`):\n\n" +
+    $"- `SpecialFunctions.Erf(1.0)` = `{erfOne:F6}`\n" +
+    $"- (canonical value: `0.842701`)")
+```
+
+The first time this page loads on a clean cache, the kernel takes ~5–10 seconds to download and unpack `MathNet.Numerics` (and its `System.Buffers` / `System.Memory` transitives). Subsequent loads hit the global packages folder and complete in a fraction of a second.
+
+This is exactly the path the integration test `ScriptExecutionInUserHomeTest.NuGetDirective_DownloadsPackage_AndScriptUsesIt` exercises end-to-end, so any regression in the NuGet directive pipeline shows up in CI.
+
 The `--render Fireworks` flag tells the markdown renderer to (a) execute the cell on page load and (b) display the cell's return value in a layout area named `Fireworks` (the area immediately below the cell). The four `Log.LogInformation` calls land on the kernel session's activity log; the final `Controls.Html(...)` becomes the rendered fireworks.
 
 ## Two things to call out
@@ -66,3 +88,26 @@ The same pipeline is available three ways. See [Script Execution](Doc/Architectu
 - **From C#:** `hub.Post(new ExecuteScriptRequest(), o => o.WithTarget(codeNodeAddress))`. Subscribe to the `ActivityLog` returned in the response.
 - **From an MCP agent:** call the `execute_script` tool with the path of an executable Code node. Same activity creation, same streaming.
 - **From interactive markdown:** wrap the script in a code fence with `--render <area>`, as shown above. The cell auto-runs on page load, and the area renders the script's return value live.
+
+## Cancelling a long-running script
+
+Per the [Activity Control Plane](Doc/Architecture/ActivityControlPlane), cancellation is a **content patch**, not a separate message. The user clicks "Cancel" → the click handler patches `RequestedStatus = Cancelled` on the activity → the activity hub's watcher dispatches the internal cancel → the script's `Ct` trips → status flips to `Cancelled`.
+
+For the script itself to be cancellable mid-flight, **pass `Ct` into every cancellable async call**:
+
+```csharp
+Log.LogInformation("Phase 1: pulling source data…");
+await Mesh.GetWorkspace()
+    .GetMeshNodeStream("rbuergi/source-feed")
+    .Where(n => (n?.Content as FeedContent)?.Status == FeedStatus.Ready)
+    .Take(1)
+    .ToTask(Ct);                               // ← cancellable
+Log.LogInformation("Phase 2: crunching numbers…");
+await ComputeAsync(Ct);                        // ← cancellable
+Log.LogInformation("Phase 3: rendering report…");
+return MeshWeaver.Layout.Controls.Markdown("Done.");
+```
+
+If the user cancels at "Phase 2", the wait inside `ComputeAsync` throws `OperationCanceledException`, the script unwinds, the activity flips to `Failed` with a cancellation message in the log, and the `🎆 fireworks` never appear.
+
+The Activity Overview's Cancel button (and the running-activities stripe on any Code node) wire this exact patch — you don't need to do anything special on the UI side beyond rendering an existing layout area.

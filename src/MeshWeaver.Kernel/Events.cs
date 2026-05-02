@@ -33,3 +33,11 @@ public record SubmitCodeResponse(string SubmissionId, bool Success)
 {
     public string? Error { get; init; }
 }
+
+/// <summary>
+/// Cancel the currently executing script on the addressed kernel host (the
+/// Activity hub). Idempotent — if no script is running, the request is a no-op.
+/// The ActivityLog flips to <c>Failed</c> status with an
+/// <see cref="System.OperationCanceledException"/> entry in <c>Messages</c>.
+/// </summary>
+public record CancelScriptRequest;

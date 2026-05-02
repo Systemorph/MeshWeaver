@@ -59,8 +59,16 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
     private MessageHubConfiguration Configure(MessageHubConfiguration config)
     {
+        // SubmitCodeRequest stays as the run trigger (today still posted directly
+        // by CodeNodeType.HandleExecuteScript). CancelScriptRequest is INTERNAL —
+        // not exposed to external clients. The canonical cancel API is
+        // patching ActivityLog.RequestedStatus = Cancelled on the activity's own
+        // content; the hub-content watcher below translates that to
+        // CancelScriptRequest dispatched to the executor. See
+        // Doc/Architecture/ActivityControlPlane.md.
         config.TypeRegistry.WithType(typeof(SubmitCodeRequest), nameof(SubmitCodeRequest));
         config.TypeRegistry.WithType(typeof(SubmitCodeResponse), nameof(SubmitCodeResponse));
+        config.TypeRegistry.WithType(typeof(CancelScriptRequest), nameof(CancelScriptRequest));
 
         return config
             .AddLayout(layout =>
@@ -80,9 +88,39 @@ public class KernelContainer(IServiceProvider serviceProvider)
             .WithInitialization((hub, _) =>
             {
                 DisposeOnTimeout(hub);
+                StartActivityControlPlane(hub);
                 return Task.CompletedTask;
             })
-            .WithHandler<SubmitCodeRequest>(ForwardSubmitCodeRequest);
+            .WithHandler<SubmitCodeRequest>(ForwardSubmitCodeRequest)
+            .WithHandler<CancelScriptRequest>(ForwardCancelRequest);
+    }
+
+    /// <summary>
+    /// Subscribe to this hub's own <see cref="MeshNodeReference"/> stream and
+    /// translate <see cref="ActivityLog.RequestedStatus"/> patches into
+    /// kernel-internal cancellations. The canonical cancel API is
+    /// <c>workspace.UpdateMeshNode(curr =&gt; curr with { Content = ((ActivityLog)curr.Content!) with { RequestedStatus = Cancelled } })</c>;
+    /// no external CancelScriptRequest needed. See
+    /// <c>Doc/Architecture/ActivityControlPlane.md</c>.
+    /// </summary>
+    private void StartActivityControlPlane(IMessageHub hub)
+    {
+        var workspace = hub.GetWorkspace();
+        var subscription = workspace.GetMeshNodeStream()
+            .Select(node => (node?.Content as ActivityLog)?.RequestedStatus)
+            .DistinctUntilChanged()
+            .Subscribe(requested =>
+            {
+                if (requested == ActivityStatus.Cancelled)
+                {
+                    IMessageHub? executor;
+                    lock (executorHubLock) { executor = executorHub; }
+                    if (executor is not null && executor.Disposal is null)
+                        hub.Post(new CancelScriptRequest(), o => o.WithTarget(executor.Address));
+                }
+            },
+            ex => logger.LogError(ex, "ActivityControlPlane subscription faulted on {Address}", hub.Address));
+        hub.RegisterForDisposal(subscription);
     }
 
     private void DisposeOnTimeout(IMessageHub hub)
@@ -158,6 +196,22 @@ public class KernelContainer(IServiceProvider serviceProvider)
                     new SubmitCodeResponse(request.Message.Id, false) { Error = ex.Message },
                     o => o.ResponseFor(request)));
 
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Forward <see cref="CancelScriptRequest"/> to the executor (if it has been
+    /// materialised — no point spawning the executor just to cancel nothing).
+    /// Fire-and-forget: the executor's cancellation flips the script's
+    /// <see cref="CancellationToken"/> and the script's own response (Failed)
+    /// flows back through the SubmitCodeRequest forwarder above.
+    /// </summary>
+    private IMessageDelivery ForwardCancelRequest(IMessageHub hub, IMessageDelivery<CancelScriptRequest> request)
+    {
+        IMessageHub? executor;
+        lock (executorHubLock) { executor = executorHub; }
+        if (executor is not null && executor.Disposal is null)
+            hub.Post(request.Message, o => o.WithTarget(executor.Address));
         return request.Processed();
     }
 }
