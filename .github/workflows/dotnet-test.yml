@@ -13,11 +13,12 @@ on:
 jobs:
   build:
     name: Build and Run Unit tests
-    # 45 min: setup+restore+build runs ~3 min; tests should finish in ~25 min,
-    # but a single hung project can burn an extra 8 min (per-project cap, see
-    # "Run Tests" step). Headroom over the realistic worst case so a single
-    # hang doesn't kill the whole job.
-    timeout-minutes: 45
+    # 60 min: setup+restore+build runs ~3 min; tests currently take ~35-40 min
+    # (FutuRe ~6m, Autocomplete ~4m, AI ~3m, Acme ~3m, plus ~30 smaller projects).
+    # Headroom for a single hung project burning its 6m wallclock cap without
+    # truncating the suite. If this gets tight again, the next move is matrix-
+    # parallelizing the per-project loop instead of bumping the cap further.
+    timeout-minutes: 60
     runs-on: ubuntu-latest
 
     steps:
