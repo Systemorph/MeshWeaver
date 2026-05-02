@@ -72,21 +72,16 @@ public static class AccessControlPipeline
                 // where AsyncLocal.Context is the hub's own impersonation address
                 // (set by PostPipeline at startup) even though delivery.AccessContext
                 // is fully populated by the sender's PostPipeline with the originating
-                // user. The result was every API-token request being denied because
-                // Admin role on the bearer token never reached the claim-based grant
-                // path: the synced-query path returned no roles, and the chain's later
-                // `if (context.Roles != null && context.ObjectId == userId)` saw the
-                // hub's identity (no Roles), not the user's.
+                // user.
                 //
-                // Trigger condition: delivery carries non-empty user Roles AND its
-                // ObjectId is NOT the receiving hub's own address (i.e. it's a real
-                // user, not hub-impersonation). When both hold, override scope context.
-                // Hub-impersonation deliveries (no user, ObjectId=hubAddress) and
-                // synced-query subscribes from the data source's own hub keep the
-                // existing scope so the recursion guard stays in place.
-                var hubAddressString = hub.Address.ToFullString();
-                if (delivery.AccessContext is { Roles: { Count: > 0 } } userCtx
-                    && !string.Equals(userCtx.ObjectId, hubAddressString, StringComparison.Ordinal))
+                // Trigger: delivery carries non-empty user Roles. That's the only
+                // signal needed — the Roles list comes from the validated bearer
+                // token (signed) or the OAuth principal (resolved at session open),
+                // both trustworthy. Hub-to-hub deliveries set ObjectId to the hub's
+                // own address with empty Roles; we naturally skip those without a
+                // hub-identity check. This is the claim-first half of the
+                // SecurityService claim-first restructure.
+                if (delivery.AccessContext is { Roles: { Count: > 0 } } userCtx)
                 {
                     accessService.SetContext(userCtx);
                 }

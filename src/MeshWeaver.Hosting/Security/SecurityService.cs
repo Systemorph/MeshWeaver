@@ -146,64 +146,53 @@ internal class SecurityService : ISecurityService
         if (userId == WellKnownUsers.System)
             return Observable.Return(Permission.All);
 
-        // Build the user's complete scope→roles map ONCE from the synced
-        // AccessAssignment query (cached + refcounted, refreshed on each
-        // assignment change). All permission checks for this user share the
-        // same subscription/computation per synced-query emission.
+        // Claim-first composition: the claim-based AccessContext.Roles + the
+        // static AccessAssignment seeds collected at construction time are
+        // available SYNCHRONOUSLY — no observable wait, no synced-query
+        // dependency. Compute that snapshot, emit it as the first value, THEN
+        // enrich asynchronously with the synced AccessAssignment query (so
+        // long-lived subscribers see updates as runtime grants land).
         //
-        // Defense-in-depth bound: if the synced query data source is wedged
-        // (the distributed-mode failure mode where the per-workspace
-        // SyncedQueryRegistry never gets a first emission from its underlying
-        // mesh-query backend), fall back to an EMPTY scope-roles map after
-        // 2 s so the rest of the chain can fold in claim-based roles from
-        // AccessContext.Roles (the API token middleware path) and the static
-        // seeds collected at construction time. Without this fallback, every
-        // permission check on a wedged silo blocks until the 10 s
-        // AccessControlPipeline timeout and fails closed — even when the
-        // bearer-token claim would have authorized the call. We explicitly
-        // do NOT StartWith because Take(1) inside the pipeline would then
-        // see the empty snapshot first, lose any Admin assignment that
-        // resolved a few hundred ms later (see commit history), and deny
-        // legitimate users. Catch-Timeout-with-empty preserves the "wait for
-        // real data when it's coming" semantics.
-        return GetUserScopeRolesStream(userId)
+        // Why claim-first: API-token requests carry their full role set on
+        // the bearer token (validated, signed). That's the trustworthy answer
+        // — permissions resolve in microseconds without ever touching the
+        // mesh-query layer. AccessControlPipeline does Take(1), so it gets
+        // this fast answer; if you need live updates (Blazor side panels
+        // rendering "current permissions") you keep the subscription open
+        // and receive the post-synced enriched value seamlessly.
+        //
+        // Why this beats the previous Timeout-then-Catch shape: that one
+        // still blocked for up to 2 s on every check waiting for the synced
+        // stream to produce its first emission. With claim-first emission,
+        // the worst case for an authorised request is sub-millisecond; the
+        // synced query is enrichment, not a gate.
+        var staticOnlyScopeRoles = ComputeStaticOnlyScopeRoles(userId);
+        var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId);
+
+        var enriched = GetUserScopeRolesStream(userId)
             .Timeout(TimeSpan.FromSeconds(2))
             .Catch<ImmutableDictionary<string, ImmutableHashSet<string>>, Exception>(ex =>
             {
                 _logger.LogWarning(ex,
-                    "GetUserScopeRolesStream timed out for {UserId} — falling back to empty " +
-                    "scope-roles map. Claim-based roles from AccessContext (e.g. API token) " +
-                    "and static AccessAssignment seeds still apply downstream. " +
-                    "If this fires repeatedly, the workspace's SyncedQueryRegistry for " +
-                    "AccessAssignment isn't producing a first emission — investigate the " +
-                    "underlying mesh-query backend wiring on this hub.",
+                    "GetUserScopeRolesStream timed out for {UserId} — staying with claim + " +
+                    "static seeds. AccessAssignment grants from the synced query won't apply " +
+                    "until the underlying SyncedQueryRegistry produces a first emission.",
                     userId);
                 return Observable.Return(ImmutableDictionary<string, ImmutableHashSet<string>>.Empty);
             })
-            .Select(scopeToRoles =>
-            {
-                var roleIds = ImmutableHashSet<string>.Empty;
-                var permissionCap = Permission.All;
-                foreach (var scope in GetScopeHierarchy(nodePath))
-                {
-                    if (scopeToRoles.TryGetValue(scope, out var roles))
-                        roleIds = roleIds.Union(roles);
-                    if (_staticPolicies.TryGetValue(scope, out var policy))
-                        permissionCap &= policy.GetPermissionCap();
-                }
+            .Select(scopeToRoles => ComputeRoleState(scopeToRoles, nodePath, userId));
 
-                // Add claim-based roles from AccessContext.
-                var context = _accessService.Context ?? _accessService.CircuitContext;
-                if (context?.Roles != null
-                    && !string.IsNullOrEmpty(context.ObjectId)
-                    && context.ObjectId == userId)
-                {
-                    foreach (var roleName in context.Roles)
-                        roleIds = roleIds.Add(roleName);
-                }
+        // Only emit the fast snapshot when it actually grants something —
+        // otherwise FirstAsync() callers (AccessControlPipeline does Take(1))
+        // would lock in the empty answer before runtime AccessAssignments
+        // visible only via the synced query had a chance to land. The
+        // polling pattern in tests + UI layouts relies on the next emission
+        // arriving when a freshly-created assignment is observed.
+        var seed = fast.RoleIds.Count > 0
+            ? Observable.Return(fast)
+            : Observable.Empty<(ImmutableHashSet<string>, Permission)>();
 
-                return (roleIds, permissionCap);
-            })
+        return seed.Concat(enriched)
             .SelectMany(state =>
             {
                 var (roleIds, permissionCap) = state;
@@ -248,7 +237,88 @@ internal class SecurityService : ISecurityService
                         userId, p, nodePath, permissionCap);
                     return p;
                 });
-            });
+            })
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// Synchronously walks the static <see cref="_staticAccessAssignments"/>
+    /// (collected at construction from <see cref="IStaticNodeProvider"/>s and
+    /// <see cref="MeshConfiguration.Nodes"/>) and produces a <c>scope → roles</c>
+    /// map for <paramref name="userId"/>. Used for the immediate emission in
+    /// <see cref="GetEffectivePermissions"/> so an authenticated request with a
+    /// static AccessAssignment grant doesn't have to wait for the synced query
+    /// to settle.
+    /// </summary>
+    private ImmutableDictionary<string, ImmutableHashSet<string>> ComputeStaticOnlyScopeRoles(string userId)
+    {
+        var result = ImmutableDictionary<string, ImmutableHashSet<string>>.Empty;
+        foreach (var (_, list) in _staticAccessAssignments)
+        {
+            foreach (var node in list)
+            {
+                if (node.NodeType != SecurityCollections.AccessAssignmentNodeType)
+                    continue;
+                var ns = node.Namespace ?? "";
+                var scope = ns.EndsWith("/_Access", StringComparison.Ordinal)
+                    ? ns[..^"/_Access".Length]
+                    : (ns == "_Access" ? "" : null);
+                if (scope is null)
+                    continue;
+                var assignment = DeserializeAssignment(node);
+                if (assignment == null || assignment.AccessObject != userId)
+                    continue;
+                foreach (var ra in assignment.Roles)
+                {
+                    if (string.IsNullOrEmpty(ra.Role) || ra.Denied)
+                        continue;
+                    var existing = result.TryGetValue(scope, out var roles)
+                        ? roles
+                        : ImmutableHashSet<string>.Empty;
+                    result = result.SetItem(scope, existing.Add(ra.Role));
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Folds the synced scope-to-roles snapshot (possibly empty) with the
+    /// claim-based <see cref="AccessContext.Roles"/> for <paramref name="userId"/>
+    /// and the static seeds collected at construction time. Pure synchronous —
+    /// no observable, no I/O — so the caller can use it both for the immediate
+    /// claim-only emission and for the post-synced enriched emission.
+    /// </summary>
+    private (ImmutableHashSet<string> RoleIds, Permission PermissionCap) ComputeRoleState(
+        ImmutableDictionary<string, ImmutableHashSet<string>> scopeToRoles,
+        string nodePath,
+        string userId)
+    {
+        var roleIds = ImmutableHashSet<string>.Empty;
+        var permissionCap = Permission.All;
+        foreach (var scope in GetScopeHierarchy(nodePath))
+        {
+            if (scopeToRoles.TryGetValue(scope, out var roles))
+                roleIds = roleIds.Union(roles);
+            if (_staticPolicies.TryGetValue(scope, out var policy))
+                permissionCap &= policy.GetPermissionCap();
+        }
+
+        // Claim-based roles: stamped by the auth pipeline onto the
+        // AccessContext (Bearer-token Roles claims, OAuth role claims, or
+        // tests that SetContext directly). Trusted as-is — they're either
+        // signed (Bearer) or the result of an explicit middleware-driven
+        // resolution (OAuth → DB → AccessContext).
+        var context = _accessService.Context ?? _accessService.CircuitContext;
+        if (context?.Roles != null
+            && !string.IsNullOrEmpty(context.ObjectId)
+            && context.ObjectId == userId)
+        {
+            foreach (var roleName in context.Roles)
+                roleIds = roleIds.Add(roleName);
+        }
+
+        return (roleIds, permissionCap);
     }
 
     /// <summary>
