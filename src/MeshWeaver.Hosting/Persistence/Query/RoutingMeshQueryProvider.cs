@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -8,6 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
@@ -318,7 +320,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                     return p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, partitionCt);
                 }, ct)
             .ScanTopN(limit, AutocompleteByPathLengthThenScore)
-            .LastOrDefaultAsync();
+            .LastOrDefaultAsync()
+            .ToTask(ct);
         foreach (var s in snapshot ?? Array.Empty<QuerySuggestion>())
             yield return s;
     }
@@ -367,7 +370,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                     return p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, partitionCt);
                 }, ct)
             .ScanTopN(limit, comparer)
-            .LastOrDefaultAsync();
+            .LastOrDefaultAsync()
+            .ToTask(ct);
         foreach (var s in snapshot ?? Array.Empty<QuerySuggestion>())
             yield return s;
     }
