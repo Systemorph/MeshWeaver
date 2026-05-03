@@ -418,6 +418,52 @@ public IObservable<bool> DeleteToken(string path)
 
 See *[CQRS — Queries vs. Content Access](CqrsAndContentAccess)* for the full rule.
 
+### Static handlers compose — don't wrap them in a service for "DI cleanliness"
+
+Hub request handlers and other one-shot pipelines that **just compose I/O** (read inputs, fan out, render, post the response) belong in a **static class with private static helpers**. Do not extract them into an `IFooService` + instance class just because the body grew or because constructor-injecting `IMessageHub` and `IMeshService` "looks cleaner". The instance wrapper buys nothing here:
+
+- The hub already carries the service provider (`hub.ServiceProvider.GetRequiredService<T>()`) — you can resolve dependencies inside the handler with one line.
+- DI services exist to hold **state** (a singleton catalog, a per-circuit context, a cached resolver). A static handler holds none — every call is a pure observable chain.
+- Adding an interface forces every existing call site to go through DI registration, fakes a "boundary" that has no observable difference, and increases the surface tests have to mock around.
+
+The shape that scales:
+
+```csharp
+public static class ExportDocumentHandler
+{
+    public static MessageHubConfiguration AddExportDocumentHandler(this MessageHubConfiguration config) =>
+        config.WithHandler<ExportDocumentRequest>(Handle);
+
+    private static IMessageDelivery Handle(
+        IMessageHub hub, IMessageDelivery<ExportDocumentRequest> delivery)
+    {
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var brandingResolver = hub.ServiceProvider.GetRequiredService<BrandingResolver>();
+        var request = delivery.Message;
+
+        // Compose the pipeline — every step is IObservable, no await.
+        hub.GetMeshNode(request.SourcePath, TimeSpan.FromSeconds(15))
+            .SelectMany(root => brandingResolver.Resolve(request.Options.BrandNodePath)
+                .Zip(CollectChapters(meshService, request, root),
+                     (branding, chapters) => Render(request, root, chapters, branding)))
+            .Subscribe(
+                bytes => hub.Post(new ExportDocumentResponse(...), o => o.ResponseFor(delivery)),
+                ex    => hub.Post(new ExportDocumentResponse(..., Error: ex.Message), o => o.ResponseFor(delivery)));
+
+        return delivery.Processed();   // sync return — Subscribe is fire-and-forget
+    }
+
+    private static IObservable<List<(string, string)>> CollectChapters(...) { /* ... */ }
+    private static byte[] Render(...) { /* ... */ }
+}
+```
+
+When **scripts** want to reuse the same building blocks (e.g. an `ExportPdfTemplate.cs` Code node), they call the **public renderer types directly** (`new PdfDocumentRenderer().Render(doc)`) — they don't need a service interface either. The kernel script already has `Mesh.GetMeshNode`, `Log`, and `Ct`; pairing those with the public renderer/builder types is enough.
+
+**Reach for an instance service only when there's actual state to hold.** Examples that justify it: a cache (`CompilationCacheService` — holds the `AssemblyLoadContext`), a per-circuit context (`AccessService` — `AsyncLocal<AccessContext>`), a registry that aggregates plug-ins (`PartitionRegistry`). A request handler that does load → render → respond is none of those.
+
+If you find yourself thinking *"I'll extract this so it's testable"*: a static method that takes its dependencies as parameters is **already** testable — the test passes a stub `IMeshService` (or a real one from `MonolithMeshTestBase`) and calls the static directly. The interface adds an unused indirection.
+
 ### Anti-patterns in click handlers
 
 ```csharp

@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Text.Json;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 
@@ -21,6 +23,15 @@ public record SubmitCodeRequest(string Code) : IRequest<SubmitCodeResponse>
     /// (the implicit, common case — the host hub IS the activity).
     /// </summary>
     public string? ActivityLogPath { get; init; }
+
+    /// <summary>
+    /// Optional input payload exposed to the script as the <c>Inputs</c> global.
+    /// Forwarded verbatim from <c>ExecuteScriptRequest.Inputs</c> by the Code-node
+    /// handler so script-templated operations (export, import, etc.) can read
+    /// caller-supplied parameters as typed JSON values.
+    /// </summary>
+    public ImmutableDictionary<string, JsonElement> Inputs { get; init; } =
+        ImmutableDictionary<string, JsonElement>.Empty;
 }
 
 /// <summary>
