@@ -105,11 +105,13 @@ public class KernelContainer(IServiceProvider serviceProvider)
     /// </summary>
     private void StartActivityControlPlane(IMessageHub hub)
     {
-        var workspace = hub.GetWorkspace();
-        var subscription = workspace.GetMeshNodeStream()
-            .Select(node => (node?.Content as ActivityLog)?.RequestedStatus)
-            .DistinctUntilChanged()
-            .Subscribe(requested =>
+        // Reuses the shared WatchControlPlane helper from MeshWeaver.Mesh.Contract
+        // so every NodeType that adopts the Activity Control Plane wires the
+        // same Status / RequestedStatus loop. The kernel-specific bit is the
+        // handler: a Cancelled request gets translated into CancelScriptRequest
+        // dispatched to the executor sub-hub.
+        var subscription = hub.WatchControlPlane(
+            requested =>
             {
                 if (requested == ActivityStatus.Cancelled)
                 {
@@ -119,7 +121,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
                         hub.Post(new CancelScriptRequest(), o => o.WithTarget(executor.Address));
                 }
             },
-            ex => logger.LogError(ex, "ActivityControlPlane subscription faulted on {Address}", hub.Address));
+            logger);
         hub.RegisterForDisposal(subscription);
     }
 
