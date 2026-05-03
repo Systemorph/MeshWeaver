@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -68,9 +70,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     }
 
     /// <summary>
-    /// Sync entry — kicks off the script work via <see cref="Observable.FromAsync"/>
-    /// so the executor's action block isn't blocked while the script runs.
-    /// Concurrency on <see cref="scriptState"/> is serialised by <see cref="executionLock"/>.
+    /// Sync entry — composes the script work as <see cref="IObservable{T}"/> end
+    /// to end so the executor's action block isn't blocked while the script runs.
+    /// Concurrency on <see cref="scriptState"/> is serialised by <see cref="executionLock"/>;
+    /// the lock is acquired through <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>
+    /// at the SemaphoreSlim boundary, every other step is plain Rx composition.
     /// </summary>
     private IMessageDelivery HandleSubmitCodeRequest(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request)
     {
@@ -87,7 +91,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         var cts = new CancellationTokenSource();
         lock (cancellationLock) { activeCancellation = cts; }
 
-        Observable.FromAsync(_ => ExecuteAsync(hub, msg.Code, msg.Id, activityLogger, cts.Token))
+        Execute(msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token)
             .Subscribe(
                 _ =>
                 {
@@ -103,7 +107,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         activityLogger.LogWarning("Script execution cancelled by user");
                     else
                         activityLogger.LogError(ex, "Script dispatch failed");
-                    activityLogger.Complete(canceled ? ActivityStatus.Failed : ActivityStatus.Failed);
+                    activityLogger.Complete(ActivityStatus.Failed);
                     hub.Post(
                         new SubmitCodeResponse(msg.Id, false)
                         {
@@ -125,69 +129,96 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         cts.Dispose();
     }
 
-    private async Task ExecuteAsync(
-        IMessageHub hub,
+    /// <summary>
+    /// Run a single submission as an observable pipeline. Composition shape:
+    /// <list type="number">
+    ///   <item>Acquire <see cref="executionLock"/> (SDK boundary → <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>).</item>
+    ///   <item>Resolve NuGet refs (SDK boundary → <see cref="Observable.FromAsync(System.Func{System.Threading.CancellationToken,System.Threading.Tasks.Task})"/>).</item>
+    ///   <item>Bind per-submission globals (sync — <see cref="Observable.Defer{T}"/>).</item>
+    ///   <item>Run Roslyn script under stdout capture (<see cref="Observable.Using{TResult, TResource}"/> + Roslyn boundary).</item>
+    ///   <item>Render return value if any (sync tail).</item>
+    /// </list>
+    /// Errors flow through <see cref="Observable.Catch{TSource}(System.IObservable{TSource}, System.Func{System.Exception, System.IObservable{TSource}})"/> —
+    /// <see cref="CompilationErrorException"/> wraps to <see cref="ScriptExecutionException"/>;
+    /// other exceptions render an inline error control. The lock is always released
+    /// via <see cref="Observable.Finally{TSource}"/>.
+    /// </summary>
+    private IObservable<Unit> Execute(
         string code,
         string viewId,
+        IReadOnlyDictionary<string, JsonElement> inputs,
         ILogger scriptOutputLogger,
         CancellationToken ct)
     {
-        await executionLock.WaitAsync(ct);
-        try
-        {
-            EnsureInitialized();
-            var cleaned = await ResolveNuGetReferencesAsync(code, ct);
-
-            // Swap the script logger for this submission so user-script
-            // Log.LogInformation lands on the requested ActivityLog.
-            scriptLogger!.Set(scriptOutputLogger);
-            // Rebind the per-submission CancellationToken on the shared globals
-            // object so `Task.Delay(ms, Ct)` etc. inside the script see THIS
-            // submission's cancellation source.
-            scriptGlobals!.Ct = ct;
-
-            // Capture stdout into the same logger so Console.WriteLine ends up
-            // on the activity log alongside Log.LogInformation calls.
-            using var stdoutPipe = new LoggerTextWriter(scriptOutputLogger);
-            using (CapturingTextWriter.Capture(stdoutPipe))
+        return Observable.FromAsync(_ => executionLock.WaitAsync(ct))
+            .SelectMany(_ =>
             {
-                if (scriptState is null)
-                {
-                    scriptState = await CSharpScript.RunAsync(
-                        cleaned, scriptOptions, scriptGlobals, typeof(MeshScriptGlobals), ct);
-                }
-                else
-                {
-                    scriptState = await scriptState.ContinueWithAsync(cleaned, scriptOptions, ct);
-                }
-                stdoutPipe.Flush();
-            }
-
-            if (scriptState.ReturnValue is not null)
+                EnsureInitialized();
+                return Observable.FromAsync(t => ResolveNuGetReferencesAsync(code, t))
+                    .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, ct));
+            })
+            .Catch<Unit, Exception>(ex =>
             {
-                var value = scriptState.ReturnValue;
-                UpdateView(viewId, value);
-                scriptOutputLogger.LogInformation("{Value}", value.ToString() ?? "");
-            }
-        }
-        catch (CompilationErrorException ex)
+                if (ex is OperationCanceledException) return Observable.Throw<Unit>(ex);
+                if (ex is CompilationErrorException compEx)
+                {
+                    var msg = string.Join("\n", compEx.Diagnostics.Select(d => d.ToString()));
+                    UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{msg}"));
+                    return Observable.Throw<Unit>(new ScriptExecutionException(msg, compEx));
+                }
+                UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{ex.Message}"));
+                return Observable.Throw<Unit>(ex);
+            })
+            .Finally(() => executionLock.Release());
+    }
+
+    /// <summary>
+    /// One Roslyn submission inside an active stdout-capture scope. Splits out
+    /// from <see cref="Execute"/> so <see cref="Observable.Using{TResult, TResource}"/>
+    /// can scope the <see cref="LoggerTextWriter"/> + <see cref="CapturingTextWriter"/>
+    /// pair to the lifetime of the script run.
+    /// </summary>
+    private IObservable<Unit> RunOnePass(
+        string cleaned,
+        string viewId,
+        ILogger scriptOutputLogger,
+        IReadOnlyDictionary<string, JsonElement> inputs,
+        CancellationToken ct)
+    {
+        scriptLogger!.Set(scriptOutputLogger);
+        scriptGlobals!.Ct = ct;
+        scriptGlobals.Inputs = inputs ?? ImmutableDictionary<string, JsonElement>.Empty;
+
+        return Observable.Using(
+            () =>
+            {
+                var stdoutPipe = new LoggerTextWriter(scriptOutputLogger);
+                var capture = CapturingTextWriter.Capture(stdoutPipe);
+                return new StdoutScope(stdoutPipe, capture);
+            },
+            scope => Observable.FromAsync(t => scriptState is null
+                    ? CSharpScript.RunAsync(cleaned, scriptOptions, scriptGlobals, typeof(MeshScriptGlobals), t)
+                    : scriptState.ContinueWithAsync(cleaned, scriptOptions, t))
+                .Do(state =>
+                {
+                    scriptState = state;
+                    scope.StdoutPipe.Flush();
+                    if (state.ReturnValue is not null)
+                    {
+                        UpdateView(viewId, state.ReturnValue);
+                        scriptOutputLogger.LogInformation("{Value}", state.ReturnValue.ToString() ?? "");
+                    }
+                })
+                .Select(_ => Unit.Default));
+    }
+
+    private sealed class StdoutScope(LoggerTextWriter stdoutPipe, IDisposable capture) : IDisposable
+    {
+        public LoggerTextWriter StdoutPipe { get; } = stdoutPipe;
+        public void Dispose()
         {
-            var msg = string.Join("\n", ex.Diagnostics.Select(d => d.ToString()));
-            UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{msg}"));
-            throw new ScriptExecutionException(msg, ex);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{ex.Message}"));
-            throw;
-        }
-        finally
-        {
-            executionLock.Release();
+            capture.Dispose();
+            StdoutPipe.Dispose();
         }
     }
 
@@ -241,6 +272,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 "System.ComponentModel",
                 "System.ComponentModel.DataAnnotations",
                 "System.Reactive.Linq",
+                "System.Text.Json",
                 "Microsoft.Extensions.Logging",
                 "MeshWeaver.Application.Styles",
                 "MeshWeaver.Layout",

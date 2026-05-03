@@ -7,6 +7,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 MeshWeaver runs C# scripts on a per-Activity Roslyn kernel hosted inside the mesh. Scripts have first-class access to the live `IMessageHub`, so they can post messages, mutate nodes, and stream results just like compiled hub handlers — but without a recompile cycle. This page covers (a) how to launch a script, (b) how to emit progress so subscribers see live updates, and (c) the architecture that keeps the host hub responsive while a script runs.
 
+> **Lifting an existing operation onto script execution?** Read *[Activity Control Plane → Operations as scripts](ActivityControlPlane#operations-as-scripts--the-canonical-shape-for-export-import-compile-)* first. That section is the canonical shape for export, import, compile, mirror, etc.: form-bound inputs via `JsonPointerReference` → patch `RequestedStatus = Running` → activity-driven progress → result panel subscribes to the same activity. This page documents the lower-level mechanics; that page documents the user-facing pattern.
+
 ## The two ways to launch a script
 
 ### 1. From an executable Code node — `ExecuteScriptRequest`

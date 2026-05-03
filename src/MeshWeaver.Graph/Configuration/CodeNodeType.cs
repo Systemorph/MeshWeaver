@@ -176,12 +176,16 @@ public static class CodeNodeType
                         {
                             var (_, activityPath) = tuple;
                             // Node created. Fire SubmitCodeRequest at the Activity
-                            // hub (which now hosts the kernel handlers).
+                            // hub (which now hosts the kernel handlers). Forward
+                            // the caller-supplied Inputs so the script can read
+                            // them off the `Inputs` global — the canonical channel
+                            // for script-templated operations (export, import…).
                             hub.Post(
                                 new SubmitCodeRequest(code.Code ?? string.Empty)
                                 {
                                     Id = submissionId,
-                                    ActivityLogPath = activityPath
+                                    ActivityLogPath = activityPath,
+                                    Inputs = request.Message.Inputs
                                 },
                                 o => o.WithTarget(new Address(activityPath)));
 

@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Text.Json;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Security;
@@ -22,6 +24,22 @@ public record ExecuteScriptRequest : IRequest<ExecuteScriptResponse>
     /// empty, the handler generates one and returns it in the response.
     /// </summary>
     public string? SubmissionId { get; init; }
+
+    /// <summary>
+    /// Optional input payload exposed to the script as the <c>Inputs</c> global
+    /// (an <c>IReadOnlyDictionary&lt;string, JsonElement&gt;</c>). Use this when an
+    /// operation is templated as a script — the form / caller patches the inputs
+    /// here and the script reads them as typed JSON values without round-tripping
+    /// through a side-channel MeshNode.
+    ///
+    /// <para>Encoded as <see cref="JsonElement"/> so any JSON-shaped value
+    /// (string, number, bool, array, object, null) survives serialization across
+    /// hub boundaries without a type-registry entry per shape. Scripts read with
+    /// e.g. <c>Inputs["title"].GetString()</c> or
+    /// <c>Inputs["options"].Deserialize&lt;ExportOptions&gt;()</c>.</para>
+    /// </summary>
+    public ImmutableDictionary<string, JsonElement> Inputs { get; init; } =
+        ImmutableDictionary<string, JsonElement>.Empty;
 }
 
 /// <summary>

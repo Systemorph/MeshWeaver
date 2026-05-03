@@ -142,6 +142,170 @@ The pattern inside scripts (and inside any worker hub doing long-running work):
 
 Subscribers (UI stripes, activity-details views, agents that watch their job) read the same content via `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` and project whichever field they care about (`Messages.Count`, `Status`, `RequestedStatus`, your own progress field). One source of truth, one observation pattern, no parallel "events" channel.
 
+## Operations as scripts — the canonical shape for export, import, compile, …
+
+Once you've internalised the property-driven control plane above, the next step is **don't write a bespoke handler at all** when the work is an *operation* with inputs, multiple steps, progress to report, or a meaningful output. Express the operation as a **Code MeshNode template** that the kernel runs as an Activity. This is how export, import, compilation, and any "user kicks off a job" surface should be modelled going forward.
+
+### Why "operation = script"
+
+- **One control plane.** Cancel = `RequestedStatus = Cancelled` patched onto the activity. Same for retry / pause / resume. No new `Cancel<X>Request` per operation.
+- **Persisted progress for free.** Every run lands on `{partition}/_Activity/{guid}` — same place as every other run the user ever triggered. The activity log is the post-mortem, the progress feed, *and* the audit trail.
+- **One result-rendering surface.** A layout area subscribes to one Activity stream and projects `Messages` + the final output (a download link, a content-collection path, a UiControl). Every operation reuses the same shape.
+- **Editable / templated / shareable.** The script *is* content. Power users clone, tweak, pin custom variants. New flavours of an existing operation (export PDF vs DOCX, import NodeCopy vs Mirror) cost zero new C# code — they're new Code MeshNodes seeded next to the originals.
+- **No type-registry sprawl.** One `ExecuteScriptRequest` and one generic result control instead of `ExportDocumentRequest` / `ExportDocumentResponse` / `CancelExportRequest` / `ExportDocumentControl` × N formats.
+
+### The shape end-to-end
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Form as Form layout area
+    participant Activity as Activity hub<br/>(per run)
+    participant Kernel as Kernel executor
+    participant Result as Result panel
+
+    User->>Form: enters inputs
+    Form->>Activity: workspace.UpdateMeshNode(<br/>set Inputs + RequestedStatus=Running)
+    Form->>Activity: ExecuteScriptRequest →<br/>code-node template
+    Activity->>Kernel: SubmitCodeRequest
+    Kernel->>Activity: ActivityLog.Messages += "Working…"
+    loop progress
+        Activity-->>Result: GetRemoteStream tick
+    end
+    Kernel->>Activity: Status = Succeeded + Output
+    Activity-->>Result: terminal snapshot → render output
+```
+
+Five pieces, all of which already exist in the framework — no new infrastructure:
+
+1. **The script template** (a `Code` MeshNode, e.g. `Doc/Templates/Code/ExportPdf`).
+2. **The form** (a layout area whose fields bind to the inputs via `JsonPointerReference`; the form auto-saves to the activity content via `workspace.UpdateMeshNode` debounced — see *[Asynchronous Calls](AsynchronousCalls)* "Reactive in click actions").
+3. **The trigger** (a click handler that posts `ExecuteScriptRequest` against the Code template — sync, fire-and-forget, no `await`).
+4. **The activity** (created automatically by the script-execution path; see *[Script Execution](ScriptExecution)*).
+5. **The result panel** (subscribes to the activity via `GetRemoteStream<MeshNode, MeshNodeReference>` and projects `Messages` + the terminal output).
+
+### Worked example: export-as-script
+
+#### 1. The script template (a `Code` MeshNode seeded by the export module)
+
+```csharp
+// ExportPdf.csx (lives as the Code property of a seeded MeshNode at e.g.
+// Doc/Templates/Code/ExportPdf — IsExecutable = true).
+//
+// Inputs arrive via the activity's content (Title, IncludeChildren, MaxDepth,
+// BrandNodePath). The script reads them off Mesh.GetMeshNode of its own activity.
+var activity = await Mesh.GetMeshNode(Mesh.NodePath);
+var inputs   = activity!.Content as ExportInputs ?? new ExportInputs();
+
+Log.LogInformation("Loading source markdown {Path}", inputs.SourcePath);
+var src      = await Mesh.GetMeshNode(inputs.SourcePath);
+var md       = (src?.Content as MarkdownContent)?.Content ?? "";
+
+Log.LogInformation("Resolving branding");
+var branding = await Mesh.GetWorkspace()
+    .GetRemoteStream<MeshNode, MeshNodeReference>(
+        new Address(inputs.BrandNodePath), new MeshNodeReference())
+    .Take(1).Select(c => (c.Value?.Content as CorporateIdentity).ToOptions())
+    .ToTask(Ct);
+
+Log.LogInformation("Rendering");
+var doc   = new DocumentBuilder().Build(src!.Name, [(src.Name, md)], inputs.Options, branding);
+var bytes = new PdfDocumentRenderer().Render(doc);
+
+Log.LogInformation("Writing {Bytes} bytes to content collection", bytes.Length);
+var outputPath = $"{inputs.TargetCollection}/{Sanitize(src.Name)}.pdf";
+// … write bytes via the content-collection service …
+
+return new ExportOutput(outputPath, "application/pdf", bytes.Length);
+```
+
+The script uses **the public renderer types directly** (`PdfDocumentRenderer`, `DocumentBuilder`) — no service layer in the middle. The kernel exposes `Mesh`, `Log`, `Ct` globals; that plus the public types is enough.
+
+#### 2. The form layout area — bind inputs via `JsonPointerReference`
+
+```csharp
+// Each form field is bound to a JsonPointer on the activity's content. The
+// auto-save subscription writes form changes onto the MeshNode debounced.
+SetupAutoSave(host, activityPath, formId, activityNode);
+
+return Controls.Stack
+    .WithView(Controls.TextBox()
+        .WithDataContext(JsonPointerReference.Of(activityPath, "/title"))
+        .WithLabel("Document title"))
+    .WithView(Controls.CheckBox()
+        .WithDataContext(JsonPointerReference.Of(activityPath, "/includeChildren"))
+        .WithLabel("Include descendants"))
+    .WithView(Controls.Button("Export")
+        .WithClickAction(ctx => Trigger(ctx, activityPath)));
+```
+
+The form **never reads its own state inside the click action** — `JsonPointerReference` + auto-save handle that. The click is O(1) (see *[Asynchronous Calls](AsynchronousCalls)* "Reactive in click actions: use `stream.Update`, not `Take(1) + Subscribe + UpdateMeshNode`").
+
+#### 3. The click handler — patch `RequestedStatus = Running` and submit
+
+```csharp
+private static Task Trigger(ClickAction ctx, string activityPath)
+{
+    // Flip RequestedStatus → Running. The Activity hub's WatchControlPlane
+    // subscription picks it up and submits the script to the kernel.
+    ctx.Host.Workspace.UpdateMeshNode(curr =>
+        curr.Content is ActivityLog log
+            ? curr with { Content = log with { RequestedStatus = ActivityStatus.Running } }
+            : curr);
+    return Task.CompletedTask;
+}
+```
+
+`WatchControlPlane(...)` (the helper from Step 1) wires the activity hub to react to `RequestedStatus = Running` by posting `SubmitCodeRequest` to its own kernel — exactly the same plumbing that powers Cancel, just for Start.
+
+#### 4. The result panel — subscribe to the activity stream
+
+```csharp
+return host.Hub.GetWorkspace()
+    .GetRemoteStream<MeshNode, MeshNodeReference>(
+        new Address(activityPath), new MeshNodeReference())
+    .Select(change => change.Value?.Content as ActivityLog)
+    .Where(log => log is not null)
+    .Select(log => Render(log!));
+```
+
+`Render` switches on `log.Status` — for `Running`, show the streaming message list; for `Succeeded`, render the output (a download link to the bytes / a `NodeReference` to the saved file); for `Failed` / `Cancelled`, show the terminal `Messages` and the reason. **One subscription, one switch, all states handled.**
+
+### Cancel, retry, status — all free
+
+Because the operation runs as an Activity, all the standard control-plane operations are inherited:
+
+- **Cancel** = `workspace.UpdateMeshNode(... with RequestedStatus = Cancelled)` on the activity. The kernel-hosted run sees `Ct` flip and exits.
+- **Retry** = create a new run by patching `RequestedStatus = Running` again on a fresh activity. The form panel does this by posting another `ExecuteScriptRequest`.
+- **Status / live progress** = `Status` + `Messages` on the same content the form already binds to.
+
+No new message types per operation. No new control surface per operation.
+
+### When to keep a static request handler instead
+
+`Operations-as-scripts` is the right shape **whenever the work is observable**. It's *not* the right shape for everything:
+
+| Situation | Use script-as-Activity? |
+|---|---|
+| Multi-step operation with inputs, progress, output | **Yes** — export, import, compile, mirror, generate |
+| Single one-shot lookup (`Get` / `QueryAsync`) | No — plain request/response |
+| Internal hub-to-hub plumbing (e.g. kernel's internal `CancelScriptRequest`) | No — not a public surface |
+| Tiny synchronous calculation, no progress to report | No — static handler |
+| Event-style notification (one-way fan-out) | No — `hub.Post` fire-and-forget |
+
+If the operation has any of: form inputs to collect, multiple steps, progress users want to watch, a meaningful output worth keeping in the activity history, or a "what's the status?" question — script execution is the canonical shape. **Default to it.**
+
+### Migration checklist (turning a request handler into a script-driven Activity)
+
+1. **Identify the inputs.** Whatever the request type used to carry, becomes the activity's content record (`ExportInputs`, `ImportInputs`, …) — the same shape, just at rest on a MeshNode instead of in flight on a message.
+2. **Write the template script.** Move the handler body into a `.csx`-shaped string on a Code MeshNode, swap the request fields for `(Mesh.GetMeshNode(Mesh.NodePath).Content as XxxInputs)`. Replace `hub.Post(response)` with `return result;`.
+3. **Bind the form.** Every input the handler used to read off the request becomes a `JsonPointerReference` field on the form, written to the activity content via auto-save (debounced `UpdateMeshNode`).
+4. **Click submits.** The click patches `RequestedStatus = Running` (or posts `ExecuteScriptRequest` against the template Code node, depending on which surface owns the lifecycle). No `await`, no synchronous reads of form state.
+5. **Result panel subscribes.** The bottom half of the layout area subscribes to the activity stream via `GetRemoteStream<MeshNode, MeshNodeReference>`, switches on `Status`, projects progress + terminal output.
+6. **Delete the request type and handler.** Or keep them as a transitional shim and mark `[Obsolete]` if external callers still depend on them — but the new path is the script.
+
+If a step in the migration feels awkward, that's a sign the operation isn't a good fit — re-check the table above.
+
 ## Routing activities to a different partition
 
 By default a script's activity lands at `{partitionRoot}/_Activity/{guid}` — the partition the Code node lives in. For shared / read-only partitions (the docs partition is the canonical example) you usually want each viewer's runs to land in the viewer's own home instead, so each user's activity feed shows their own history independent of who else is browsing.
