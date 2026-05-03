@@ -61,6 +61,33 @@ public sealed class V09_RenameSourceTestSegments : IMigration
 
             foreach (var table in tables)
             {
+                // Pre-delete legacy rows whose renamed counterpart already exists. After
+                // commit 0280084e7 the app started writing the new `Source`/`Test` segment
+                // names while old `_Source`/`_Test` rows were still in the DB; in some
+                // partitions both versions coexist for the same (renamed_namespace, id).
+                // The renamed row is canonical (that's what the app now reads), so the
+                // legacy row is dead data — dropping it lets the UPDATE below succeed
+                // without violating the (namespace, id) primary key.
+                await using (var dedupCmd = ctx.DataSource.CreateCommand($"""
+                    DELETE FROM "{schema}"."{table}" legacy
+                    WHERE legacy.namespace ~ '(^|/)_(Source|Test)($|/)'
+                      AND EXISTS (
+                          SELECT 1 FROM "{schema}"."{table}" renamed
+                          WHERE renamed.id = legacy.id
+                            AND renamed.namespace = regexp_replace(
+                                regexp_replace(legacy.namespace, '(^|/)_Source($|/)', '\1Source\2', 'g'),
+                                '(^|/)_Test($|/)', '\1Test\2', 'g'
+                            )
+                      )
+                    """))
+                {
+                    var deleted = await dedupCmd.ExecuteNonQueryAsync();
+                    if (deleted > 0)
+                        ctx.Logger.LogInformation(
+                            "Repair v9: {Schema}.{Table} — pre-deleted {Count} legacy _Source/_Test row(s) whose renamed twin already existed",
+                            schema, table, deleted);
+                }
+
                 // Rewrite `_Source` / `_Test` as whole path segments (anchored at string
                 // start/end or bounded by '/'), preserving case and neighbours. Only
                 // rewrite main_node when it is non-null — otherwise leave NULL alone.
