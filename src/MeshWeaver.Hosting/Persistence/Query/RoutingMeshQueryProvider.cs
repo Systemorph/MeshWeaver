@@ -32,6 +32,14 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
     /// </summary>
     private static readonly SemaphoreSlim FanOutThrottle = new(20, 20);
 
+    /// <summary>
+    /// Per-partition cap during autocomplete fan-out. A single slow / hung partition
+    /// must not block the entire result set. UX target is sub-second; 2 s is the
+    /// generous outer bound. Without this we wait for <c>Task.WhenAll</c> over every
+    /// partition and a stuck Postgres connection silently turns "@/" into a 12 s hang.
+    /// </summary>
+    private static readonly TimeSpan PartitionAutocompleteTimeout = TimeSpan.FromSeconds(2);
+
 
 
     public RoutingMeshQueryProvider(
@@ -295,13 +303,16 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             try { await FanOutThrottle.WaitAsync(ct); }
             catch (OperationCanceledException) { return; }
 
+            using var partitionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            partitionCts.CancelAfter(PartitionAutocompleteTimeout);
+
             try
             {
                 var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
-                await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, ct))
+                await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, partitionCts.Token))
                     all.Add(s);
             }
-            catch (OperationCanceledException) { /* silent */ }
+            catch (OperationCanceledException) { /* timed out OR caller cancelled */ }
             catch (Exception) { /* don't kill other partitions */ }
             finally { FanOutThrottle.Release(); }
         }
@@ -370,13 +381,16 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             try { await FanOutThrottle.WaitAsync(ct); }
             catch (OperationCanceledException) { return; }
 
+            using var partitionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            partitionCts.CancelAfter(PartitionAutocompleteTimeout);
+
             try
             {
                 var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
-                await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, ct))
+                await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, partitionCts.Token))
                     all.Add(s);
             }
-            catch (OperationCanceledException) { /* silent */ }
+            catch (OperationCanceledException) { /* timed out OR caller cancelled */ }
             catch (Exception) { /* don't kill other partitions */ }
             finally { FanOutThrottle.Release(); }
         }

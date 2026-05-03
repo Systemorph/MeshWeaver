@@ -500,6 +500,12 @@ internal class UnifiedReferenceAutocompleteProvider(
             yield return item;
     }
 
+    /// <summary>2-second cap on a delegated per-node round-trip. Without this we
+    /// inherit the framework's 30 s <c>RequestTimeout</c>, which means a hung /
+    /// non-responding remote node hub stalls the entire autocomplete result for
+    /// the whole 30 s.</summary>
+    private static readonly TimeSpan NodeDelegationTimeout = TimeSpan.FromSeconds(2);
+
     private IObservable<AutocompleteResponse?> GetCompletionsViaHub(string nodePath, string currentSegment)
     {
         // Target the per-node hub at nodePath. Without an explicit target, the
@@ -511,6 +517,7 @@ internal class UnifiedReferenceAutocompleteProvider(
         // The dispatch *must* land on a different hub.
         var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
         return hub.Observe(request, o => o.WithTarget(new Address(nodePath)))
+            .Timeout(NodeDelegationTimeout)
             .FirstAsync()
             .Select(d => d.Message as AutocompleteResponse)
             .Catch<AutocompleteResponse?, Exception>(_ => Observable.Return<AutocompleteResponse?>(null));
