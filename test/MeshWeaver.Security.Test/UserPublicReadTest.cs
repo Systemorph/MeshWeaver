@@ -170,6 +170,14 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", "Viewer", "Globex"))
             .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
+        // Wait for the runtime AccessAssignment to surface in SecurityService's
+        // synced query (the QueryAsync path checks live permissions). Without
+        // this gate, the immediate query reads the cached snapshot from before
+        // the grant landed → empty result.
+        await Mesh.GetPermissionAsync("Globex", "Alice",
+            until: p => p.HasFlag(Permission.Read),
+            ct: TestContext.Current.CancellationToken);
+
         var resultsAfterGrant = await MeshQuery.QueryAsync<MeshNode>(
             "path:Globex",
             ct: TestContext.Current.CancellationToken

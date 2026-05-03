@@ -37,17 +37,17 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             .AddMeshNodes(
                 AssignmentNodeFactory.UserRole("Alice", "Editor", "ACME"),
                 // Bob: stacked roles (handled by combining two assignment nodes with distinct ids)
-                AssignmentNodeFactory.UserRole("Bob_Viewer", "Viewer", "ACME"),
+                AssignmentNodeFactory.UserRole("Bob_Viewer", "Viewer", "ACME", accessObject: "Bob"),
                 AssignmentNodeFactory.UserRole("Bob", "Editor", "ACME"),
                 AssignmentNodeFactory.UserRole("NewUser", "Admin", null),
                 // Carol: stacked roles (Admin + Viewer at ACME) used for the "remove Admin" test
-                AssignmentNodeFactory.UserRole("Carol_Admin", "Admin", "ACME"),
+                AssignmentNodeFactory.UserRole("Carol_Admin", "Admin", "ACME", accessObject: "Carol"),
                 AssignmentNodeFactory.UserRole("Carol", "Viewer", "ACME"),
                 AssignmentNodeFactory.UserRole("Roland", "Admin", null),
-                AssignmentNodeFactory.UserRole("MultiUser_MW", "Viewer", "MeshWeaver"),
+                AssignmentNodeFactory.UserRole("MultiUser_MW", "Viewer", "MeshWeaver", accessObject: "MultiUser"),
                 AssignmentNodeFactory.UserRole("MultiUser", "Editor", "ACME"),
                 AssignmentNodeFactory.UserRole("InheritUser", "Admin", "Organization"),
-                AssignmentNodeFactory.UserRole("OverrideUser_Org", "Viewer", "Org"),
+                AssignmentNodeFactory.UserRole("OverrideUser_Org", "Viewer", "Org", accessObject: "OverrideUser"),
                 AssignmentNodeFactory.UserRole("OverrideUser", "Admin", "Org/Special"),
                 AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", "MeshWeaver"),
                 AssignmentNodeFactory.UserRole($"{WellKnownUsers.Anonymous}_Profiles", "Viewer", "Profiles", accessObject: WellKnownUsers.Anonymous),

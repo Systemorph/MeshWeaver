@@ -45,9 +45,9 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
                 AssignmentNodeFactory.UserRole("Alice", "Editor", "ACME"),
                 AssignmentNodeFactory.UserRole("OverrideUser", "Viewer", "Org"),
                 // OverrideUser also gets a grant at child for the deny-then-grant test
-                AssignmentNodeFactory.UserRole("OverrideUser_Child", "Viewer", "Org/Team/Project"),
+                AssignmentNodeFactory.UserRole("OverrideUser_Child", "Viewer", "Org/Team/Project", accessObject: "OverrideUser"),
                 AssignmentNodeFactory.UserRole("MixedUser", "Admin", null),
-                AssignmentNodeFactory.UserRole("MixedUser_AcmeEditor", "Editor", "ACME"),
+                AssignmentNodeFactory.UserRole("MixedUser_AcmeEditor", "Editor", "ACME", accessObject: "MixedUser"),
                 AssignmentNodeFactory.UserRole("InheritedUser", "Viewer", "NS"),
                 AssignmentNodeFactory.UserRole("LocalUserNS", "Editor", "NS/Child"));
 

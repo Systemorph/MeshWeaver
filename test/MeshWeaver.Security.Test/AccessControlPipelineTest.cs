@@ -91,9 +91,16 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
             .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Verify the permission was granted via the GetPermissionRequest round-trip.
-        var hasRead = await Mesh.HasPermissionAsync(
-            NodePath, "Viewer1", Permission.Read, TestContext.Current.CancellationToken);
-        hasRead.Should().BeTrue("Viewer1 with Viewer role should have Read permission");
+        // Use the polling overload — without `until`, GetPermissionAsync's
+        // FirstAsync may return the cached snapshot from before the runtime
+        // AccessAssignment landed in the synced query. Probe for the Read
+        // flag and bail out as soon as it surfaces.
+        var permissions = await Mesh.GetPermissionAsync(
+            NodePath, "Viewer1",
+            until: p => p.HasFlag(Permission.Read),
+            ct: TestContext.Current.CancellationToken);
+        permissions.Should().HaveFlag(Permission.Read,
+            "Viewer1 with Viewer role should have Read permission");
     }
 
     [Fact(Timeout = 10000)]
@@ -375,9 +382,11 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 10000)]
     public async Task CaseInsensitivePath_Works()
     {
-        // Path uses lowercase "user" instead of "User"
+        // Path uses uppercase "Alice" — the userId match must be case-insensitive
+        // so a user accessing their own scope under a casing-different prefix still
+        // resolves through the self-scope fallback.
         var permissions = await Mesh.GetPermissionAsync(
-            "user/alice/child", "alice", TestContext.Current.CancellationToken);
+            "Alice/child", "alice", TestContext.Current.CancellationToken);
 
         permissions.Should().HaveFlag(Permission.Read,
             "self-scope fallback should be case-insensitive on path prefix");

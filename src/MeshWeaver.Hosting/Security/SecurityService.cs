@@ -306,9 +306,24 @@ internal class SecurityService : ISecurityService
                                && userId != WellKnownUsers.Public;
         foreach (var scope in GetScopeHierarchy(nodePath))
         {
+            // BreaksInheritance: the policy at this scope discards everything
+            // that was inherited from ancestors — both the role grants AND any
+            // partition-level cap that was being narrowed on the way down.
+            // Local roles defined AT this scope (and below) still apply, so
+            // we drop accumulated state BEFORE this iteration's contributions
+            // land. The flag is set in addition to the per-permission switches,
+            // so the same policy can still cap the local roles via the
+            // GetPermissionCap call further down.
+            if (_staticPolicies.TryGetValue(scope, out var policy)
+                && policy.BreaksInheritance)
+            {
+                roleIds = ImmutableHashSet<string>.Empty;
+                permissionCap = Permission.All;
+            }
+
             if (scopeToRoles.TryGetValue(scope, out var roles))
                 roleIds = roleIds.Union(roles);
-            if (_staticPolicies.TryGetValue(scope, out var policy))
+            if (policy is not null)
                 permissionCap &= policy.GetPermissionCap();
 
             // Self-scope: a user implicitly holds the Admin role on their own
