@@ -107,6 +107,19 @@ builder.UseOrleansMeshServer(address, silo =>
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
     .ConfigureMemexPortal();
 
+// Hard gate: refuse to start if the DB isn't migrated. Aspire's
+// WaitForCompletion(dbMigration) is a soft hint at deploy time — Container
+// Apps schedule the portal independently, so a crashed migration silently
+// lets the portal come up against a half-migrated DB. The startup gate
+// trips IHostApplicationLifetime.StopApplication, which causes the host to
+// exit and Container Apps to mark the revision as Failed — that's the
+// signal tools/deploy.sh polls for to fail the pipeline.
+builder.Services.AddHostedService<Memex.Portal.Distributed.DbVersionGate>();
+// Live healthcheck for the same condition — surfaces drift after startup
+// (e.g. someone manually rolled a partial migration via psql).
+builder.Services.AddHealthChecks()
+    .AddCheck<Memex.Portal.Distributed.DbVersionHealthCheck>("db_version");
+
 var app = builder.Build();
 
 app.MapDefaultEndpoints();
