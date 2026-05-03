@@ -391,10 +391,43 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
             if (rss >= MemCriticalBytes && Interlocked.Exchange(ref _criticalEmitted, 1) == 0)
             {
-                TestPhaseTrace("watchdog", "MEM_CRITICAL",
-                    extra: $"rss={rss / 1024 / 1024}MiB threshold={MemCriticalBytes / 1024 / 1024}MiB " +
-                           "— OOM imminent. The class active at this line (see preceding " +
-                           "INIT_START or CTOR) is the one driving the leak.");
+                // Final diagnostic — always log so dev machines with plenty of
+                // RAM still surface the cumulative leak in the trace file
+                // instead of letting it grow silently.
+                var nativeBreakdown = ReadProcSelfStatus();
+                var diag =
+                    $"rss={rss / 1024 / 1024}MiB threshold={MemCriticalBytes / 1024 / 1024}MiB " +
+                    $"managed={managed / 1024 / 1024}MiB " +
+                    (string.IsNullOrEmpty(nativeBreakdown) ? "" : nativeBreakdown + " ") +
+                    $"{SnapshotKnownStaticCaches()}";
+
+                // Only FailFast on CI — a 7 GB ubuntu-latest runner is moments
+                // from SIGKILL at this point, and the FailFast turns the silent
+                // 6 m wallclock TIMEOUT into a loud "MEM_CRITICAL exceeded"
+                // exit. Local dev machines with 32+ GB RAM should keep running
+                // (the watchdog still logs the breach so the leak is visible).
+                var onCi =
+                    Environment.GetEnvironmentVariable("CI") is { Length: > 0 }
+                    || Environment.GetEnvironmentVariable("GITHUB_ACTIONS") is { Length: > 0 };
+
+                TestPhaseTrace("watchdog", onCi ? "MEM_CRITICAL_FAILFAST" : "MEM_CRITICAL",
+                    extra: diag + (onCi
+                        ? " — aborting testhost (CI). The class active at this line " +
+                          "(see preceding INIT_START or CTOR) is the one driving the leak."
+                        : " — local dev: continuing. The class active at this line " +
+                          "(see preceding INIT_START or CTOR) is the one driving the leak."));
+
+                if (onCi)
+                {
+                    // Force a flush so the trace lines reach disk before exit.
+                    try { File.AppendAllText(TestTraceLogPath, string.Empty); } catch { }
+                    try { File.AppendAllText(MemoryDeltaLogPath, string.Empty); } catch { }
+
+                    Environment.FailFast(
+                        $"MeshWeaver test infrastructure aborted: process RSS exceeded {MemCriticalBytes / 1024 / 1024} MiB " +
+                        $"({rss / 1024 / 1024} MiB observed). This is the cumulative Autofac Reflection.Emit factory " +
+                        $"leak from non-shared MonolithMeshTestBase classes. Diagnostic: {diag}");
+                }
             }
             else if (rss >= MemPressureBytes)
             {

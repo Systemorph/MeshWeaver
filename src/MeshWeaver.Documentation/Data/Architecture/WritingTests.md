@@ -181,6 +181,103 @@ await workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
 
 Even in test fixtures, stay consistent with the production rule: click actions are sync, use `Subscribe` + `RegisterCallback`. A fixture that spawns a browser session to click a real UI button is the one exception, and it should be clearly labelled.
 
+## Stream assertions: filter, then take
+
+When a test waits on an emission from a hot stream — a `Subject`, the workspace's `GetRemoteStream`, a hub change-feed, a synced query — never take the first emission unconditionally. Emit ordering is non-deterministic on cold-start CI, the first value often arrives with stale or partial state, and the assertion captures the wrong snapshot.
+
+```csharp
+// ❌ WRONG — takes whatever arrives first; flakes on CI when an unrelated
+//    upstream emission lands before the one the test cares about.
+var seen = await stream.FirstAsync().Timeout(5.Seconds()).ToTask(ct);
+seen.Should().Be("alice");
+
+// ❌ WRONG — TaskCompletionSource captures the first invocation and
+//    TrySetResult ignores subsequent ones, so a stale first value pins the
+//    assertion.
+var tcs = new TaskCompletionSource<string?>();
+stream.Subscribe(value => tcs.TrySetResult(value));
+var seen = await tcs.Task.WaitAsync(5.Seconds());
+
+// ✅ RIGHT — filter for the value that proves the invariant holds, time
+//    out if it never arrives.
+var aliceSeen = await stream
+    .Where(id => id == "alice")
+    .FirstAsync()
+    .Timeout(5.Seconds())
+    .ToTask(ct);
+```
+
+Same pattern for query result-set assertions:
+
+```csharp
+// ❌ WRONG — first emission of a multi-query SyncedQuery may contain only
+//    one upstream's Initial result.
+var firstResults = await observable.FirstAsync().ToTask(ct);
+
+// ✅ RIGHT — wait for the assertion to actually hold (every expected node
+//    is present), with a timeout that surfaces a real failure instead of
+//    a stale partial state.
+var results = await observable
+    .Where(arr => expected.All(p => arr.Any(n => n.Path == p)))
+    .FirstAsync()
+    .Timeout(15.Seconds())
+    .ToTask(ct);
+```
+
+### `Subject` vs. `ReplaySubject` — choose by who emits when
+
+A plain `Subject<T>` is **hot**: emissions made before a subscriber attaches are dropped on the floor. The pattern below looks right but is broken:
+
+```csharp
+// ❌ WRONG — `seen` is hot. The handler may invoke OnNext BEFORE the
+//    test's await subscribes, so the .Where(id => id == "alice") never
+//    sees the value and the test times out.
+var seen = new Subject<string?>();
+stream.Update(_ =>
+{
+    seen.OnNext(accessService.Context?.ObjectId);
+    return null;
+}, _ => { });
+
+var aliceSeen = await seen
+    .Where(id => id == "alice")
+    .FirstAsync()
+    .Timeout(5.Seconds())
+    .ToTask(ct);
+```
+
+Use `ReplaySubject<T>` when the producer can fire before the consumer subscribes — late subscribers replay every prior emission and the `.Where(...).FirstAsync()` finds the value:
+
+```csharp
+// ✅ RIGHT — every OnNext is buffered; the test's later subscribe still
+//    sees the "alice" emission produced earlier by the handler.
+var seen = new ReplaySubject<string?>();
+stream.Update(_ =>
+{
+    seen.OnNext(accessService.Context?.ObjectId);
+    return null;
+}, _ => { });
+
+var aliceSeen = await seen
+    .Where(id => id == "alice")
+    .FirstAsync()
+    .Timeout(5.Seconds())
+    .ToTask(ct);
+```
+
+Or invert: subscribe first, fire the producer second. Either pattern works; pick whichever reads more naturally for the test.
+
+### CI-only failure ≠ flake — it's a real timing or shared-state bug
+
+When a test fails on CI but passes locally, the temptation is to label it a flake and skip it. **Don't.** In every case investigated in this repo so far, a CI-only failure has been a real bug:
+
+- An eventually-consistent index hadn't propagated the just-written node — the production code reads the index too eagerly.
+- A `Subject` was hot when it should have been a `ReplaySubject` — the assertion missed the emission on faster CI hardware (or slower, depending).
+- A `TaskCompletionSource.TrySetResult` captured a stale first value — the production callback fires multiple times under load.
+- An `AccessContext` was lost across the post-pipeline → handler boundary — the production code reads `AsyncLocal.Value` on the wrong thread.
+
+Skipping the test hides the bug; running it once on CI surfaced it. Fix the bug, don't skip the test. Search this doc for "Stream assertions" and "ReadNodeAsync" first — those two patterns have caught most of the CI-only failures already.
+
 ## Comprehensive coverage per the Coder agent rules
 
 [`Coder.md`](xref:Agent/Coder) sets the testing bar for new NodeTypes and data models: **comprehensive unit tests per invariant + branch + boundary + degenerate-input**, not "at least one test per feature". Applies equally to hand-written code. A NodeType with a single happy-path test is demoed, not tested. Bring the suite up before you merge.

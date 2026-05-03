@@ -59,13 +59,12 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         // invokes the delegate, can the delegate see "alice" from
         // accessService.Context?
         //
-        // Use a Subject so we can observe ALL delegate invocations and filter via
-        // Where — the previous TaskCompletionSource form took the FIRST emission
-        // unconditionally, which on cold-start CI captured the sync hub's
-        // initial-state delegate call ("sync/...") before the post-pipeline-routed
-        // call (with "alice") arrived. Robust assertion: wait for "alice" to be
-        // observed at least once, fail with timeout otherwise.
-        var seen = new System.Reactive.Subjects.Subject<string?>();
+        // ReplaySubject — not Subject. The handler may fire OnNext BEFORE the
+        // test's await subscribes; a hot Subject would drop those emissions
+        // and the .Where(id == "alice") would never fire. ReplaySubject
+        // buffers every OnNext and replays them to late subscribers. See
+        // Doc/Architecture/WritingTests.md → "Stream assertions".
+        var seen = new System.Reactive.Subjects.ReplaySubject<string?>();
         stream.Update(_ =>
         {
             seen.OnNext(accessService.Context?.ObjectId);

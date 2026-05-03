@@ -30,6 +30,11 @@ namespace MeshWeaver.Acme.Test;
 /// </summary>
 public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Read-only queries against the shared ACME sample graph — no node
+    // mutation, no permission changes. Sharing the SP cuts ~6 SP rebuilds
+    // and reuses the dynamic NodeType DLL cache across [Fact]s.
+    protected override bool ShareMeshAcrossTests => true;
+
     // Per-session cache — Guid suffix prevents Windows file-lock collisions
     // when a stale .dll from a prior test process is still loaded.
     private static readonly string SharedCacheDirectory = Path.Combine(

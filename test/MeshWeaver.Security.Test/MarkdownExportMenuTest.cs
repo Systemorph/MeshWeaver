@@ -26,6 +26,10 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // Read-only menu fetch tests against statically-seeded TestOrg/TestMarkdown
+    // — no node mutation, no permission changes. Safe to share SP.
+    protected override bool ShareMeshAcrossTests => true;
+
     private const string MarkdownNodePath = "TestOrg/TestMarkdown";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

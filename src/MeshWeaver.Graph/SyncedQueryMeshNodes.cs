@@ -228,44 +228,59 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                     }),
                     MeshChangeKind.Deleted));
 
-        var changes = queries
-            .Select(ObserveOne)
+        // Per-query Initial gating: with multi-query unions and a naive .Merge,
+        // the first .Take(1) downstream consumer (e.g. MeshNodeCompilationService.
+        // discoverCodeFiles) sees only the FASTEST query's Initial and treats it
+        // as the complete result set — partial state. Tag each upstream query
+        // with its index so the Scan can track which Initials have arrived;
+        // only emit downstream once every query has sent its Initial event.
+        var taggedChanges = queries
+            .Select((q, i) => ObserveOne(q).Select(c => (Change: c, QueryIndex: i, IsExternal: false)))
             .Merge()
-            .Merge(externalChanges)
-            .Merge(feedRemovals);
+            .Merge(externalChanges.Select(c => (Change: c, QueryIndex: -1, IsExternal: true)))
+            .Merge(feedRemovals.Select(c => (Change: c, QueryIndex: -1, IsExternal: true)));
 
-        // Fold change deltas into a path → MeshNode dictionary. The upstream
-        // IMeshQueryProvider.ObserveQuery is registered with userId=WellKnownUsers.System
-        // (line above), so its emissions already bypass per-node read validators
-        // — we use the carried payloads directly.
-        //
-        // We INTENTIONALLY do not open per-path remote streams to "refresh" the
-        // values: the synced AccessAssignment query is consumed by SecurityService
-        // BEFORE permission evaluation has a system-identity view of its own data,
-        // and a per-path remote-stream subscription would re-enter the read
-        // validator chain in the caller's user context — at which point
-        // RlsNodeValidator denies (e.g. nodelete-user has no read on
-        // `_Access/Roland_Access`), the synced collection silently empties, and
-        // SecurityService.HasPermission returns false for everyone.
-        //
-        // Future writes to a synced node DO propagate via the upstream
-        // ObserveQuery's Updated events, which carry the post-write MeshNode
-        // payload — the DistinctUntilChanged below de-dupes equal payloads.
-        return changes
+        // Fold change deltas into a path → MeshNode dictionary AND a bitmask of
+        // which upstream queries have produced their Initial event. Suppress
+        // downstream emissions until every query has reported in — that turns
+        // the first .Take(1) consumer into "first complete snapshot" instead
+        // of "first partial snapshot".
+        var initialMask = (1L << queries.Count) - 1L; // all 1s for queries.Count bits
+        return taggedChanges
             .Scan(
-                ImmutableDictionary<string, MeshNode>.Empty,
-                (dict, change) => change.ChangeType switch
+                (Dict: ImmutableDictionary<string, MeshNode>.Empty,
+                 InitialsReceived: 0L),
+                (state, tagged) =>
                 {
-                    QueryChangeType.Initial or QueryChangeType.Reset
-                        or QueryChangeType.Added or QueryChangeType.Updated =>
-                        change.Items.Aggregate(dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)),
-                    QueryChangeType.Removed =>
-                        change.Items.Aggregate(dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
-                    _ => dict,
+                    var (dict, initials) = state;
+                    var change = tagged.Change;
+
+                    // Track Initial / Reset arrivals by query index — once every
+                    // upstream has reported, we unblock the downstream gate.
+                    if (!tagged.IsExternal &&
+                        (change.ChangeType == QueryChangeType.Initial ||
+                         change.ChangeType == QueryChangeType.Reset))
+                    {
+                        initials |= 1L << tagged.QueryIndex;
+                    }
+
+                    var nextDict = change.ChangeType switch
+                    {
+                        QueryChangeType.Initial or QueryChangeType.Reset
+                            or QueryChangeType.Added or QueryChangeType.Updated =>
+                            change.Items.Aggregate(dict, (d, n) =>
+                                string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)),
+                        QueryChangeType.Removed =>
+                            change.Items.Aggregate(dict, (d, n) =>
+                                string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
+                        _ => dict,
+                    };
+
+                    return (nextDict, initials);
                 })
-            .Do(dict => pathSet.OnNext(dict.Keys.ToImmutableHashSet()))
+            .Where(state => state.InitialsReceived == initialMask)
+            .Do(state => pathSet.OnNext(state.Dict.Keys.ToImmutableHashSet()))
+            .Select(state => state.Dict)
             .DistinctUntilChanged()
             .Select(dict => (IEnumerable<MeshNode>)dict.Values);
     }
