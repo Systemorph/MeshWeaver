@@ -1,0 +1,105 @@
+using System.Collections.Concurrent;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
+
+namespace MeshWeaver.Hosting;
+
+/// <summary>
+/// Default <see cref="INodeTypeStreamCache"/> — wraps
+/// <c>workspace.GetMeshNodeStream(path)</c> with <c>Replay(1).RefCount()</c>
+/// per path so multiple subscribers share one upstream subscription and new
+/// subscribers receive the cached snapshot instantly.
+///
+/// <para>Side-channel <see cref="MaybeKickCompile"/> on every emission: if the
+/// emitted MeshNode is a NodeType definition that has neither a
+/// <c>LatestReleasePath</c> nor an <c>AssemblyLocation</c> and isn't already
+/// pending/compiling, flip its <c>CompilationStatus</c> to <c>Pending</c>. The
+/// existing <c>CompileWatcher</c> (in
+/// <c>src/MeshWeaver.Graph/MeshDataSource.cs</c>) reacts to <c>Pending</c>,
+/// runs Roslyn, writes the Release MeshNode, and updates the NodeType's
+/// <c>LatestReleasePath</c> + <c>AssemblyLocation</c>. The cache then re-emits
+/// through the same observable so subscribers see the update without a
+/// resubscribe.</para>
+/// </summary>
+internal sealed class NodeTypeStreamCache : INodeTypeStreamCache
+{
+    private readonly IMessageHub meshHub;
+    private readonly ILogger<NodeTypeStreamCache> logger;
+    private readonly ConcurrentDictionary<string, IObservable<MeshNode>> _streams = new();
+
+    public NodeTypeStreamCache(IMessageHub meshHub, ILogger<NodeTypeStreamCache> logger)
+    {
+        this.meshHub = meshHub;
+        this.logger = logger;
+    }
+
+    public IObservable<MeshNode> GetStream(string path) =>
+        _streams.GetOrAdd(path, p =>
+            meshHub.GetWorkspace()
+                .GetMeshNodeStream(p)
+                .Do(node => MaybeKickCompile(p, node))
+                .Replay(1)
+                .RefCount());
+
+    /// <summary>
+    /// First touch of a NodeType MeshNode that has no usable artefact — kick
+    /// off compilation. Repeated emissions where the node is already pending,
+    /// compiling, or has a release are no-ops.
+    /// </summary>
+    private void MaybeKickCompile(string path, MeshNode node)
+    {
+        // Only NodeType definitions need compilation. Any other content type
+        // (Activity, Release, Markdown, etc.) is just observed.
+        if (node.NodeType != MeshNode.NodeTypePath) return;
+
+        // Already has an assembly path — built-in NodeTypes set this at
+        // registration; dynamic NodeTypes get it after a successful release.
+        // No need to kick.
+        if (!string.IsNullOrEmpty(node.AssemblyLocation)) return;
+
+        if (node.Content is not Graph.Configuration.NodeTypeDefinition def)
+            return;
+
+        if (!string.IsNullOrEmpty(def.LatestReleasePath)) return;
+        if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling) return;
+
+        // Don't auto-compile error-state NodeTypes — the user has to fix the
+        // source and click Create Release explicitly. Auto-flipping Pending
+        // on every emission would create a tight retry loop.
+        if (def.CompilationStatus == CompilationStatus.Error) return;
+
+        try
+        {
+            logger.LogInformation(
+                "First touch of NodeType {Path} with no release — flipping CompilationStatus = Pending",
+                path);
+            // Update via the workspace stream — same path the GUI Create-Release
+            // button uses. Targets the per-NodeType hub at `path`; the hub's
+            // CompileWatcher reacts.
+            meshHub.GetWorkspace().UpdateMeshNode(curr =>
+                curr.Content is Graph.Configuration.NodeTypeDefinition d
+                    ? curr with
+                    {
+                        Content = d with
+                        {
+                            CompilationStatus = CompilationStatus.Pending,
+                            LastCompileStartedAt = DateTimeOffset.UtcNow
+                        }
+                    }
+                    : curr,
+                path);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort — failing to kick the compile is observability, not
+            // correctness. The next emission will retry, and the explicit
+            // Create-Release click path still works regardless.
+            logger.LogWarning(ex,
+                "MaybeKickCompile failed for NodeType {Path} (best-effort, ignored)", path);
+        }
+    }
+}

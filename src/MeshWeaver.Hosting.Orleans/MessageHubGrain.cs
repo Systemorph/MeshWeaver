@@ -18,70 +18,33 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 {
 
     private ModulesAssemblyLoadContext? loadContext;
-    private readonly IMeshStorage persistence = meshHub.ServiceProvider.GetRequiredService<IMeshStorage>();
-    private IMessageHub? Hub { get; set; }
+    private readonly INodeTypeStreamCache streamCache =
+        meshHub.ServiceProvider.GetRequiredService<INodeTypeStreamCache>();
 
+    /// <summary>
+    /// Hub-readiness signal. <see cref="OnActivateAsync"/> returns immediately
+    /// after subscribing to the cached MeshNode stream — no blocking on the
+    /// activation path. The subscription's onNext callback resolves
+    /// <see cref="HubConfiguration"/>, instantiates the hosted hub, and
+    /// completes this TCS. <see cref="DeliverMessage"/> awaits it (Orleans
+    /// already runs DeliverMessage as a Task; the await happens on the
+    /// message-handling path, not on activation).
+    /// </summary>
+    private readonly TaskCompletionSource<IMessageHub> _hubReady =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public override async Task OnActivateAsync(CancellationToken cancellationToken)
+    private IDisposable? _activationSubscription;
+
+    public override Task OnActivateAsync(CancellationToken cancellationToken)
     {
         var streamId = this.GetPrimaryKeyString();
         var address = meshHub.GetAddress(streamId);
         var addressPath = address.ToString();
+        var grainScheduler = TaskScheduler.Current;
 
-        // Resolve node from persistence, config, or static providers.
-        // Retry with backoff: the node may have just been created and persistence
-        // (debounce flush, cross-silo replication) may not have it yet.
-        MeshNode? node = null;
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            // GetNode returns IObservable; bridge once at the grain-activation lifecycle hook.
-            node = await persistence.GetNode(addressPath).FirstAsync().ToTask(cancellationToken);
-
-            if (node is null)
-            {
-                var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
-                meshConfig?.Nodes.TryGetValue(addressPath, out node);
-            }
-
-            node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
-                .SelectMany(p => p.GetStaticNodes())
-                .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
-
-            if (node is not null) break;
-
-            if (attempt < 4)
-            {
-                logger.LogDebug("Grain {StreamId}: node not found at {Path}, retry {Attempt}/4",
-                    streamId, addressPath, attempt + 1);
-                await Task.Delay(200 * (attempt + 1), cancellationToken);
-            }
-        }
-
-        if (node is null)
-        {
-            throw new InvalidOperationException(
-                $"Cannot activate grain {streamId}: node not found at {addressPath} after 5 attempts.");
-        }
-
-        // Resolve hub configuration (triggers compilation if needed, composes
-        // with default config). Single Task bridge at the grain-activation
-        // boundary; the reactive chain inside ResolveHubConfiguration runs on
-        // the producer's scheduler so a CompileRequest routed back through
-        // the mesh during this activation doesn't capture and block the
-        // grain scheduler the way the previous Task-returning shape did.
-        var hubFactory = meshHub.ServiceProvider.GetService<IMeshNodeHubFactory>();
-        if (hubFactory != null)
-            node = await hubFactory.ResolveHubConfiguration(node).FirstAsync().ToTask(cancellationToken);
-
-        if (node.AssemblyLocation is not null)
-            Assembly.LoadFrom(node.AssemblyLocation);
-
-        if (node.HubConfiguration is null)
-            throw new ArgumentException($"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType}).");
-
-        // Register a keep-alive timer that renews DelayDeactivation while
-        // long-running operations are active. The timer runs on the grain's scheduler.
-        // Operations increment/decrement the counter; timer only acts when > 0.
+        // Register the keep-alive timer up-front. Independent of node
+        // resolution — it only acts when the long-running-operation counter
+        // is > 0, so it's a no-op until the hub starts processing work.
         _keepAliveTimer = this.RegisterGrainTimer(
             _ =>
             {
@@ -96,21 +59,98 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 Interleave = true
             });
 
-        // Couple the root grain hub to the grain's TaskScheduler. Every message processed
-        // on this hub runs on the grain's scheduler — Orleans attributes the work
-        // (activity counters, RequestContext flow, distributed-tracing scopes,
-        // deactivation timing). Hosted hubs created from here (via GetHostedHub) keep
-        // the default TaskScheduler.Default and are independent actors. See
-        // Doc/Architecture/OrleansTaskScheduler.md.
-        var grainScheduler = TaskScheduler.Current;
+        // Built-in NodeTypes registered via MeshBuilder.AddMeshNodes have
+        // HubConfiguration + AssemblyLocation set at registration time, so we
+        // can short-circuit synchronously without subscribing to the stream.
+        // Dynamic NodeTypes flow through the observable path.
+        var staticNode = TryResolveStaticNode(addressPath);
+        if (staticNode is { HubConfiguration: not null })
+        {
+            CompleteActivation(streamId, address, grainScheduler, staticNode);
+            return Task.CompletedTask;
+        }
 
-        Hub = meshHub.GetHostedHub(address, config =>
-            node.HubConfiguration(config)
-                .WithTaskScheduler(grainScheduler)
-                .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
-                .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation)))!;
+        // Subscribe to the cached MeshNode stream and complete activation
+        // when an emission carries a usable HubConfiguration. NO AWAIT —
+        // OnActivateAsync returns immediately. Orleans considers the grain
+        // activated; DeliverMessage awaits _hubReady.Task before processing
+        // any inbound message.
+        //
+        // The routing grain has already warmed this stream (and waited for
+        // CompilationStatus = Ok) before forwarding the first message to us,
+        // so the subscription typically fires synchronously off the cached
+        // Replay(1) snapshot.
+        _activationSubscription = streamCache.GetStream(addressPath)
+            .SelectMany(node => ResolveHubConfigurationObservable(node))
+            .Where(node => node.HubConfiguration is not null)
+            .Take(1)
+            .Subscribe(
+                node => CompleteActivation(streamId, address, grainScheduler, node),
+                ex =>
+                {
+                    logger.LogError(ex,
+                        "Grain {StreamId}: activation stream faulted for {Path}",
+                        streamId, addressPath);
+                    _hubReady.TrySetException(ex);
+                });
 
-        Hub.RegisterForDisposal(_ => DeactivateOnIdle());
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Composes the per-emission "enrich with HubConfiguration" step as an
+    /// observable so the activation chain stays purely reactive. For static
+    /// nodes the emitted node already carries HubConfiguration; for dynamic
+    /// NodeType instances we delegate to <see cref="IMeshNodeHubFactory.ResolveHubConfiguration"/>,
+    /// which itself reads off a cached stream — no synchronous Task bridges.
+    /// </summary>
+    private IObservable<MeshNode> ResolveHubConfigurationObservable(MeshNode node)
+    {
+        if (node.HubConfiguration is not null)
+            return Observable.Return(node);
+        var hubFactory = meshHub.ServiceProvider.GetService<IMeshNodeHubFactory>();
+        return hubFactory is null
+            ? Observable.Return(node)
+            : hubFactory.ResolveHubConfiguration(node);
+    }
+
+    /// <summary>
+    /// Synchronous activation completion: load the assembly, instantiate the
+    /// hosted hub, signal hub-readiness. Called from the activation
+    /// subscription's onNext (or directly for static nodes). Idempotent via
+    /// <see cref="TaskCompletionSource.TrySetResult"/> guards.
+    /// </summary>
+    private void CompleteActivation(string streamId, Address address, TaskScheduler grainScheduler, MeshNode node)
+    {
+        if (_hubReady.Task.IsCompleted) return;
+
+        try
+        {
+            if (node.AssemblyLocation is not null)
+                Assembly.LoadFrom(node.AssemblyLocation);
+
+            if (node.HubConfiguration is null)
+            {
+                _hubReady.TrySetException(new ArgumentException(
+                    $"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType})."));
+                return;
+            }
+
+            var hub = meshHub.GetHostedHub(address, config =>
+                node.HubConfiguration(config)
+                    .WithTaskScheduler(grainScheduler)
+                    .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
+                    .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation)))!;
+
+            hub.RegisterForDisposal(_ => DeactivateOnIdle());
+            _hubReady.TrySetResult(hub);
+            logger.LogDebug("Grain {StreamId} activated", streamId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Grain {StreamId}: CompleteActivation failed", streamId);
+            _hubReady.TrySetException(ex);
+        }
     }
 
     private IGrainTimer? _keepAliveTimer;
@@ -144,15 +184,26 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
 
-    public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
+    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
         logger.LogDebug("Received: {request}", delivery);
-        if (Hub == null)
+
+        // Await hub-readiness — OnActivateAsync no longer blocks; instead it
+        // subscribes to the MeshNode stream and completes _hubReady on
+        // emission. For routed messages whose stream the routing grain
+        // already warmed, this completes synchronously off the Replay(1)
+        // cached snapshot.
+        IMessageHub hub;
+        try
+        {
+            hub = await _hubReady.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (Exception ex)
         {
             var address = this.GetPrimaryKeyString();
-            logger.LogError("Hub not started for {address}", this.GetPrimaryKeyString());
+            logger.LogError(ex, "Hub readiness failed for {Address}", address);
             DeactivateOnIdle();
-            return Task.FromResult(delivery.Failed($"Hub not started for {address}"));
+            return delivery.Failed($"Hub not started for {address}: {ex.Message}");
         }
 
         // Apply user identity from Orleans RequestContext to the delivery.
@@ -184,10 +235,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         logger.LogInformation("GrainDeliver: IN  grain={Grain}, message={MessageType}, target={Target}, id={Id}",
             this.GetPrimaryKeyString(), msgType, delivery.Target?.ToString() ?? "(self)", delivery.Id);
-        var ret = Hub!.DeliverMessage(delivery);
+        var ret = hub.DeliverMessage(delivery);
         logger.LogInformation("GrainDeliver: OUT grain={Grain}, message={MessageType}, state={State}, id={Id}",
             this.GetPrimaryKeyString(), msgType, ret.State, delivery.Id);
-        return Task.FromResult(ret);
+        return ret;
     }
 
 
@@ -196,19 +247,31 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var grainId = this.GetPrimaryKeyString();
         logger.LogInformation("Grain {GrainId} deactivating: reason={Reason}", grainId, reason.ReasonCode);
 
-        if (Hub != null)
+        // Tear down the activation subscription first so any in-flight
+        // emission can't try to instantiate the hub after deactivation began.
+        _activationSubscription?.Dispose();
+        _activationSubscription = null;
+
+        // Resolve the hub if activation completed; otherwise this is a no-op.
+        IMessageHub? hub = null;
+        if (_hubReady.Task.IsCompletedSuccessfully)
+            hub = _hubReady.Task.Result;
+        else
+            _hubReady.TrySetCanceled();
+
+        if (hub != null)
         {
             try
             {
                 // Cancel any active execution (e.g., AI streaming) — this triggers the
                 // OperationCanceledException path which saves state and notifies the parent.
-                Hub.CancelCurrentExecution();
+                hub.CancelCurrentExecution();
 
-                Hub.Dispose();
+                hub.Dispose();
                 // Wait for disposal (includes async flush of pending saves and
                 // cancellation of active thread executions via hosted _Exec hubs).
                 // Allow up to 120s for AI streaming to cancel, save state, and flush.
-                var disposalTask = Hub.Disposal!;
+                var disposalTask = hub.Disposal!;
                 var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(120), cancellationToken));
                 if (completed != disposalTask)
                     logger.LogWarning("Grain {GrainId}: hub disposal timed out after 120s — pending saves may be lost!", grainId);
@@ -220,14 +283,32 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 logger.LogError(ex, "Grain {GrainId}: hub disposal failed — pending saves may be lost!", grainId);
             }
         }
-        Hub = null;
         if (loadContext != null)
             loadContext.Unload();
         loadContext = null;
         await base.OnDeactivateAsync(reason, cancellationToken);
     }
 
+    /// <summary>
+    /// Synchronous lookup for built-in MeshNodes that ride
+    /// <see cref="MeshConfiguration.Nodes"/> or <see cref="IStaticNodeProvider"/>.
+    /// These have <see cref="MeshNode.HubConfiguration"/> + (where applicable)
+    /// <see cref="MeshNode.AssemblyLocation"/> set at registration time, so
+    /// routing through the synchronization-stream cache is unnecessary and
+    /// would add a cross-hub round-trip on every grain cold start. Returns
+    /// <c>null</c> if no static registration exists for <paramref name="addressPath"/>;
+    /// caller falls back to the cached stream.
+    /// </summary>
+    private MeshNode? TryResolveStaticNode(string addressPath)
+    {
+        var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
+        if (meshConfig is not null && meshConfig.Nodes.TryGetValue(addressPath, out var node))
+            return node;
 
+        return meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
+    }
 }
 
 
