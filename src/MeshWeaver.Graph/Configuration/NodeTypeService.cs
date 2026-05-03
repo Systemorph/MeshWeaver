@@ -339,6 +339,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     private Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
         var wasNewCompile = false;
+        string? activityPath = null;
         // Use ConcurrentDictionary.GetOrAdd with a Task to ensure only one compilation runs per key.
         // On failure, remove from dictionary to allow retry on next access.
         var task = _compilationTasks.GetOrAdd(nodeTypePath, path =>
@@ -346,6 +347,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             // Only the first caller to miss the cache kicks off a compile — mark it started.
             wasNewCompile = true;
             _compilingInProgress[path] = DateTimeOffset.UtcNow;
+            // Step 4 of the Activity-Control-Plane plan: emit a compile activity
+            // so UI overlays / agents can subscribe to the canonical activity
+            // stream instead of polling _compilationErrors. Best-effort, never
+            // throws — see NodeTypeCompilationActivity for the contract.
+            activityPath = NodeTypeCompilationActivity.Start(hub, path, logger);
             return CompileWithReleaseAsync(path, ct);
         });
 
@@ -365,14 +371,26 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 // diagnostics flip back to Error instead of reporting stale Ok.
                 _compilationSucceededAt.TryRemove(nodeTypePath, out _);
                 // Track the compilation error for error reporting in UI
+                string? errorText = null;
                 if (t.Exception?.InnerException is CompilationException compEx)
+                {
                     _compilationErrors[nodeTypePath] = compEx.Message;
+                    errorText = compEx.Message;
+                }
                 else if (t.Exception?.InnerException != null)
+                {
                     _compilationErrors[nodeTypePath] = t.Exception.InnerException.Message;
+                    errorText = t.Exception.InnerException.Message;
+                }
+                if (wasNewCompile)
+                    NodeTypeCompilationActivity.MarkFailed(hub, activityPath,
+                        errorText ?? "Compilation failed", logger);
                 return null;
             }
             _compilationErrors.TryRemove(nodeTypePath, out _);
             _compilationSucceededAt[nodeTypePath] = DateTimeOffset.UtcNow;
+            if (wasNewCompile)
+                NodeTypeCompilationActivity.MarkSucceeded(hub, activityPath, logger);
             return t.Result?.AssemblyPath;
         }, TaskContinuationOptions.ExecuteSynchronously);
     }
