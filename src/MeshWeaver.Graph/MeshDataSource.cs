@@ -387,6 +387,24 @@ public static class MeshDataSourceExtensions
                         ? $"{hubPath}/_activity/{compileLog.Id}"
                         : null;
 
+                    // On success, write a Release MeshNode at
+                    //   {nodeTypePath}/_Release/{version}
+                    // capturing the assembly path + the markdown release notes
+                    // the author wrote on NodeTypeDefinition.ReleaseNotes (via
+                    // form auto-save). The NodeType's LatestReleasePath gets
+                    // updated to point at this release. On failure we don't
+                    // create a Release — the previous succeeded release stays
+                    // active. Failed compiles still surface via
+                    // LastCompilationActivityPath + CompilationError + the
+                    // _activity log entry. Per
+                    // Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md.
+                    string? newReleasePath = null;
+                    if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
+                    {
+                        newReleasePath = TryCreateReleaseNode(
+                            hub, hubPath, outcome.Result!, activityPath, logger);
+                    }
+
                     workspace.UpdateMeshNode(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def)
@@ -405,6 +423,18 @@ public static class MeshDataSourceExtensions
                                     LastCompileSucceededAt = DateTimeOffset.UtcNow,
                                     LastCompiledVersion = curr.Version,
                                     LastCompilationActivityPath = activityPath,
+                                    // Pin the active release pointer to the freshly-created
+                                    // Release MeshNode so consumers (NodeTypeService,
+                                    // per-node hub activation, layout areas) can read the
+                                    // active artefact straight off the NodeType without a
+                                    // catalog query. Falls back to the previous value when
+                                    // release creation didn't happen (cold start, no
+                                    // mesh service available — best-effort).
+                                    LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
+                                    // Clear release notes so the form is blank for the
+                                    // next release; the notes are now captured on the
+                                    // Release MeshNode itself (immutable history).
+                                    ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
                                     // Persist the per-source snapshot the compile actually
                                     // consumed. Future recompile-needed checks read this back
                                     // and compare against the live source-node versions —
@@ -431,6 +461,10 @@ public static class MeshDataSourceExtensions
                                 CompilationStatus = CompilationStatus.Error,
                                 CompilationError = errorSummary,
                                 LastCompilationActivityPath = activityPath,
+                                // LatestReleasePath stays put — failed compile leaves
+                                // the previous succeeded release active. Same for
+                                // ReleaseNotes: keep them so the user can fix the
+                                // source and click Create Release again.
                                 // Clear the snapshot — an error-state NodeType has nothing
                                 // valid to compare against; force the next attempt to
                                 // re-discover sources rather than spuriously short-circuit
@@ -448,6 +482,112 @@ public static class MeshDataSourceExtensions
 
     /// <summary>Local record carrying the outcome of a single compile attempt.</summary>
     private sealed record CompileOutcome(NodeCompilationResult? Result, Exception? Error);
+
+    /// <summary>
+    /// Best-effort: write a <c>Release</c> MeshNode at
+    /// <c>{nodeTypePath}/_Release/{version}</c> capturing the compiled assembly
+    /// path + the markdown release notes from the NodeType's
+    /// <c>NodeTypeDefinition.ReleaseNotes</c> field. Returns the new release
+    /// path on success, or <c>null</c> if the create couldn't be dispatched
+    /// (no IMeshService available — early startup, test fixture, etc.).
+    ///
+    /// <para>Failures are swallowed: the release MeshNode is observability +
+    /// history. Compile correctness must not depend on the create succeeding.
+    /// See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
+    /// </summary>
+    private static string? TryCreateReleaseNode(
+        IMessageHub hub,
+        string nodeTypePath,
+        NodeCompilationResult result,
+        string? activityPath,
+        ILogger? logger)
+    {
+        try
+        {
+            var meshService = hub.ServiceProvider.GetService<IMeshService>();
+            if (meshService is null) return null;
+
+            // Read the NodeType's own MeshNode synchronously off the workspace
+            // — the compile watcher is already streaming this hub's content
+            // and the MeshNode is in cache. Can't use GetMeshNode (hub round-
+            // trip from inside our own subscription would race with the
+            // UpdateMeshNode that follows).
+            string? notes = null;
+            try
+            {
+                var workspace = hub.GetWorkspace();
+                var ownStream = workspace.GetMeshNodeStream();
+                MeshNode? ownNode = null;
+                using var sub = ownStream.Take(1).Subscribe(n => ownNode = n);
+                if (ownNode?.Content is NodeTypeDefinition def)
+                    notes = def.ReleaseNotes;
+            }
+            catch
+            {
+                // Workspace not ready — release notes will be empty for this
+                // release. Acceptable — the release itself still records the
+                // assembly path + activity link.
+            }
+
+            // Auto-stamp version: {yyyyMMddHHmmss}-{8charContentHash}. Sortable
+            // chronologically + unique per content. Using sha256-truncated of
+            // the assembly location keeps it stable for the same compile
+            // output. Future improvement: surface a user-supplied version on
+            // the click handler and prefer that when set.
+            var hashSrc = result.AssemblyLocation ?? Guid.NewGuid().ToString();
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            var hash = Convert.ToBase64String(
+                sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(hashSrc)))
+                .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..8];
+            var version = $"{DateTime.UtcNow:yyyyMMddHHmmss}-{hash}";
+
+            var releaseNamespace = $"{nodeTypePath}/_Release";
+            var releasePath = $"{releaseNamespace}/{version}";
+
+            var release = new NodeTypeRelease
+            {
+                Path = releasePath,
+                NodeTypePath = nodeTypePath,
+                Release = hash,
+                Version = version,
+                Notes = !string.IsNullOrWhiteSpace(notes)
+                    ? Markdown.MarkdownContent.Parse(notes!, "", releasePath)
+                    : null,
+                FrameworkVersion = typeof(NodeTypeRelease).Assembly
+                    .GetName().Version?.ToString() ?? "0.0.0",
+                CreatedAt = DateTimeOffset.UtcNow,
+                AssemblyPath = result.AssemblyLocation,
+                Status = "Succeeded",
+                CompilationActivityPath = activityPath
+            };
+
+            var node = new MeshNode(version, releaseNamespace)
+            {
+                Name = $"Release {version}",
+                NodeType = ReleaseNodeType.NodeType,
+                MainNode = nodeTypePath,
+                State = MeshNodeState.Active,
+                Content = release
+            };
+
+            // Fire-and-forget — observability, not correctness. If the create
+            // fails (replication race, transient mesh-side error) we log and
+            // skip; the next compile retry creates a fresh release.
+            meshService.CreateNode(node).Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "CompileWatcher: failed to create Release node at {ReleasePath}",
+                    releasePath));
+
+            return releasePath;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "CompileWatcher: TryCreateReleaseNode threw for {NodeTypePath}", nodeTypePath);
+            return null;
+        }
+    }
 
     private static void SubscribeToOwnDeletion(IMessageHub hub)
     {

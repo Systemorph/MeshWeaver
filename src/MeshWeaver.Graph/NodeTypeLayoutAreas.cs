@@ -734,6 +734,21 @@ public static class NodeTypeLayoutAreas
         headerRow = headerRow.WithView(actions);
         stack = stack.WithView(headerRow);
 
+        // Live compile-activity panel: streams the messages from the most
+        // recent compile activity (LastCompilationActivityPath) below the
+        // header. Re-emits when the NodeType's own MeshNode ticks (status
+        // changes, activity path updates). Empty when no compile has happened
+        // yet. On success, also surface a "Latest release" link to the
+        // freshly-created Release MeshNode at LatestReleasePath. Shape per
+        // Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md → "Live
+        // progress" UI requirement.
+        var compileLogPanel = (LayoutAreaHost h, RenderingContext rc) =>
+            host.Workspace.GetMeshNodeStream()
+                .Select(n => n?.Content as NodeTypeDefinition)
+                .Where(d => d is not null)
+                .Select(d => BuildCompileLogPanel(d!));
+        stack = stack.WithView(compileLogPanel, "CompileLogPanel");
+
         // Editable settings form — auto-saves to MeshNode.Content as NodeTypeDefinition.
         var dataId = $"nodeTypeConfig_{node.Path.Replace('/', '_')}";
         var form = NodeTypeConfigForm.FromNode(node, definition);
@@ -1239,6 +1254,69 @@ public static class NodeTypeLayoutAreas
         => Controls.Stack
             .WithStyle("padding: 24px; display: flex; align-items: center; justify-content: center;")
             .WithView(Controls.Progress(message, 0));
+
+    /// <summary>
+    /// Compile-log panel beneath the Create-Release header. Shows:
+    /// <list type="bullet">
+    ///   <item>While compiling: a "Compiling…" banner.</item>
+    ///   <item>After failure: the formatted diagnostics from
+    ///     <see cref="NodeTypeDefinition.CompilationError"/>.</item>
+    ///   <item>After success: a link to the freshly-created
+    ///     <c>Release</c> MeshNode at <see cref="NodeTypeDefinition.LatestReleasePath"/>.</item>
+    ///   <item>A clickable link to the most recent compile activity log
+    ///     (<see cref="NodeTypeDefinition.LastCompilationActivityPath"/>) for full
+    ///     Roslyn output / executed-source-queries trace.</item>
+    /// </list>
+    /// Empty when nothing has happened yet.
+    /// </summary>
+    private static UiControl BuildCompileLogPanel(NodeTypeDefinition def)
+    {
+        // Nothing meaningful to show until at least one compile has been
+        // requested or recorded. Return an empty stack so the layout area
+        // doesn't reserve space for an unused panel.
+        var hasState = def.CompilationStatus is not null
+            || !string.IsNullOrEmpty(def.LastCompilationActivityPath)
+            || !string.IsNullOrEmpty(def.LatestReleasePath);
+        if (!hasState) return Controls.Stack;
+
+        var panel = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 12px 16px; background: var(--neutral-layer-2); border-radius: 4px; gap: 8px; margin-bottom: 8px;");
+
+        if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
+        {
+            panel = panel.WithView(Controls.Body("Compiling…")
+                .WithStyle("color: var(--accent-fill-rest); font-weight: 600;"));
+        }
+        else if (def.CompilationStatus == CompilationStatus.Error
+                 && !string.IsNullOrEmpty(def.CompilationError))
+        {
+            panel = panel
+                .WithView(Controls.Body("Compile failed")
+                    .WithStyle("color: var(--error); font-weight: 600;"))
+                .WithView(Controls.Html(
+                    $"<pre style=\"white-space: pre-wrap; font-family: monospace; font-size: 12px; color: var(--error); margin: 0;\">{System.Net.WebUtility.HtmlEncode(def.CompilationError)}</pre>"));
+        }
+        else if (def.CompilationStatus == CompilationStatus.Ok
+                 && !string.IsNullOrEmpty(def.LatestReleasePath))
+        {
+            var releaseHref = "/" + def.LatestReleasePath;
+            panel = panel
+                .WithView(Controls.Body("Release published")
+                    .WithStyle("color: var(--accent-fill-rest); font-weight: 600;"))
+                .WithView(Controls.Html(
+                    $"<a href=\"{System.Net.WebUtility.HtmlEncode(releaseHref)}\" style=\"text-decoration: none; color: var(--accent-fill-rest);\">→ {System.Net.WebUtility.HtmlEncode(def.LatestReleasePath!)}</a>"));
+        }
+
+        if (!string.IsNullOrEmpty(def.LastCompilationActivityPath))
+        {
+            var activityHref = "/" + def.LastCompilationActivityPath;
+            panel = panel.WithView(Controls.Html(
+                $"<a href=\"{System.Net.WebUtility.HtmlEncode(activityHref)}\" style=\"font-size: 12px; color: var(--neutral-foreground-hint);\">View full compile log →</a>"));
+        }
+
+        return panel;
+    }
 }
 
 /// <summary>
