@@ -4,7 +4,8 @@
 //   title:          string  (optional) — document title; defaults to node.Name
 //   brandNodePath:  string  (optional) — CorporateIdentity / Organization path
 //   options:        object  (optional) — DocumentExportOptions JSON (IncludeChildren, MaxDepth, …)
-// Returns: ExportDocumentResponse with the rendered bytes.
+// Returns: RenderedDocument (Format, FileName, MimeType, Content) — written to
+//   ActivityLog.ReturnValue on terminal status; subscribers deserialize it.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -91,7 +92,7 @@ var document = new DocumentBuilder().Build(title, chapters, options, branding);
 var bytes = new PdfDocumentRenderer().Render(document);
 Log.LogInformation("Rendered {Bytes} bytes", bytes.Length);
 
-return new ExportDocumentResponse(
+return new RenderedDocument(
     ExportFormat.Pdf,
     Sanitize(title) + ".pdf",
     "application/pdf",

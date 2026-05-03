@@ -10,18 +10,19 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Markdown.Export.Handlers;
 
 /// <summary>
-/// Handles <see cref="ExportDocumentRequest"/> by relaying it onto the
-/// script-templated export pipeline. The handler builds an
-/// <see cref="ExecuteScriptRequest"/> with caller-supplied
-/// <see cref="ExecuteScriptRequest.Inputs"/>, dispatches it at the matching
-/// Code template (<c>Templates/Export/Pdf</c> or <c>Templates/Export/Docx</c>),
-/// subscribes to the resulting activity stream, and posts the rendered bytes
-/// back as an <see cref="ExportDocumentResponse"/> when the activity completes.
+/// Handles <see cref="ExportDocumentRequest"/> by <b>starting</b> the
+/// script-templated export pipeline and posting back a start-ack with the
+/// activity path. The handler does NOT wait for the rendered bytes — that
+/// would block the action block under load while the script does cross-hub
+/// work (per <c>Doc/Architecture/AsynchronousCalls.md</c> → "🚨 NOTHING ASYNC
+/// EVER"). Callers (Blazor view, MCP, tests) subscribe to
+/// <c>workspace.GetMeshNodeStream(ActivityPath)</c> for progress and read the
+/// rendered bytes from <c>ActivityLog.ReturnValue</c> on terminal status.
 ///
-/// <para>Pre-existing callers (Blazor view, Orleans test, …) keep firing
-/// <see cref="ExportDocumentRequest"/> and reading bytes off the response —
-/// the migration to script-driven execution is internal. See
-/// <c>Doc/Architecture/ActivityControlPlane.md</c> → "Operations as scripts".</para>
+/// <para>Pipeline:
+/// <c>ExportDocumentRequest → ScriptDispatch.StartScript → ExecuteScriptRequest
+/// at Templates/Export/{Pdf,Docx} → kernel runs script → ActivityLog ticks live →
+/// caller reads ActivityLog.ReturnValue on terminal</c>.</para>
 /// </summary>
 public static class ExportDocumentHandler
 {
@@ -45,14 +46,15 @@ public static class ExportDocumentHandler
         var inputs = BuildInputs(request, jsonOptions);
         var templatePath = ResolveTemplatePath(request.Options.Format);
 
-        return ScriptDispatch.RelayToScript<ExportDocumentRequest, ExportDocumentResponse>(
+        return ScriptDispatch.StartScript<ExportDocumentRequest, ExportDocumentResponse>(
             hub,
             delivery,
             templatePath,
             inputs,
-            mapSuccess: returnValue => DeserializeResponse(returnValue, request, jsonOptions),
+            mapStarted: started => new ExportDocumentResponse(
+                request.Options.Format, started.ActivityPath),
             mapFailure: reason => new ExportDocumentResponse(
-                request.Options.Format, "", "", [], Error: reason),
+                request.Options.Format, "", Error: reason),
             logger: logger);
     }
 
@@ -75,27 +77,4 @@ public static class ExportDocumentHandler
         ExportFormat.Docx => $"{MarkdownExportTemplates.TemplatesNamespace}/{MarkdownExportTemplates.ExportDocxId}",
         _ => throw new NotSupportedException($"Unsupported format {format}")
     };
-
-    private static ExportDocumentResponse DeserializeResponse(
-        JsonElement? returnValue,
-        ExportDocumentRequest request,
-        JsonSerializerOptions jsonOptions)
-    {
-        if (returnValue is { } el && el.ValueKind == JsonValueKind.Object)
-        {
-            try
-            {
-                var deserialized = el.Deserialize<ExportDocumentResponse>(jsonOptions);
-                if (deserialized is not null && deserialized.Content.Length > 0)
-                    return deserialized;
-            }
-            catch
-            {
-                // Fall through to a structured "no content" failure response.
-            }
-        }
-        return new ExportDocumentResponse(
-            request.Options.Format, "", "", [],
-            Error: "Export script returned no content");
-    }
 }

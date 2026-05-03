@@ -1,10 +1,11 @@
 using System;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
-using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
@@ -20,13 +21,20 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// End-to-end test for the <c>ExportDocumentRequest</c> → script-template
-/// relay. Verifies that posting an <see cref="ExportDocumentRequest"/> at a
-/// markdown node triggers the seeded <c>Templates/Export/Pdf</c> Code template,
-/// runs it through the kernel + activity pipeline, and posts back an
-/// <see cref="ExportDocumentResponse"/> with non-empty PDF bytes.
-///
-/// Pre-existing callers (Blazor view, Orleans tests) keep firing
-/// <c>ExportDocumentRequest</c> as before — the script-driven path is internal.
+/// dispatch. Verifies that posting an <see cref="ExportDocumentRequest"/> at
+/// a markdown node:
+/// <list type="number">
+///   <item>Returns immediately (no wait-for-terminal) with an
+///         <see cref="ExportDocumentResponse"/> carrying the activity path.</item>
+///   <item>The script runs on the kernel and writes its
+///         <see cref="RenderedDocument"/> result onto
+///         <see cref="ActivityLog.ReturnValue"/> on terminal status.</item>
+///   <item>The caller subscribes to the activity stream, projects to
+///         <see cref="ActivityLog"/>, filters on terminal status, and
+///         deserialises the rendered bytes from <c>ReturnValue</c>.</item>
+/// </list>
+/// This is the canonical "operations as scripts" subscription shape — see
+/// <c>Doc/Architecture/ActivityControlPlane.md</c>.
 /// </summary>
 public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -39,7 +47,7 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
             .AddMarkdownExport();
 
     [Fact]
-    public async Task ExportRequest_DispatchesToScriptTemplate_AndReturnsBytes()
+    public async Task ExportRequest_StartsScriptActivity_AndReturnsBytesOnTerminal()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         await meshService.CreateNode(MeshNode.FromPath(ExportNs) with
@@ -65,21 +73,45 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
         });
 
         var ct = TestContext.Current.CancellationToken;
-        var response = await Mesh
+
+        // Step 1 — dispatch the request, observe the start-ack. The handler
+        // returns immediately with the activity path; it does NOT wait for
+        // the script to finish.
+        var dispatch = await Mesh
             .Observe<ExportDocumentResponse>(request, o => o.WithTarget(new Address(SourcePath)))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
+
+        dispatch.Message.Error.Should().BeNullOrEmpty(
+            "the export handler should return a successful start-ack");
+        dispatch.Message.ActivityPath.Should().NotBeNullOrEmpty(
+            "the response should carry the running activity's path");
+
+        // Step 2 — subscribe to the activity stream, project to ActivityLog,
+        // filter on terminal status, take the snapshot. The script writes its
+        // RenderedDocument as ActivityLog.ReturnValue on terminal.
+        var terminal = await Mesh.GetWorkspace()
+            .GetMeshNodeStream(dispatch.Message.ActivityPath)
+            .Select(n => n?.Content as ActivityLog)
+            .Where(log => log is not null && log.Status != ActivityStatus.Running)
             .Take(1)
             .Timeout(TimeSpan.FromMinutes(2))
             .ToTask(ct);
 
-        response.Should().NotBeNull();
-        response.Message.Error.Should().BeNullOrEmpty(
-            "the script-relay handler should produce bytes, not an error");
-        response.Message.Format.Should().Be(ExportFormat.Pdf);
-        response.Message.MimeType.Should().Be("application/pdf");
-        response.Message.FileName.Should().EndWith(".pdf");
-        response.Message.Content.Should().NotBeNullOrEmpty(
-            "PDF bytes should round-trip through ActivityLog.ReturnValue");
-        response.Message.Content.Length.Should().BeGreaterThan(100,
+        terminal!.Status.Should().Be(ActivityStatus.Succeeded,
+            because: "the script should render the PDF without errors. Messages:\n  "
+                     + string.Join("\n  ", terminal.Messages.Select(m => $"[{m.LogLevel}] {m.Message}")));
+
+        terminal.ReturnValue.Should().NotBeNull("the script should record its output");
+        var rendered = terminal.ReturnValue!.Value.Deserialize<RenderedDocument>(
+            Mesh.JsonSerializerOptions);
+        rendered.Should().NotBeNull("ActivityLog.ReturnValue should deserialise to RenderedDocument");
+        rendered!.Format.Should().Be(ExportFormat.Pdf);
+        rendered.MimeType.Should().Be("application/pdf");
+        rendered.FileName.Should().EndWith(".pdf");
+        rendered.Content.Should().NotBeNullOrEmpty();
+        rendered.Content.Length.Should().BeGreaterThan(100,
             "a real PDF is at least a few hundred bytes");
     }
 }

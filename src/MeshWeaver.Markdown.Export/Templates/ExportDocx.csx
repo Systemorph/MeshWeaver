@@ -86,7 +86,7 @@ var document = new DocumentBuilder().Build(title, chapters, options, branding);
 var bytes = new DocxDocumentRenderer().Render(document);
 Log.LogInformation("Rendered {Bytes} bytes", bytes.Length);
 
-return new ExportDocumentResponse(
+return new RenderedDocument(
     ExportFormat.Docx,
     Sanitize(title) + ".docx",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

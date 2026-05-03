@@ -90,6 +90,13 @@ public static class GraphConfigurationExtensions
             // Register Graph content types in the hub's type registry for polymorphic JSON serialization
             builder.ConfigureHub(config => config.WithGraphTypes());
 
+            // Seed the built-in NodeCopy + Mirror script templates as Code MeshNodes
+            // at Templates/Import/{NodeCopy,Mirror}. ImportLayoutArea fires
+            // ExecuteScriptRequest at these to drive copy / mirror operations.
+            // Stateless static helper, no DI provider — see
+            // Doc/Architecture/AsynchronousCalls.md → "Static handlers compose".
+            builder.AddMeshNodes(GraphImportTemplates.GetStaticNodes());
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
@@ -101,6 +108,13 @@ public static class GraphConfigurationExtensions
 
                 // NuGet package resolver for #r "nuget:..." directives
                 services.AddNuGetResolver();
+
+                // Make this assembly visible to kernel scripts so the
+                // NodeCopy + Mirror templates can resolve types from
+                // MeshWeaver.Graph (NodeCopyHelper, …) without depending
+                // on AppDomain having eagerly loaded them.
+                services.AddSingleton(new MeshWeaver.Kernel.Hub.KernelScriptAssembly(
+                    typeof(GraphImportTemplates).Assembly));
 
                 return services;
             });
@@ -116,6 +130,14 @@ public static class GraphConfigurationExtensions
                 .AddContentCollections()
                 .AddEmbeddedResourceContentCollection("NodeTypeIcons",
                     typeof(GraphConfigurationExtensions).Assembly, "Icons")
+                // High-level subtree-copy operation. Relays NodeCopyDispatchRequest
+                // through the Templates/Import/NodeCopy script template via
+                // ScriptDispatch.RelayToScript so callers see request/response
+                // semantics while the work runs as an Activity (live progress,
+                // cancellation via RequestedStatus). Same shape as
+                // ExportDocumentRequest. The legacy CopyNodeRequest stays for
+                // single-node / move-internal paths.
+                .AddNodeCopyDispatchHandler()
                 .WithServices(services =>
                 {
                     // Register MeshNodeCompilationService as both concrete and interface

@@ -1,5 +1,7 @@
 @using System.Reactive.Linq
 @using System.Reactive.Threading.Tasks
+@using System.Text.Json
+@using MeshWeaver.Data
 @using MeshWeaver.Layout
 @using MeshWeaver.Markdown.Export.Configuration
 @using MeshWeaver.Markdown.Export.Messaging
@@ -171,30 +173,62 @@
             FooterOverride = string.IsNullOrWhiteSpace(_footer) ? null : _footer
         };
 
-        // Subscribe — no await on hub-touching observable.
+        // Two-step subscription per the just-start dispatch contract:
+        //   1. Observe the ExportDocumentResponse — handler returns immediately
+        //      with the activity path; no wait-for-terminal in the hub handler.
+        //   2. Subscribe to the activity stream, project to ActivityLog,
+        //      filter on terminal status, take(1), deserialize the rendered
+        //      bytes from ActivityLog.ReturnValue, trigger the browser download.
+        // Pure observable composition — no `await` on hub-touching streams.
         Hub.Observe(
                 new ExportDocumentRequest(SourcePath, options),
                 o => o.WithTarget(new MeshWeaver.Messaging.Address(SourcePath)))
-            .FirstAsync()
+            .Take(1)
+            .SelectMany(dispatch =>
+            {
+                var msg = dispatch.Message;
+                if (!string.IsNullOrEmpty(msg.Error))
+                    return Observable.Throw<ActivityLog>(new InvalidOperationException(msg.Error));
+                if (string.IsNullOrEmpty(msg.ActivityPath))
+                    return Observable.Throw<ActivityLog>(
+                        new InvalidOperationException("Export handler returned no activity path"));
+
+                return Hub.GetWorkspace()
+                    .GetMeshNodeStream(msg.ActivityPath)
+                    .Select(n => n?.Content as ActivityLog)
+                    .Where(log => log is not null && log.Status != ActivityStatus.Running)
+                    .Take(1)
+                    .Select(log => log!);
+            })
             .Subscribe(
-                response => _ = InvokeAsync(() => OnExportResponseAsync(response)),
+                terminal => _ = InvokeAsync(() => OnExportTerminalAsync(terminal)),
                 ex => _ = InvokeAsync(() => OnExportErrorAsync(ex.Message)));
     }
 
-    private async Task OnExportResponseAsync(IMessageDelivery<ExportDocumentResponse> response)
+    private async Task OnExportTerminalAsync(ActivityLog terminal)
     {
         try
         {
-            if (response?.Message is { } result && result.Content.Length > 0)
+            if (terminal.Status == ActivityStatus.Succeeded
+                && terminal.ReturnValue is { } el)
             {
-                using var ms = new MemoryStream(result.Content);
-                using var streamRef = new DotNetStreamReference(ms);
-                await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", result.FileName, streamRef);
-                _done = true;
+                var rendered = el.Deserialize<RenderedDocument>(Hub.JsonSerializerOptions);
+                if (rendered is { } r && r.Content.Length > 0)
+                {
+                    using var ms = new MemoryStream(r.Content);
+                    using var streamRef = new DotNetStreamReference(ms);
+                    await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", r.FileName, streamRef);
+                    _done = true;
+                }
+                else
+                {
+                    _error = "Export script returned no content.";
+                }
             }
             else
             {
-                _error = response?.Message?.Error ?? "Empty response from the export handler.";
+                var lastError = terminal.Messages.LastOrDefault(m => m.LogLevel >= Microsoft.Extensions.Logging.LogLevel.Warning)?.Message;
+                _error = lastError ?? $"Export {terminal.Status}";
             }
         }
         catch (Exception ex)

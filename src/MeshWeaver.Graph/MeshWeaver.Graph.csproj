@@ -12,6 +12,11 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Icons\**\*.*" />
+    <!-- Built-in import script templates seeded as Code MeshNodes via
+         GraphImportTemplates. Embed as resources so the .csx text travels
+         inside the assembly with no file-system lookup at runtime. -->
+    <EmbeddedResource Include="Templates\NodeCopy.csx" />
+    <EmbeddedResource Include="Templates\Mirror.csx" />
   </ItemGroup>
 
   <ItemGroup>

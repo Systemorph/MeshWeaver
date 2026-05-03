@@ -122,16 +122,36 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
 
         var delivery = await client.Observe(request, o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(cts.Token);
 
-        // The cast that used to throw InvalidCastException:
+        // The cast that used to throw InvalidCastException — start-ack still
+        // routes via the typed response, so this regression guard stays.
         delivery.Should().BeOfType<MessageDelivery<ExportDocumentResponse>>(
-            "response must deserialize to the concrete type â€” JsonElement fallback means the $type " +
+            "response must deserialize to the concrete type — JsonElement fallback means the $type " +
             "discriminator didn't match any registered type on the client hub");
 
-        var response = delivery.Message;
-        response.Error.Should().BeNull(response.Error);
-        response.Format.Should().Be(ExportFormat.Pdf);
-        response.Content.Should().NotBeNull().And.NotBeEmpty("PDF render should produce bytes");
-        response.MimeType.Should().Be("application/pdf");
+        var dispatch = delivery.Message;
+        dispatch.Error.Should().BeNull(dispatch.Error);
+        dispatch.Format.Should().Be(ExportFormat.Pdf);
+        dispatch.ActivityPath.Should().NotBeNullOrEmpty(
+            "the just-start dispatch returns the activity path — bytes flow via ActivityLog.ReturnValue");
+
+        // Two-step: subscribe to the activity stream and read the rendered bytes
+        // off ActivityLog.ReturnValue on terminal status. Pure observable
+        // composition, no per-step await on hub-touching streams.
+        var terminal = await client.GetWorkspace()
+            .GetMeshNodeStream(dispatch.ActivityPath)
+            .Select(n => n?.Content as ActivityLog)
+            .Where(log => log is not null && log.Status != ActivityStatus.Running)
+            .Take(1)
+            .ToTask(cts.Token);
+
+        terminal!.Status.Should().Be(ActivityStatus.Succeeded,
+            because: "the script should render the PDF. Messages: "
+                     + string.Join(" | ", terminal.Messages.Select(m => $"[{m.LogLevel}] {m.Message}")));
+        terminal.ReturnValue.Should().NotBeNull("the script writes RenderedDocument here");
+        var rendered = terminal.ReturnValue!.Value.Deserialize<RenderedDocument>(client.JsonSerializerOptions);
+        rendered!.Format.Should().Be(ExportFormat.Pdf);
+        rendered.Content.Should().NotBeNullOrEmpty("PDF render should produce bytes");
+        rendered.MimeType.Should().Be("application/pdf");
     }
 
     /// <summary>
@@ -286,14 +306,28 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
         var delivery = await client.Observe(request, o => o.WithTarget(new Address(nodePath))).FirstAsync().ToTask(cts.Token);
 
         delivery.Should().BeOfType<MessageDelivery<ExportDocumentResponse>>(
-            "response must deserialize to the concrete type â€” JsonElement fallback means the $type " +
+            "response must deserialize to the concrete type — JsonElement fallback means the $type " +
             "discriminator didn't match any registered type on the client hub");
 
-        var response = delivery.Message;
-        response.Error.Should().BeNull(response.Error);
-        response.Format.Should().Be(ExportFormat.Docx);
-        response.Content.Should().NotBeNull().And.NotBeEmpty("DOCX render should produce bytes");
-        response.MimeType.Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        var dispatch = delivery.Message;
+        dispatch.Error.Should().BeNull(dispatch.Error);
+        dispatch.Format.Should().Be(ExportFormat.Docx);
+        dispatch.ActivityPath.Should().NotBeNullOrEmpty();
+
+        var terminal = await client.GetWorkspace()
+            .GetMeshNodeStream(dispatch.ActivityPath)
+            .Select(n => n?.Content as ActivityLog)
+            .Where(log => log is not null && log.Status != ActivityStatus.Running)
+            .Take(1)
+            .ToTask(cts.Token);
+
+        terminal!.Status.Should().Be(ActivityStatus.Succeeded,
+            because: "the script should render the DOCX. Messages: "
+                     + string.Join(" | ", terminal.Messages.Select(m => $"[{m.LogLevel}] {m.Message}")));
+        var rendered = terminal.ReturnValue!.Value.Deserialize<RenderedDocument>(client.JsonSerializerOptions);
+        rendered!.Format.Should().Be(ExportFormat.Docx);
+        rendered.Content.Should().NotBeNullOrEmpty("DOCX render should produce bytes");
+        rendered.MimeType.Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     }
 }
 
