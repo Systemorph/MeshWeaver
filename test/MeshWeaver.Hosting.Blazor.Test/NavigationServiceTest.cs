@@ -116,16 +116,26 @@ public class NavigationServiceTest
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
 
+        // Set the URI so InitializeAsync's bootstrap (PublishPath) actually
+        // pushes a non-empty path through the subject — empty paths short-
+        // circuit in the production code, leaving the buffer empty and
+        // making Skip(1) below count zero on the only emission.
+        _navigationManager.SetUri("http://localhost/ACME");
+
         // Act
         await service.InitializeAsync();
         await service.InitializeAsync(); // Second call should be idempotent
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert - verify only one subscription by checking only one event fires
-        // .Skip(1) discards the cached value emitted by ReplaySubject(1) on subscribe.
+        // per location change. .Skip(1) discards the cached value emitted by
+        // ReplaySubject(1) on subscribe (now populated by the bootstrap above).
         var eventCount = 0;
         service.NavigationContext.Skip(1).Subscribe(_ => eventCount++);
 
-        _navigationManager.SimulateLocationChanged("http://localhost/ACME");
+        // Use a different path so DistinctUntilChanged doesn't collapse the
+        // emission with the bootstrap one.
+        _navigationManager.SimulateLocationChanged("http://localhost/ACME/Other");
 
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
@@ -214,7 +224,11 @@ public class NavigationServiceTest
         var service = CreateService();
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
+        // Set URI so InitializeAsync's bootstrap actually triggers ProcessLocationChange
+        // — empty paths short-circuit in production via PublishPath.
+        _navigationManager.SetUri("http://localhost/ACME");
         await service.InitializeAsync();
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         var previousContext = service.Context;
         previousContext.Should().NotBeNull();
@@ -464,6 +478,10 @@ public class NavigationServiceTest
                 new CreatableTypeInfo("ACME/Project/Story"),
                 new CreatableTypeInfo("ACME/Project/Todo")));
 
+        // Set URI so InitializeAsync triggers ProcessLocationChange
+        // (PublishPath skips empty initial paths in production).
+        _navigationManager.SetUri("http://localhost/ACME/Project");
+
         // Act
         await service.InitializeAsync();
         await Task.Delay(300, TestContext.Current.CancellationToken);
@@ -488,6 +506,10 @@ public class NavigationServiceTest
 
         _nodeTypeService.GetCreatableTypesAsync("ACME", Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerableWithDelay(new CreatableTypeInfo("ACME/Todo")));
+
+        // Set URI so InitializeAsync triggers ProcessLocationChange
+        // (PublishPath skips empty initial paths in production).
+        _navigationManager.SetUri("http://localhost/ACME");
 
         // Act
         await service.InitializeAsync();
@@ -550,9 +572,13 @@ public class NavigationServiceTest
         _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(threadNode)));
 
-        var ready = NextContext(service);
         await service.InitializeAsync();
-        await ready;
+        // The MockNavigationManager initializes at "http://localhost/" (empty
+        // relative path) and PublishPath("") returns early, so InitializeAsync's
+        // bootstrap is a no-op. Trigger the navigation explicitly via
+        // SimulateLocationChanged — same shape as the other passing tests.
+        _navigationManager.SimulateLocationChanged($"http://localhost/{SatellitePath}");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         service.CurrentNamespace.Should().Be(MainNode);
         service.Context!.Namespace.Should().Be(SatellitePath);
@@ -573,12 +599,18 @@ public class NavigationServiceTest
         var mainNode = new MeshNode("AIConsulting", "PartnerRe")
         {
             NodeType = "Group"
-            // MainNode defaults to Path â†’ "PartnerRe/AIConsulting"
+            // MainNode defaults to Path → "PartnerRe/AIConsulting"
         };
         _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(mainNode)));
 
         await service.InitializeAsync();
+        // The MockNavigationManager initializes at "http://localhost/" (empty
+        // relative path) and PublishPath("") returns early, so InitializeAsync's
+        // bootstrap is a no-op. Trigger the navigation explicitly — same shape
+        // as OnLocationChanged_ResolvesPath_CreatesNavigationContext above.
+        _navigationManager.SimulateLocationChanged("http://localhost/PartnerRe/AIConsulting");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         service.CurrentNamespace.Should().Be("PartnerRe/AIConsulting");
         service.Context!.PrimaryPath.Should().Be("PartnerRe/AIConsulting");
@@ -608,6 +640,10 @@ public class NavigationServiceTest
 
         CreatableTypesSnapshot? lastSnapshot = null;
         service.CreatableTypes.Subscribe(s => lastSnapshot = s);
+
+        // Set URI so InitializeAsync triggers ProcessLocationChange
+        // (PublishPath skips empty initial paths in production).
+        _navigationManager.SetUri("http://localhost/PartnerRe/AIConsulting/_Thread/abc-123");
 
         await service.InitializeAsync();
         await Task.Delay(150, TestContext.Current.CancellationToken);
