@@ -185,12 +185,17 @@ internal class SecurityService : ISecurityService
 
         // CombineLatest the user's scope-roles snapshot with the live
         // PartitionAccessPolicy map so a runtime-created policy participates
-        // in the cap/inheritance walk. Both observables are Replay(1).RefCount,
-        // so once both have emitted at least once the combination is hot.
+        // in the cap/inheritance walk. Both observables are Replay(1).RefCount;
+        // we deliberately don't StartWith the policy stream — emitting an empty
+        // snapshot ahead of the synced query's Initial would race the
+        // BreaksInheritance check (the first CombineLatest emission would
+        // skip every runtime policy, AccessControlPipeline's Take(1) would
+        // lock in the wrong answer, and a deny-by-policy would slip through).
+        // The synced query emits Initial on subscribe, so the first valid
+        // combined emission carries whatever policies exist at that instant.
         var enriched = GetUserScopeRolesStream(userId)
             .CombineLatest(
-                ObserveAllPolicies()
-                    .StartWith(ImmutableDictionary<string, PartitionAccessPolicy>.Empty),
+                ObserveAllPolicies(),
                 (snap, policies) => (snap.Granted, snap.Denied, RuntimePolicies: policies))
             .Timeout(TimeSpan.FromSeconds(2))
             .Catch<(ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
