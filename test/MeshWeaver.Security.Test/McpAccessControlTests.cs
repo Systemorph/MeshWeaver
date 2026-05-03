@@ -57,6 +57,12 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         {
             Name = $"Token for {userName}",
             NodeType = "ApiToken",
+            // Stamp MainNode = userId so SecurePersistence's IsSelfAccess shortcut
+            // grants the owning user read access on the validation round-trip.
+            // Without this, ValidateTokenRequest's `hub.GetMeshNode(self)` is
+            // checked against an unauthenticated context, fails the RLS read,
+            // and the validator returns "Token not found".
+            MainNode = userId,
             Content = new ApiToken
             {
                 TokenHash = hash,
@@ -65,6 +71,10 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
                 UserEmail = userId,
                 Label = "Test",
                 CreatedAt = DateTimeOffset.UtcNow,
+                // Roles must include Api so the API-token gate
+                // (SecurityService.GetEffectivePermissions's IsApiToken check)
+                // doesn't strip the user's permissions to None.
+                Roles = ["Editor"],
             }
         };
 

@@ -251,6 +251,13 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Editor", sharedPath))
             .FirstAsync().ToTask(TestTimeout);
 
+        // Wait for the runtime grant to surface in SecurityService's synced
+        // query before logging in — without this gate the subsequent thread
+        // create races the propagation and hits "Access denied: Create".
+        await Mesh.GetPermissionAsync(sharedPath, userId,
+            until: p => p.HasFlag(Permission.Update),
+            ct: TestTimeout);
+
         LoginAs(userId);
 
         try
