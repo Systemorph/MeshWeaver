@@ -50,7 +50,14 @@ internal class MeshNodeCompilationService(
     // Query expansion lives in CodeQueryResolver now so the NodeType Configuration
     // side menu can evaluate the *same* queries the compiler uses — the Sources /
     // Tests lists displayed in the UI are guaranteed to match the files compiled.
-    private readonly List<MetadataReference> _references = GetDefaultReferences();
+    //
+    // Default Roslyn references are process-wide: TPA list and the three additional
+    // assemblies don't change at runtime, and `MetadataReference.CreateFromFile`
+    // mmaps each DLL — repeating the work per-hub-singleton on a multi-hub test
+    // run wasted ~150ms × N hubs of cold disk I/O.
+    private static readonly Lazy<IReadOnlyList<MetadataReference>> _defaultReferences =
+        new(GetDefaultReferences, LazyThreadSafetyMode.ExecutionAndPublication);
+    private IReadOnlyList<MetadataReference> _references => _defaultReferences.Value;
 
     private static List<MetadataReference> GetDefaultReferences()
     {
