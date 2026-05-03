@@ -1,4 +1,6 @@
 using System.Text;
+using Azure.Core;
+using Azure.Identity;
 using MeshWeaver.Hosting.PostgreSql;
 using Npgsql;
 
@@ -50,16 +52,51 @@ internal static class SchemaHelpers
     }
 
     /// <summary>
-    /// Build a per-schema NpgsqlDataSource with <c>SearchPath = "{schema},public"</c> and pgvector
-    /// enabled — used for migrations that need to (re)create stored procedures inside a partition.
+    /// Build a per-schema NpgsqlDataSource with <c>SearchPath = "{schema},public"</c>,
+    /// pgvector enabled, and Azure AD password-provider wired when the connection
+    /// string targets an Azure-managed Postgres (host ends in
+    /// <c>.postgres.database.azure.com</c> AND password is empty).
+    ///
+    /// <para>Without the AAD provider, per-schema migrations on prod/test fail
+    /// with <c>28000: no pg_hba.conf entry for host … user "app"</c> because the
+    /// raw <c>NpgsqlDataSourceBuilder.Build()</c> attempts password auth with an
+    /// empty password against an SSL-required, AAD-only server. Aspire's
+    /// <c>AddAzureNpgsqlDataSource</c> wires this token provider on the *main*
+    /// runner connection — but every per-schema datasource we spin up here
+    /// needs the same hook or it falls back to anonymous password auth and dies.
+    /// Local Docker postgres (mode=local) uses username+password and is left
+    /// untouched.</para>
     /// </summary>
     public static NpgsqlDataSource BuildSchemaDataSource(string baseConnectionString, string schema, bool useVector = true)
     {
         var csb = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = $"{schema},public" };
         var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
         if (useVector) dsb.UseVector();
+
+        var isAzure = csb.Host?.EndsWith(".postgres.database.azure.com", StringComparison.OrdinalIgnoreCase) == true;
+        var hasPassword = !string.IsNullOrEmpty(csb.Password);
+        if (isAzure && !hasPassword)
+        {
+            dsb.UsePeriodicPasswordProvider(
+                async (_, ct) =>
+                {
+                    var token = await AzureCredential.GetTokenAsync(
+                        new TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]), ct);
+                    return token.Token;
+                },
+                successRefreshInterval: TimeSpan.FromMinutes(45),
+                failureRefreshInterval: TimeSpan.FromSeconds(30));
+        }
+
         return dsb.Build();
     }
+
+    /// <summary>
+    /// Shared <see cref="DefaultAzureCredential"/> reused across per-schema
+    /// password providers — avoids re-authenticating for every schema while a
+    /// migration walks dozens of partitions.
+    /// </summary>
+    private static readonly DefaultAzureCredential AzureCredential = new();
 
     /// <summary>Build the per-schema PostgreSqlStorageOptions for a partition migration.</summary>
     public static PostgreSqlStorageOptions BuildSchemaOptions(string baseConnectionString, string schema, int vectorDimensions)
