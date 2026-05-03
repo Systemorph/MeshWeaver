@@ -9,6 +9,8 @@
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <!-- HttpMeshStorageAdapter speaks MCP-HTTP to a remote MeshWeaver portal. -->
+    <PackageReference Include="ModelContextProtocol.Core" />
     <PackageReference Include="System.Reactive" />
   </ItemGroup>
   <ItemGroup>

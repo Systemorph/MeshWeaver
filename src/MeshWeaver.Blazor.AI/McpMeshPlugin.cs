@@ -3,8 +3,10 @@ using System.Net;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
+using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
+using MeshWeaver.Hosting.Persistence.Http;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -40,6 +42,7 @@ namespace MeshWeaver.Blazor.AI;
 public class McpMeshPlugin
 {
     private readonly MeshOperations ops;
+    private readonly IMessageHub sessionHub;
     private readonly ILogger<McpMeshPlugin> logger;
     private readonly string baseUrl;
 
@@ -76,7 +79,7 @@ public class McpMeshPlugin
         // (see ActivityNodeType.HubConfiguration + AddKernelSubHubHandlers).
         // Replies route through the standard MeshNode chain to portal/mcp-…
         // — same routing every other MCP tool already uses (Get, Search, …).
-        var sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, routingService, logger);
+        sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, routingService, logger);
 
         ops = new MeshOperations(sessionHub);
     }
@@ -276,6 +279,84 @@ For the full source-discovery + matched-Code-paths + Roslyn trace, `get @<activi
         [Description("Path to an executable Code node (e.g., @Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Script/ImportLargeClaims). Must be `IsExecutable=true`.")] string path,
         [Description("Timeout in seconds. Default 120.")] int timeoutSeconds = 120)
         => ops.ExecuteScript(path, timeoutSeconds).FirstAsync().ToTask();
+
+    [McpServerTool]
+    [Description(@"Mirror a subtree from THIS instance up to a remote MeshWeaver portal. Recursively reads every node under `sourcePath` (along with partition data) from the local persistence and creates/updates them on the remote. Authentication is the remote's standard ApiToken Bearer flow — issue a token on the destination once, paste it here.
+
+Use cases:
+  • Promote local development content to prod (`remoteBaseUrl=https://memex.meshweaver.cloud`).
+  • Stage a snapshot to a peer instance for review.
+
+Returns a JSON summary: `{status, direction:'Push', sourcePath, targetPath, nodesImported, nodesSkipped, nodesRemoved, partitionsImported, elapsedMs}`. With `dryRun=true` returns `{status:'DryRun', nodesScanned, paths:[...]}` so you can preview before writing.
+
+Network: this instance must have outbound HTTPS reach to `remoteBaseUrl`. Prod can't reach localhost — for the reverse direction (prod→local) you need a tunnel (Cloudflare / ngrok).")]
+    public Task<string> MirrorToRemote(
+        [Description("Remote portal base URL, e.g. 'https://memex.meshweaver.cloud'.")] string remoteBaseUrl,
+        [Description("ApiToken issued on the REMOTE portal — pastes as `mw_…`.")] string remoteToken,
+        [Description("Local path whose subtree to push (e.g. 'rbuergi/Story').")] string sourcePath,
+        [Description("Optional remote path to write under. Defaults to sourcePath.")] string? targetPath = null,
+        [Description("If true, delete remote nodes that don't exist locally (DESTRUCTIVE).")] bool removeMissing = false,
+        [Description("If true, only enumerate what would be touched without writing.")] bool dryRun = false)
+        => new MirrorOperations(sessionHub)
+            .Push(new MirrorRequest
+            {
+                RemoteBaseUrl = remoteBaseUrl,
+                RemoteToken = remoteToken,
+                SourcePath = sourcePath,
+                TargetPath = targetPath,
+                RemoveMissing = removeMissing,
+                DryRun = dryRun,
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogError(ex, "MirrorToRemote failed for {Source} → {Url}", sourcePath, remoteBaseUrl);
+                return Observable.Return(new MirrorResult
+                {
+                    Status = "Error",
+                    Direction = "Push",
+                    SourcePath = sourcePath,
+                    TargetPath = targetPath ?? sourcePath,
+                    Error = ex.Message,
+                });
+            })
+            .Select(r => JsonSerializer.Serialize(r, sessionHub.JsonSerializerOptions))
+            .FirstAsync().ToTask();
+
+    [McpServerTool]
+    [Description(@"Mirror a subtree from a remote MeshWeaver portal DOWN to THIS instance. The local instance pulls from `remoteBaseUrl` over HTTPS — the remote must be reachable from here. Use to seed dev with prod data, or to mirror Doc/Architecture markdown into a partition you can edit.
+
+Returns the same JSON summary shape as MirrorToRemote, with direction='Pull'. Same dry-run support.")]
+    public Task<string> PullFromRemote(
+        [Description("Remote portal base URL, e.g. 'https://memex.meshweaver.cloud'.")] string remoteBaseUrl,
+        [Description("ApiToken issued on the REMOTE portal — pastes as `mw_…`.")] string remoteToken,
+        [Description("Remote path whose subtree to pull (e.g. 'Doc/Architecture').")] string sourcePath,
+        [Description("Optional local path to write under. Defaults to sourcePath.")] string? targetPath = null,
+        [Description("If true, delete LOCAL nodes that don't exist on the remote (DESTRUCTIVE).")] bool removeMissing = false,
+        [Description("If true, only enumerate what would be touched without writing.")] bool dryRun = false)
+        => new MirrorOperations(sessionHub)
+            .Pull(new MirrorRequest
+            {
+                RemoteBaseUrl = remoteBaseUrl,
+                RemoteToken = remoteToken,
+                SourcePath = sourcePath,
+                TargetPath = targetPath,
+                RemoveMissing = removeMissing,
+                DryRun = dryRun,
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogError(ex, "PullFromRemote failed for {Source} ← {Url}", sourcePath, remoteBaseUrl);
+                return Observable.Return(new MirrorResult
+                {
+                    Status = "Error",
+                    Direction = "Pull",
+                    SourcePath = sourcePath,
+                    TargetPath = targetPath ?? sourcePath,
+                    Error = ex.Message,
+                });
+            })
+            .Select(r => JsonSerializer.Serialize(r, sessionHub.JsonSerializerOptions))
+            .FirstAsync().ToTask();
 
     [McpServerTool]
     [Description(@"Returns an interactive rendering of a layout area as an MCP-UI embedded resource. Hosts that support MCP-UI (Claude.ai web/desktop, ChatGPT Apps) render this inline as an iframe widget; text-only hosts see the URL as a fallback.
