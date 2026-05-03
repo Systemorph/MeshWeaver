@@ -71,6 +71,13 @@ internal class SecurityService : ISecurityService
     private IObservable<MeshNode[]>? _allNodesShared;
     private readonly object _allNodesLock = new();
 
+    // Parallel synced-query for PartitionAccessPolicy nodes — runtime policies
+    // (e.g. tests that CreateNode an AssignmentNodeFactory.Policy mid-test) need
+    // to participate in the cap/inheritance chain alongside the static seeds in
+    // _staticPolicies. Replay(1).RefCount as for AccessAssignments.
+    private IObservable<ImmutableDictionary<string, PartitionAccessPolicy>>? _allPoliciesShared;
+    private readonly object _allPoliciesLock = new();
+
     public SecurityService(
         AccessService accessService,
         IMessageHub hub,
@@ -176,20 +183,31 @@ internal class SecurityService : ISecurityService
         var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(userId);
         var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, staticOnlyDeniedScopeRoles);
 
+        // CombineLatest the user's scope-roles snapshot with the live
+        // PartitionAccessPolicy map so a runtime-created policy participates
+        // in the cap/inheritance walk. Both observables are Replay(1).RefCount,
+        // so once both have emitted at least once the combination is hot.
         var enriched = GetUserScopeRolesStream(userId)
+            .CombineLatest(
+                ObserveAllPolicies()
+                    .StartWith(ImmutableDictionary<string, PartitionAccessPolicy>.Empty),
+                (snap, policies) => (snap.Granted, snap.Denied, RuntimePolicies: policies))
             .Timeout(TimeSpan.FromSeconds(2))
             .Catch<(ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
-                ImmutableDictionary<string, ImmutableHashSet<string>> Denied), Exception>(ex =>
+                ImmutableDictionary<string, ImmutableHashSet<string>> Denied,
+                ImmutableDictionary<string, PartitionAccessPolicy> RuntimePolicies), Exception>(ex =>
             {
                 _logger.LogWarning(ex,
                     "GetUserScopeRolesStream timed out for {UserId} — staying with claim + " +
                     "static seeds. AccessAssignment grants from the synced query won't apply " +
                     "until the underlying SyncedQueryRegistry produces a first emission.",
                     userId);
-                return Observable.Return((Granted: ImmutableDictionary<string, ImmutableHashSet<string>>.Empty,
-                    Denied: ImmutableDictionary<string, ImmutableHashSet<string>>.Empty));
+                return Observable.Return((
+                    Granted: ImmutableDictionary<string, ImmutableHashSet<string>>.Empty,
+                    Denied: ImmutableDictionary<string, ImmutableHashSet<string>>.Empty,
+                    RuntimePolicies: ImmutableDictionary<string, PartitionAccessPolicy>.Empty));
             })
-            .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, snap.Denied));
+            .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, snap.Denied, snap.RuntimePolicies));
 
         // Only emit the fast snapshot when it actually grants something —
         // otherwise FirstAsync() callers (AccessControlPipeline does Take(1))
@@ -342,7 +360,8 @@ internal class SecurityService : ISecurityService
         ImmutableDictionary<string, ImmutableHashSet<string>> scopeToRoles,
         string nodePath,
         string userId,
-        ImmutableDictionary<string, ImmutableHashSet<string>>? scopeToDeniedRoles = null)
+        ImmutableDictionary<string, ImmutableHashSet<string>>? scopeToDeniedRoles = null,
+        ImmutableDictionary<string, PartitionAccessPolicy>? runtimePolicies = null)
     {
         var roleIds = ImmutableHashSet<string>.Empty;
         var permissionCap = Permission.All;
@@ -350,6 +369,16 @@ internal class SecurityService : ISecurityService
                                && userId != WellKnownUsers.Public;
         foreach (var scope in GetScopeHierarchy(nodePath))
         {
+            // Merge static + runtime policy at this scope. Runtime overrides
+            // static when both exist (test seeds via AssignmentNodeFactory.Policy
+            // do a runtime CreateNode that should beat any earlier static seed
+            // at the same namespace).
+            PartitionAccessPolicy? policy = null;
+            if (runtimePolicies is not null && runtimePolicies.TryGetValue(scope, out var rp))
+                policy = rp;
+            else if (_staticPolicies.TryGetValue(scope, out var sp))
+                policy = sp;
+
             // BreaksInheritance: the policy at this scope discards everything
             // that was inherited from ancestors — both the role grants AND any
             // partition-level cap that was being narrowed on the way down.
@@ -358,8 +387,7 @@ internal class SecurityService : ISecurityService
             // land. The flag is set in addition to the per-permission switches,
             // so the same policy can still cap the local roles via the
             // GetPermissionCap call further down.
-            if (_staticPolicies.TryGetValue(scope, out var policy)
-                && policy.BreaksInheritance)
+            if (policy is not null && policy.BreaksInheritance)
             {
                 roleIds = ImmutableHashSet<string>.Empty;
                 permissionCap = Permission.All;
@@ -502,6 +530,45 @@ internal class SecurityService : ISecurityService
     /// <c>RlsNodeValidator.Validate</c> short-circuits to <c>Valid</c> for
     /// that identity. No re-entrant call back into this method.</para>
     /// </summary>
+    /// <summary>
+    /// Live <see cref="PartitionAccessPolicy"/> map keyed by namespace, drawn
+    /// from the same workspace synced-query mechanism that backs the
+    /// AccessAssignment surface. Required so a runtime
+    /// <see cref="AssignmentNodeFactory.Policy"/> create participates in the
+    /// scope-walk in <see cref="ComputeRoleState"/> alongside the static seeds
+    /// loaded into <c>_staticPolicies</c>.
+    /// </summary>
+    private IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> ObserveAllPolicies()
+    {
+        if (_allPoliciesShared != null)
+            return _allPoliciesShared;
+        lock (_allPoliciesLock)
+        {
+            if (_allPoliciesShared != null)
+                return _allPoliciesShared;
+            var workspace = _hub.GetWorkspace();
+            _allPoliciesShared = workspace
+                .GetQuery("$security-partition-policies",
+                    $"nodeType:PartitionAccessPolicy scope:subtree")
+                .Select(arr =>
+                {
+                    var result = ImmutableDictionary<string, PartitionAccessPolicy>.Empty;
+                    foreach (var node in arr)
+                    {
+                        if (node.Id != "_Policy") continue;
+                        var policy = node.Content as PartitionAccessPolicy
+                                     ?? DeserializePolicy(node);
+                        if (policy is null) continue;
+                        result = result.SetItem(node.Namespace ?? "", policy);
+                    }
+                    return result;
+                })
+                .Replay(1)
+                .RefCount();
+            return _allPoliciesShared;
+        }
+    }
+
     private IObservable<MeshNode[]> ObserveAllMeshNodes()
     {
         if (_allNodesShared != null)

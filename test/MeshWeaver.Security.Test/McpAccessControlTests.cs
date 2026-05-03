@@ -184,22 +184,28 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         // (who fails the AccessAssignment Create access check).
         accessService.SetCircuitContext(null);
 
-        // Wait for the runtime AccessAssignments to propagate through the
-        // synced AccessAssignment query that SecurityService rides. Without
-        // this gate, plugin.Get reads the cached snapshot from before any
-        // assignment landed → DENY → "Not found" — racing the synced query.
-        // Probe both per-user grants (Viewer at SharedOrg for User1, Editor
-        // at SharedOrg/Confidential for User2 — the BreaksInheritance scope)
-        // and bail when both surface at least Read; that's enough to know
-        // the entire batch has landed.
+        // Wait for the runtime AccessAssignments AND the BreaksInheritance
+        // policy on SharedOrg/Confidential to propagate through the synced
+        // queries that SecurityService rides. We probe THREE signals:
+        //   1. User1 has Read at SharedOrg (Viewer landed)
+        //   2. User2 has Update at SharedOrg/Confidential (Editor re-grant +
+        //      policy break landed)
+        //   3. User1 does NOT have Read at SharedOrg/Confidential — i.e.,
+        //      BreaksInheritance has actually flipped, dropping User1's
+        //      inherited Viewer. Without (3), the test can race ahead while
+        //      the policy synced query still has the empty initial emission,
+        //      and User1 ends up reading Confidential through inheritance.
         var sec = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var waitUser1 = sec.GetEffectivePermissions("SharedOrg", User1)
+        var waitUser1Read = sec.GetEffectivePermissions("SharedOrg", User1)
             .Where(p => p.HasFlag(Permission.Read))
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
-        var waitUser2 = sec.GetEffectivePermissions("SharedOrg/Confidential", User2)
+        var waitUser2Update = sec.GetEffectivePermissions("SharedOrg/Confidential", User2)
             .Where(p => p.HasFlag(Permission.Update))
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
-        await Task.WhenAll(waitUser1, waitUser2);
+        var waitBreakActive = sec.GetEffectivePermissions("SharedOrg/Confidential", User1)
+            .Where(p => !p.HasFlag(Permission.Read))
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
+        await Task.WhenAll(waitUser1Read, waitUser2Update, waitBreakActive);
     }
 
     [Fact(Timeout = 30000)]
