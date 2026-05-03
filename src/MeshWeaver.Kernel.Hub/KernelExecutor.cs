@@ -93,10 +93,17 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
 
         Execute(msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token)
             .Subscribe(
-                _ =>
+                returnValue =>
                 {
                     ClearCancellationIf(cts);
-                    activityLogger.Complete(ActivityStatus.Succeeded);
+                    // Capture the script's return value as JsonElement on the
+                    // activity's terminal snapshot so handlers that triggered
+                    // the script (e.g. ExportDocumentHandler) can deserialize
+                    // it without a side-channel MeshNode.
+                    JsonElement? returnElement = returnValue is null
+                        ? null
+                        : JsonSerializer.SerializeToElement(returnValue, hub.JsonSerializerOptions);
+                    activityLogger.Complete(ActivityStatus.Succeeded, returnElement);
                     hub.Post(new SubmitCodeResponse(msg.Id, true), o => o.ResponseFor(request));
                 },
                 ex =>
@@ -143,7 +150,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// other exceptions render an inline error control. The lock is always released
     /// via <see cref="Observable.Finally{TSource}"/>.
     /// </summary>
-    private IObservable<Unit> Execute(
+    private IObservable<object?> Execute(
         string code,
         string viewId,
         IReadOnlyDictionary<string, JsonElement> inputs,
@@ -157,17 +164,17 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 return Observable.FromAsync(t => ResolveNuGetReferencesAsync(code, t))
                     .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, ct));
             })
-            .Catch<Unit, Exception>(ex =>
+            .Catch<object?, Exception>(ex =>
             {
-                if (ex is OperationCanceledException) return Observable.Throw<Unit>(ex);
+                if (ex is OperationCanceledException) return Observable.Throw<object?>(ex);
                 if (ex is CompilationErrorException compEx)
                 {
                     var msg = string.Join("\n", compEx.Diagnostics.Select(d => d.ToString()));
                     UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{msg}"));
-                    return Observable.Throw<Unit>(new ScriptExecutionException(msg, compEx));
+                    return Observable.Throw<object?>(new ScriptExecutionException(msg, compEx));
                 }
                 UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{ex.Message}"));
-                return Observable.Throw<Unit>(ex);
+                return Observable.Throw<object?>(ex);
             })
             .Finally(() => executionLock.Release());
     }
@@ -176,9 +183,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// One Roslyn submission inside an active stdout-capture scope. Splits out
     /// from <see cref="Execute"/> so <see cref="Observable.Using{TResult, TResource}"/>
     /// can scope the <see cref="LoggerTextWriter"/> + <see cref="CapturingTextWriter"/>
-    /// pair to the lifetime of the script run.
+    /// pair to the lifetime of the script run. Emits the script's
+    /// <c>ReturnValue</c> (possibly null) so the caller can publish it on the
+    /// activity log's terminal snapshot.
     /// </summary>
-    private IObservable<Unit> RunOnePass(
+    private IObservable<object?> RunOnePass(
         string cleaned,
         string viewId,
         ILogger scriptOutputLogger,
@@ -199,7 +208,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             scope => Observable.FromAsync(t => scriptState is null
                     ? CSharpScript.RunAsync(cleaned, scriptOptions, scriptGlobals, typeof(MeshScriptGlobals), t)
                     : scriptState.ContinueWithAsync(cleaned, scriptOptions, t))
-                .Do(state =>
+                .Select(state =>
                 {
                     scriptState = state;
                     scope.StdoutPipe.Flush();
@@ -208,8 +217,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         UpdateView(viewId, state.ReturnValue);
                         scriptOutputLogger.LogInformation("{Value}", state.ReturnValue.ToString() ?? "");
                     }
-                })
-                .Select(_ => Unit.Default));
+                    return state.ReturnValue;
+                }));
     }
 
     private sealed class StdoutScope(LoggerTextWriter stdoutPipe, IDisposable capture) : IDisposable
@@ -261,6 +270,17 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             if (asm.IsDynamic) continue;
             if (string.IsNullOrEmpty(asm.Location)) continue;
             refs.Add(asm);
+        }
+
+        // Modules that ship script templates (export, import, …) register their
+        // own assembly via DI so it's guaranteed in the references set even if it
+        // hasn't been touched yet at AppDomain scan time. Each module pushes one
+        // <see cref="KernelScriptAssembly"/> singleton (or singletons) and we
+        // enumerate them here.
+        foreach (var contrib in publicHub.ServiceProvider
+                     .GetServices<KernelScriptAssembly>())
+        {
+            refs.Add(contrib.Assembly);
         }
 
         scriptOptions = ScriptOptions.Default

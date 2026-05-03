@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.ShortGuid;
 
@@ -15,6 +16,16 @@ public record ActivityLog(string Category)
     public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
     public ActivityStatus Status { get; init; }
+
+    /// <summary>
+    /// Optional JSON-encoded return value of the work that produced this activity.
+    /// For script-templated operations (export, import, …) the kernel writes the
+    /// script's <c>return</c> value here on terminal status so request handlers
+    /// that triggered the activity can deserialize the result without a side-channel
+    /// MeshNode. Null while the activity is running and for activities that have
+    /// no return value (e.g. fire-and-forget jobs).
+    /// </summary>
+    public JsonElement? ReturnValue { get; init; }
 
     /// <summary>
     /// The status the user (or an automated control plane) is requesting the

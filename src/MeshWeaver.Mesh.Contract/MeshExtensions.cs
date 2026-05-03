@@ -44,6 +44,8 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(CopyNodeResponse), nameof(CopyNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeCopyRejectionReason), nameof(NodeCopyRejectionReason));
         config.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
+        config.TypeRegistry.WithType(typeof(ExecuteScriptRequest), nameof(ExecuteScriptRequest));
+        config.TypeRegistry.WithType(typeof(ExecuteScriptResponse), nameof(ExecuteScriptResponse));
 
         // Per-node pre-flight delete validation. Posted by HandleDeleteNodeRequest to each
         // node in the subtree. Owning hub runs local INodeValidators + domain rules.

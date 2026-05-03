@@ -1,14 +1,8 @@
-using System.Reactive;
-using System.Reactive.Linq;
-using MeshWeaver.Data;
-using MeshWeaver.Markdown.Export.Ast;
-using MeshWeaver.Markdown.Export.Branding;
+using System.Collections.Immutable;
+using System.Text.Json;
 using MeshWeaver.Markdown.Export.Configuration;
-using MeshWeaver.Markdown.Export.Docx;
 using MeshWeaver.Markdown.Export.Messaging;
-using MeshWeaver.Markdown.Export.Pdf;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -16,9 +10,18 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Markdown.Export.Handlers;
 
 /// <summary>
-/// Handles <see cref="ExportDocumentRequest"/> by loading the source markdown (and optional descendants),
-/// resolving branding, building the document model, and running the appropriate renderer.
-/// Sync handler — composes via <c>IObservable</c> + <c>Subscribe</c>; no <c>await</c>.
+/// Handles <see cref="ExportDocumentRequest"/> by relaying it onto the
+/// script-templated export pipeline. The handler builds an
+/// <see cref="ExecuteScriptRequest"/> with caller-supplied
+/// <see cref="ExecuteScriptRequest.Inputs"/>, dispatches it at the matching
+/// Code template (<c>Templates/Export/Pdf</c> or <c>Templates/Export/Docx</c>),
+/// subscribes to the resulting activity stream, and posts the rendered bytes
+/// back as an <see cref="ExportDocumentResponse"/> when the activity completes.
+///
+/// <para>Pre-existing callers (Blazor view, Orleans test, …) keep firing
+/// <see cref="ExportDocumentRequest"/> and reading bytes off the response —
+/// the migration to script-driven execution is internal. See
+/// <c>Doc/Architecture/ActivityControlPlane.md</c> → "Operations as scripts".</para>
 /// </summary>
 public static class ExportDocumentHandler
 {
@@ -37,122 +40,62 @@ public static class ExportDocumentHandler
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(ExportDocumentHandler).FullName!);
         var request = delivery.Message;
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var brandingResolver = hub.ServiceProvider.GetRequiredService<BrandingResolver>();
+        var jsonOptions = hub.JsonSerializerOptions;
 
-        // Read root → resolve branding + collect descendants in parallel → build → respond.
-        // Each step in the chain is a Subscribe callback; the handler returns synchronously.
-        // Root read is one-shot — GetDataRequest, not a SubscribeRequest+unsubscribe.
-        hub.GetMeshNode(request.SourcePath, TimeSpan.FromSeconds(15))
-            .SelectMany(rootNode =>
-            {
-                if (rootNode is null)
-                {
-                    hub.Post(new ExportDocumentResponse(
-                            request.Options.Format, "", "", Array.Empty<byte>(),
-                            Error: $"Source node not found: {request.SourcePath}"),
-                        o => o.ResponseFor(delivery));
-                    return Observable.Empty<Unit>();
-                }
+        var inputs = BuildInputs(request, jsonOptions);
+        var templatePath = ResolveTemplatePath(request.Options.Format);
 
-                var title = request.Options.Title ?? rootNode.Name ?? rootNode.Id;
-
-                var brandingObs = brandingResolver.Resolve(request.Options.BrandNodePath);
-
-                var chaptersObs = CollectChapters(meshService, request, rootNode, title);
-
-                return brandingObs.Zip(chaptersObs,
-                    (branding, chapters) => RenderAndPost(hub, delivery, request, title, chapters, branding));
-            })
-            .Subscribe(
-                _ => { },
-                ex =>
-                {
-                    logger.LogError(ex, "Export failed for {Path}", request.SourcePath);
-                    hub.Post(new ExportDocumentResponse(
-                            request.Options.Format, "", "", Array.Empty<byte>(),
-                            Error: ex.Message),
-                        o => o.ResponseFor(delivery));
-                });
-
-        return delivery.Processed();
+        return ScriptDispatch.RelayToScript<ExportDocumentRequest, ExportDocumentResponse>(
+            hub,
+            delivery,
+            templatePath,
+            inputs,
+            mapSuccess: returnValue => DeserializeResponse(returnValue, request, jsonOptions),
+            mapFailure: reason => new ExportDocumentResponse(
+                request.Options.Format, "", "", [], Error: reason),
+            logger: logger);
     }
 
-    private static IObservable<List<(string, string)>> CollectChapters(
-        IMeshService meshService, ExportDocumentRequest request, MeshNode rootNode, string title) =>
-        Observable.FromAsync(async () =>
-        {
-            var chapters = new List<(string, string)> { (title, ExtractMarkdown(rootNode)) };
-            if (!request.Options.IncludeChildren)
-                return chapters;
+    private static ImmutableDictionary<string, JsonElement> BuildInputs(
+        ExportDocumentRequest request, JsonSerializerOptions jsonOptions)
+    {
+        var builder = ImmutableDictionary.CreateBuilder<string, JsonElement>();
+        builder["sourcePath"] = JsonSerializer.SerializeToElement(request.SourcePath, jsonOptions);
+        builder["options"] = JsonSerializer.SerializeToElement(request.Options, jsonOptions);
+        if (!string.IsNullOrEmpty(request.Options.Title))
+            builder["title"] = JsonSerializer.SerializeToElement(request.Options.Title, jsonOptions);
+        if (!string.IsNullOrEmpty(request.Options.BrandNodePath))
+            builder["brandNodePath"] = JsonSerializer.SerializeToElement(request.Options.BrandNodePath, jsonOptions);
+        return builder.ToImmutable();
+    }
 
-            var maxDepth = request.Options.MaxDepth;
-            var rootDepth = request.SourcePath.Count(c => c == '/');
-            await foreach (var desc in meshService.QueryAsync<MeshNode>(
-                $"path:{request.SourcePath} scope:descendants"))
-            {
-                if (maxDepth > 0)
-                {
-                    var depth = desc.Path.Count(c => c == '/') - rootDepth;
-                    if (depth > maxDepth) continue;
-                }
-                var md = ExtractMarkdown(desc);
-                if (!string.IsNullOrWhiteSpace(md))
-                    chapters.Add((desc.Name ?? desc.Id, md));
-            }
-            return chapters;
-        });
+    private static string ResolveTemplatePath(ExportFormat format) => format switch
+    {
+        ExportFormat.Pdf => $"{MarkdownExportTemplates.TemplatesNamespace}/{MarkdownExportTemplates.ExportPdfId}",
+        ExportFormat.Docx => $"{MarkdownExportTemplates.TemplatesNamespace}/{MarkdownExportTemplates.ExportDocxId}",
+        _ => throw new NotSupportedException($"Unsupported format {format}")
+    };
 
-    private static Unit RenderAndPost(
-        IMessageHub hub,
-        IMessageDelivery<ExportDocumentRequest> delivery,
+    private static ExportDocumentResponse DeserializeResponse(
+        JsonElement? returnValue,
         ExportDocumentRequest request,
-        string title,
-        IReadOnlyList<(string, string)> chapters,
-        BrandingOptions branding)
+        JsonSerializerOptions jsonOptions)
     {
-        var document = new DocumentBuilder().Build(title, chapters, request.Options, branding);
-
-        byte[] bytes;
-        string mime;
-        string extension;
-        switch (request.Options.Format)
+        if (returnValue is { } el && el.ValueKind == JsonValueKind.Object)
         {
-            case ExportFormat.Pdf:
-                bytes = new PdfDocumentRenderer().Render(document);
-                mime = "application/pdf";
-                extension = "pdf";
-                break;
-            case ExportFormat.Docx:
-                bytes = new DocxDocumentRenderer().Render(document);
-                mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-                extension = "docx";
-                break;
-            default:
-                throw new NotSupportedException($"Unsupported format {request.Options.Format}");
+            try
+            {
+                var deserialized = el.Deserialize<ExportDocumentResponse>(jsonOptions);
+                if (deserialized is not null && deserialized.Content.Length > 0)
+                    return deserialized;
+            }
+            catch
+            {
+                // Fall through to a structured "no content" failure response.
+            }
         }
-
-        var fileName = $"{Sanitize(title)}.{extension}";
-        hub.Post(new ExportDocumentResponse(request.Options.Format, fileName, mime, bytes),
-            o => o.ResponseFor(delivery));
-        return Unit.Default;
-    }
-
-    private static string ExtractMarkdown(MeshNode node)
-    {
-        if (node.Content is MeshWeaver.Markdown.MarkdownContent mc)
-            return mc.Content ?? "";
-        if (node.Content is string s) return s;
-        return "";
-    }
-
-    private static string Sanitize(string s)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var sb = new System.Text.StringBuilder();
-        foreach (var c in s)
-            sb.Append(invalid.Contains(c) ? '_' : c);
-        var name = sb.ToString().Trim();
-        return string.IsNullOrEmpty(name) ? "Document" : name;
+        return new ExportDocumentResponse(
+            request.Options.Format, "", "", [],
+            Error: "Export script returned no content");
     }
 }

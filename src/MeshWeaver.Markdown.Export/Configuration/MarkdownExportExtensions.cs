@@ -85,7 +85,21 @@ public static class MarkdownExportExtensions
         builder.ConfigureServices(services => services
             .AddSingleton(cfg)
             .AddTransient<ExportTemplateResolver>()
-            .AddTransient<BrandingResolver>());
+            .AddTransient<BrandingResolver>()
+            // Make this assembly visible to kernel scripts. Without this the
+            // export template .csx files can't resolve `using MeshWeaver.Markdown.Export.*`
+            // when AppDomain hasn't eagerly loaded the assembly before the
+            // first script run. See KernelScriptAssembly.
+            .AddSingleton(new MeshWeaver.Kernel.Hub.KernelScriptAssembly(
+                typeof(MarkdownExportTemplates).Assembly)));
+
+        // Seed the built-in PDF/DOCX template Code MeshNodes at
+        // Templates/Export/{Pdf,Docx}. Layout areas drive export by posting
+        // ExecuteScriptRequest at these nodes — the kernel runs the embedded
+        // .csx with caller-supplied Inputs and writes progress / output to an
+        // Activity in the caller's home. See Doc/Architecture/ActivityControlPlane.md
+        // → "Operations as scripts". Stateless static helper, no DI provider.
+        builder.AddMeshNodes(MarkdownExportTemplates.GetStaticNodes());
 
         // Menu items, layout views, and the export request handler must live on the
         // node hubs (one per Markdown node) — that's where layout rendering runs and where

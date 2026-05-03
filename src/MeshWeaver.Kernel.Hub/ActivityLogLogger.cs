@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -59,15 +60,18 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
 
     /// <summary>
     /// Finalise the activity log with <paramref name="status"/> and flush a last
-    /// update so subscribers see the terminal state.
+    /// update so subscribers see the terminal state. Optionally records the
+    /// script's <paramref name="returnValue"/> on the activity content so request
+    /// handlers that triggered the script (e.g. <c>ExportDocumentHandler</c>) can
+    /// deserialize it on terminal status without a side-channel MeshNode.
     /// </summary>
-    public void Complete(ActivityStatus status)
+    public void Complete(ActivityStatus status, JsonElement? returnValue = null)
     {
         if (Interlocked.Exchange(ref _completed, 1) != 0) return;
-        PublishSnapshot(status, finish: true);
+        PublishSnapshot(status, finish: true, returnValue);
     }
 
-    private void PublishSnapshot(ActivityStatus status, bool finish)
+    private void PublishSnapshot(ActivityStatus status, bool finish, JsonElement? returnValue = null)
     {
         ImmutableList<LogMessage> snapshot;
         lock (_lock) { snapshot = _messages; }
@@ -82,7 +86,8 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
             {
                 Messages = snapshot,
                 Status = status,
-                End = finish ? DateTime.UtcNow : null
+                End = finish ? DateTime.UtcNow : null,
+                ReturnValue = returnValue
             };
 
             var segments = activityLogPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
