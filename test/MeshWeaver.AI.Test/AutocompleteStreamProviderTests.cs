@@ -232,9 +232,10 @@ public class AutocompleteStreamProviderTests
     // ──────────────────────── Test doubles ────────────────────────
 
     /// <summary>
-    /// Provider whose <c>GetItemsAsync</c> yields whatever items the test pushes via
-    /// <see cref="Emit"/>, and completes when the test calls <see cref="Complete"/>.
-    /// Uses a <see cref="Subject{T}"/> as the backing channel.
+    /// Provider whose <c>GetItems</c> observable forwards everything the test
+    /// pushes via <see cref="Emit"/>, and completes when the test calls
+    /// <see cref="Complete"/>. The backing <see cref="Subject{T}"/> IS the
+    /// observable — no async-enumerable bridge needed.
     /// </summary>
     private sealed class ScriptedProvider : IAutocompleteProvider
     {
@@ -243,46 +244,15 @@ public class AutocompleteStreamProviderTests
         public void Emit(AutocompleteItem item) => subject.OnNext(item);
         public void Complete() => subject.OnCompleted();
 
-        public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-            string query, string? contextPath,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            // Buffer subject emissions into the IAsyncEnumerable consumer until completion.
-            var queue = new System.Collections.Concurrent.BlockingCollection<AutocompleteItem>();
-            var done = new TaskCompletionSource();
-
-            using var sub = subject.Subscribe(
-                item =>
-                {
-                    // Tolerate the consumer's CancellationToken having fired (downstream
-                    // disposed) — discarding the item is the right behavior in that case.
-                    try { queue.Add(item, ct); }
-                    catch (OperationCanceledException) { }
-                    catch (InvalidOperationException) { /* CompleteAdding called */ }
-                },
-                ex => { done.TrySetException(ex); queue.CompleteAdding(); },
-                () => { done.TrySetResult(); queue.CompleteAdding(); });
-
-            await Task.Yield();
-            foreach (var item in queue.GetConsumingEnumerable(ct))
-                yield return item;
-
-            await done.Task;
-        }
+        public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+            => subject;
     }
 
     private sealed class FailingProvider : IAutocompleteProvider
     {
-        public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-            string query, string? contextPath,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            await Task.Yield();
-            throw new InvalidOperationException("simulated provider failure");
-#pragma warning disable CS0162 // Unreachable code detected
-            yield break;
-#pragma warning restore CS0162
-        }
+        public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+            => Observable.Throw<AutocompleteItem>(
+                new InvalidOperationException("simulated provider failure"));
     }
 
     /// <summary>
@@ -292,17 +262,10 @@ public class AutocompleteStreamProviderTests
     /// </summary>
     private sealed class QueryAwareProvider : IAutocompleteProvider
     {
-        public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-            string query, string? contextPath,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            for (var i = 1; i <= query.Length; i++)
-            {
-                await Task.Yield();
-                ct.ThrowIfCancellationRequested();
-                yield return new AutocompleteItem($"{query}-{i}", $"{query}-{i}",
-                    Priority: 100 - i);
-            }
-        }
+        public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
+            => Enumerable.Range(1, query.Length)
+                .Select(i => new AutocompleteItem($"{query}-{i}", $"{query}-{i}",
+                    Priority: 100 - i))
+                .ToObservable();
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Completion;
@@ -137,7 +138,9 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
             return;
         }
 
-        var items = await contentProvider.GetItemsAsync("@").ToListAsync(TestContext.Current.CancellationToken);
+        var items = await contentProvider.GetItems("@")
+            .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
         Output.WriteLine($"ContentAutocompleteProvider returned {items.Count} items:");
         foreach (var item in items.Take(10))
             Output.WriteLine($"  - [{item.Kind}] {item.Label}: {item.InsertText}");
