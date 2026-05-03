@@ -1146,10 +1146,13 @@ public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : M
         // Act - try to update a node that doesn't exist
         var act = () => NodeFactory.UpdateNode(node).ToTask();
 
-        // Assert — routing returns "No node found for address ..." when no per-node hub
-        // exists for the path; framework wraps as InvalidOperationException.
+        // Assert — UpdateNodeRequest is forwarded to the owning per-node hub
+        // (see MeshExtensions.cs HandleUpdateNodeRequest forwarding in 727ba0925).
+        // When the path doesn't resolve, the response is mapped to
+        // NodeUpdateRejectionReason.NodeNotFound and IMeshService.UpdateNode
+        // surfaces it as InvalidOperationException("Node not found: {path}").
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*No node found*");
+            .WithMessage("*Node not found*");
     }
 
 }
