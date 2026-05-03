@@ -128,8 +128,8 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         var workspace = client.GetWorkspace();
 
         // 1. Create thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Delegation tool call test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Delegation tool call test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
         Output.WriteLine($"1. Thread: {threadPath}");
 
         // 2. Subscribe to messages
@@ -149,7 +149,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Please delegate this research task",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("2. Message submitted");
@@ -213,8 +213,8 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         var workspace = client.GetWorkspace();
 
         // 1. Create thread and submit
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Resubmit delegation test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Resubmit delegation test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
 
         var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)?.Messages ?? [])
@@ -226,7 +226,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Delegate something",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var msgIds = await twoMessages;

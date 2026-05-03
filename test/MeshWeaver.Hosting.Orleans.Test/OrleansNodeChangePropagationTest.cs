@@ -108,8 +108,8 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         var client = await GetClientAsync();
 
         // 1. Create thread â€” exactly like ThreadChatView.SendMessageAsync does
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "NodeChange propagation test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "NodeChange propagation test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
         // 2. Subscribe to messages (like ThreadChatView data-binding)
@@ -128,7 +128,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Create a doc and delegate updates to Executor",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("AppendUserMessageRequest succeeded â€” submission queued");
@@ -172,7 +172,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         // 7. Verify the Markdown node was created by the Create tool
         var meshService = Fixture.Cluster.Client.ServiceProvider.GetRequiredService<IMeshService>();
         var createdNodes = await meshService
-            .QueryAsync<MeshNode>("path:User/TestUser/test-doc-nodechange", ct: ct)
+            .QueryAsync<MeshNode>("path:TestUser/test-doc-nodechange", ct: ct)
             .ToListAsync(ct);
         createdNodes.Should().ContainSingle("Create tool should have created the Markdown node");
         Output.WriteLine($"Created node: {createdNodes[0].Path}, name={createdNodes[0].Name}");
@@ -228,8 +228,8 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
         var client = await GetClientAsync();
 
         // 1. Create and execute a thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Resubmit deadlock test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Resubmit deadlock test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
 
         var twoMessages = ObserveThreadMessages(client, threadPath)
             .Where(ids => ids.Count >= 2)
@@ -241,7 +241,7 @@ public class OrleansNodeChangePropagationTest(SharedOrleansFixture fixture, ITes
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "First message",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
         var msgIds = await twoMessages;
@@ -327,7 +327,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
                 new Dictionary<string, object?>
                 {
                     ["agentName"] = "Worker",
-                    ["task"] = "Patch the node at User/TestUser/test-doc-nodechange: set name to 'Updated by sub-agent'"
+                    ["task"] = "Patch the node at TestUser/test-doc-nodechange: set name to 'Updated by sub-agent'"
                 });
             return Task.FromResult(new ChatResponse(
                 new ChatMessage(ChatRole.Assistant, [delegateCall])));
@@ -339,7 +339,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
             var nodeJson = JsonSerializer.Serialize(new
             {
                 id = "test-doc-nodechange",
-                @namespace = "User/TestUser",
+                @namespace = "TestUser",
                 nodeType = "Markdown",
                 name = "Test Doc for NodeChange",
                 content = "# Initial Content"
@@ -417,7 +417,7 @@ internal class PatchToolChatClient : IChatClient
             var patchCall = new FunctionCallContent("call_patch", "Patch",
                 new Dictionary<string, object?>
                 {
-                    ["path"] = "User/TestUser/test-doc-nodechange",
+                    ["path"] = "TestUser/test-doc-nodechange",
                     ["fields"] = fieldsJson
                 });
             return Task.FromResult(new ChatResponse(

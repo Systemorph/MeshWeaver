@@ -24,7 +24,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Topology:
 /// </para>
 /// <code>
-///        a (owning per-grain hub at User/TestUser/a — full mesh-node setup
+///        a (owning per-grain hub at TestUser/a — full mesh-node setup
 ///           via the standard Markdown NodeType: AddMeshDataSource +
 ///           AddDefaultLayoutAreas + persistence)
 ///       / \
@@ -68,7 +68,7 @@ public class OrleansThreeNodePropagationTest(SharedOrleansFixture fixture, ITest
         // 1. Pick a unique owning path so test reruns don't collide on the
         //    shared TestCluster state.
         var aId = $"three-node-a-{Guid.NewGuid():N}";
-        var pathA = $"User/TestUser/{aId}";
+        var pathA = $"TestUser/{aId}";
 
         // 2. Create node `a` via the canonical CreateNodeRequest path. The mesh
         //    hub processes the create; the per-grain hub activates lazily on
@@ -79,12 +79,12 @@ public class OrleansThreeNodePropagationTest(SharedOrleansFixture fixture, ITest
         //    as production.
         var creator = await GetClientAsync($"creator-{Guid.NewGuid():N}", "TestUser");
         var createResp = await creator.Observe(
-                new CreateNodeRequest(new MeshNode(aId, "User/TestUser")
+                new CreateNodeRequest(new MeshNode(aId, "TestUser")
                 {
                     Name = "A0",
                     NodeType = "Markdown",
                 }),
-                o => o.WithTarget(new Address("User/TestUser")))
+                o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
         Output.WriteLine($"[test] CreateNode succeeded: {pathA}");

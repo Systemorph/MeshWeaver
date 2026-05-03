@@ -68,8 +68,8 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : OrleansTestBase<R
         var client = await GetClientAsync($"reent-{suffix}");
 
         // Create thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Reentrancy test", "TestUser");
-        var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Reentrancy test", "TestUser");
+        var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
         var threadPath = createResp.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -98,7 +98,7 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : OrleansTestBase<R
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Call a tool please",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
         Output.WriteLine("Submitted");
@@ -147,7 +147,7 @@ internal class ToolCallingReentrancyClient : IChatClient
         if (options?.Tools?.Any(t => t.Name == "Get") == true)
         {
             var call = new FunctionCallContent("test-get", "Get",
-                new Dictionary<string, object?> { ["path"] = "@/User/TestUser" });
+                new Dictionary<string, object?> { ["path"] = "@/TestUser" });
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, [call])));
         }
 

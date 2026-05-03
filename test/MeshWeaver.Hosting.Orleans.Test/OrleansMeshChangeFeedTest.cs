@@ -64,12 +64,12 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
         var client = await GetClientAsync($"cfeed-{suffix}");
 
         // Create parent
-        var parentNode = new MeshNode($"cfeed-parent-{suffix}", "User/TestUser")
+        var parentNode = new MeshNode($"cfeed-parent-{suffix}", "TestUser")
         {
             Name = "Change Feed Parent",
             NodeType = "Markdown"
         };
-        var parentPath = await CreateNodeAsync(client, parentNode, "User/TestUser", ct);
+        var parentPath = await CreateNodeAsync(client, parentNode, "TestUser", ct);
         Output.WriteLine($"Parent: {parentPath}");
 
         // Create child
@@ -78,7 +78,7 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
             Name = "Change Feed Child",
             NodeType = "Markdown"
         };
-        var childPath = await CreateNodeAsync(client, childNode, "User/TestUser", ct);
+        var childPath = await CreateNodeAsync(client, childNode, "TestUser", ct);
         Output.WriteLine($"Child: {childPath}");
 
         // Verify: child is reachable via message routing (GetDataRequest via MeshNodeReference reducer).
@@ -104,8 +104,8 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
         var client = await GetClientAsync($"cfeed-del-{suffix}");
 
         // Create thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "ChangeFeed routing test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "ChangeFeed routing test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
         Output.WriteLine($"Thread: {threadPath}");
 
         // Submit message (creates user + response cells)
@@ -125,7 +125,7 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test routing",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
@@ -142,7 +142,7 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
         {
             Name = "Sub-thread routing test",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = "User/TestUser",
+            MainNode = "TestUser",
             Content = new MeshThread { CreatedBy = "TestUser" }
         };
         var subThreadPath = await CreateNodeAsync(client, subThreadNode, threadPath, ct);
@@ -155,7 +155,7 @@ public class OrleansMeshChangeFeedTest(SharedOrleansFixture fixture, ITestOutput
                 ThreadPath = subThreadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello sub-thread",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
 
         subSubmitResponse.Message.Success.Should().BeTrue(

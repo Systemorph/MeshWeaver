@@ -85,13 +85,13 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
 
             // Build thread with pre-populated messages (auto-execute on activation)
             var (threadNode, userMsgId, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-                "User/TestUser", "Hello Orleans auto-execute!",
+                "TestUser", "Hello Orleans auto-execute!",
                 createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
             Output.WriteLine($"Thread: {threadPath}, user={userMsgId}, response={responseMsgId}");
 
             // Create the thread â€” AutoExecutePendingMessage should fire on grain activation
-            var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
+            var createResponse = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
             createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
             Output.WriteLine("Thread created, waiting for execution...");
 
@@ -145,15 +145,15 @@ public class OrleansAutoExecuteTest(SharedOrleansFixture fixture, ITestOutputHel
             var client = await GetClientAsync();
 
             var (threadNode, _, responseMsgId) = ThreadNodeType.BuildThreadWithMessages(
-                "User/TestUser", "Test routing to response grain",
+                "TestUser", "Test routing to response grain",
                 createdBy: "TestUser", agentName: "Orchestrator");
             var threadPath = threadNode.Path!;
             var responsePath = $"{threadPath}/{responseMsgId}";
 
-            await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
+            await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
 
             // Activate the per-thread hub by sending it a message — CreateNodeRequest above
-            // landed at User/TestUser, the catalog has the node, but the per-thread grain
+            // landed at TestUser, the catalog has the node, but the per-thread grain
             // is created lazily on its first inbound message. Without this ping, the hub's
             // WithInitialization callbacks (including WatchForExecution that fires the
             // auto-execute dispatch) never run and the response cell is never created.

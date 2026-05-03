@@ -41,16 +41,16 @@ public class OrleansGetDataRequestPropagationTest(SharedOrleansFixture fixture, 
         // 1. Create node a (plain Markdown — same NodeType as the working
         //    Orleans 3-node test). Use a creator client to avoid mixing roles.
         var aId = $"poll-a-{Guid.NewGuid():N}";
-        var pathA = $"User/TestUser/{aId}";
+        var pathA = $"TestUser/{aId}";
 
         var creator = await GetClientAsync($"creator-{Guid.NewGuid():N}", "TestUser");
         var createResp = await creator.Observe(
-                new CreateNodeRequest(new MeshNode(aId, "User/TestUser")
+                new CreateNodeRequest(new MeshNode(aId, "TestUser")
                 {
                     Name = "A0",
                     NodeType = "Markdown",
                 }),
-                o => o.WithTarget(new Address("User/TestUser")))
+                o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
         Output.WriteLine($"[test] CreateNode succeeded: {pathA}");

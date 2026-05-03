@@ -39,7 +39,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// </summary>
 public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSiloConfigurator>(output)
 {
-    private const string ContextPath = "User/TestUser";
+    private const string ContextPath = "TestUser";
 
     // Cluster lifecycle, ClientMesh, GetClientAsync, ConfigureClient, and the standard
     // mesh-node handler chain are inherited from OrleansTestBase<TSiloConfigurator>.

@@ -74,8 +74,8 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
         var client = await GetClientAsync();
 
         // Create a thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Delegation flow test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Delegation flow test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
         Output.WriteLine($"Thread: {threadPath}");
 
         // Subscribe to thread messages
@@ -98,7 +98,7 @@ public class OrleansDelegationFlowTest(ITestOutputHelper output) : OrleansTestBa
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Please delegate this task",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("AppendUserMessageRequest succeeded");
