@@ -23,22 +23,18 @@ var rg = mode switch
 };
 var dbName = mode == "test" ? "memex-test" : "memex";
 
-// Discover the FQDN dynamically — we don't want a stale hard-coded host
-// here drifting from what aspire deploy actually provisioned.
-string host;
-{
-    var psi = new System.Diagnostics.ProcessStartInfo("az",
-        $"postgres flexible-server list -g {rg} --query \"[0].fullyQualifiedDomainName\" -o tsv")
-    {
-        RedirectStandardOutput = true, UseShellExecute = false
-    };
-    using var p = System.Diagnostics.Process.Start(psi)!;
-    host = (await p.StandardOutput.ReadToEndAsync()).Trim();
-    await p.WaitForExitAsync();
-    if (string.IsNullOrEmpty(host))
-        throw new InvalidOperationException(
-            $"Couldn't resolve postgres FQDN in resource group {rg}. Is `az login` current and the RG correct?");
-}
+// FQDN of the deployed Postgres flexible-server. Pass it as the 2nd arg so
+// we don't hard-code an environment-specific hostname (the random suffix
+// changes whenever the resource group is reprovisioned). tools/deploy.sh
+// resolves it via `az postgres flexible-server list -g $RG ...` and forwards
+// it here. Falls back to PG_HOST env var for ad-hoc invocation.
+var host = Args.Count > 1
+    ? Args[1]
+    : Environment.GetEnvironmentVariable("PG_HOST")
+      ?? throw new InvalidOperationException(
+          "Postgres host not provided. Pass it as the 2nd arg "
+          + "(`dotnet script tools/check-db-version.csx -- prod <fqdn>`) "
+          + "or set PG_HOST. tools/deploy.sh discovers it via `az` and forwards.");
 var db = dbName;
 
 // AAD identity from `az login`. The signed-in user must be a Postgres AAD admin
@@ -52,23 +48,29 @@ var user = Environment.GetEnvironmentVariable("AZURE_USER_PRINCIPAL_NAME")
            ?? throw new InvalidOperationException(
                "Set AZURE_USER_PRINCIPAL_NAME to your AAD UPN (e.g. rbuergi@systemorph.com).");
 
-await using var conn = new NpgsqlConnection(
-    $"Host={host};Database={db};Username={user};Password={token.Token};SSL Mode=Require");
-await conn.OpenAsync();
-
-await using var cmd = new NpgsqlCommand("""
-    SELECT (content->>'Version')::int AS v
-      FROM admin.mesh_nodes
-     WHERE id = 'db_version' AND namespace = ''
-     LIMIT 1
-    """, conn);
-var raw = await cmd.ExecuteScalarAsync();
-var version = raw switch
+// dotnet-script REPL doesn't support `using var` at the script root, so wrap
+// the connection lifetime in an async lambda and let it dispose at scope exit.
+int version = await GetDbVersionAsync();
+async Task<int> GetDbVersionAsync()
 {
-    int v => v,
-    long l => (int)l,
-    _ => 0
-};
+    await using var conn = new NpgsqlConnection(
+        $"Host={host};Database={db};Username={user};Password={token.Token};SSL Mode=Require");
+    await conn.OpenAsync();
+
+    await using var cmd = new NpgsqlCommand("""
+        SELECT (content->>'Version')::int AS v
+          FROM admin.mesh_nodes
+         WHERE id = 'db_version' AND namespace = ''
+         LIMIT 1
+        """, conn);
+    var raw = await cmd.ExecuteScalarAsync();
+    return raw switch
+    {
+        int v => v,
+        long l => (int)l,
+        _ => 0
+    };
+}
 
 if (version < ExpectedVersion)
 {
