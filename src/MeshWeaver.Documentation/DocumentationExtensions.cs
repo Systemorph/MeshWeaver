@@ -1,6 +1,7 @@
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Documentation;
 
@@ -55,6 +56,40 @@ public static class DocumentationExtensions
                 "DocContent",
                 typeof(DocumentationExtensions).Assembly,
                 "Content"));
+
+        // Doc namespace caps: read-only docs (no Create/Update/Delete) but
+        // discussion + commenting allowed. Previously lived on the legacy
+        // DocumentationNodeProvider but that path caused a DI cycle when
+        // wired via IStaticNodeProvider, so seed the policy + Public Viewer
+        // grant directly via AddMeshNodes — SecurityService now picks both
+        // up from MeshConfiguration.Nodes.
+        builder.AddMeshNodes(
+            new MeshNode("_Policy", DocumentationNodeProvider.RootNamespace)
+            {
+                NodeType = "PartitionAccessPolicy",
+                Name = "Documentation Access Policy",
+                Content = new PartitionAccessPolicy
+                {
+                    Create = false,
+                    Update = false,
+                    Delete = false,
+                    Comment = true,
+                    Thread = true
+                }
+            },
+            new MeshNode($"{WellKnownUsers.Public}_Access",
+                $"{DocumentationNodeProvider.RootNamespace}/_Access")
+            {
+                NodeType = "AccessAssignment",
+                Name = $"{WellKnownUsers.Public} Access",
+                MainNode = DocumentationNodeProvider.RootNamespace,
+                Content = new AccessAssignment
+                {
+                    AccessObject = WellKnownUsers.Public,
+                    DisplayName = "All authenticated users",
+                    Roles = [new RoleAssignment { Role = "Viewer" }]
+                }
+            });
 
         return builder;
     }
