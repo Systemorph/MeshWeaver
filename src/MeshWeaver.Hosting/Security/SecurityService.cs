@@ -173,20 +173,23 @@ internal class SecurityService : ISecurityService
         // the worst case for an authorised request is sub-millisecond; the
         // synced query is enrichment, not a gate.
         var staticOnlyScopeRoles = ComputeStaticOnlyScopeRoles(userId);
-        var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId);
+        var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(userId);
+        var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, staticOnlyDeniedScopeRoles);
 
         var enriched = GetUserScopeRolesStream(userId)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Catch<ImmutableDictionary<string, ImmutableHashSet<string>>, Exception>(ex =>
+            .Catch<(ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
+                ImmutableDictionary<string, ImmutableHashSet<string>> Denied), Exception>(ex =>
             {
                 _logger.LogWarning(ex,
                     "GetUserScopeRolesStream timed out for {UserId} — staying with claim + " +
                     "static seeds. AccessAssignment grants from the synced query won't apply " +
                     "until the underlying SyncedQueryRegistry produces a first emission.",
                     userId);
-                return Observable.Return(ImmutableDictionary<string, ImmutableHashSet<string>>.Empty);
+                return Observable.Return((Granted: ImmutableDictionary<string, ImmutableHashSet<string>>.Empty,
+                    Denied: ImmutableDictionary<string, ImmutableHashSet<string>>.Empty));
             })
-            .Select(scopeToRoles => ComputeRoleState(scopeToRoles, nodePath, userId));
+            .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, snap.Denied));
 
         // Only emit the fast snapshot when it actually grants something —
         // otherwise FirstAsync() callers (AccessControlPipeline does Take(1))
@@ -289,6 +292,46 @@ internal class SecurityService : ISecurityService
     }
 
     /// <summary>
+    /// Mirror of <see cref="ComputeStaticOnlyScopeRoles"/> for the OPPOSITE
+    /// half: a <c>scope → denied-roles</c> map for the user, drawn from
+    /// every <c>RoleAssignment</c> with <c>Denied = true</c>. Walks the same
+    /// static seeds the granted half walks, so a deny seeded at construction
+    /// time takes effect on the immediate claim-only emission alongside the
+    /// granted role state.
+    /// </summary>
+    private ImmutableDictionary<string, ImmutableHashSet<string>> ComputeStaticOnlyDeniedScopeRoles(string userId)
+    {
+        var result = ImmutableDictionary<string, ImmutableHashSet<string>>.Empty;
+        foreach (var (_, list) in _staticAccessAssignments)
+        {
+            foreach (var node in list)
+            {
+                if (node.NodeType != SecurityCollections.AccessAssignmentNodeType)
+                    continue;
+                var ns = node.Namespace ?? "";
+                var scope = ns.EndsWith("/_Access", StringComparison.Ordinal)
+                    ? ns[..^"/_Access".Length]
+                    : (ns == "_Access" ? "" : null);
+                if (scope is null)
+                    continue;
+                var assignment = DeserializeAssignment(node);
+                if (assignment == null || assignment.AccessObject != userId)
+                    continue;
+                foreach (var ra in assignment.Roles)
+                {
+                    if (string.IsNullOrEmpty(ra.Role) || !ra.Denied)
+                        continue;
+                    var existing = result.TryGetValue(scope, out var roles)
+                        ? roles
+                        : ImmutableHashSet<string>.Empty;
+                    result = result.SetItem(scope, existing.Add(ra.Role));
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Folds the synced scope-to-roles snapshot (possibly empty) with the
     /// claim-based <see cref="AccessContext.Roles"/> for <paramref name="userId"/>
     /// and the static seeds collected at construction time. Pure synchronous —
@@ -298,7 +341,8 @@ internal class SecurityService : ISecurityService
     private (ImmutableHashSet<string> RoleIds, Permission PermissionCap) ComputeRoleState(
         ImmutableDictionary<string, ImmutableHashSet<string>> scopeToRoles,
         string nodePath,
-        string userId)
+        string userId,
+        ImmutableDictionary<string, ImmutableHashSet<string>>? scopeToDeniedRoles = null)
     {
         var roleIds = ImmutableHashSet<string>.Empty;
         var permissionCap = Permission.All;
@@ -325,6 +369,14 @@ internal class SecurityService : ISecurityService
                 roleIds = roleIds.Union(roles);
             if (policy is not null)
                 permissionCap &= policy.GetPermissionCap();
+
+            // Apply role-level denies at this scope: an AccessAssignment with
+            // Denied=true subtracts the listed roles from the running union.
+            // This is per-scope (not aggregated up front) so a deny at a
+            // descendant only kicks in once the walk reaches that scope.
+            if (scopeToDeniedRoles is not null
+                && scopeToDeniedRoles.TryGetValue(scope, out var deniedRoles))
+                roleIds = roleIds.Except(deniedRoles);
 
             // Self-scope: a user implicitly holds the Admin role on their own
             // partition (path == "{userId}" or under "{userId}/"). The role
@@ -362,7 +414,9 @@ internal class SecurityService : ISecurityService
     /// <c>Replay(1).RefCount</c> warm even when no external consumer is
     /// listening; eviction (sliding 5 min) disposes the keep-alive.
     /// </summary>
-    private IObservable<ImmutableDictionary<string, ImmutableHashSet<string>>> GetUserScopeRolesStream(string userId)
+    private IObservable<(
+        ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
+        ImmutableDictionary<string, ImmutableHashSet<string>> Denied)> GetUserScopeRolesStream(string userId)
     {
         return _userScopeRolesCache.GetOrCreate(userId, entry =>
         {
@@ -380,10 +434,13 @@ internal class SecurityService : ISecurityService
         })!;
     }
 
-    private ImmutableDictionary<string, ImmutableHashSet<string>> ComputeScopeRoles(
+    private (
+        ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
+        ImmutableDictionary<string, ImmutableHashSet<string>> Denied) ComputeScopeRoles(
         string userId, IEnumerable<MeshNode> allNodes)
     {
-        var result = ImmutableDictionary<string, ImmutableHashSet<string>>.Empty;
+        var granted = ImmutableDictionary<string, ImmutableHashSet<string>>.Empty;
+        var denied = ImmutableDictionary<string, ImmutableHashSet<string>>.Empty;
 
         void Consume(MeshNode node)
         {
@@ -402,12 +459,16 @@ internal class SecurityService : ISecurityService
 
             foreach (var ra in assignment.Roles)
             {
-                if (string.IsNullOrEmpty(ra.Role) || ra.Denied)
+                if (string.IsNullOrEmpty(ra.Role))
                     continue;
-                var existing = result.TryGetValue(scope, out var roles)
+                var target = ra.Denied ? denied : granted;
+                var existing = target.TryGetValue(scope, out var roles)
                     ? roles
                     : ImmutableHashSet<string>.Empty;
-                result = result.SetItem(scope, existing.Add(ra.Role));
+                if (ra.Denied)
+                    denied = denied.SetItem(scope, existing.Add(ra.Role));
+                else
+                    granted = granted.SetItem(scope, existing.Add(ra.Role));
             }
         }
 
@@ -417,7 +478,7 @@ internal class SecurityService : ISecurityService
             foreach (var node in list)
                 Consume(node);
 
-        return result;
+        return (Granted: granted, Denied: denied);
     }
 
     private const string AccessAssignmentQueryId = "$security-access-assignments";

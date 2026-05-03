@@ -44,10 +44,14 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
                 AssignmentNodeFactory.UserRole("Carol_Admin", "Admin", "ACME", accessObject: "Carol"),
                 AssignmentNodeFactory.UserRole("Carol", "Viewer", "ACME"),
                 AssignmentNodeFactory.UserRole("Roland", "Admin", null),
-                AssignmentNodeFactory.UserRole("MultiUser_MW", "Viewer", "MeshWeaver", accessObject: "MultiUser"),
+                // MultiUser_MW is an INDEPENDENT principal in MultipleRoles_CombinesPermissions —
+                // accessObject defaults to the userId so the test's per-user-id queries find each.
+                AssignmentNodeFactory.UserRole("MultiUser_MW", "Viewer", "MeshWeaver"),
                 AssignmentNodeFactory.UserRole("MultiUser", "Editor", "ACME"),
                 AssignmentNodeFactory.UserRole("InheritUser", "Admin", "Organization"),
-                AssignmentNodeFactory.UserRole("OverrideUser_Org", "Viewer", "Org", accessObject: "OverrideUser"),
+                // OverrideUser_Org is a separate principal in ExactMatch_TakesPrecedence —
+                // OverrideUser must NOT inherit OverrideUser_Org's grant.
+                AssignmentNodeFactory.UserRole("OverrideUser_Org", "Viewer", "Org"),
                 AssignmentNodeFactory.UserRole("OverrideUser", "Admin", "Org/Special"),
                 AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", "MeshWeaver"),
                 AssignmentNodeFactory.UserRole($"{WellKnownUsers.Anonymous}_Profiles", "Viewer", "Profiles", accessObject: WellKnownUsers.Anonymous),
@@ -116,11 +120,28 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Carol seeded with Admin (Carol_Admin) + Viewer (Carol). Remove the Admin assignment.
-        await meshService.DeleteNode("ACME/_Access/Carol_Admin_Access")
-            .FirstAsync().ToTask(TestTimeout);
+        // Re-create Carol's Admin assignment at runtime so the deletion below
+        // hits a real persisted node. Static seeds (added via AddMeshNodes in
+        // ConfigureMesh) live in MeshConfiguration.Nodes only — they're picked
+        // up by SecurityService's static-seed path, but DeleteNode looks at
+        // persistence storage and would return "Node not found".
+        var carolAdmin = AssignmentNodeFactory.UserRole("Carol_RuntimeAdmin", "Admin", "ACME",
+            accessObject: "Carol");
+        await meshService.CreateNode(carolAdmin).FirstAsync().ToTask(TestTimeout);
 
-        var permissions = await Mesh.GetPermissionAsync("ACME", "Carol", TestTimeout);
+        // Wait for the runtime grant to surface so Admin is part of Carol's
+        // permissions before we delete it again.
+        await Mesh.GetPermissionAsync("ACME", "Carol",
+            until: p => p.HasFlag(Permission.Delete),
+            ct: TestTimeout);
+
+        await meshService.DeleteNode(carolAdmin.Path).FirstAsync().ToTask(TestTimeout);
+
+        // Wait for the deletion to surface (Delete must drop out of Carol's
+        // permissions; the static Viewer seed remains).
+        var permissions = await Mesh.GetPermissionAsync("ACME", "Carol",
+            until: p => !p.HasFlag(Permission.Delete) && p.HasFlag(Permission.Read),
+            ct: TestTimeout);
         permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api,
             "Only Viewer role should remain after removing Admin");
     }
