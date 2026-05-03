@@ -562,23 +562,20 @@ internal class CompilationCacheService(
         // The flag ensures the next IsCacheValid returns false regardless.
         _invalidated[nodeName] = 0;
 
-        // Skip the expensive ALC unload + GC + file deletion when there's nothing to
-        // invalidate — first-compile path hits this on every NodeType activation, and
-        // a sync `GC.Collect` + `WaitForPendingFinalizers` freezes the whole process
-        // (including peer tests using the same SP). The compile that follows will
-        // overwrite any stale file on disk anyway, so the only path that needs the
-        // heavy unload is when an ALC is currently live for this nodeName.
+        // Only run the ALC unload + sync GC.Collect when an ALC is live for this
+        // nodeName. The expensive part is `GC.Collect` + `WaitForPendingFinalizers`,
+        // which stops the world for the whole SP (freezes peer tests sharing the
+        // mesh). When there's no live ALC, file deletion alone — without the GC —
+        // is enough to fulfil the invalidation contract.
         var hasLiveContext = _loadContexts.ContainsKey(nodeName);
-        if (!hasLiveContext)
+        if (hasLiveContext)
         {
-            return;
+            UnloadContext(nodeName);
+
+            // Required so the unloaded ALC releases its file lock before we delete the DLL.
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
         }
-
-        UnloadContext(nodeName);
-
-        // Required so the unloaded ALC releases its file lock before we delete the DLL.
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
 
         var filesToDelete = new[]
         {
