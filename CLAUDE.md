@@ -119,10 +119,12 @@ The documentation on deployment is accessible via src/MeshWeaver.Documentation/D
 Topics: Aspire CLI deployment, deployment modes (local/test/prod/monolith), secrets management, Azure Container Apps, PostgreSQL, Orleans clustering, infrastructure provisioning
 
 **Quick deploy commands** (run from repo root):
-- **Prod**: `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode prod`
-- **Test**: `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode test`
+- **Prod**: `tools/deploy.sh prod`
+- **Test**: `tools/deploy.sh test`
 
-Prerequisites: Azure CLI authenticated, Aspire CLI installed, Docker running. See the full deployment doc for details.
+**🚨 Never run bare `aspire deploy` for prod/test.** Aspire 13.2 reports the pipeline as ✓ when the db-migration container *app* provisions, even if the migration container inside crashes (V02 pg_hba.conf, etc.). `tools/deploy.sh` wraps `aspire deploy` + polls the migration replica's `lastTerminationState.exitCode` + runs `check-db-version.csx` for an end-to-end version assert. The first-party deploy-time hook (`DeployingCallbackAnnotation`) lands in Aspire Wave 14; until then the wrapper is the only way to fail-loud on a half-migrated DB.
+
+Prerequisites: Azure CLI authenticated, Aspire CLI installed, Docker running, `dotnet-script` installed. See `Doc/Architecture/Deployment.md` for the full story (DbVersionGate, healthcheck, version bump procedure).
 
 ### Agents
 

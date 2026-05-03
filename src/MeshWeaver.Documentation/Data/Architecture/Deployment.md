@@ -26,35 +26,45 @@ The AppHost supports multiple modes, passed as `--mode <mode>`:
 2. **Aspire CLI** installed (`dotnet tool install -g aspire`)
 3. **Docker** running (required for building container images)
 4. **Secrets configured** in the AppHost project (see [Secrets Management](#secrets-management) below)
+5. **dotnet-script** for the post-deploy DB version check (`dotnet tool install -g dotnet-script`)
 
-## Deploy to Production
-
-From the repository root:
-
-```bash
-aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode prod
-```
-
-This command:
-1. Builds the application (Release configuration, linux-x64)
-2. Pushes container images to Azure Container Registry
-3. Provisions/updates Azure Container Apps, PostgreSQL, Blob Storage, Orleans clustering, and Application Insights
-4. Deploys to **Sweden Central** with sticky sessions enabled for Blazor Server
-
-## Deploy to Test
+## 🚨 Always use `tools/deploy.sh` — never bare `aspire deploy`
 
 ```bash
-aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode test
+tools/deploy.sh prod    # or: tools/deploy.sh test
 ```
 
-Same process as prod but targets the test environment (separate PostgreSQL, Blob Storage, and Container Apps instances).
+`aspire deploy` on its own **silently passes when the db-migration container crashes**. Aspire's pipeline reports `✓ provision-db-migration-containerapp completed successfully` as soon as the Container App *definition* provisions — it doesn't watch the actual migration container's exit code. Result: a half-migrated DB, an exit-0 deploy, and a portal that comes up against broken data and 401s every user.
+
+The wrapper script closes that gap:
+
+1. Runs `aspire deploy --project memex/aspire/Memex.AppHost/Memex.AppHost.csproj -- --mode <prod|test>` (the same command Aspire docs sanction).
+2. After Aspire returns, polls `az containerapp replica list -n db-migration -g <rg>` until the replica reaches `Terminated` and reads `lastTerminationState.exitCode`. Non-zero → fails the deploy with the last 100 log lines.
+3. Runs `tools/check-db-version.csx` to assert `admin.mesh_nodes.db_version >= 15` against the deployed DB via AAD-authenticated psql. End-to-end check — catches the case where the migration container terminated 0 but didn't finish (e.g., crashed inside a try/catch that swallowed the exception).
+
+Two layers of belt-and-braces backstop the wrapper inside the portal itself:
+
+- **`DbVersionGate` (`Memex.Portal.Distributed/DbVersionGate.cs`)**: `IHostedService` that runs at portal startup, queries `admin.mesh_nodes.db_version`, and calls `IHostApplicationLifetime.StopApplication()` if it's missing or below `ExpectedDbVersion = 15`. Container Apps then marks the revision `Failed` and routes no traffic to it.
+- **`DbVersionHealthCheck`**: Live healthcheck wrapping the same query — surfaces drift if someone manually rolls a partial migration via `psql` after startup.
+
+Bump `DbVersionGate.ExpectedDbVersion` and `tools/check-db-version.csx`'s `ExpectedVersion` constant in lock-step with the highest `Vxx_*.cs` migration in `memex/aspire/Memex.Database.Migration/Migrations/`.
+
+> **Why not gate this inside `aspire deploy` itself?** Aspire 13.2.x has no first-party API for a deploy-time callback that can poll a provisioned resource and fail the pipeline. The required `DeployingCallbackAnnotation` + `IReportingTask.FailAsync` surface ships in **Wave 14**. When we bump to 14.x, the bash poller can move into `Memex.AppHost/Program.cs` as an annotation on the `db-migration` resource, and `tools/deploy.sh` can collapse back to a thin alias.
 
 ## Verify Deployment
 
-After deployment completes, the Aspire CLI outputs the portal URL. Verify by:
-- Opening the portal URL in a browser
-- Checking the Aspire dashboard for service health
-- Reviewing Application Insights for startup telemetry
+`tools/deploy.sh` already runs the version gate. If you ran `aspire deploy` directly, verify manually:
+
+```bash
+dotnet script tools/check-db-version.csx -- prod
+```
+
+Expect `✅ db_version=15 (>= 15)`.
+
+After verification:
+- Open the portal URL in a browser
+- Check the Aspire dashboard for service health
+- Review Application Insights for startup telemetry
 
 # Running Locally
 
