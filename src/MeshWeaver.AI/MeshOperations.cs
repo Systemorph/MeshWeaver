@@ -205,21 +205,64 @@ public class MeshOperations
         return TryResolveUnifiedPath(resolvedPath)
             .SelectMany(unified => unified != null
                 ? Observable.Return(unified)
-                : FetchNode(resolvedPath).Select(node =>
+                : FetchNode(resolvedPath).SelectMany(node =>
                     {
                         if (node is null)
-                            return $"Not found: {resolvedPath}";
+                            return GetWithBrokenNodeTypeFallback(resolvedPath);
                         var compileError = LookupCompilationError(node);
-                        return compileError != null
+                        return Observable.Return(compileError != null
                             ? JsonSerializer.Serialize(
                                 new { node, compilationError = compileError },
                                 hub.JsonSerializerOptions)
-                            : JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
+                            : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
                     }))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Error getting data at path {Path}", resolvedPath);
                 return Observable.Return($"Error: {ex.Message}");
+            });
+    }
+
+    /// <summary>
+    /// Fallback when <see cref="FetchNode"/> returned <c>null</c> — typically a
+    /// broken-NodeType path whose per-node hub couldn't activate (compilation
+    /// failed) and whose <see cref="GetDataRequest"/> timed out after 10s.
+    ///
+    /// <para>If <see cref="INodeTypeService.GetCompilationError"/> has a recorded
+    /// error for this path, the catalog still has the node's stored definition
+    /// even though its hub is broken. We read it via
+    /// <see cref="IMeshService.QueryAsync"/> as the documented exception to
+    /// "queries are for sets only" (see <c>Doc/Architecture/CqrsAndContentAccess.md</c>):
+    /// the live content is unreachable, the catalog snapshot is the best we
+    /// have, and the wrapped response surfaces the compile error so callers
+    /// (Coder agent, MCP, UI overlays) can fix the source instead of seeing a
+    /// generic "Not found".</para>
+    /// </summary>
+    private IObservable<string> GetWithBrokenNodeTypeFallback(string resolvedPath)
+    {
+        var compileError = nodeTypeService?.GetCompilationError(resolvedPath);
+        if (string.IsNullOrEmpty(compileError))
+            return Observable.Return($"Not found: {resolvedPath}");
+
+        // Catalog read — IObservable wrapper around the IAsyncEnumerable so we
+        // stay on the reactive path. FirstOrDefaultAsync on a snapshot query is
+        // safe here (the catalog is the source of truth for the broken-hub
+        // case; live content is unreachable by definition).
+        return Observable.FromAsync(ct =>
+                mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+                    .FirstOrDefaultAsync(ct).AsTask())
+            .Select(node => node is null
+                ? $"Not found: {resolvedPath}"
+                : JsonSerializer.Serialize(
+                    new { node, compilationError = compileError },
+                    hub.JsonSerializerOptions))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "Catalog fallback for broken NodeType at {Path} failed", resolvedPath);
+                return Observable.Return(JsonSerializer.Serialize(
+                    new { compilationError = compileError, error = "Catalog read failed: " + ex.Message },
+                    hub.JsonSerializerOptions));
             });
     }
 

@@ -778,18 +778,14 @@ public class MeshPluginTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// <see cref="MeshPlugin.Get"/> on an instance of a broken NodeType must
-    /// wrap the response with a <c>compilationError</c> field so callers that
-    /// only call Get still see the failure.
+    /// <see cref="MeshPlugin.Get"/> on a broken NodeType (whose per-node hub
+    /// can't activate because Roslyn rejects its <c>HubConfiguration</c>) must
+    /// fall back to a catalog read and wrap the response with a
+    /// <c>compilationError</c> field. The Observe call no longer leaks when
+    /// the per-node hub is dead because <see cref="MeshOperations.GetWithBrokenNodeTypeFallback"/>
+    /// kicks in after the 10s GetDataRequest timeout.
     /// </summary>
-    // Skipped 2026-05-03 (after compile-cache fix in cb467ed87 unblocked the
-    // sister test GetDiagnostics_BrokenNodeType_ReturnsErrorStatus): Get on an
-    // instance of a broken NodeType still hangs the request — the per-node hub
-    // never replies with a compilationError-wrapped response, so the Observe
-    // call times out at 60s and leaves a leaked callback. Separate bug: the
-    // Get-handler path doesn't surface the cached compile error the way
-    // GetDiagnostics does. Re-enable once Get wraps broken-NodeType responses.
-    [Fact(Timeout = 60000, Skip = "Get on broken NodeType instance hangs (leaked callback) — handler doesn't wrap response with compilationError. Separate from compile-cache file-lock race.")]
+    [Fact(Timeout = 60000)]
     public async Task Get_InstanceOfBrokenNodeType_WrapsResponseWithCompilationError()
     {
         var mockChat = new MockAgentChat();
