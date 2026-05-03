@@ -449,23 +449,33 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleExecution(IMessageDelivery delivery)
     {
-        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        // Per-message hot path. All MESSAGE_FLOW: LogTrace + the {@Delivery}
+        // LogDebug compute GetType().Name and box args even when the level is
+        // off; gate via IsEnabled and cache the type name once.
+        var traceEnabled = logger.IsEnabled(LogLevel.Trace);
+        var messageTypeName = delivery.Message.GetType().Name;
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                messageTypeName, Address, delivery.Id);
 
 
 
         executionBuffer.Post(async _ =>
         {
-            logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
-            logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
+            if (traceEnabled)
+                logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                    messageTypeName, Address, delivery.Id);
+            // {@Delivery} destructures the delivery into log structure — expensive
+            // per message. Gate on Debug.
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
 
             var executionStopwatch = Stopwatch.StartNew();
             var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
             // Mark this handler as the currently-executing one so a disposal timeout
             // diagnostic can name it — without this, "dispose hung" tells you nothing
             // about which handler is wedged. Cleared in `finally` below.
-            currentlyExecutingMessageType = delivery.Message.GetType().Name;
+            currentlyExecutingMessageType = messageTypeName;
             Interlocked.Exchange(ref currentlyExecutingStartedTicks, Stopwatch.GetTimestamp());
             try
             {
@@ -490,13 +500,15 @@ public class MessageService : IMessageService
                     logger.LogWarning("Hub {Address} is disposing. Not processing message {Message}", hub.Address, jsonMessage);
                 }
 
-                logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
-                    delivery.Message.GetType().Name, Address, executionStopwatch.ElapsedMilliseconds);
+                if (traceEnabled)
+                    logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
+                        messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
             }
             catch (OperationCanceledException) when (isDisposing)
             {
-                logger.LogTrace("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
-                    delivery.Message.GetType().Name, Address, executionStopwatch.ElapsedMilliseconds);
+                if (traceEnabled)
+                    logger.LogTrace("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
+                        messageTypeName, Address, executionStopwatch.ElapsedMilliseconds);
 
                 // During disposal, timeouts are acceptable to prevent hangs
                 if (delivery.Message is not ExecutionRequest)
@@ -507,8 +519,9 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
-                logger.LogTrace("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error} | Duration: {Duration}ms",
-                    delivery.Message.GetType().Name, Address, e.Message, executionStopwatch.ElapsedMilliseconds);
+                if (traceEnabled)
+                    logger.LogTrace("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error} | Duration: {Duration}ms",
+                        messageTypeName, Address, e.Message, executionStopwatch.ElapsedMilliseconds);
 
                 if (delivery.Message is ExecutionRequest er)
                     await er.ExceptionCallback.Invoke(e);
@@ -529,13 +542,14 @@ public class MessageService : IMessageService
                 Interlocked.Exchange(ref currentlyExecutingStartedTicks, 0);
             }
 
-            if (delivery.Message is not ExecutionRequest)
+            if (delivery.Message is not ExecutionRequest && logger.IsEnabled(LogLevel.Debug))
                 logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms",
                     delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
 
         });
-        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
+                messageTypeName, Address, delivery.Id);
         return delivery.Forwarded(hub.Address);
     }
 
