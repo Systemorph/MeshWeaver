@@ -557,49 +557,45 @@ internal class CompilationCacheService(
     {
         logger.LogDebug("Invalidating cache for {NodeName}", nodeName);
 
-        // Mark invalidated BEFORE attempting to delete: if the DLL is still mapped by
-        // a live ALC, File.Delete will silently fail and leave the stale DLL on disk.
-        // The flag ensures the next IsCacheValid returns false regardless.
+        // Mark invalidated so the next IsCacheValid returns false. Combined
+        // with releases-as-MeshNodes, "invalidated" really just means "the
+        // currently-loaded ALC is no longer authoritative for this NodeType
+        // — the next request must consult the latest Release". We don't need
+        // to delete anything on disk; release DLLs are content-keyed and
+        // accumulate. See Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md.
         _invalidated[nodeName] = 0;
 
-        // Only run the ALC unload + sync GC.Collect when an ALC is live for this
-        // nodeName. The expensive part is `GC.Collect` + `WaitForPendingFinalizers`,
-        // which stops the world for the whole SP (freezes peer tests sharing the
-        // mesh). When there's no live ALC, file deletion alone — without the GC —
-        // is enough to fulfil the invalidation contract.
-        var hasLiveContext = _loadContexts.ContainsKey(nodeName);
-        if (hasLiveContext)
-        {
-            UnloadContext(nodeName);
+        // Unload every ALC that was loading code for THIS NodeType, regardless
+        // of how it was keyed. Release-based loads register under
+        // release.Path (e.g. "Type/Foo@hash"); legacy loads register under the
+        // sanitized nodeName itself. Match on NodeAssemblyLoadContext.NodeName
+        // so both flavours flush.
+        var keysToUnload = _loadContexts
+            .Where(kvp => string.Equals(kvp.Key, nodeName, StringComparison.Ordinal)
+                       || string.Equals(kvp.Value.NodeName, nodeName, StringComparison.Ordinal))
+            .Select(kvp => kvp.Key)
+            .ToList();
 
-            // Required so the unloaded ALC releases its file lock before we delete the DLL.
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
+        if (keysToUnload.Count > 0)
+        {
+            foreach (var key in keysToUnload)
+                UnloadContext(key);
+
+            // Per-NodeType ALC unload only — no GC.Collect. Release DLLs
+            // stay on disk, so we never need the file lock to drop. Other
+            // NodeTypes' ALCs continue running undisturbed.
         }
 
-        var filesToDelete = new[]
-        {
-            GetDllPath(nodeName),
-            GetPdbPath(nodeName),
-            GetSourcePath(nodeName),
-            GetXmlDocPath(nodeName)
-        };
-
-        foreach (var file in filesToDelete)
-        {
-            try
-            {
-                if (File.Exists(file))
-                {
-                    File.Delete(file);
-                    logger.LogDebug("Deleted cached file: {FilePath}", file);
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to delete cached file: {FilePath}", file);
-            }
-        }
+        // NB: we deliberately do NOT delete DLLs / PDBs / source caches.
+        //   - Release-based caching: each release lives in its own
+        //     {cacheDir}/{nodeName}_{releaseHash}/ folder. Deleting old
+        //     releases is a separate, opt-in concern (TTL / "keep last N"),
+        //     not part of invalidation.
+        //   - Legacy single-DLL caching: File.Delete races the still-mapped
+        //     ALC on Windows and produces UnauthorizedAccessException
+        //     (CodeEditRecompileTest's failure mode). Better to leave the
+        //     stale DLL on disk and let the next compile overwrite it after
+        //     the ALC has fully unloaded.
     }
 
     /// <inheritdoc />
