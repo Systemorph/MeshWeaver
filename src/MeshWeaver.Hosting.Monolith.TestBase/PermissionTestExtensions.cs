@@ -54,11 +54,15 @@ public static class PermissionTestExtensions
         Func<Permission, bool>? until,
         CancellationToken ct = default)
     {
-        using var scope = hub.ServiceProvider.CreateScope();
-        var accessService = scope.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
-
-        var sec = scope.ServiceProvider.GetRequiredService<ISecurityService>();
+        // SecurityService.GetEffectivePermissions takes the userId explicitly,
+        // so we don't need to mutate AccessService.CircuitContext for the
+        // probe. The previous shape stamped CircuitContext = userId on the
+        // singleton AccessService and never restored it — every subsequent
+        // call (e.g., the runtime DeleteNode immediately after a
+        // until-polling probe) saw the probe's identity instead of the
+        // DevLogin admin context the test had set, and the delete failed
+        // with "Delete permission denied".
+        var sec = hub.ServiceProvider.GetRequiredService<ISecurityService>();
         var stream = sec.GetEffectivePermissions(path, userId);
         if (until != null)
             stream = stream.Where(until).Timeout(TimeSpan.FromSeconds(5));
