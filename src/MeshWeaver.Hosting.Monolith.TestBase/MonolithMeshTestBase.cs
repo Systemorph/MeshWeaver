@@ -107,14 +107,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual bool ShareMeshAcrossTests => false;
 
     /// <summary>
-    /// Mirrors <see cref="ShareMeshAcrossTests"/> for the SP-disposal hook
-    /// added in <see cref="Fixture.TestBase.DisposeAsync"/>. When the mesh
-    /// is shared across [Fact]s, the SP is shared too — disposing it on the
-    /// first [Fact]'s teardown breaks every subsequent [Fact].
-    /// </summary>
-    protected override bool DisposeServiceProviderOnTestEnd => !ShareMeshAcrossTests;
-
-    /// <summary>
     /// Cached <see cref="IServiceProvider"/> per test-class type, populated on
     /// the first instance of a class that opts in via
     /// <see cref="ShareMeshAcrossTests"/>. Never cleared during the testhost
