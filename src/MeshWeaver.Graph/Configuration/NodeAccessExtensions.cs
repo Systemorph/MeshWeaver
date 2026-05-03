@@ -42,8 +42,8 @@ public static class NodeAccessExtensions
 
     /// <summary>
     /// Allows users to edit nodes under their own partition (path = userId or userId/...).
-    /// Post-v10: each user has their own root-level partition ({userId}); the legacy
-    /// "User/{userId}" prefix is gone.
+    /// Post-v10: each user has their own root-level partition ({userId}). The legacy
+    /// "User/{userId}" prefix is still honoured for in-flight transitional data.
     /// </summary>
     public static MessageHubConfiguration WithSelfEdit(this MessageHubConfiguration config)
         => config.AddAccessRule(
@@ -53,8 +53,12 @@ public static class NodeAccessExtensions
                 if (string.IsNullOrEmpty(userId)) return false;
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath)) return false;
-                return nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
-                       || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase);
+                if (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
+                    || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                var legacyPrefix = "User/" + userId;
+                return nodePath.Equals(legacyPrefix, StringComparison.OrdinalIgnoreCase)
+                       || nodePath.StartsWith(legacyPrefix + "/", StringComparison.OrdinalIgnoreCase);
             });
 
     /// <summary>
