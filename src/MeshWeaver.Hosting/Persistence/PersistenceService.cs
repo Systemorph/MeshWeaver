@@ -108,14 +108,21 @@ internal class PersistenceService(
         => node.NodeType == MeshNode.NodeTypePath;
 
     /// <summary>
-    /// Users can always read their own User/VUser profile nodes,
-    /// and hubs can always access their own nodes (MainNode == userId).
+    /// Users can always read their own profile nodes (identified by NodeType
+    /// "User" or "VUser" with Id == userId), and hubs can always access their
+    /// own nodes (MainNode == userId). NodeType is the type discriminator —
+    /// don't gate on Namespace, since post-v10 the user partition is at
+    /// root and the legacy "User"/"VUser" namespace is no longer meaningful.
     /// </summary>
     private static bool IsSelfAccess(MeshNode node, string? userId)
-        => !string.IsNullOrEmpty(userId)
-           && (((node.Namespace == "User" || node.Namespace == "VUser")
-                && string.Equals(node.Id, userId, StringComparison.OrdinalIgnoreCase))
-               || string.Equals(node.MainNode, userId, StringComparison.OrdinalIgnoreCase));
+    {
+        if (string.IsNullOrEmpty(userId))
+            return false;
+        if (string.Equals(node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return (node.NodeType == "User" || node.NodeType == "VUser")
+               && string.Equals(node.Id, userId, StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Checks if a user has read access to a node.

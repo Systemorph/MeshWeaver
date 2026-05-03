@@ -17,10 +17,19 @@ public static class AssignmentNodeFactory
     /// AccessAssignment node granting (or, when <paramref name="denied"/> is true,
     /// denying) <paramref name="roleId"/> to <paramref name="userId"/> at
     /// <paramref name="scope"/> (null/empty means global root).
+    ///
+    /// <para><paramref name="accessObject"/> overrides the AccessAssignment's
+    /// <c>AccessObject</c> when the seed needs a unique node id but the role
+    /// must apply to a different (e.g., shared) principal — typically
+    /// <see cref="WellKnownUsers.Anonymous"/>. When omitted, AccessObject
+    /// equals <paramref name="userId"/> (the historical default).</para>
     /// </summary>
-    public static MeshNode UserRole(string userId, string roleId, string? scope = null, bool denied = false)
+    public static MeshNode UserRole(
+        string userId, string roleId, string? scope = null, bool denied = false,
+        string? accessObject = null)
     {
         var ns = string.IsNullOrEmpty(scope) ? "_Access" : $"{scope}/_Access";
+        var subject = accessObject ?? userId;
         return new MeshNode($"{userId}_Access", ns)
         {
             NodeType = "AccessAssignment",
@@ -28,8 +37,8 @@ public static class AssignmentNodeFactory
             MainNode = scope ?? "",
             Content = new AccessAssignment
             {
-                AccessObject = userId,
-                DisplayName = userId,
+                AccessObject = subject,
+                DisplayName = subject,
                 Roles = [new RoleAssignment { Role = roleId, Denied = denied }]
             }
         };
