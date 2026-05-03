@@ -55,11 +55,21 @@ internal sealed class MirrorOperations
             // records the calls. Either way we own disposal: McpRemoteMeshClient
             // is IAsyncDisposable; the stub may or may not be — handled below.
             var remote = _remoteFactory.Create(request.RemoteBaseUrl, request.RemoteToken);
-            var remoteAdapter = new HttpMeshStorageAdapter(remote);
+            IStorageAdapter remoteAdapter = new HttpMeshStorageAdapter(remote);
+
+            // If the caller asked for a different namespace on the destination
+            // (e.g. push `rbuergi/Story` to `Systemorph/Story`), wrap the
+            // *remote* adapter with a PathRemappingStorageAdapter so every
+            // path that flows through gets rewritten on the way out.
+            var hasRemap = !string.IsNullOrEmpty(request.TargetPath)
+                           && !string.Equals(request.TargetPath, request.SourcePath, StringComparison.Ordinal);
+            if (hasRemap)
+                remoteAdapter = new PathRemappingStorageAdapter(remoteAdapter, request.SourcePath, request.TargetPath!);
+
             var isPush = !string.Equals(request.Direction, "Pull", StringComparison.OrdinalIgnoreCase);
             var (source, target) = isPush
-                ? (_localAdapter, (IStorageAdapter)remoteAdapter)
-                : ((IStorageAdapter)remoteAdapter, _localAdapter);
+                ? (_localAdapter, remoteAdapter)
+                : (remoteAdapter, _localAdapter);
 
             var run = request.DryRun
                 ? RunDryRun(source, request, isPush)
