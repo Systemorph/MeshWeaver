@@ -111,10 +111,20 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     ClearCancellationIf(cts);
                     var canceled = ex is OperationCanceledException;
                     if (canceled)
+                    {
                         activityLogger.LogWarning("Script execution cancelled by user");
+                        activityLogger.Complete(ActivityStatus.Cancelled);
+                    }
                     else
-                        activityLogger.LogError(ex, "Script dispatch failed");
-                    activityLogger.Complete(ActivityStatus.Failed);
+                    {
+                        // Surface the full exception detail on the activity log
+                        // (LogError on the standard formatter includes Type +
+                        // Message + StackTrace via "{message}\n{exception}"),
+                        // so subscribers see WHY the script failed, not just
+                        // a generic "Failed" status.
+                        activityLogger.LogError(ex, "Script execution failed: {Reason}", ex.Message);
+                        activityLogger.Complete(ActivityStatus.Failed);
+                    }
                     hub.Post(
                         new SubmitCodeResponse(msg.Id, false)
                         {

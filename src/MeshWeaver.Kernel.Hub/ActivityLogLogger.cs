@@ -24,6 +24,17 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     private ImmutableList<LogMessage> _messages = ImmutableList<LogMessage>.Empty;
     private int _completed;
 
+    // Rate-limit running-state publishes. Each Log call appends to _messages but
+    // only triggers a DataChangeRequest at most once per ThrottleMs. Without
+    // this, scripts that do heavy work — node-create churn, NodeCopy, etc. —
+    // flood the activity hub's synchronization stream with concurrent patches
+    // and trigger StaleStreamStateException reorderings, eventually starving
+    // SubscribeRequest responses. The Complete path bypasses the throttle so
+    // terminal status always lands.
+    private const int ThrottleMs = 100;
+    private long _lastPublishTicks;
+    private int _publishScheduled;
+
     IDisposable? ILogger.BeginScope<TState>(TState state) => null;
 
     public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
@@ -53,8 +64,47 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
             _messages = _messages.Add(entry);
         }
 
-        // Best-effort push. Failures never surface into the script — the activity
-        // log is an observability surface, not a correctness path.
+        // Best-effort push, throttled. Failures never surface into the script —
+        // the activity log is an observability surface, not a correctness path.
+        ScheduleThrottledPublish();
+    }
+
+    /// <summary>
+    /// Emits a running-state snapshot at most once every <see cref="ThrottleMs"/>.
+    /// Coalesces bursts of log calls into a single DataChangeRequest so the
+    /// activity hub's stream isn't flooded with concurrent patches.
+    /// </summary>
+    private void ScheduleThrottledPublish()
+    {
+        var now = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastPublishTicks);
+        if (now - last < ThrottleMs)
+        {
+            // Schedule a tail flush: if no other thread has scheduled one, queue
+            // a delayed publish so the latest snapshot still lands.
+            if (Interlocked.CompareExchange(ref _publishScheduled, 1, 0) == 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(ThrottleMs);
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _publishScheduled, 0);
+                        if (Volatile.Read(ref _completed) == 0)
+                        {
+                            Interlocked.Exchange(ref _lastPublishTicks, Environment.TickCount64);
+                            PublishSnapshot(ActivityStatus.Running, finish: false);
+                        }
+                    }
+                });
+            }
+            return;
+        }
+
+        Interlocked.Exchange(ref _lastPublishTicks, now);
         PublishSnapshot(ActivityStatus.Running, finish: false);
     }
 
