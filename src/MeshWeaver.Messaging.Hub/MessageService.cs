@@ -231,13 +231,16 @@ public class MessageService : IMessageService
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
             && delivery.Message is not ShutdownRequest and not DisposeRequest)
         {
-            logger.LogDebug("Dropping message {MessageType} (ID: {MessageId}) in {Address} - hub is shutting down (RunLevel={RunLevel})",
-                delivery.Message.GetType().Name, delivery.Id, Address, hub.RunLevel);
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Dropping message {MessageType} (ID: {MessageId}) in {Address} - hub is shutting down (RunLevel={RunLevel})",
+                    delivery.Message.GetType().Name, delivery.Id, Address, hub.RunLevel);
             return delivery.Failed("Hub is shutting down");
         }
 
-        logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}",
-            delivery.Message.GetType().Name, delivery.Id, Address);
+        // Per-message; gate to skip GetType().Name + boxing when Debug is off.
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}",
+                delivery.Message.GetType().Name, delivery.Id, Address);
 
         // Always buffer to the main buffer - deferral logic will be handled in NotifyAsync
         // based on whether the message is actually targeted at this hub
@@ -248,6 +251,8 @@ public class MessageService : IMessageService
 
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
+        // Per-message hot path. Lift the trace gate once at the top.
+        var traceEnabled = logger.IsEnabled(LogLevel.Trace);
         var name = GetMessageType(delivery);
 
         if (delivery.State != MessageDeliveryState.Submitted)
@@ -290,8 +295,9 @@ public class MessageService : IMessageService
         {
 
             delivery = UnpackIfNecessary(delivery);
-            logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                name, Address, delivery.Id);
+            if (traceEnabled)
+                logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                    name, Address, delivery.Id);
 
             if (delivery.State == MessageDeliveryState.Failed)
                 return ReportFailure(delivery);
@@ -299,13 +305,15 @@ public class MessageService : IMessageService
 
 
 
-        logger.LogTrace(
-            "MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
-            name, Address, delivery.Id, delivery.Target);
+        if (traceEnabled)
+            logger.LogTrace(
+                "MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+                name, Address, delivery.Id, delivery.Target);
         delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
-        logger.LogTrace(
-            "MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
-            name, Address, delivery.Id, delivery.State);
+        if (traceEnabled)
+            logger.LogTrace(
+                "MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
+                name, Address, delivery.Id, delivery.State);
 
         if (isOnTarget)
         {

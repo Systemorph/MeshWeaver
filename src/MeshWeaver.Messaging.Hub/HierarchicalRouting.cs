@@ -80,8 +80,10 @@ internal class HierarchicalRouting
         if (delivery.Target.Host != null)
         {
             var hosted = delivery.Target;
-            logger.LogDebug("Routing delivery {id} of type {type} to host with address {target}", delivery.Id,
-                delivery.Message.GetType().Name, hosted.Host);
+            // Per-routed-message; gate to skip GetType().Name + boxing.
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Routing delivery {id} of type {type} to host with address {target}", delivery.Id,
+                    delivery.Message.GetType().Name, hosted.Host);
             if (hub.Address.Equals(hosted.Host))
             {
                 // Get the inner address (the target without its host)
@@ -166,8 +168,10 @@ internal class HierarchicalRouting
             return delivery.Failed("Parent hub disposing");
         }
 
-        logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
-            delivery.Message.GetType().Name, parentHub.Address);
+        // Per-routed-message; gate to skip GetType().Name + boxing.
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
+                delivery.Message.GetType().Name, parentHub.Address);
         if (parentHub.Address.Type != AddressExtensions.MeshType)
             delivery = delivery.WithSender(delivery.Sender.WithHost(parentHub.Address));
         parentHub.DeliverMessage(delivery);

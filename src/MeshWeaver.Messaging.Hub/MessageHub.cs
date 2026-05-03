@@ -596,16 +596,23 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        // Per-response hot path. Cache type name + gate by IsEnabled to skip
+        // GetType().Name recomputes and params boxing when logger is off.
+        var traceEnabled = logger.IsEnabled(LogLevel.Trace);
+        var debugEnabled = logger.IsEnabled(LogLevel.Debug);
+        string? messageTypeName = (traceEnabled || debugEnabled) ? delivery.Message.GetType().Name : null;
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                messageTypeName, Address, delivery.Id);
 
         if (
             !delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
             || requestId.ToString() is not { } requestIdString
         )
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
+            if (traceEnabled)
+                logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                    messageTypeName, Address, delivery.Id);
             return Task.FromResult(delivery);
         }
 
@@ -614,15 +621,17 @@ public sealed class MessageHub : IMessageHub
         {
             if (!responseSubjects.Remove(requestIdString, out var entry))
             {
-                logger.LogDebug("No subject found for response message {MessageType} (ID: {MessageId}) - treating as processed",
-                    delivery.Message.GetType().Name, delivery.Id);
+                if (debugEnabled)
+                    logger.LogDebug("No subject found for response message {MessageType} (ID: {MessageId}) - treating as processed",
+                        messageTypeName, delivery.Id);
                 return Task.FromResult(delivery.Processed());
             }
             subject = entry.Subject;
         }
 
-        logger.LogDebug("Dispatching response to subject | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        if (debugEnabled)
+            logger.LogDebug("Dispatching response to subject | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                messageTypeName, Address, delivery.Id);
 
         if (delivery.Message is DeliveryFailure failure)
         {
@@ -634,8 +643,9 @@ public sealed class MessageHub : IMessageHub
             subject.OnCompleted();
         }
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                messageTypeName, Address, delivery.Id);
         return Task.FromResult(delivery.Processed());
     }
 
@@ -650,8 +660,12 @@ public sealed class MessageHub : IMessageHub
         if (configure != null)
             options = configure(options);
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_POST | {MessageType} | Hub: {Address} | Target: {Target} | Sender: {Sender}",
-            typeof(TMessage).Name, Address, options.Target, options.Sender);
+        // Per-message hot path. typeof(TMessage).Name is JIT-folded so it's free,
+        // but params object[] boxing of options.Target / Sender / result.Id is not.
+        var traceEnabled = logger.IsEnabled(LogLevel.Trace);
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: HUB_POST | {MessageType} | Hub: {Address} | Target: {Target} | Sender: {Sender}",
+                typeof(TMessage).Name, Address, options.Target, options.Sender);
 
         // Log only important messages during disposal
         if (IsDisposing && (message is ShutdownRequest || logger.IsEnabled(LogLevel.Debug)))
@@ -661,21 +675,27 @@ public sealed class MessageHub : IMessageHub
         }
 
         var result = (IMessageDelivery<TMessage>?)messageService.Post(message, options);
-        logger.LogTrace("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
-            typeof(TMessage).Name, Address, result?.Id, options.Target);
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+                typeof(TMessage).Name, Address, result?.Id, options.Target);
         return result;
     }
 
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
-        logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        // Per-inbound hot path. Cache type name + gate by IsEnabled.
+        var traceEnabled = logger.IsEnabled(LogLevel.Trace);
+        string? messageTypeName = traceEnabled ? delivery.Message.GetType().Name : null;
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                messageTypeName, Address, delivery.Id);
 
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
         var result = messageService.RouteMessageAsync(ret, default);
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
-            delivery.Message.GetType().Name, Address, delivery.Id, result.State);
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
+                messageTypeName, Address, delivery.Id, result.State);
         return result;
     }
 
