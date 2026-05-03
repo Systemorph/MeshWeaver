@@ -40,8 +40,10 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
                 AssignmentNodeFactory.UserRole("Bob_Viewer", "Viewer", "ACME", accessObject: "Bob"),
                 AssignmentNodeFactory.UserRole("Bob", "Editor", "ACME"),
                 AssignmentNodeFactory.UserRole("NewUser", "Admin", null),
-                // Carol: stacked roles (Admin + Viewer at ACME) used for the "remove Admin" test
-                AssignmentNodeFactory.UserRole("Carol_Admin", "Admin", "ACME", accessObject: "Carol"),
+                // Carol: only the static Viewer at ACME is seeded here. The
+                // Admin role is created at runtime by RemoveUserRole_RemovesSpecificRole
+                // so the same test can delete it again — static seeds live in
+                // MeshConfiguration.Nodes only and DeleteNode would not find them.
                 AssignmentNodeFactory.UserRole("Carol", "Viewer", "ACME"),
                 AssignmentNodeFactory.UserRole("Roland", "Admin", null),
                 // MultiUser_MW is an INDEPENDENT principal in MultipleRoles_CombinesPermissions —
