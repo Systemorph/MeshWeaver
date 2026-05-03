@@ -92,8 +92,19 @@ public static class ApiTokenNodeType
         // Read own MeshNode via one-shot GetDataRequest — true request/response, no
         // lingering subscription. Posts to self (hub.Address); the handler's Subscribe
         // runs on the event loop after this returns, so no deadlock.
+        //
+        // Impersonate-as-System for the lookup: token validation is the entry
+        // point that turns a raw token into a user identity, so by definition
+        // the caller is unauthenticated. Without an explicit System scope, the
+        // SecurePersistence ACL would deny the read (anonymous can't read an
+        // ApiToken node) and the validator would return "Token not found" for
+        // every request. The hash-compare further down is the actual
+        // authentication step; the System scope only covers this one read.
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var hubAddress = hub.Address.ToString();
-        hub.GetMeshNode(hubAddress, TimeSpan.FromSeconds(10))
+        Observable.Using(
+            () => accessService.ImpersonateAsSystem(),
+            _ => hub.GetMeshNode(hubAddress, TimeSpan.FromSeconds(10)))
             .SelectMany(node =>
             {
                 if (node == null)
@@ -114,8 +125,15 @@ public static class ApiTokenNodeType
                     }
 
                     // Cross-hub one-shot read for the actual token node — GetDataRequest
-                    // routes to the owning per-node hub via the mesh.
-                    tokenNodeObs = hub.GetMeshNode(index.TokenPath, TimeSpan.FromSeconds(10));
+                    // routes to the owning per-node hub via the mesh. Re-impersonate
+                    // as System for this read too: the AsyncLocal context that the
+                    // outer Observable.Using set may not be alive when the SelectMany
+                    // continuation re-subscribes downstream, and the actual token
+                    // node sits at "{userId}/ApiToken/{hashPrefix}" which RLS gates
+                    // on the owning user's identity.
+                    tokenNodeObs = Observable.Using(
+                        () => accessService.ImpersonateAsSystem(),
+                        _ => hub.GetMeshNode(index.TokenPath, TimeSpan.FromSeconds(10)));
                 }
                 else
                 {

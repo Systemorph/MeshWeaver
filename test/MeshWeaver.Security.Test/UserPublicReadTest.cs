@@ -165,10 +165,16 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         results.Should().BeEmpty("Organization instances require partition-level access, not public read");
 
         // Grant Alice (the unprivileged user) Viewer role on Globex via runtime CreateNode.
-        // This tests the live behavior change after a permission grant.
+        // This tests the live behavior change after a permission grant — but the
+        // CreateNode itself goes through the standard RLS validator, which would
+        // deny Alice (the current context) the right to write into Globex/_Access.
+        // Switch back to the DevLogin admin context for the seeding write, then
+        // restore Alice for the post-grant query.
+        TestUsers.DevLogin(Mesh);
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         await meshService.CreateNode(AssignmentNodeFactory.UserRole("Alice", "Viewer", "Globex"))
             .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        LoginAsUnprivilegedUser();
 
         // Wait for the runtime AccessAssignment to surface in SecurityService's
         // synced query (the QueryAsync path checks live permissions). Without

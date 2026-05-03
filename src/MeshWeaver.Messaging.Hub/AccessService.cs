@@ -116,6 +116,33 @@ public class AccessService
         });
     }
 
+    /// <summary>
+    /// Temporarily sets the access context to the well-known System identity.
+    /// SecurityService grants <c>Permission.All</c> to System unconditionally,
+    /// so this scope is the right answer for infrastructure operations that
+    /// need to bypass RLS — e.g., the per-token hub reading its own
+    /// MeshNode during token validation, where the caller is, by design,
+    /// unauthenticated. Restores the previous AsyncLocal value on dispose.
+    /// </summary>
+    /// <remarks>
+    /// Use sparingly. Wrapping general application code in this scope is a
+    /// security smell — the right shape for normal user flows is to plumb
+    /// the user's <c>AccessContext</c> through the message-level
+    /// <c>delivery.AccessContext</c>, not to bypass RLS.
+    /// </remarks>
+    public IDisposable ImpersonateAsSystem()
+    {
+        // The literal must match `MeshWeaver.Mesh.Security.WellKnownUsers.System`;
+        // we don't reference that constant here because Messaging.Hub sits below
+        // Mesh.Contract in the project graph and adding the dep would invert it.
+        const string SystemObjectId = "system-security";
+        return new AccessContextScope(this, new AccessContext
+        {
+            ObjectId = SystemObjectId,
+            Name = SystemObjectId
+        });
+    }
+
     private sealed class AccessContextScope : IDisposable
     {
         private readonly AccessService service;
