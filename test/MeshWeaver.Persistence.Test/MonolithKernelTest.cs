@@ -116,11 +116,13 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
         var client = GetClient();
         var kernelAddress = await CreateKernelSessionAsync();
 
+        // Subscribe BEFORE posting — see WatchForActivityLogAsync's docstring.
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, new LayoutAreaReference(Area));
+
         client.Post(
             new SubmitCodeRequest(Code) { Id = Area },
             o => o.WithTarget(kernelAddress));
 
-        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(kernelAddress, new LayoutAreaReference(Area));
         var control = await stream.GetControlStream(Area)
             .Timeout(20.Seconds())
             .FirstAsync(x => x is not null);
@@ -153,12 +155,14 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
         var kernelAddress = await CreateKernelSessionAsync();
         const string viewId = "test-view-1";
 
+        // Subscribe BEFORE posting — see WatchForActivityLogAsync's docstring.
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference(viewId));
+
         client.Post(
             new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown(\"Hello from kernel\")") { Id = viewId },
             o => o.WithTarget(kernelAddress));
 
-        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
-            kernelAddress, new LayoutAreaReference(viewId));
         var control = await stream.GetControlStream(viewId)
             .Timeout(15.Seconds())
             .FirstAsync(x => x is not null);
@@ -177,6 +181,10 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
         var client = GetClient();
         var kernelAddress = await CreateKernelSessionAsync();
 
+        // Subscribe BEFORE posting — see WatchForActivityLogAsync's docstring.
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference("cell-2"));
+
         // First submission: define a variable
         client.Post(
             new SubmitCodeRequest("var myValue = 42;") { Id = "cell-1" },
@@ -187,8 +195,6 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"Value is {myValue}\")") { Id = "cell-2" },
             o => o.WithTarget(kernelAddress));
 
-        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
-            kernelAddress, new LayoutAreaReference("cell-2"));
         var control = await stream.GetControlStream("cell-2")
             .Timeout(15.Seconds())
             .FirstAsync(x => x is not null);
@@ -221,18 +227,19 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
         var client = GetClient();
         var kernelAddress = await CreateKernelSessionAsync();
 
+        // Subscribe to each area BEFORE posting — see WatchForActivityLogAsync's docstring.
+        var stream2 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference("s2"));
+        var stream3 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference("s3"));
+
         client.Post(new SubmitCodeRequest("var sharedValue = 100;") { Id = "s1" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"first: {sharedValue}\")") { Id = "s2" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest("MeshWeaver.Layout.Controls.Markdown($\"second: {sharedValue * 2}\")") { Id = "s3" }, o => o.WithTarget(kernelAddress));
 
-        // Subscribe to each area independently — each needs its own LayoutAreaReference
-        var stream2 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
-            kernelAddress, new LayoutAreaReference("s2"));
         var r2 = await stream2.GetControlStream("s2").Timeout(20.Seconds()).FirstAsync(x => x is not null);
         (r2 as MarkdownControl)!.Markdown.ToString().Should().Contain("first: 100");
 
-        var stream3 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
-            kernelAddress, new LayoutAreaReference("s3"));
         var r3 = await stream3.GetControlStream("s3").Timeout(20.Seconds()).FirstAsync(x => x is not null);
         (r3 as MarkdownControl)!.Markdown.ToString().Should().Contain("second: 200");
     }
@@ -290,6 +297,16 @@ var wordFreq = corpus.Split(' ')
         // Act V — uses `wordFreq` dictionary from Act I
         const string actV = @"MeshWeaver.Layout.Controls.Markdown($""Most frequent word: '{wordFreq.First().Key}' ({wordFreq.First().Value}x)"")";
 
+        // Subscribe to each area BEFORE posting — see WatchForActivityLogAsync's docstring.
+        var stream2 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference("act-2"));
+        var stream3 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference("act-3"));
+        var stream4 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference("act-4"));
+        var stream5 = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            kernelAddress, new LayoutAreaReference("act-5"));
+
         // Submit all blocks in order (mimics what MarkdownView does)
         client.Post(new SubmitCodeRequest(actI) { Id = "act-1" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest(actII) { Id = "act-2" }, o => o.WithTarget(kernelAddress));
@@ -297,23 +314,19 @@ var wordFreq = corpus.Split(' ')
         client.Post(new SubmitCodeRequest(actIV) { Id = "act-4" }, o => o.WithTarget(kernelAddress));
         client.Post(new SubmitCodeRequest(actV) { Id = "act-5" }, o => o.WithTarget(kernelAddress));
 
-        // Verify all blocks produced results using variables from Act I.
-        // Each area needs its own LayoutAreaReference stream subscription.
-        async Task<MarkdownControl> GetMarkdown(string areaId)
+        async Task<MarkdownControl> GetMarkdown(ISynchronizationStream<JsonElement> stream, string areaId)
         {
-            var s = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
-                kernelAddress, new LayoutAreaReference(areaId));
-            var control = await s.GetControlStream(areaId).Timeout(20.Seconds()).FirstAsync(x => x is not null);
+            var control = await stream.GetControlStream(areaId).Timeout(20.Seconds()).FirstAsync(x => x is not null);
             return (MarkdownControl)control;
         }
 
-        (await GetMarkdown("act-2")).Markdown.ToString().Should().Contain("Uptime:",
+        (await GetMarkdown(stream2, "act-2")).Markdown.ToString().Should().Contain("Uptime:",
             "Act II must see `now` and `epoch` from Act I");
-        (await GetMarkdown("act-3")).Markdown.ToString().Should().Contain("Primes below 200: 46",
+        (await GetMarkdown(stream3, "act-3")).Markdown.ToString().Should().Contain("Primes below 200: 46",
             "Act III must see `primes` collection from Act I");
-        (await GetMarkdown("act-4")).Markdown.ToString().Should().Contain("Collatz(27) has 111 steps",
+        (await GetMarkdown(stream4, "act-4")).Markdown.ToString().Should().Contain("Collatz(27) has 111 steps",
             "Act IV must see `Collatz` local function from Act I");
-        (await GetMarkdown("act-5")).Markdown.ToString().Should().Contain("'the' (4x)",
+        (await GetMarkdown(stream5, "act-5")).Markdown.ToString().Should().Contain("'the' (4x)",
             "Act V must see `wordFreq` dictionary from Act I");
     }
 
@@ -360,6 +373,14 @@ var wordFreq = corpus.Split(' ')
         var client = GetClient();
         var kernelAddress = await CreateKernelSessionAsync();
 
+        // Subscribe to ALL areas BEFORE posting any submission — see
+        // WatchForActivityLogAsync's docstring. Materialise the streams in a
+        // dictionary so the assertion loop can pull them out by submission id.
+        var streams = submissions.ToDictionary(
+            s => s.Id,
+            s => client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+                kernelAddress, new LayoutAreaReference(s.Id)));
+
         // Post all submissions to the same kernel — exactly what MarkdownView does
         foreach (var submission in submissions)
         {
@@ -372,8 +393,7 @@ var wordFreq = corpus.Split(' ')
         for (var i = 0; i < submissions.Count; i++)
         {
             var submission = submissions[i];
-            var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
-                kernelAddress, new LayoutAreaReference(submission.Id));
+            var stream = streams[submission.Id];
             try
             {
                 var control = await stream.GetControlStream(submission.Id)
