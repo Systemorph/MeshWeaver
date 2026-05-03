@@ -107,6 +107,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual bool ShareMeshAcrossTests => false;
 
     /// <summary>
+    /// Mirrors <see cref="ShareMeshAcrossTests"/> for the SP-disposal hook
+    /// added in <see cref="Fixture.TestBase.DisposeAsync"/>. When the mesh
+    /// is shared across [Fact]s, the SP is shared too — disposing it on the
+    /// first [Fact]'s teardown breaks every subsequent [Fact].
+    /// </summary>
+    protected override bool DisposeServiceProviderOnTestEnd => !ShareMeshAcrossTests;
+
+    /// <summary>
     /// Cached <see cref="IServiceProvider"/> per test-class type, populated on
     /// the first instance of a class that opts in via
     /// <see cref="ShareMeshAcrossTests"/>. Never cleared during the testhost
@@ -124,6 +132,17 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         Path.Combine(Path.GetTempPath(), "meshweaver-test-trace.log");
     private static readonly object TestTraceLogLock = new();
 
+    /// <summary>
+    /// Cross-process per-class memory delta summary — one line per test class
+    /// covering INIT_MEM → DISPOSE_MEM (after forced full GC). Surfaces leaks
+    /// without forcing a developer to grep through the much busier per-event
+    /// <see cref="TestTraceLogPath"/>. Path-stable so the workflow's
+    /// "Collect test logs for artifact" step can always find it.
+    /// </summary>
+    private static readonly string MemoryDeltaLogPath =
+        Path.Combine(Path.GetTempPath(), "meshweaver-memory-delta.log");
+    private static readonly object MemoryDeltaLogLock = new();
+
     private static void TestPhaseTrace(string testClass, string phase, long? elapsedMs = null, string? extra = null)
     {
         try
@@ -137,6 +156,79 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         catch
         {
             // Tracing must never throw out of the test pipeline.
+        }
+    }
+
+    /// <summary>
+    /// Writes one structured line to <see cref="MemoryDeltaLogPath"/> capturing
+    /// the per-test-instance INIT_MEM → DISPOSE_MEM delta after a forced full
+    /// GC. Format is grep-friendly: <c>HH:mm:ss.fff [TestClass] DELTA managed=…
+    /// rss=… rssAnon=… unmanaged=… shared=…</c>. Cannot use <see cref="ILogger"/>
+    /// here — DisposeAsync runs after the test's logging scope has been torn down.
+    /// <para>
+    /// <c>rssAnon</c> = anonymous resident pages (native heap + JIT code + stacks)
+    /// — Linux only, from <c>/proc/self/status</c>. This is where Autofac's
+    /// Reflection.Emit factories pin memory that managed-heap GC can't touch and
+    /// is the leak metric the user actually cares about.
+    /// </para>
+    /// <para>
+    /// <c>unmanaged</c> = <c>rss − managed</c> — a portable approximation of native
+    /// memory cost (works on Windows + macOS where rssAnon is not exposed). Includes
+    /// JIT code, native heap, mapped files, and the kernel's per-process bookkeeping;
+    /// noisier than rssAnon on Linux but the only signal available off-Linux.
+    /// </para>
+    /// </summary>
+    private static void TestMemoryDelta(
+        string testClass,
+        long managedDelta,
+        long rssDelta,
+        long rssAnonDelta,
+        long unmanagedDelta,
+        bool shared)
+    {
+        try
+        {
+            var line = $"{DateTime.UtcNow:HH:mm:ss.fff} [{testClass}] DELTA "
+                + $"managed={managedDelta / 1024 / 1024}MiB "
+                + $"rss={rssDelta / 1024 / 1024}MiB "
+                + $"rssAnon={rssAnonDelta / 1024 / 1024}MiB "
+                + $"unmanaged={unmanagedDelta / 1024 / 1024}MiB "
+                + $"shared={(shared ? 1 : 0)}";
+            lock (MemoryDeltaLogLock)
+                File.AppendAllText(MemoryDeltaLogPath, line + Environment.NewLine);
+        }
+        catch
+        {
+            // Tracing must never throw out of the test pipeline.
+        }
+    }
+
+    /// <summary>
+    /// Reads <c>RssAnon</c> (anonymous resident KB → bytes) from
+    /// <c>/proc/self/status</c>. Linux only; returns 0 on Windows/macOS so
+    /// callers compute <c>delta=0</c> there and rely on the <c>unmanaged</c>
+    /// (rss − managed) metric instead.
+    /// </summary>
+    private static long ReadRssAnonBytes()
+    {
+        try
+        {
+            if (!File.Exists("/proc/self/status")) return 0;
+            foreach (var line in File.ReadLines("/proc/self/status"))
+            {
+                if (line.StartsWith("RssAnon:", StringComparison.Ordinal))
+                {
+                    var parts = line.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2 && long.TryParse(parts[1], out var kb))
+                        return kb * 1024L;
+                    return 0;
+                }
+            }
+            return 0;
+        }
+        catch
+        {
+            return 0;
         }
     }
 
@@ -401,6 +493,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// auto-create (and recurse on), and sets up access rights so that access control
     /// allows operations in tests.
     /// </summary>
+    /// <summary>
+    /// Per-instance INIT memory snapshot — captured immediately after
+    /// <see cref="InitializeAsync"/> finishes so DisposeAsync can compute
+    /// the post-cycle delta and write a single DELTA line per test instance
+    /// to <see cref="MemoryDeltaLogPath"/>. Tracks managed heap, full RSS,
+    /// AND unmanaged-as-anonymous (rssAnon on Linux) — the last is where
+    /// the Autofac Reflection.Emit factory pin lives, plus any unmanaged
+    /// allocations from native libraries the test pulls in.
+    /// </summary>
+    private long _instanceInitManagedBytes;
+    private long _instanceInitRssBytes;
+    private long _instanceInitRssAnonBytes;
+
     public override async ValueTask InitializeAsync()
     {
         var sw = Stopwatch.StartNew();
@@ -423,6 +528,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             await SetupAccessRightsAsync();
             TestPhaseTrace(name, "INIT_DONE", sw.ElapsedMilliseconds);
             TestMemTrace(name, "INIT_MEM", forceGc: false);
+
+            // Snapshot for the per-instance DELTA line written in DisposeAsync.
+            _instanceInitManagedBytes = GC.GetTotalMemory(forceFullCollection: false);
+            try { _instanceInitRssBytes = Process.GetCurrentProcess().WorkingSet64; }
+            catch { _instanceInitRssBytes = 0; }
+            _instanceInitRssAnonBytes = ReadRssAnonBytes();
         }
         catch (Exception ex)
         {
@@ -781,6 +892,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 throw;
             }
             TestMemTrace(testName, "DISPOSE_MEM", forceGc: true);
+            WriteInstanceMemoryDelta(testName, shared: true);
             return;
         }
 
@@ -843,10 +955,49 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // class. Across the run, look for classes whose post-DISPOSE managed
             // delta stays positive — those are the leaks driving CI's OOM.
             TestMemTrace(testName, "DISPOSE_MEM", forceGc: true);
+            WriteInstanceMemoryDelta(testName, shared: false);
         }
 
         if (disposeException != null)
             throw disposeException;
+    }
+
+    /// <summary>
+    /// Computes the per-instance INIT → DISPOSE delta in managed heap, full RSS,
+    /// rssAnon (Linux), and unmanaged-as-(rss−managed) and writes it as one line
+    /// to <see cref="MemoryDeltaLogPath"/>. Called at the very end of
+    /// <see cref="DisposeAsync"/> after GC has run.
+    /// </summary>
+    private void WriteInstanceMemoryDelta(string testName, bool shared)
+    {
+        try
+        {
+            // _instanceInitManagedBytes==0 means InitializeAsync never completed
+            // (test threw before snapshot). Skip — no meaningful delta.
+            if (_instanceInitManagedBytes == 0 && _instanceInitRssBytes == 0)
+                return;
+
+            var managedAfter = GC.GetTotalMemory(forceFullCollection: false);
+            long rssAfter;
+            try { rssAfter = Process.GetCurrentProcess().WorkingSet64; }
+            catch { rssAfter = 0; }
+            var rssAnonAfter = ReadRssAnonBytes();
+
+            var managedDelta = managedAfter - _instanceInitManagedBytes;
+            var rssDelta = _instanceInitRssBytes == 0 ? 0 : rssAfter - _instanceInitRssBytes;
+            var rssAnonDelta = _instanceInitRssAnonBytes == 0 ? 0 : rssAnonAfter - _instanceInitRssAnonBytes;
+            // unmanaged ≈ rss − managed: portable native-cost approximation that works
+            // on Windows and macOS where rssAnon isn't exposed.
+            var unmanagedBefore = _instanceInitRssBytes - _instanceInitManagedBytes;
+            var unmanagedAfter = rssAfter - managedAfter;
+            var unmanagedDelta = unmanagedAfter - unmanagedBefore;
+
+            TestMemoryDelta(testName, managedDelta, rssDelta, rssAnonDelta, unmanagedDelta, shared);
+        }
+        catch
+        {
+            // Memory tracing must never throw out of the test pipeline.
+        }
     }
 
     /// <summary>
