@@ -562,10 +562,21 @@ internal class CompilationCacheService(
         // The flag ensures the next IsCacheValid returns false regardless.
         _invalidated[nodeName] = 0;
 
-        // First, unload the AssemblyLoadContext to release the file lock
+        // Skip the expensive ALC unload + GC + file deletion when there's nothing to
+        // invalidate — first-compile path hits this on every NodeType activation, and
+        // a sync `GC.Collect` + `WaitForPendingFinalizers` freezes the whole process
+        // (including peer tests using the same SP). The compile that follows will
+        // overwrite any stale file on disk anyway, so the only path that needs the
+        // heavy unload is when an ALC is currently live for this nodeName.
+        var hasLiveContext = _loadContexts.ContainsKey(nodeName);
+        if (!hasLiveContext)
+        {
+            return;
+        }
+
         UnloadContext(nodeName);
 
-        // Small delay to allow GC to collect the unloaded context
+        // Required so the unloaded ALC releases its file lock before we delete the DLL.
         GC.Collect();
         GC.WaitForPendingFinalizers();
 
