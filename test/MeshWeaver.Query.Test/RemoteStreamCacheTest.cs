@@ -53,6 +53,14 @@ public class RemoteStreamCacheTest(ITestOutputHelper output) : MonolithMeshTestB
         var workspace = Mesh.GetWorkspace();
         var first = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
+
+        // Wire up the stream by waiting for its Initial emission. Without this
+        // the workspace's internal SubscribeRequest stays pending and the
+        // disposal-time leak detector fails the test before the assertion runs.
+        await first
+            .Where(c => c.Value != null && c.Value.Name == "Alpha")
+            .FirstAsync().Timeout(System.TimeSpan.FromSeconds(15)).ToTask(ct);
+
         var second = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(path), new MeshNodeReference());
 

@@ -317,4 +317,72 @@ public class SyncedQueryTest(ITestOutputHelper output)
             .Where(arr => arr.All(n => n.Path != assignmentPath))
             .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
     }
+
+    /// <summary>
+    /// Regression guard for multi-query unions in
+    /// <see cref="SyncedQueryMeshNodes"/>: when <c>workspace.GetQuery</c> is
+    /// called with N&gt;1 queries, the FIRST emission downstream
+    /// (<c>.Take(1)</c>) MUST contain the union of every query's Initial
+    /// result set — never a partial one driven by whichever upstream
+    /// <c>ObserveQuery</c> happened to emit first.
+    ///
+    /// <para>The original failure mode (caught by
+    /// <c>MeshNodeCompilationIntegrationTest.CompileWithMultipleSourceLocationsPullsInExternalCode</c>):
+    /// a Profile NodeType compile asks for the union of
+    /// <c>namespace:type/Profile/Source</c> + <c>namespace:type/Post/Source</c>;
+    /// the .Take(1) consumer received only Profile/Source/code (the faster
+    /// upstream's Initial), missed Post/Source/code entirely, and the
+    /// compile failed with "type 'Platform' could not be found".</para>
+    ///
+    /// <para>Fix lives in
+    /// <c>SyncedQueryMeshNodes.BuildReadStreamCore</c>: tag each upstream's
+    /// changes with its query index, track an Initial-received bitmask, and
+    /// suppress downstream emissions until every query has reported its
+    /// Initial (or Reset) event.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task MultiQueryUnion_FirstEmission_ContainsAllQueryResults()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Two distinct namespaces, one node in each. Use unique IDs so this
+        // test doesn't collide with any other [Fact] under shared mesh.
+        var nsA = $"{TestPartition}/MultiQueryA";
+        var nsB = $"{TestPartition}/MultiQueryB";
+        var nodeA = new MeshNode("alpha", nsA)
+        {
+            Name = "Alpha",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+        };
+        var nodeB = new MeshNode("beta", nsB)
+        {
+            Name = "Beta",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+        };
+        await NodeFactory.CreateNode(nodeA).FirstAsync().ToTask(ct);
+        await NodeFactory.CreateNode(nodeB).FirstAsync().ToTask(ct);
+
+        // Two-query union — the bug manifested when one query's Initial
+        // emission won the .Merge race and downstream .Take(1) consumed it
+        // as the complete result set.
+        var observable = Mesh.GetWorkspace().GetQuery(
+            "$multi-query-union-test",
+            $"namespace:{nsA} scope:subtree nodeType:Markdown",
+            $"namespace:{nsB} scope:subtree nodeType:Markdown");
+
+        var firstEmission = await observable
+            .Take(1)
+            .Timeout(15.Seconds())
+            .ToTask(ct);
+
+        var paths = firstEmission.Select(n => n.Path).ToHashSet();
+        paths.Should().Contain(nodeA.Path,
+            "the FIRST emission of a multi-query SyncedQuery must include results " +
+            "from every upstream query, not just the fastest one");
+        paths.Should().Contain(nodeB.Path,
+            "the FIRST emission of a multi-query SyncedQuery must include results " +
+            "from every upstream query, not just the fastest one");
+    }
 }

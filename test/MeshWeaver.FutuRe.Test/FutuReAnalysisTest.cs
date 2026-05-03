@@ -36,6 +36,13 @@ namespace MeshWeaver.FutuRe.Test;
 /// </summary>
 public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // 46 [Fact]s, all read-only views over the shared FutuRe sample graph
+    // (LocalAnalysis / GroupAnalysis NodeTypes) with no node mutation.
+    // Sharing the SP cuts the per-class build cost from 46 SP rebuilds × ~2s
+    // each to one SP build, plus reuses the dynamic NodeType DLL cache across
+    // all [Fact]s. Local: ~5m → ~1m on this project alone.
+    protected override bool ShareMeshAcrossTests => true;
+
     // Per-session cache directory keyed on Guid.NewGuid so a stale DLL pinned by a
     // prior test process's AssemblyLoadContext (or a newer framework DLL invalidating
     // the timestamp check) can't break compilation. The default bin/.mesh-cache and

@@ -6,6 +6,20 @@ This file provides guidance to AI agents when working with code in this reposito
 
 **NEVER commit or push automatically.** Always wait for the user to explicitly ask for a commit or push. Present changes for review first.
 
+## Test Triage Workflow
+
+When CI fails, **DO NOT run entire test projects locally** — they take 1-5 min each, multiply across iterations, and burn the user's time. Instead:
+
+1. **Read the failed test names from CI logs** — `gh run view <id> --log` already names them line-by-line in `[xUnit.net …] testName [FAIL]`. The trx artifact gives full stack traces.
+2. **Run ONE test at a time locally** with `dotnet test <project> --filter "FullyQualifiedName~<TestName>" --no-build --no-restore`. Iterate on a single failing test until it passes, then move on.
+3. **No skipping**. If a test fails, fix it. "CI-only flake" is rarely the right answer — usually the test catches a real eventually-consistent timing or shared-state bug.
+
+For full guidance on test-base setup, stream assertions, `Subject` vs. `ReplaySubject`, and the CI-only-failure-is-a-real-bug rule, read:
+
+- [Writing Tests in MeshWeaver](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md) — golden rules, stream assertions, the `ReadNodeAsync` primitive, how to handle CI-only failures.
+- [CQRS — Queries vs. Content Access](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) — why `QueryAsync` is the wrong read after a write.
+- [Test State Isolation](src/MeshWeaver.Documentation/Data/Architecture/TestStateIsolation.md) — required if your tests share a cluster fixture.
+
 ## GitHub PR Operations
 
 The `gh` CLI token has **read + push** permissions but **cannot** merge PRs, resolve review threads, or request reviewers. For these operations:

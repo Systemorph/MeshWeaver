@@ -61,20 +61,26 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Subscribe to the activity log MeshNode and wait for the next snapshot
-    /// matching <paramref name="predicate"/>. Mirrors the canonical pattern from
-    /// the docs (workspace.GetRemoteStream + Where + Take(1)).
+    /// Returns a Task that completes when the activity log at <paramref name="activityAddress"/>
+    /// emits a snapshot matching <paramref name="predicate"/>. Subscribes IMMEDIATELY
+    /// at call time so the caller can post the trigger AFTER awaiting the returned
+    /// Task on the next line — without that ordering, the script's activity log
+    /// update can fire BEFORE the test subscribes (handler runs faster than the
+    /// test thread reaches the subscribe call), the hot stream drops the
+    /// emission, and the test times out. See
+    /// <c>Doc/Architecture/WritingTests.md</c> → "Stream assertions".
     /// </summary>
-    private async Task<ActivityLog> WaitForActivityLogAsync(
+    private Task<ActivityLog> WatchForActivityLogAsync(
         IMessageHub client, Address activityAddress, Func<ActivityLog, bool> predicate, TimeSpan? timeout = null)
-        => await client.GetWorkspace()
+        => client.GetWorkspace()
             .GetRemoteStream<MeshNode, MeshNodeReference>(activityAddress, new MeshNodeReference())
             .Select(change => change.Value?.Content as ActivityLog)
             .Where(log => log is not null && predicate(log!))
             .Select(log => log!)
             .Take(1)
             .Timeout(timeout ?? 15.Seconds())
-            .FirstAsync();
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task HelloWorld()
@@ -82,13 +88,15 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var kernelAddress = await CreateKernelSessionAsync();
 
+        // Subscribe BEFORE posting — see WatchForActivityLogAsync's docstring.
+        var logTask = WatchForActivityLogAsync(client, kernelAddress,
+            l => l.Messages.Any(m => m.Message.Contains("Hello World")));
+
         client.Post(
             new SubmitCodeRequest("Console.WriteLine(\"Hello World\");"),
             o => o.WithTarget(kernelAddress));
 
-        // Stdout flows into the activity log via the kernel's LoggerTextWriter.
-        var log = await WaitForActivityLogAsync(client, kernelAddress,
-            l => l.Messages.Any(m => m.Message.Contains("Hello World")));
+        var log = await logTask;
 
         log.Messages.Select(m => m.Message)
             .Should().Contain(m => m.Contains("Hello World"));
