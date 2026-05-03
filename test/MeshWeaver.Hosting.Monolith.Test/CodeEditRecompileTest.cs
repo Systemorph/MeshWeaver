@@ -94,7 +94,34 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     // times out at 30s targeting mesh/{instanceId} — the per-node hub for the
     // first instance never activates within budget. That's a hub-routing issue,
     // not a compile-cache one; needs separate investigation.
-    [Fact(Timeout = 60000, Skip = "CreateNodeRequest to per-instance hub times out at 30s — instance hub doesn't activate within budget. Separate from compile-cache file-lock race (now fixed).")]
+    // Skipped 2026-05-03: the implicit "edit + invalidate-cache + recycle"
+    // flow this test exercises has a Windows-side stale-DLL bug —
+    // CompilationCacheService._loadContexts is keyed by release.Path for
+    // release-based ALCs, so InvalidateCache(nodeName) can't see them, skips
+    // the GC.Collect, and File.Delete fails with UnauthorizedAccessException
+    // because the live ALC still holds the file handle. The next read returns
+    // the stale V1 marker.
+    //
+    // Roland's design pivot: drop the implicit invalidate-on-edit path
+    // entirely. Instead make releases first-class:
+    //   1. User edits NodeType properties / sources (free-form, no compile).
+    //   2. User explicitly creates a Release MeshNode (timestamped, with
+    //      optional markdown release notes).
+    //   3. A NodeType-compile Activity runs against the Release. Step 4 of
+    //      the Activity-Control-Plane plan emits the activity already
+    //      (NodeTypeCompilationActivity); the new path consumes it.
+    //   4. If the activity fails, the Release is not committed (or is
+    //      committed with Status=Failed and no AssemblyPath) — the previous
+    //      Release stays the active one.
+    //   5. NodeTypeService resolves "current assembly" by looking up the
+    //      latest succeeded Release MeshNode for the NodeType, not by
+    //      scanning a process-local cache.
+    //
+    // Under that design the test becomes "create V1 release → read V1 →
+    // create V2 release → read V2", and the stale-DLL race goes away
+    // (V2 has its own ALC keyed by release.Path; V1 stays loaded but the
+    // instance hub binds to V2's ALC). Until the migration lands, skip.
+    [Fact(Timeout = 60000, Skip = "Stale DLL on Windows. Pending Release-as-MeshNode migration (see comment + #21).")]
     public async Task CodeEdit_AfterRecycle_RecompilesAndServesNewVersion()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;

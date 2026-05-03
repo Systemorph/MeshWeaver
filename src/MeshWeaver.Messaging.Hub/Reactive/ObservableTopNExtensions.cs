@@ -207,4 +207,5 @@ public static class ObservableTopNExtensions
         ArgumentNullException.ThrowIfNull(source);
         return source.ToObservableSequence().ScanSorted(comparer);
     }
+
 }

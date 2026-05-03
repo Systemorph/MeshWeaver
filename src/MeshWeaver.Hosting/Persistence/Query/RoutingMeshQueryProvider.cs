@@ -33,6 +33,40 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
     /// </summary>
     private static readonly SemaphoreSlim FanOutThrottle = new(20, 20);
 
+    /// <summary>
+    /// Default autocomplete sort: shortest path first (top-level partitions
+    /// beat deep descendants), highest score next, then by name. Matches the
+    /// pre-streaming-fan-out behaviour — the OLD code did this in an
+    /// <c>OrderBy(Path.Length).ThenByDescending(Score).ThenBy(Name)</c> at
+    /// the end of <c>Task.WhenAll</c>; the new streaming chain pipes items
+    /// through <c>CollectTopNAsync</c> with this comparer to maintain the
+    /// same final ordering while letting fast partitions emit early.
+    /// </summary>
+    private static readonly IComparer<QuerySuggestion> AutocompleteByPathLengthThenScore =
+        Comparer<QuerySuggestion>.Create((a, b) =>
+        {
+            var c = a.Path.Length.CompareTo(b.Path.Length);
+            if (c != 0) return c;
+            c = b.Score.CompareTo(a.Score); // higher score first
+            if (c != 0) return c;
+            return string.CompareOrdinal(a.Name, b.Name);
+        });
+
+    /// <summary>
+    /// RelevanceFirst variant: highest score first, then shortest path, then
+    /// by name. Used by chat / search consumers that prioritise fuzzy-match
+    /// quality over hierarchy depth.
+    /// </summary>
+    private static readonly IComparer<QuerySuggestion> AutocompleteByScoreThenPathLength =
+        Comparer<QuerySuggestion>.Create((a, b) =>
+        {
+            var c = b.Score.CompareTo(a.Score); // higher score first
+            if (c != 0) return c;
+            c = a.Path.Length.CompareTo(b.Path.Length);
+            if (c != 0) return c;
+            return string.CompareOrdinal(a.Name, b.Name);
+        });
+
 
 
     public RoutingMeshQueryProvider(
@@ -265,20 +299,28 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             ? (await _crossSchemaProvider.GetSearchableSchemasAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : null;
 
-        // Streaming fan-out: each partition writes results into a Channel as it
-        // produces them. The iterator yields each item as soon as it arrives —
-        // fast partitions emit immediately and don't have to wait for slow ones.
-        // No per-partition timeout: the consumer (Monaco's CompletionCallback,
-        // BlazorAutocompleteService → ScanTopN, etc.) decides when to stop reading.
-        await foreach (var s in StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
-            (partitionKey, p, partitionCt) =>
-            {
-                var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
-                return p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, partitionCt);
-            }, ct))
-        {
+        // Streaming fan-out + sorted top-N snapshot: partitions write into a
+        // Channel as they produce; ScanTopN folds the merged stream into an
+        // ImmutableList<T> kept sorted by the injected comparer
+        // (path-length-first by default — matches the pre-streaming shape
+        // `OrderBy(Path.Length).Then(Score).Then(Name).Take(limit)`). Fast
+        // partitions don't wait for slow ones; the comparer guarantees deep
+        // "loose match" candidates can't displace top-level partitions in
+        // the final snapshot. We `LastOrDefaultAsync` to surface the final
+        // snapshot at the IAsyncEnumerable boundary; consumers that want
+        // streaming snapshots can subscribe to ScanTopN themselves at the
+        // observable surface (see BlazorAutocompleteService for the live-
+        // databinding shape).
+        var snapshot = await StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
+                (partitionKey, p, partitionCt) =>
+                {
+                    var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
+                    return p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, partitionCt);
+                }, ct)
+            .ScanTopN(limit, AutocompleteByPathLengthThenScore)
+            .LastOrDefaultAsync();
+        foreach (var s in snapshot ?? Array.Empty<QuerySuggestion>())
             yield return s;
-        }
     }
 
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -309,20 +351,25 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             ? (await _crossSchemaProvider.GetSearchableSchemasAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : null;
 
-        // Streaming fan-out — see comment on the other AutocompleteAsync overload.
-        // Global ordering used to be applied across the merged ConcurrentBag after
-        // Task.WhenAll; now each partition's own ordering streams through and the
-        // consumer (ScanTopN snapshots in BlazorAutocompleteService etc.) is
-        // responsible for any cross-partition re-sort.
-        await foreach (var s in StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
-            (partitionKey, p, partitionCt) =>
-            {
-                var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
-                return p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, partitionCt);
-            }, ct))
+        // Streaming fan-out + sorted top-N — see comment on the other
+        // AutocompleteAsync overload. RelevanceFirst mode uses the
+        // score-first comparer so high-score fuzzy matches win over
+        // shallow paths with weak scores.
+        var comparer = mode switch
         {
+            AutocompleteMode.RelevanceFirst => AutocompleteByScoreThenPathLength,
+            _ => AutocompleteByPathLengthThenScore,
+        };
+        var snapshot = await StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
+                (partitionKey, p, partitionCt) =>
+                {
+                    var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
+                    return p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, partitionCt);
+                }, ct)
+            .ScanTopN(limit, comparer)
+            .LastOrDefaultAsync();
+        foreach (var s in snapshot ?? Array.Empty<QuerySuggestion>())
             yield return s;
-        }
     }
 
     /// <summary>
