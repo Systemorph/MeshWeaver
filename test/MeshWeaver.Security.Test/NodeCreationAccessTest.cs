@@ -297,8 +297,10 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
 
         try
         {
-            // Act — create a Thread under User/{userId} (self-access should grant permission)
-            var threadPath = $"User/{userId}/TestThread_{Guid.NewGuid().AsString()}";
+            // Act — create a Thread under {userId} (self-access should grant permission).
+            // Post-v10: per-user partition lives at root namespace, so the user's
+            // own scope is just "{userId}" rather than the legacy "User/{userId}".
+            var threadPath = $"{userId}/TestThread_{Guid.NewGuid().AsString()}";
             var threadNode = MeshNode.FromPath(threadPath) with
             {
                 Name = "Test Chat Thread",
@@ -311,7 +313,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             created.Should().NotBeNull("User should be able to create threads under their own User node");
             created.State.Should().Be(MeshNodeState.Active);
             created.Path.Should().Be(threadPath);
-            created.MainNode.Should().Be($"User/{userId}", "Satellite thread MainNode should point to parent node");
+            created.MainNode.Should().Be(userId, "Satellite thread MainNode should point to parent node");
             Output.WriteLine($"Thread created successfully at: {created.Path}, MainNode: {created.MainNode}");
         }
         finally
