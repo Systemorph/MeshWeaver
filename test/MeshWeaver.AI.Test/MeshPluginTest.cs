@@ -727,7 +727,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     // Re-enable once compile-on-broken-NodeType is serialised against in-flight
     // compiles AND DLL files are released after Emit failures (mirror the
     // CodeEditRecompileTest fix).
-    [Fact(Timeout = 60000, Skip = "Windows file-lock race on .mesh-cache .dll — see CodeEditRecompileTest.")]
+    [Fact(Timeout = 60000)]
     public async Task GetDiagnostics_BrokenNodeType_ReturnsErrorStatus()
     {
         var mockChat = new MockAgentChat();
@@ -782,11 +782,14 @@ public class MeshPluginTest : MonolithMeshTestBase
     /// wrap the response with a <c>compilationError</c> field so callers that
     /// only call Get still see the failure.
     /// </summary>
-    // Skipped 2026-04-28: same Windows file-locking race as
-    // GetDiagnostics_BrokenNodeType_ReturnsErrorStatus above — File.Create on the
-    // cached .dll fails with "being used by another process" and the IOException
-    // ends up as the cached error instead of the Roslyn "AlsoNotAType" diagnostic.
-    [Fact(Timeout = 60000, Skip = "Windows file-lock race on .mesh-cache .dll — see CodeEditRecompileTest.")]
+    // Skipped 2026-05-03 (after compile-cache fix in cb467ed87 unblocked the
+    // sister test GetDiagnostics_BrokenNodeType_ReturnsErrorStatus): Get on an
+    // instance of a broken NodeType still hangs the request — the per-node hub
+    // never replies with a compilationError-wrapped response, so the Observe
+    // call times out at 60s and leaves a leaked callback. Separate bug: the
+    // Get-handler path doesn't surface the cached compile error the way
+    // GetDiagnostics does. Re-enable once Get wraps broken-NodeType responses.
+    [Fact(Timeout = 60000, Skip = "Get on broken NodeType instance hangs (leaked callback) — handler doesn't wrap response with compilationError. Separate from compile-cache file-lock race.")]
     public async Task Get_InstanceOfBrokenNodeType_WrapsResponseWithCompilationError()
     {
         var mockChat = new MockAgentChat();

@@ -88,7 +88,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     // doesn't activate within budget. Both the recompile path and the hub
     // activation need rework before this test can pass deterministically;
     // tracking via the failure ledger.
-    [Fact(Timeout = 60000, Skip = "Cold-start recompile + AssemblyLoadContext unload race — re-enable once instance hub activation is bounded.")]
+    // Re-evaluated 2026-05-03: original Windows file-lock root cause is fixed by
+    // cb467ed87 (CompilationCacheService skips ALC unload + GC.Collect when no
+    // live context). Test now fails with a different shape: CreateNodeRequest
+    // times out at 30s targeting mesh/{instanceId} — the per-node hub for the
+    // first instance never activates within budget. That's a hub-routing issue,
+    // not a compile-cache one; needs separate investigation.
+    [Fact(Timeout = 60000, Skip = "CreateNodeRequest to per-instance hub times out at 30s — instance hub doesn't activate within budget. Separate from compile-cache file-lock race (now fixed).")]
     public async Task CodeEdit_AfterRecycle_RecompilesAndServesNewVersion()
     {
         var ct = new CancellationTokenSource(45.Seconds()).Token;
