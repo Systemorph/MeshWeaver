@@ -17,7 +17,14 @@ public class DeliveryFailureException : Exception
     internal DeliveryFailureException(string message, Exception innerException)
         : base(message, innerException) { }
 
-    internal DeliveryFailure Failure { get; } = null!;
+    /// <summary>
+    /// The underlying <see cref="DeliveryFailure"/> when this exception was
+    /// constructed from one. Surfaces the original failure's <c>ErrorType</c>,
+    /// <c>ExceptionType</c>, <c>StackTrace</c>, and the offending <c>Delivery</c>
+    /// — callers can map these back to domain-level rejection reasons without
+    /// relying on the exception's user-facing message.
+    /// </summary>
+    public DeliveryFailure Failure { get; } = null!;
 }
 
 public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)

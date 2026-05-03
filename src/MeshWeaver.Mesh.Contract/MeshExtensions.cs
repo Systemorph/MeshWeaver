@@ -1169,7 +1169,20 @@ public static class MeshExtensions
                     ex => hub.Post(
                         UpdateNodeResponse.Fail(
                             ex.Message ?? "Forwarded UpdateNodeRequest failed",
-                            NodeUpdateRejectionReason.Unknown),
+                            // Map the most common forwarded-failure shapes back to
+                            // semantic rejection reasons. Without this mapping a
+                            // RLS-denied update at the per-node hub returns as an
+                            // Unauthorized DeliveryFailure → caught here → Unknown,
+                            // which loses the "user can't see / can't update this
+                            // node" signal callers rely on.
+                            ex is DeliveryFailureException dfx
+                                ? dfx.Failure?.ErrorType switch
+                                {
+                                    ErrorType.Unauthorized => NodeUpdateRejectionReason.ValidationFailed,
+                                    ErrorType.NotFound => NodeUpdateRejectionReason.NodeNotFound,
+                                    _ => NodeUpdateRejectionReason.Unknown,
+                                }
+                                : NodeUpdateRejectionReason.Unknown),
                         o => o.ResponseFor(request)));
             return request.Processed();
         }
