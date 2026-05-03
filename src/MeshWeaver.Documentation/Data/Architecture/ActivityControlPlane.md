@@ -75,11 +75,12 @@ When you build a custom NodeType that has any state-machine semantics (a long-ru
 Skeleton:
 
 ```csharp
-public record JobContent(string Category)
+public record JobContent(string Category) : ActivityLog(Category)
 {
-    public JobStatus Status { get; init; }
-    public JobStatus? RequestedStatus { get; init; }
-    // ... domain fields
+    // ActivityLog already has Status + RequestedStatus + Messages.
+    // Add domain fields here.
+    public string? InputPath { get; init; }
+    public string? OutputPath { get; init; }
 }
 
 public static class JobNodeType
@@ -91,23 +92,25 @@ public static class JobNodeType
             .AddMeshDataSource(s => s.WithContentType<JobContent>())
             .WithInitialization((hub, _) =>
             {
-                hub.RegisterForDisposal(WatchControlPlane(hub));
+                hub.RegisterForDisposal(hub.WatchControlPlane(requested =>
+                {
+                    if (requested == ActivityStatus.Cancelled) DoCancel(hub);
+                    else if (requested == ActivityStatus.Running) DoStart(hub);
+                }));
                 return Task.CompletedTask;
             })
     };
-
-    private static IDisposable WatchControlPlane(IMessageHub hub) =>
-        hub.GetWorkspace().GetMeshNodeStream()
-            .Select(n => (n?.Content as JobContent)?.RequestedStatus)
-            .DistinctUntilChanged()
-            .Subscribe(requested =>
-            {
-                if (requested == JobStatus.Cancelled) DoCancel(hub);
-                else if (requested == JobStatus.Paused)    DoPause(hub);
-                else if (requested == JobStatus.Running)   DoResume(hub);
-            });
 }
 ```
+
+The shared `IMessageHub.WatchControlPlane(...)` extension lives in
+`MeshWeaver.Mesh.Contract` (`ActivityControlPlaneExtensions.cs`) — it
+projects the hub's own `MeshNodeReference` stream down to the
+`ActivityLog.RequestedStatus` field, applies `DistinctUntilChanged`,
+and forwards each transition to your handler. Faulted subscriptions
+log to the optional `ILogger` argument (or to the
+`MeshWeaver.ActivityControlPlane` category resolved from the hub's
+service provider) so a broken control plane doesn't disappear silently.
 
 ## Reporting status back to the UI
 
