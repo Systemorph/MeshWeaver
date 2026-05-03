@@ -95,13 +95,13 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
     /// </summary>
     private async Task<string> CreateMarkdownNodeAsync(IMessageHub client, string id, string markdown, CancellationToken ct)
     {
-        var node = new MeshNode(id, "User/" + TestUserId)
+        var node = new MeshNode(id, TestUserId)
         {
             Name = id,
             NodeType = MarkdownNodeType.NodeType,
             Content = new MarkdownContent { Content = markdown }
         };
-        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address("User/" + TestUserId))).FirstAsync().ToTask(ct);
+        var response = await client.Observe(new CreateNodeRequest(node), o => o.WithTarget(new Address(TestUserId))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         return response.Message.Node!.Path!;
     }
@@ -316,7 +316,7 @@ public class MarkdownExportSiloConfigurator : ISiloConfigurator, IHostConfigurat
             .AddInMemoryPersistence()
             .ConfigurePortalMesh()
             .AddMarkdownExport()
-            .AddMeshNodes(new MeshNode(TestUserId, "User") { Name = "TestUser", NodeType = "User" })
+            .AddMeshNodes(new MeshNode(TestUserId) { Name = "TestUser", NodeType = "User" })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
