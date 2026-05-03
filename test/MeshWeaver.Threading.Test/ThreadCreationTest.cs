@@ -559,6 +559,21 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Login as admin
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
 
+        // SetupAccessRightsAsync created the AccessAssignment for AdminUserId, but
+        // SecurityService loads assignments via SyncedQuery which is eventually
+        // consistent. On cold-start CI, the first HasPermissionAsync call can
+        // return false before the synced query catches up. Poll until admin has
+        // Create permission.
+        var permDeadline = DateTime.UtcNow.AddSeconds(10);
+        var hasCreate = false;
+        while (DateTime.UtcNow < permDeadline)
+        {
+            hasCreate = await Mesh.HasPermissionAsync("SecureProject", AdminUserId, Permission.Create, ct);
+            if (hasCreate) break;
+            await Task.Delay(100, ct);
+        }
+        hasCreate.Should().BeTrue("admin should have Create on SecureProject after SetupAccessRightsAsync");
+
         // Create context node
         await NodeFactory.CreateNode(
             new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" });
@@ -578,6 +593,17 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Create context node as admin first
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
+
+        // Wait for the admin AccessAssignment from SetupAccessRightsAsync to land
+        // through SyncedQuery — same eventually-consistent race as the sibling test.
+        var permDeadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < permDeadline)
+        {
+            if (await Mesh.HasPermissionAsync("SecureProject", AdminUserId, Permission.Create, ct))
+                break;
+            await Task.Delay(100, ct);
+        }
+
         await NodeFactory.CreateNode(
             new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" });
 

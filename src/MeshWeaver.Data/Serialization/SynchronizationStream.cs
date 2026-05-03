@@ -151,7 +151,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (!TryGetActiveHub(out var hub))
             return;
-        hub.Post(new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback));
+        var capturedContext = CaptureCallerAccessContext(hub);
+        hub.Post(
+            new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback),
+            opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
     }
 
     public void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update,
@@ -159,7 +162,28 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (!TryGetActiveHub(out var hub))
             return;
-        hub.Post(new UpdateStreamRequest(update, exceptionCallback));
+        var capturedContext = CaptureCallerAccessContext(hub);
+        hub.Post(
+            new UpdateStreamRequest(update, exceptionCallback),
+            opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
+    }
+
+    /// <summary>
+    /// Captures the caller's <see cref="AccessService.Context"/> (per-request
+    /// AsyncLocal) at the point <c>stream.Update</c> is invoked, so the
+    /// post-pipeline can stamp the resulting <c>UpdateStreamRequest</c>
+    /// delivery with the caller's identity even when the post-pipeline runs
+    /// on the sync stream's internal hub thread (which has its own
+    /// AsyncLocal value — typically null — and would otherwise fall back to
+    /// stamping the sync hub's address as the user).
+    /// <para>Returns <c>null</c> if the caller has no AccessContext set —
+    /// the existing fallback behaviour (post-pipeline stamps the posting
+    /// hub's address) then takes effect.</para>
+    /// </summary>
+    private static AccessContext? CaptureCallerAccessContext(IMessageHub hub)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService?.Context ?? accessService?.CircuitContext;
     }
 
     /// <summary>

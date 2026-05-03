@@ -122,6 +122,23 @@ public record Post
 }"));
         postResponse.Success.Should().BeTrue($"Post should compile; error: {postResponse.Error}");
 
+        // Wait for the catalog index to pick up Post's Source/code node before
+        // Profile's compile queries `namespace:type/Post/Source scope:subtree`.
+        // The compilation service uses QueryAsync which goes through the
+        // eventually-consistent catalog — on cold-start CI, the just-created
+        // Code node for Post takes 200-2000ms to appear there. Poll until visible
+        // so the cross-NodeType source pull is deterministic.
+        var ct = TestContext.Current.CancellationToken;
+        var indexDeadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < indexDeadline)
+        {
+            var indexed = await MeshService
+                .QueryAsync<MeshNode>("namespace:type/Post/Source scope:subtree nodeType:Code", ct: ct)
+                .ToListAsync(ct);
+            if (indexed.Any(n => n.Path == "type/Post/Source/code")) break;
+            await Task.Delay(100, ct);
+        }
+
         // Profile NodeType references Platform via cross-NodeType Sources.
         var response = await CreateAndCompile("Profile",
             new NodeTypeDefinition

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -52,21 +53,32 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         // Set the AsyncLocal context to a specific user identity.
         accessService.SetContext(new AccessContext { ObjectId = "alice", Name = "Alice" });
 
-        // Capture identity SEEN INSIDE the update delegate — this is what really
-        // matters: after Hub.Post(UpdateStreamRequest) → post-pipeline →
-        // delivery-pipeline (which sets accessService.Context from
-        // delivery.AccessContext) → handler invokes the delegate, can the
-        // delegate see "alice" from accessService.Context?
-        var insideDelegate = new TaskCompletionSource<string?>();
+        // Capture identity SEEN INSIDE the update delegate — what really matters:
+        // after Hub.Post(UpdateStreamRequest) → post-pipeline → delivery-pipeline
+        // (which sets accessService.Context from delivery.AccessContext) → handler
+        // invokes the delegate, can the delegate see "alice" from
+        // accessService.Context?
+        //
+        // Use a Subject so we can observe ALL delegate invocations and filter via
+        // Where — the previous TaskCompletionSource form took the FIRST emission
+        // unconditionally, which on cold-start CI captured the sync hub's
+        // initial-state delegate call ("sync/...") before the post-pipeline-routed
+        // call (with "alice") arrived. Robust assertion: wait for "alice" to be
+        // observed at least once, fail with timeout otherwise.
+        var seen = new System.Reactive.Subjects.Subject<string?>();
         stream.Update(_ =>
         {
-            insideDelegate.TrySetResult(accessService.Context?.ObjectId);
+            seen.OnNext(accessService.Context?.ObjectId);
             return null;
         }, _ => { });
 
-        var seen = await insideDelegate.Task.WaitAsync(5.Seconds());
+        var aliceSeen = await seen
+            .Where(id => id == "alice")
+            .FirstAsync()
+            .Timeout(5.Seconds())
+            .ToTask(TestContext.Current.CancellationToken);
 
-        seen.Should().Be(
+        aliceSeen.Should().Be(
             "alice",
             "stream.Update must preserve the caller's AsyncLocal identity into the delegate execution — " +
             "delivery.AccessContext flows through post-pipeline → delivery-pipeline → AccessService.Context");
