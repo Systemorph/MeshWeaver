@@ -1576,79 +1576,57 @@ public class MeshOperations
 
         var resolvedPath = ResolvePath(path);
 
-        // Kernel is NOT addressed from here. Post ExecuteScriptRequest to the Code
-        // node's own hub — the Code hub reads its CodeConfiguration from its own
-        // workspace (sync), validates IsExecutable, and dispatches to the internal
-        // kernel. Response carries submissionId + outputAreaReference so the caller
-        // can subscribe to live progress.
-        return Observable.Create<string>(observer =>
-        {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-            var completed = 0;
-
-            void EmitOnce(object payload)
-            {
-                if (Interlocked.Exchange(ref completed, 1) != 0) return;
-                observer.OnNext(JsonSerializer.Serialize(payload, hub.JsonSerializerOptions));
-                observer.OnCompleted();
-            }
-
-            try
-            {
-                var delivery = hub.Post(
-                    new ExecuteScriptRequest(),
-                    o => o.WithTarget(new Address(resolvedPath)))!;
-
-                hub.Observe(delivery)
-                    .Subscribe(
-                        d =>
-                        {
-                            if (d.Message is ExecuteScriptResponse r)
-                            {
-                                EmitOnce(new
-                                {
-                                    status = r.Success ? "Dispatched" : "Error",
-                                    path = resolvedPath,
-                                    submissionId = r.SubmissionId,
-                                    outputUrl = r.Success ? $"{resolvedPath}/area/{r.OutputAreaReference}" : null,
-                                    error = r.Error,
-                                    message = r.Success
-                                        ? "Script dispatched. Subscribe to the output area for live progress."
-                                        : $"Dispatch failed: {r.Error}"
-                                });
-                            }
-                            else
-                            {
-                                EmitOnce(new
-                                {
-                                    status = "Error",
-                                    path = resolvedPath,
-                                    message = $"Unexpected response {d.Message?.GetType().Name}"
-                                });
-                            }
-                        },
-                        ex => EmitOnce(new
-                        {
-                            status = "Error",
-                            path = resolvedPath,
-                            message = $"Delivery failed: {ex.Message ?? "unknown"}"
-                        }));
-
-                cts.Token.Register(() => EmitOnce(new
+        // Fire-and-forget dispatch. The Code hub creates an Activity at
+        // `{partition}/_Activity/{submissionId}` (the kernel runs inside the
+        // Activity hub) and writes ActivityLog.Messages + Status as the script
+        // executes. We pre-generate the SubmissionId here so we can return the
+        // Activity path immediately — callers poll `get @{activityPath}` to
+        // observe progress and final status without waiting for an ack.
+        //
+        // Why no wait? The ack `ExecuteScriptResponse` from the Code hub is a
+        // throw-away "got it, here's the activity path" — but routing it back
+        // to a hosted MCP session hub is fragile (we lost ~half a day chasing
+        // it). The Activity itself is the source of truth: live messages,
+        // terminal Status, error details — everything's there. So just return
+        // the activity path and let the caller observe.
+        var partition = resolvedPath.Split('/', 2)[0];
+        if (string.IsNullOrEmpty(partition))
+            return Observable.Return(JsonSerializer.Serialize(
+                new
                 {
-                    status = "Timeout",
+                    status = "Error",
                     path = resolvedPath,
-                    timeoutSeconds,
-                    message = $"Code node did not acknowledge dispatch within {timeoutSeconds}s."
-                }));
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "ExecuteScript failed for {Path}", resolvedPath);
-                EmitOnce(new { status = "Error", path = resolvedPath, message = ex.Message });
-            }
+                    message = "Could not derive partition from script path."
+                },
+                hub.JsonSerializerOptions));
 
-            return () => cts.Dispose();
-        });
+        var submissionId = Guid.NewGuid().ToString("N");
+        var activityPath = $"{partition}/_Activity/{submissionId}";
+
+        try
+        {
+            hub.Post(
+                new ExecuteScriptRequest { SubmissionId = submissionId },
+                o => o.WithTarget(new Address(resolvedPath)));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "ExecuteScript failed to dispatch for {Path}", resolvedPath);
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", path = resolvedPath, message = ex.Message },
+                hub.JsonSerializerOptions));
+        }
+
+        return Observable.Return(JsonSerializer.Serialize(
+            new
+            {
+                status = "Dispatched",
+                path = resolvedPath,
+                submissionId,
+                activityPath,
+                message = $"Script dispatched. Poll `get @{activityPath}` for live messages " +
+                          "and final status (Running → Succeeded/Failed)."
+            },
+            hub.JsonSerializerOptions));
     }
 }

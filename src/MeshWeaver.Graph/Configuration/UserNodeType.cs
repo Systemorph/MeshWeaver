@@ -156,9 +156,9 @@ public static class UserNodeType
                 var nodePath = context.Node.Path;
                 if (!string.IsNullOrEmpty(nodePath))
                 {
-                    var userScopePath = $"User/{userId}";
-                    if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
-                        || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
+                    // Post-v10: user's partition is `{userId}` (root-level), not `User/{userId}`.
+                    if (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
+                        || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase))
                         return Observable.Return(true);
                 }
             }

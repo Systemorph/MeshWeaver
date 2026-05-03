@@ -41,7 +41,9 @@ public static class NodeAccessExtensions
                 (_, userId) => !string.IsNullOrEmpty(userId));
 
     /// <summary>
-    /// Allows users to edit nodes under their own User/{userId} scope.
+    /// Allows users to edit nodes under their own partition (path = userId or userId/...).
+    /// Post-v10: each user has their own root-level partition ({userId}); the legacy
+    /// "User/{userId}" prefix is gone.
     /// </summary>
     public static MessageHubConfiguration WithSelfEdit(this MessageHubConfiguration config)
         => config.AddAccessRule(
@@ -51,9 +53,8 @@ public static class NodeAccessExtensions
                 if (string.IsNullOrEmpty(userId)) return false;
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath)) return false;
-                var userScopePath = $"User/{userId}";
-                return nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
-                       || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase);
+                return nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
+                       || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase);
             });
 
     /// <summary>

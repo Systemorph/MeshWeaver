@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using MeshWeaver.AI;
+using MeshWeaver.Data;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -99,9 +100,18 @@ public class McpMeshPlugin
         // so every MCP-bound response (Get / Search / Patch / ExecuteScript / …)
         // routes back to this stream. No kernel route rule — kernel work runs
         // inside the Activity MeshNode hub (per node), not here.
+        //
+        // AddData() registers the data plugin so the hub has its own IWorkspace.
+        // MeshOperations.Compile uses hub.GetWorkspace() to subscribe to a
+        // NodeType's MeshNode stream and Update its compilationStatus → Pending
+        // (the canonical write path that doesn't require Update permission on
+        // the cross-partition NodeType row). Without AddData IWorkspace can't
+        // activate and Compile fails with "An exception was thrown while
+        // activating MeshWeaver.Data.IWorkspace".
         return rootHub.GetHostedHub(
             address,
             sessionConfig => sessionConfig
+                .AddData()
                 .WithInitialization(async (hub, _) =>
                 {
                     var registry = await routingService.RegisterStreamAsync(hub);
