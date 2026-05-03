@@ -102,10 +102,13 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Admin context for data seeding — global Admin role for "setup-admin" via runtime CreateNode.
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole("setup-admin", "Admin"))
-            .FirstAsync().ToTask(TestTimeout);
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "setup-admin", Name = "Setup Admin" });
+        // Stay on the DevLogin admin context (set by MonolithMeshTestBase.InitializeAsync)
+        // for the rest of the seed. The previous pattern minted a new "setup-admin"
+        // user via runtime CreateNode + immediately switched the AccessContext to
+        // it, but the AccessAssignment took a beat to propagate through the synced
+        // query that SecurityService rides — so the very next CreateNode (the
+        // SharedOrg root) hit "Access denied: Create permission required". Using
+        // the DevLogin admin throughout setup is simpler and free of the race.
 
         // Create namespace nodes
         await NodeFactory.CreateNode(new MeshNode("SharedOrg")
@@ -145,9 +148,6 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         _tokenUser1 = await CreateApiTokenAsync(User1, "User One");
         _tokenUser2 = await CreateApiTokenAsync(User2, "User Two");
 
-        // Clear admin context so tests start clean
-        accessService.SetCircuitContext(null);
-
         // User1: Viewer on SharedOrg (can read), no access to PrivateOrg
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(User1, "Viewer", "SharedOrg"))
             .FirstAsync().ToTask(TestTimeout);
@@ -167,6 +167,29 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         // Re-grant User2 as Editor on Confidential (after inheritance break)
         await meshService.CreateNode(AssignmentNodeFactory.UserRole(User2, "Editor", "SharedOrg/Confidential"))
             .FirstAsync().ToTask(TestTimeout);
+
+        // Clear admin context so tests start clean — moved AFTER all the
+        // AccessAssignment writes so the seeds run as the DevLogin admin
+        // (who has Create permission everywhere) rather than as anonymous
+        // (who fails the AccessAssignment Create access check).
+        accessService.SetCircuitContext(null);
+
+        // Wait for the runtime AccessAssignments to propagate through the
+        // synced AccessAssignment query that SecurityService rides. Without
+        // this gate, plugin.Get reads the cached snapshot from before any
+        // assignment landed → DENY → "Not found" — racing the synced query.
+        // Probe both per-user grants (Viewer at SharedOrg for User1, Editor
+        // at SharedOrg/Confidential for User2 — the BreaksInheritance scope)
+        // and bail when both surface at least Read; that's enough to know
+        // the entire batch has landed.
+        var sec = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var waitUser1 = sec.GetEffectivePermissions("SharedOrg", User1)
+            .Where(p => p.HasFlag(Permission.Read))
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
+        var waitUser2 = sec.GetEffectivePermissions("SharedOrg/Confidential", User2)
+            .Where(p => p.HasFlag(Permission.Update))
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
+        await Task.WhenAll(waitUser1, waitUser2);
     }
 
     [Fact(Timeout = 30000)]

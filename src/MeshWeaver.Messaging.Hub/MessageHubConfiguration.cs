@@ -235,16 +235,26 @@ public record MessageHubConfiguration
             // CircuitContext = per-circuit AsyncLocal (set by CircuitAccessHandler).
             var context = userService?.Context ?? userService?.CircuitContext;
             if (context is not null)
+            {
                 d = d.SetAccessContext(context);
+            }
             else
             {
-                // Hub-to-hub: identify as the hub itself using its full address path
-                var hubAddress = syncPipeline.Hub.Address;
-                d = d.SetAccessContext(new AccessContext
-                {
-                    ObjectId = hubAddress.ToFullString(),
-                    Name = hubAddress.ToString()
-                });
+                // No fallback to hub address. The previous shape stamped the
+                // post with `ObjectId = hubAddress.ToFullString()` — turning
+                // the post into "user = mesh/{guid}", which then matched no
+                // AccessAssignment and silently denied cross-partition writes
+                // OR (worse) matched a fake principal that no real seed had
+                // intended to grant. The mesh hub must never post on behalf
+                // of itself; messages without a real principal should either
+                // ride <see cref="WellKnownUsers.System"/> (via
+                // ImpersonateAsHub) or fail-closed downstream.
+                logger?.LogWarning(
+                    "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
+                    "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
+                    "fails closed. Wrap intentional system writes with AccessService.ImpersonateAsHub.",
+                    syncPipeline.Hub.Address,
+                    d.Message?.GetType().Name ?? "(null)");
             }
             logger?.LogDebug(
                 "PostPipeline: hub={Hub}, message={MessageType}, user={User} (context={Context}, circuit={Circuit})",
