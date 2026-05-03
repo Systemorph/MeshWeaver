@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -31,14 +32,6 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
     /// With 23+ schemas, unrestricted parallelism exhausts the shared connection pool.
     /// </summary>
     private static readonly SemaphoreSlim FanOutThrottle = new(20, 20);
-
-    /// <summary>
-    /// Per-partition cap during autocomplete fan-out. A single slow / hung partition
-    /// must not block the entire result set. UX target is sub-second; 2 s is the
-    /// generous outer bound. Without this we wait for <c>Task.WhenAll</c> over every
-    /// partition and a stuck Postgres connection silently turns "@/" into a 12 s hang.
-    /// </summary>
-    private static readonly TimeSpan PartitionAutocompleteTimeout = TimeSpan.FromSeconds(2);
 
 
 
@@ -168,88 +161,82 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fallback: per-partition fan-out (non-PostgreSQL or when cross-schema not available)
-        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        var allResults = new ConcurrentBag<object>();
-
+        // Fallback: per-partition fan-out (non-PostgreSQL or when cross-schema not available).
+        // Streaming: each partition emits into a Channel; the iterator yields results as
+        // they arrive. Fast partitions deliver first; slow ones don't block fast ones.
+        // No per-partition timeout — consumer (e.g. ScanTopN snapshot, MeshSearchView)
+        // decides when to stop reading. Cross-partition dedup-by-Path applies on the
+        // consumer side. Global ordering used to be applied across the merged
+        // ConcurrentBag after Task.WhenAll; with streaming each partition's own
+        // ordering passes through and global re-sort is the consumer's job.
         _logger?.LogDebug("Fan-out query: {Query}, providers={Count}, effectivePath={Path}",
             fanOutQuery, _router.QueryProviders.Count, effectivePath);
 
-        var queryTasks = new List<Task>();
-        foreach (var (key, p) in _router.QueryProviders)
-        {
-            _logger?.LogDebug("Fan-out: querying partition {Key} ({ProviderType})", key, p.GetType().Name);
-            queryTasks.Add(QueryOneAsync(key, p));
-        }
+        var globalLimit = request.Limit ?? parsed.Limit;
 
-        // Discover new partitions and query each as it becomes available
+        // Snapshot the provider set + queue any newly-discovered ones into the same
+        // streaming fan-out, so a partition activated mid-query still streams results
+        // (matches the previous discover-then-WhenAll behaviour, just streaming).
+        var initialProviders = _router.QueryProviders.ToList();
+        var allProviders = new List<KeyValuePair<string, IMeshQueryProvider>>(initialProviders);
         await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
         {
             _logger?.LogDebug("Fan-out: discovered new partition {Key}", key);
-            queryTasks.Add(QueryOneAsync(key, p));
+            allProviders.Add(new KeyValuePair<string, IMeshQueryProvider>(key, p));
         }
 
-        await Task.WhenAll(queryTasks);
+        var providerDict = allProviders.ToDictionary(kv => kv.Key, kv => kv.Value);
 
-        _logger?.LogDebug("Fan-out complete: {ResultCount} results from {TaskCount} partitions",
-            allResults.Count, queryTasks.Count);
-
-        // Re-sort merged results and apply global limit
-        var globalLimit = request.Limit ?? parsed.Limit;
-        IEnumerable<object> sorted = allResults;
+        // ORDER BY needs cross-partition sort — buffer all results, sort, then yield.
+        // Without ORDER BY the natural emission is arrival order from the streaming fan-out
+        // (the previous shape used a ConcurrentBag whose iteration was also arrival-ish).
         if (parsed.OrderBy != null)
         {
-            var evaluator = new QueryEvaluator();
-            sorted = evaluator.OrderResults(allResults.OfType<MeshNode>(), parsed.OrderBy).Cast<object>();
-        }
-        if (globalLimit.HasValue)
-            sorted = sorted.Take(globalLimit.Value);
-
-        foreach (var item in sorted)
-            yield return item;
-
-        yield break;
-
-        async Task QueryOneAsync(string partitionKey, IMeshQueryProvider p)
-        {
-            try
+            var allResults = new List<object>();
+            await foreach (var item in StreamFanOutAsync<object>(providerDict, searchableSchemas: null,
+                (partitionKey, p, partitionCt) =>
+                {
+                    var scopedRequest = string.IsNullOrEmpty(effectivePath)
+                        ? enrichedRequest with { Query = fanOutQuery }
+                        : enrichedRequest;
+                    return p.QueryAsync(scopedRequest, options, partitionCt);
+                }, ct))
             {
-                await FanOutThrottle.WaitAsync(ct);
+                allResults.Add(item);
             }
-            catch (OperationCanceledException) { return; }
 
-            try
+            var evaluator = new QueryEvaluator();
+            IEnumerable<object> sorted = evaluator.OrderResults(allResults.OfType<MeshNode>(), parsed.OrderBy).Cast<object>();
+            if (globalLimit.HasValue)
+                sorted = sorted.Take(globalLimit.Value);
+
+            var seenOrdered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in sorted)
             {
-                // Per-partition fan-out: each partition's storage already isolates data by schema,
-                // so we don't need to inject DefaultPath = partitionKey (which would add a lowercase
-                // path filter that doesn't match proper-cased actual paths like "User/...").
+                if (item is MeshNode node && !seenOrdered.Add(node.Path))
+                    continue;
+                yield return item;
+            }
+            yield break;
+        }
+
+        // No ORDER BY: stream as available. Cross-partition dedupe-by-Path applies.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var emitted = 0;
+        await foreach (var item in StreamFanOutAsync<object>(providerDict, searchableSchemas: null,
+            (partitionKey, p, partitionCt) =>
+            {
                 var scopedRequest = string.IsNullOrEmpty(effectivePath)
                     ? enrichedRequest with { Query = fanOutQuery }
                     : enrichedRequest;
-
-                var count = 0;
-                await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
-                {
-                    if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
-                        continue;
-                    allResults.Add(item);
-                    count++;
-                }
-                if (count > 0)
-                    _logger?.LogDebug("Fan-out: partition {Key} returned {Count} results", partitionKey, count);
-            }
-            catch (OperationCanceledException)
-            {
-                _logger?.LogDebug("Fan-out: partition {Key} CANCELLED", partitionKey);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "Fan-out query to partition {Partition} failed", partitionKey);
-            }
-            finally
-            {
-                FanOutThrottle.Release();
-            }
+                return p.QueryAsync(scopedRequest, options, partitionCt);
+            }, ct))
+        {
+            if (item is MeshNode node && !seen.Add(node.Path))
+                continue;
+            yield return item;
+            if (globalLimit.HasValue && ++emitted >= globalLimit.Value)
+                yield break;
         }
     }
 
@@ -260,9 +247,6 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         int limit = 10,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Note: no latest-wins cancellation here — let queries complete.
-        // The SemaphoreSlim throttle limits concurrency sufficiently.
-
         var segment = PathPartition.GetFirstSegment(basePath);
 
         if (segment != null && _router.QueryProviders.TryGetValue(segment, out var provider))
@@ -277,44 +261,23 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         { /* provisioning happens as a side effect */ }
 
         // Fan out: only to searchable partitions (excludes Admin, Portal, Kernel).
-        // Use searchable_schemas from cross-schema provider if available.
         var searchableSchemas = _crossSchemaProvider != null
             ? (await _crossSchemaProvider.GetSearchableSchemasAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : null;
 
-        var all = new ConcurrentBag<QuerySuggestion>();
-        var tasks = new ConcurrentBag<Task>();
-
-        foreach (var (key, p) in _router.QueryProviders)
-        {
-            // Skip non-searchable partitions (Admin, Portal, Kernel)
-            if (searchableSchemas != null && !searchableSchemas.Contains(key.ToLowerInvariant()))
-                continue;
-            tasks.Add(AutocompleteOneAsync(key, p));
-        }
-
-        await Task.WhenAll(tasks);
-
-        foreach (var s in all.OrderBy(s => s.Path.Length).ThenByDescending(s => s.Score).ThenBy(s => s.Name).Take(limit))
-            yield return s;
-
-        async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
-        {
-            try { await FanOutThrottle.WaitAsync(ct); }
-            catch (OperationCanceledException) { return; }
-
-            using var partitionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            partitionCts.CancelAfter(PartitionAutocompleteTimeout);
-
-            try
+        // Streaming fan-out: each partition writes results into a Channel as it
+        // produces them. The iterator yields each item as soon as it arrives —
+        // fast partitions emit immediately and don't have to wait for slow ones.
+        // No per-partition timeout: the consumer (Monaco's CompletionCallback,
+        // BlazorAutocompleteService → ScanTopN, etc.) decides when to stop reading.
+        await foreach (var s in StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
+            (partitionKey, p, partitionCt) =>
             {
                 var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
-                await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, partitionCts.Token))
-                    all.Add(s);
-            }
-            catch (OperationCanceledException) { /* timed out OR caller cancelled */ }
-            catch (Exception) { /* don't kill other partitions */ }
-            finally { FanOutThrottle.Release(); }
+                return p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, partitionCt);
+            }, ct))
+        {
+            yield return s;
         }
     }
 
@@ -328,9 +291,6 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         string? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Note: no latest-wins cancellation here — let queries complete.
-        // The SemaphoreSlim throttle limits concurrency sufficiently.
-
         var segment = PathPartition.GetFirstSegment(basePath);
 
         if (segment != null && _router.QueryProviders.TryGetValue(segment, out var provider))
@@ -349,50 +309,73 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             ? (await _crossSchemaProvider.GetSearchableSchemasAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : null;
 
-        var all = new ConcurrentBag<QuerySuggestion>();
-        var tasks = new ConcurrentBag<Task>();
+        // Streaming fan-out — see comment on the other AutocompleteAsync overload.
+        // Global ordering used to be applied across the merged ConcurrentBag after
+        // Task.WhenAll; now each partition's own ordering streams through and the
+        // consumer (ScanTopN snapshots in BlazorAutocompleteService etc.) is
+        // responsible for any cross-partition re-sort.
+        await foreach (var s in StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
+            (partitionKey, p, partitionCt) =>
+            {
+                var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
+                return p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, partitionCt);
+            }, ct))
+        {
+            yield return s;
+        }
+    }
 
-        foreach (var (key, p) in _router.QueryProviders)
+    /// <summary>
+    /// Streaming fan-out helper. Each partition runs its iteration on a
+    /// background continuation; results flow into a Channel and the iterator
+    /// yields them as they arrive. Fast partitions emit immediately — slow ones
+    /// don't block fast ones, and no per-partition timeout is needed because
+    /// the consumer can stop reading at any point.
+    /// </summary>
+    private static async IAsyncEnumerable<T> StreamFanOutAsync<T>(
+        IReadOnlyDictionary<string, IMeshQueryProvider> providers,
+        HashSet<string>? searchableSchemas,
+        Func<string, IMeshQueryProvider, CancellationToken, IAsyncEnumerable<T>> getPartitionResults,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var channel = Channel.CreateUnbounded<T>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+        var pending = 0;
+        var partitionTasks = new List<Task>();
+        foreach (var (key, p) in providers)
         {
             if (searchableSchemas != null && !searchableSchemas.Contains(key.ToLowerInvariant()))
                 continue;
-            tasks.Add(AutocompleteOneAsync(key, p));
+            Interlocked.Increment(ref pending);
+            partitionTasks.Add(StreamOneAsync(key, p));
         }
 
-        await Task.WhenAll(tasks);
-
-        IEnumerable<QuerySuggestion> ordered = mode switch
+        if (partitionTasks.Count == 0)
         {
-            AutocompleteMode.RelevanceFirst => all
-                .OrderByDescending(s => s.Score)
-                .ThenBy(s => s.Path.Length)
-                .ThenBy(s => s.Name),
-            _ => all
-                .OrderBy(s => s.Path.Length)
-                .ThenByDescending(s => s.Score)
-                .ThenBy(s => s.Name)
-        };
+            channel.Writer.TryComplete();
+        }
 
-        foreach (var s in ordered.Take(limit))
-            yield return s;
+        await foreach (var item in channel.Reader.ReadAllAsync(ct))
+            yield return item;
 
-        async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
+        async Task StreamOneAsync(string partitionKey, IMeshQueryProvider p)
         {
             try { await FanOutThrottle.WaitAsync(ct); }
-            catch (OperationCanceledException) { return; }
-
-            using var partitionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            partitionCts.CancelAfter(PartitionAutocompleteTimeout);
+            catch (OperationCanceledException) { goto done; }
 
             try
             {
-                var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
-                await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, partitionCts.Token))
-                    all.Add(s);
+                await foreach (var item in getPartitionResults(partitionKey, p, ct))
+                    channel.Writer.TryWrite(item);
             }
-            catch (OperationCanceledException) { /* timed out OR caller cancelled */ }
+            catch (OperationCanceledException) { /* caller cancelled */ }
             catch (Exception) { /* don't kill other partitions */ }
             finally { FanOutThrottle.Release(); }
+
+        done:
+            if (Interlocked.Decrement(ref pending) == 0)
+                channel.Writer.TryComplete();
         }
     }
 

@@ -19,10 +19,13 @@ public class ContentAutocompleteProvider(IContentService contentService) : IAuto
     public string? Prefix => "content";
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null) =>
+        AutocompleteProviderObservable.FromAsyncEnumerable(ct => EnumerateAsync(query, contextPath, ct));
+
+    private async IAsyncEnumerable<AutocompleteItem> EnumerateAsync(
         string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        string? contextPath,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         // Strip @ prefix and any path before the query text
         var searchText = ExtractSearchText(query);

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using FluentAssertions;
 using Memex.Portal.Shared;
 using MeshWeaver.Data.Completion;
@@ -90,8 +91,8 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
 
         async Task RunOne(int idx)
         {
-            var items = await provider.GetItemsAsync(Query, null,
-                    TestContext.Current.CancellationToken)
+            var items = await provider.GetItems(Query, null)
+                .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
                 .ToArrayAsync(TestContext.Current.CancellationToken);
             // No content assertion — the existence test is "did the call return".
             items.Should().NotBeNull($"call {idx} should have returned a result");
@@ -113,8 +114,8 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
 
         // Relative mode: query is empty + ends with '/' so the provider asks the
         // contextPath node for its own completions (areas, data, content).
-        var items = await provider.GetItemsAsync("@", "Systemorph/Marketing",
-                TestContext.Current.CancellationToken)
+        var items = await provider.GetItems("@", "Systemorph/Marketing")
+            .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
             .ToArrayAsync(TestContext.Current.CancellationToken).AsTask()
             .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
@@ -136,8 +137,8 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
         // Path that does not exist anywhere — there is no per-node hub at this address.
         const string Query = "@/ZzzNonexistent/Bogus/";
 
-        var items = await provider.GetItemsAsync(Query, null,
-                TestContext.Current.CancellationToken)
+        var items = await provider.GetItems(Query, null)
+            .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
             .ToArrayAsync(TestContext.Current.CancellationToken).AsTask()
             .WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
@@ -166,8 +167,8 @@ public class AutocompleteDelegationDeadlockTest : MonolithMeshTestBase
 
         var tasks = queries.Select(async q =>
         {
-            var items = await provider.GetItemsAsync(q, null,
-                    TestContext.Current.CancellationToken)
+            var items = await provider.GetItems(q, null)
+                .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
                 .ToArrayAsync(TestContext.Current.CancellationToken);
             items.Should().NotBeNull();
         });

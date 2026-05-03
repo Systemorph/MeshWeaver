@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data.Completion;
@@ -279,7 +280,8 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         }
 
         var items = await contentProvider
-            .GetItemsAsync("@", null, TestContext.Current.CancellationToken)
+            .GetItems("@", null)
+            .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
             .Take(10)
             .ToArrayAsync(TestContext.Current.CancellationToken);
 
@@ -313,7 +315,8 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
 
         // Type @/ACME/ProductLaunch/ to get keyword suggestions (needs 2+ completed segments)
         var items = await unifiedProvider!
-            .GetItemsAsync("@/ACME/ProductLaunch/", null, TestContext.Current.CancellationToken)
+            .GetItems("@/ACME/ProductLaunch/", null)
+            .ToAsyncEnumerableSequence(TestContext.Current.CancellationToken)
             .ToArrayAsync(TestContext.Current.CancellationToken);
 
         var keywords = items.Where(i => i.Category == "Keywords").ToArray();

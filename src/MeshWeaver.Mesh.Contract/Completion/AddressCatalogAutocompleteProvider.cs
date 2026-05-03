@@ -14,10 +14,12 @@ public class AddressCatalogAutocompleteProvider(IAddressCatalogService? addressC
     private const int AddressIdCategoryPriority = 1600;
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null) =>
+        AutocompleteProviderObservable.FromAsyncEnumerable(ct => EnumerateAsync(query, ct));
+
+    private async IAsyncEnumerable<AutocompleteItem> EnumerateAsync(
         string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct)
     {
         if (addressCatalog == null)
             yield break;
