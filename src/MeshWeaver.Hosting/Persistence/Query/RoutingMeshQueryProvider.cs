@@ -338,45 +338,61 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         Func<string, IMeshQueryProvider, CancellationToken, IAsyncEnumerable<T>> getPartitionResults,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        // Snapshot the matching providers FIRST so we know the exact count
+        // before any task can complete. The previous shape did
+        // `Increment(ref pending); StartTask()` per partition in the loop,
+        // which races: the first task may run synchronously up to its first
+        // `await` and decrement `pending` to 0 — closing the channel before
+        // the next partition is spawned. Symptom: only the first partition's
+        // results made it through (failing autocomplete tests with 1 result
+        // instead of N).
+        var matching = new List<KeyValuePair<string, IMeshQueryProvider>>();
+        foreach (var kv in providers)
+        {
+            if (searchableSchemas != null && !searchableSchemas.Contains(kv.Key.ToLowerInvariant()))
+                continue;
+            matching.Add(kv);
+        }
+
         var channel = Channel.CreateUnbounded<T>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-        var pending = 0;
-        var partitionTasks = new List<Task>();
-        foreach (var (key, p) in providers)
-        {
-            if (searchableSchemas != null && !searchableSchemas.Contains(key.ToLowerInvariant()))
-                continue;
-            Interlocked.Increment(ref pending);
-            partitionTasks.Add(StreamOneAsync(key, p));
-        }
-
-        if (partitionTasks.Count == 0)
+        if (matching.Count == 0)
         {
             channel.Writer.TryComplete();
+        }
+        else
+        {
+            // pending starts at the FULL partition count — set before any
+            // task runs, so a fast partition's decrement can't drop it to
+            // zero prematurely. Each task decrements exactly once on
+            // completion; the last one closes the channel.
+            var pending = matching.Count;
+            foreach (var (key, p) in matching)
+                _ = StreamOneAsync(key, p);
+
+            async Task StreamOneAsync(string partitionKey, IMeshQueryProvider p)
+            {
+                try { await FanOutThrottle.WaitAsync(ct); }
+                catch (OperationCanceledException) { goto done; }
+
+                try
+                {
+                    await foreach (var item in getPartitionResults(partitionKey, p, ct))
+                        channel.Writer.TryWrite(item);
+                }
+                catch (OperationCanceledException) { /* caller cancelled */ }
+                catch (Exception) { /* don't kill other partitions */ }
+                finally { FanOutThrottle.Release(); }
+
+            done:
+                if (Interlocked.Decrement(ref pending) == 0)
+                    channel.Writer.TryComplete();
+            }
         }
 
         await foreach (var item in channel.Reader.ReadAllAsync(ct))
             yield return item;
-
-        async Task StreamOneAsync(string partitionKey, IMeshQueryProvider p)
-        {
-            try { await FanOutThrottle.WaitAsync(ct); }
-            catch (OperationCanceledException) { goto done; }
-
-            try
-            {
-                await foreach (var item in getPartitionResults(partitionKey, p, ct))
-                    channel.Writer.TryWrite(item);
-            }
-            catch (OperationCanceledException) { /* caller cancelled */ }
-            catch (Exception) { /* don't kill other partitions */ }
-            finally { FanOutThrottle.Release(); }
-
-        done:
-            if (Interlocked.Decrement(ref pending) == 0)
-                channel.Writer.TryComplete();
-        }
     }
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
