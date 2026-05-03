@@ -756,12 +756,34 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     private MeshNode WithCompilationErrorOverlay(MeshNode node, string nodeType, string? error)
     {
-        var baseConfig = node.HubConfiguration
-            ?? GetCachedHubConfiguration(nodeType)
-            ?? meshConfiguration.DefaultNodeHubConfiguration;
+        // Compile-failed grains use ONLY the framework's
+        // DefaultNodeHubConfiguration as the base — never the user's
+        // (potentially broken) cached HubConfiguration from a previous
+        // compile. Picking up `node.HubConfiguration` or
+        // `GetCachedHubConfiguration(nodeType)` here would re-register
+        // handlers from the failed user assembly, which is exactly what
+        // we don't want. The framework default supplies the minimum
+        // hub-infra (Ping/Initialize/Dispose handlers + workspace) so
+        // the grain can still answer system messages and serve a
+        // layout area.
+        var baseConfig = string.IsNullOrEmpty(error)
+            ? (node.HubConfiguration
+                ?? GetCachedHubConfiguration(nodeType)
+                ?? meshConfiguration.DefaultNodeHubConfiguration)
+            : meshConfiguration.DefaultNodeHubConfiguration;
+
         if (string.IsNullOrEmpty(error))
             return CopyIconFromNodeType(node with { HubConfiguration = baseConfig }, nodeType);
 
+        // On compile failure: framework default + the error-overlay layout.
+        // The overlay registers ONLY the OverviewArea handler that renders
+        // the friendly markdown diagnostic. The grain stays minimal — no
+        // user data sources, no broken user handlers — but it CAN still
+        // answer infrastructure messages (Ping/Initialize/Dispose) because
+        // the framework default carries them. Navigation to the instance
+        // URL shows the diagnostic; other layout areas / data queries
+        // fall through to DeliveryFailure NotFound with the compile error
+        // available via MeshNode.CompilationError.
         var overlay = CreateCompilationErrorConfiguration(error);
         Func<MessageHubConfiguration, MessageHubConfiguration> composed = baseConfig != null
             ? (config => overlay(baseConfig(config)))
