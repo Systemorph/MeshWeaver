@@ -75,8 +75,8 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             var client = await GetClientAsync();
 
             // Step 1: Create thread
-            var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Portal flow Orleans test", "TestUser");
-            var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
+            var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Portal flow Orleans test", "TestUser");
+            var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
             createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
             var threadPath = createResp.Message.Node!.Path!;
             Output.WriteLine($"Thread: {threadPath}");
@@ -87,7 +87,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
 
             var userCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(userMsgId, threadPath)
                 {
-                    NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
+                    NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                     Content = new ThreadMessage
                     {
                         Role = "user", Text = "Portal flow Orleans test", Timestamp = DateTime.UtcNow,
@@ -100,7 +100,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             // Step 3: Create response cell â†’ verify
             var responseCellResp = await client.Observe(new CreateNodeRequest(new MeshNode(responseMsgId, threadPath)
                 {
-                    NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
+                    NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                     Content = new ThreadMessage
                     {
                         Role = "assistant", Text = "", Timestamp = DateTime.UtcNow,
@@ -118,7 +118,7 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
                     UserMessageId = userMsgId,
                     ResponseMessageId = responseMsgId,
                     AgentName = "Orchestrator",
-                    ContextPath = "User/TestUser"
+                    ContextPath = "TestUser"
                 }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             submitResp.Message.Success.Should().BeTrue("submit must succeed");
             Output.WriteLine("Submitted â€” WatchForExecution should trigger");
@@ -170,26 +170,26 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             var client = await GetClientAsync();
 
             // Create thread + first message pair
-            var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Multi-message test", "TestUser");
-            var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
+            var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Multi-message test", "TestUser");
+            var createResp = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
             var threadPath = createResp.Message.Node!.Path!;
 
             var u1 = Guid.NewGuid().ToString("N")[..8];
             var r1 = Guid.NewGuid().ToString("N")[..8];
             await client.Observe(new CreateNodeRequest(new MeshNode(u1, threadPath)
             {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                 Content = new ThreadMessage { Role = "user", Text = "First question", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
             }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             await client.Observe(new CreateNodeRequest(new MeshNode(r1, threadPath)
             {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                 Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
             }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath, UserMessageText = "First question",
-                UserMessageId = u1, ResponseMessageId = r1, ContextPath = "User/TestUser"
+                UserMessageId = u1, ResponseMessageId = r1, ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
             // Wait for first execution to complete
@@ -206,18 +206,18 @@ public class OrleansPortalFlowTest(SharedOrleansFixture fixture, ITestOutputHelp
             var r2 = Guid.NewGuid().ToString("N")[..8];
             await client.Observe(new CreateNodeRequest(new MeshNode(u2, threadPath)
             {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                 Content = new ThreadMessage { Role = "user", Text = "Second question", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput }
             }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             await client.Observe(new CreateNodeRequest(new MeshNode(r2, threadPath)
             {
-                NodeType = ThreadMessageNodeType.NodeType, MainNode = "User/TestUser",
+                NodeType = ThreadMessageNodeType.NodeType, MainNode = "TestUser",
                 Content = new ThreadMessage { Role = "assistant", Text = "", Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse }
             }), o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
             await client.Observe(new SubmitMessageRequest
             {
                 ThreadPath = threadPath, UserMessageText = "Second question",
-                UserMessageId = u2, ResponseMessageId = r2, ContextPath = "User/TestUser"
+                UserMessageId = u2, ResponseMessageId = r2, ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
             // Wait for second execution

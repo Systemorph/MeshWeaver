@@ -67,7 +67,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
         var client = await GetClientAsync();
 
         // Create thread
-        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("User/TestUser", "Completion test", "TestUser")), o => o.WithTarget(new Address("User/TestUser"))).FirstAsync().ToTask(ct);
+        var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestUser", "Completion test", "TestUser")), o => o.WithTarget(new Address("TestUser"))).FirstAsync().ToTask(ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
@@ -81,7 +81,7 @@ public class DelegationCompletionTest(SharedOrleansFixture fixture, ITestOutputH
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Test completion notification",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             },
             o => o.WithTarget(new Address(threadPath)));
         delivery.Should().NotBeNull("Post should return delivery");

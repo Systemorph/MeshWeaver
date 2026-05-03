@@ -84,9 +84,9 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
     /// This tests that routing works across 6+ path segments.
     ///
     /// Path hierarchy:
-    ///   User/TestUser/_Thread/my-thread              (thread, 4 segments)
-    ///   User/TestUser/_Thread/my-thread/msg1          (message, 5 segments)
-    ///   User/TestUser/_Thread/my-thread/msg1/sub      (sub-thread, 6 segments)
+    ///   TestUser/_Thread/my-thread              (thread, 4 segments)
+    ///   TestUser/_Thread/my-thread/msg1          (message, 5 segments)
+    ///   TestUser/_Thread/my-thread/msg1/sub      (sub-thread, 6 segments)
     ///
     /// The RoutingGrain must resolve the sub-thread grain key correctly and
     /// propagate the access context through the entire chain.
@@ -97,11 +97,11 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         var client = await GetClientAsync();
 
-        // 1. Create a thread under User/TestUser
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Routing test thread", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
+        // 1. Create a thread under TestUser
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Routing test thread", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
         Output.WriteLine($"Thread: {threadPath}");
-        threadPath.Should().StartWith("User/TestUser/_Thread/");
+        threadPath.Should().StartWith("TestUser/_Thread/");
 
         // 2. Submit message to create cells (user msg + response msg)
         var twoMessages = ObserveThreadMessages(client, threadPath)
@@ -114,7 +114,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Test message for sub-thread routing",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
         Output.WriteLine("First AppendUserMessageRequest succeeded");
@@ -140,7 +140,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
         {
             Name = "Sub-thread routing test",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = "User/TestUser",
+            MainNode = "TestUser",
             Content = new MeshThread
             {
                 CreatedBy = "TestUser"
@@ -165,7 +165,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
                 ThreadPath = subThreadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Hello from sub-thread!",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(subThreadPath))).FirstAsync().ToTask(ct);
 
         subSubmitResponse.Message.Success.Should().BeTrue(
@@ -213,8 +213,8 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
         var client = await GetClientAsync();
 
         // 1. Create a thread
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Access context test", "TestUser");
-        var threadPath = await CreateNodeAsync(client, threadNode, "User/TestUser", ct);
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Access context test", "TestUser");
+        var threadPath = await CreateNodeAsync(client, threadNode, "TestUser", ct);
         Output.WriteLine($"Thread: {threadPath}");
 
         // 2. Submit message to create proper cells (ThreadMessages) via the standard flow
@@ -228,7 +228,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
                 ThreadPath = threadPath,
                 UserMessageId = Guid.NewGuid().ToString("N")[..8],
                 UserText = "Access context test msg",
-                ContextPath = "User/TestUser"
+                ContextPath = "TestUser"
             }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
@@ -247,7 +247,7 @@ public class OrleansSubThreadRoutingTest(SharedOrleansFixture fixture, ITestOutp
         {
             Name = "Access context sub-thread",
             NodeType = ThreadNodeType.NodeType,
-            MainNode = "User/TestUser",
+            MainNode = "TestUser",
             Content = new MeshThread { CreatedBy = "TestUser" }
         };
         var subThreadPath = await CreateNodeAsync(client, subThreadNode, threadPath, ct);

@@ -29,7 +29,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// straight back via <c>ResponseFor(delivery)</c>. So the test exercises:
 /// </para>
 /// <list type="number">
-///   <item>Client posts to <c>User/TestUser/_Thread/&lt;id&gt;</c> via <see cref="IRoutingService"/>.</item>
+///   <item>Client posts to <c>TestUser/_Thread/&lt;id&gt;</c> via <see cref="IRoutingService"/>.</item>
 ///   <item><see cref="RoutingGrain.RouteMessage"/> resolves the path, gets the
 ///   per-thread <see cref="MessageHubGrain"/>, calls <c>DeliverMessage</c>.</item>
 ///   <item>The grain's hub (configured by Thread's NodeType
@@ -68,13 +68,13 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
         //    against. Use BuildThreadNode (NOT BuildThreadWithMessages) so no auto-execute
         //    fires â€” we only want the hub to come up with the Thread NodeType's
         //    HubConfiguration applied.
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Routing test (no LLM)", "TestUser");
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Routing test (no LLM)", "TestUser");
         var threadPath = threadNode.Path!;
         Output.WriteLine($"[Setup] Thread path: {threadPath}");
 
         var createResp = await client.Observe(
                 new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/TestUser")))
+                o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
 
@@ -119,13 +119,13 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
         var client = await GetClientAsync();
 
         // 1. Create the Thread (no auto-execute).
-        var threadNode = ThreadNodeType.BuildThreadNode("User/TestUser", "Workspace propagation test", "TestUser");
+        var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "Workspace propagation test", "TestUser");
         var threadPath = threadNode.Path!;
         Output.WriteLine($"[Setup] Thread path: {threadPath}");
 
         var createResp = await client.Observe(
                 new CreateNodeRequest(threadNode),
-                o => o.WithTarget(new Address("User/TestUser")))
+                o => o.WithTarget(new Address("TestUser")))
             .FirstAsync().ToTask(ct);
         createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
 
@@ -150,7 +150,7 @@ public class OrleansHostedHubRoutingTest(SharedOrleansFixture fixture, ITestOutp
                     // on UserMessageIds.Count growing instead of looking for this id.
                     UserMessageId = Guid.NewGuid().ToString("N")[..8],
                     UserText = "Workspace propagation test message",
-                    ContextPath = "User/TestUser"
+                    ContextPath = "TestUser"
                 },
                 o => o.WithTarget(new Address(threadPath)))
             .FirstAsync().ToTask(ct);
