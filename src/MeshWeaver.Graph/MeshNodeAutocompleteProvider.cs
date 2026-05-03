@@ -19,10 +19,13 @@ internal class MeshNodeAutocompleteProvider(
     private const int DefaultMaxResults = 20;
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
+    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null) =>
+        AutocompleteProviderObservable.FromAsyncEnumerable(ct => EnumerateAsync(query, contextPath, ct));
+
+    private async IAsyncEnumerable<AutocompleteItem> EnumerateAsync(
         string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        string? contextPath,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         // Skip UCR prefix queries — handled by dedicated providers (Content, Data, etc.)
         if (StartsWithUcrPrefix(query))

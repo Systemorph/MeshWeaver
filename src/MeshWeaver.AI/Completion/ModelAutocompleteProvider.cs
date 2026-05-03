@@ -1,6 +1,6 @@
 #nullable enable
 
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
 
 namespace MeshWeaver.AI.Completion;
@@ -33,38 +33,22 @@ public class ModelAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-        string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
     {
-        IReadOnlyList<string> models;
+        // No external I/O — pure in-memory enumeration of the model list.
+        IReadOnlyList<string>? models =
+            _chatClientFactory?.Models ?? _availableModels;
+        if (models is null)
+            return Observable.Empty<AutocompleteItem>();
 
-        if (_chatClientFactory != null)
-        {
-            models = _chatClientFactory.Models;
-        }
-        else if (_availableModels != null)
-        {
-            models = _availableModels;
-        }
-        else
-        {
-            yield break;
-        }
-
-        await Task.CompletedTask; // Satisfy async requirement
-
-        foreach (var model in models)
-        {
-            yield return new AutocompleteItem(
+        return models
+            .Select(model => new AutocompleteItem(
                 Label: $"@model/{model}",
                 InsertText: $"@model/{model} ",
                 Description: "AI Model",
                 Category: "Models",
                 Priority: 0,
-                Kind: AutocompleteKind.Other
-            );
-        }
+                Kind: AutocompleteKind.Other))
+            .ToObservable();
     }
 }

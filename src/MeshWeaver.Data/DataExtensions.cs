@@ -1700,11 +1700,12 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Handles AutocompleteRequest by aggregating items from all registered IAutocompleteProvider services.
-    /// Sync handler — provider IAsyncEnumerables convert to Observables (Merge) and the response is
-    /// posted from the Subscribe callback once all providers complete. This keeps the hub ActionBlock
-    /// free while providers do their work, including any hub-to-hub round-trips inside their bodies
-    /// (see <c>UnifiedReferenceAutocompleteProvider.GetNodeDelegatedCompletions</c>).
+    /// Handles AutocompleteRequest by aggregating items from all registered
+    /// <see cref="IAutocompleteProvider"/> services. Sync handler — providers
+    /// expose <see cref="IObservable{AutocompleteItem}"/> directly per the
+    /// observable-first contract, so we Merge their streams and Subscribe.
+    /// Each provider's <c>OnError</c> is swallowed to a Catch returning Empty
+    /// so one bad provider doesn't kill the aggregate.
     /// </summary>
     private static IMessageDelivery HandleAutocompleteRequest(
         IMessageHub hub,
@@ -1715,20 +1716,8 @@ public static class DataExtensions
         var contextPath = request.Message.Context;
 
         var perProvider = providers.Select(p =>
-            Observable.Create<AutocompleteItem>(async (observer, token) =>
-            {
-                try
-                {
-                    await foreach (var item in p.GetItemsAsync(query, contextPath, token))
-                        observer.OnNext(item);
-                    observer.OnCompleted();
-                }
-                catch
-                {
-                    // Skip providers that fail
-                    observer.OnCompleted();
-                }
-            }));
+            p.GetItems(query, contextPath)
+                .Catch<AutocompleteItem, Exception>(_ => Observable.Empty<AutocompleteItem>()));
 
         Observable.Merge(perProvider)
             .ToList()

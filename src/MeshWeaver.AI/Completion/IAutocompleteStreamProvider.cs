@@ -25,16 +25,15 @@ public interface IAutocompleteStreamProvider
     /// emission is a top-N snapshot ordered by <see cref="AutocompleteItem.Priority"/>
     /// (higher first). The first emission is an empty snapshot (so consumers can render
     /// their initial empty state). Completes when every registered provider's
-    /// <c>GetItemsAsync</c> stream has finished.
+    /// <c>GetItems</c> observable has completed.
     /// </summary>
     IObservable<IReadOnlyList<AutocompleteItem>> Stream(string query, string? contextPath);
 }
 
 /// <summary>
 /// Default <see cref="IAutocompleteStreamProvider"/>. Merges every registered
-/// <see cref="IAutocompleteProvider"/>'s <c>IAsyncEnumerable</c> via
-/// <see cref="ObservableTopNExtensions.ToObservableSequence{T}(IAsyncEnumerable{T})"/>
-/// and folds the merged stream through
+/// <see cref="IAutocompleteProvider.GetItems"/> observable and folds the merged
+/// stream through
 /// <see cref="ObservableTopNExtensions.ScanTopN{T}(IObservable{T},int,IComparer{T})"/>.
 /// </summary>
 public sealed class AutocompleteStreamProvider(IEnumerable<IAutocompleteProvider> providers, int topN = 50)
@@ -50,8 +49,7 @@ public sealed class AutocompleteStreamProvider(IEnumerable<IAutocompleteProvider
     public IObservable<IReadOnlyList<AutocompleteItem>> Stream(string query, string? contextPath)
     {
         var snapshot = providers
-            .Select(p => p.GetItemsAsync(query, contextPath, default)
-                .ToObservableSequence()
+            .Select(p => p.GetItems(query, contextPath)
                 .Catch(Observable.Empty<AutocompleteItem>()))
             .Merge()
             .ScanTopN(topN, ByPriorityDescending);

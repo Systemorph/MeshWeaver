@@ -60,8 +60,7 @@ public static class AgentsApplicationExtensions
         // before posting the final aggregated response. No await, no Task — the observable
         // chain drives the post when the source completes.
         providers
-            .Select(p => p.GetItemsAsync(query, contextPath, default)
-                .ToObservableSequence()
+            .Select(p => p.GetItems(query, contextPath)
                 .Catch(Observable.Empty<AutocompleteItem>()))
             .Merge()
             .ScanTopN(AutocompleteTopN, AutocompleteByPriority)

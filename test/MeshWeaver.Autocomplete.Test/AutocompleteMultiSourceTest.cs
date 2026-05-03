@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using FluentAssertions;
 using Memex.Portal.Shared;
 using MeshWeaver.ContentCollections;
@@ -158,7 +159,8 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
         try
         {
             var items = await contentProvider
-                .GetItemsAsync("@Annual", "ACME/ProductLaunch", opCts.Token)
+                .GetItems("@Annual", "ACME/ProductLaunch")
+                .ToAsyncEnumerableSequence(opCts.Token)
                 .ToListAsync(opCts.Token);
 
             Output.WriteLine($"Direct content provider items for '@Annual':");

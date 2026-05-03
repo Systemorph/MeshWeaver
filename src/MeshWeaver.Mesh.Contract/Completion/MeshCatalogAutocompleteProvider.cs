@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,16 +22,12 @@ public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-        string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
     {
-        await Task.CompletedTask; // Satisfy async requirement
-
+        // Pure in-memory enumeration of registered mesh catalog nodes + reserved prefixes.
         var yielded = new HashSet<string>();
+        var items = new List<AutocompleteItem>();
 
-        // Get nodes from mesh catalog - use top-level nodes (single segment) for autocomplete
         if (meshCatalog != null)
         {
             var topLevelNodes = meshCatalog.Configuration.Nodes.Values
@@ -42,40 +38,38 @@ public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
             foreach (var node in topLevelNodes)
             {
                 yielded.Add($"@{node.Path}/");
-                yield return new AutocompleteItem(
+                items.Add(new AutocompleteItem(
                     Label: $"@{node.Path}/",
                     InsertText: $"@{node.Path}/",
                     Description: node.Name,
                     Category: "Prefixes",
                     Priority: PrefixCategoryPriority - (node.Order ?? 0),
-                    Kind: AutocompleteKind.Other
-                );
+                    Kind: AutocompleteKind.Other));
             }
         }
 
-        // Add reserved prefixes (agent, model) if not already present
         if (!yielded.Contains("@agent/"))
         {
-            yield return new AutocompleteItem(
+            items.Add(new AutocompleteItem(
                 Label: "@agent/",
                 InsertText: "@agent/",
                 Description: "Select an AI agent",
                 Category: "Prefixes",
                 Priority: PrefixCategoryPriority,
-                Kind: AutocompleteKind.Agent
-            );
+                Kind: AutocompleteKind.Agent));
         }
 
         if (!yielded.Contains("@model/"))
         {
-            yield return new AutocompleteItem(
+            items.Add(new AutocompleteItem(
                 Label: "@model/",
                 InsertText: "@model/",
                 Description: "Select an AI model",
                 Category: "Prefixes",
                 Priority: PrefixCategoryPriority,
-                Kind: AutocompleteKind.Other
-            );
+                Kind: AutocompleteKind.Other));
         }
+
+        return items.ToObservable();
     }
 }

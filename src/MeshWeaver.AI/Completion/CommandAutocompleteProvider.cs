@@ -1,6 +1,6 @@
 #nullable enable
 
-using System.Runtime.CompilerServices;
+using System.Reactive.Linq;
 using MeshWeaver.AI.Commands;
 using MeshWeaver.Data.Completion;
 
@@ -25,26 +25,21 @@ public class CommandAutocompleteProvider : IAutocompleteProvider
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(
-        string query,
-        string? contextPath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+    public IObservable<AutocompleteItem> GetItems(string query, string? contextPath = null)
     {
+        // No external I/O — pure in-memory enumeration. ToObservable on the
+        // synchronous IEnumerable is the correct shape; no Channel / no async.
         if (_commandRegistry == null)
-            yield break;
+            return Observable.Empty<AutocompleteItem>();
 
-        await Task.CompletedTask; // Satisfy async requirement
-
-        foreach (var cmd in _commandRegistry.GetAllCommands())
-        {
-            yield return new AutocompleteItem(
+        return _commandRegistry.GetAllCommands()
+            .Select(cmd => new AutocompleteItem(
                 Label: $"/{cmd.Name}",
                 InsertText: $"/{cmd.Name} ",
                 Description: cmd.Description,
                 Category: "Commands",
                 Priority: CommandCategoryPriority,
-                Kind: AutocompleteKind.Command
-            );
-        }
+                Kind: AutocompleteKind.Command))
+            .ToObservable();
     }
 }
