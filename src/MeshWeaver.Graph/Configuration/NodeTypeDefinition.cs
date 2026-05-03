@@ -204,6 +204,19 @@ public record NodeTypeDefinition
     public string? LastCompilationActivityPath { get; init; }
 
     /// <summary>
+    /// Path of the latest <c>Release</c> MeshNode at <c>{nodeTypePath}/_Release/{version}</c>
+    /// — the active compiled artefact for this NodeType. Set by the compile watcher
+    /// after a successful compile + Release node creation; preserves the previous value
+    /// across failed compiles so consumers (NodeTypeService, per-node hub activation,
+    /// the layout area) keep loading the last-known-good release until a fresh one ships.
+    ///
+    /// <para>Read this field instead of resolving the active release through a query —
+    /// the value is on the NodeType MeshNode itself, no <c>ObserveQuery</c> round-trip
+    /// required. See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
+    /// </summary>
+    public string? LatestReleasePath { get; init; }
+
+    /// <summary>
     /// Free-form release notes captured next to the "Create Release" button on
     /// the Configuration view. Auto-saved through the same form-debounce path
     /// every other editable field uses (no manual read-on-click). Surfaced on

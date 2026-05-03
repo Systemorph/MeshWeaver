@@ -3,14 +3,23 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Represents a compiled release of a NodeType.
-/// Contains all compilation inputs and metadata for the release.
-/// Immutable once created - the Path uniquely identifies the compiled output.
+/// Represents a compiled release of a NodeType. Lives on disk as a MeshNode
+/// of type <c>Release</c> at <c>{nodeTypePath}/_Release/{version}</c>;
+/// immutable once committed.
+///
+/// <para>Releases are first-class durable artefacts — the GUI's Create-Release
+/// button triggers a compile activity, and on success the watcher writes a
+/// new Release MeshNode with the compiled <see cref="AssemblyPath"/> + the
+/// markdown <see cref="Notes"/> the user authored. Old releases stay on disk
+/// (one DLL per version) so older instances of the NodeType can keep running
+/// on their loaded ALC while new instances bind to the latest succeeded
+/// release. See <c>Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md</c>.</para>
 /// </summary>
 public record NodeTypeRelease
 {
@@ -31,6 +40,23 @@ public record NodeTypeRelease
     /// Computed from all compilation inputs.
     /// </summary>
     public required string Release { get; init; }
+
+    /// <summary>
+    /// User-facing version label (e.g. "1.2.0", "feature-x"). When the release
+    /// was auto-stamped, defaults to <c>{yyyyMMddHHmmss}-{8charHash}</c> for
+    /// chronological sortability. When the user supplied an explicit version
+    /// at create-release time, that value wins.
+    /// </summary>
+    public string? Version { get; init; }
+
+    /// <summary>
+    /// Author-written release notes — free-form markdown body shown at the top
+    /// of the Release detail view and in the release-history list. Sourced from
+    /// <c>NodeTypeDefinition.ReleaseNotes</c> at compile time and copied here
+    /// so the release is a self-contained snapshot (later edits to the
+    /// NodeType's <c>ReleaseNotes</c> field don't rewrite history).
+    /// </summary>
+    public MarkdownContent? Notes { get; init; }
 
     /// <summary>
     /// The C# source code from CodeConfiguration.
@@ -56,6 +82,36 @@ public record NodeTypeRelease
     /// When this release was created.
     /// </summary>
     public required DateTimeOffset CreatedAt { get; init; }
+
+    /// <summary>
+    /// Filesystem path of the compiled DLL for this release (set when the
+    /// compile activity terminated <c>Succeeded</c>; null on failure).
+    /// Stable per <c>(NodeTypePath, Version)</c> — overwriting in place is
+    /// safe; deleting other versions' DLLs is forbidden because their ALCs
+    /// may still be holding the file handles for live instances.
+    /// </summary>
+    public string? AssemblyPath { get; init; }
+
+    /// <summary>
+    /// Path to the corresponding <c>.pdb</c> file, when emitted alongside the
+    /// DLL. Same naming convention as <see cref="AssemblyPath"/>.
+    /// </summary>
+    public string? PdbPath { get; init; }
+
+    /// <summary>
+    /// Mirror of the compile activity's terminal status. <c>Succeeded</c> means
+    /// the release is loadable and is a candidate for "active release"
+    /// resolution; <c>Failed</c> means the previous succeeded release stays
+    /// active and this release is kept only as history.
+    /// </summary>
+    public string? Status { get; init; }
+
+    /// <summary>
+    /// Path to the <c>NodeTypeCompilation</c> activity that produced this
+    /// release — link to the live message log + diagnostics. Set even on
+    /// failed releases so triagers can drill into the Roslyn output.
+    /// </summary>
+    public string? CompilationActivityPath { get; init; }
 
     /// <summary>
     /// Gets a sanitized version of the Path suitable for file system naming.

@@ -27,6 +27,7 @@ public static class GraphConfigurationExtensions
             builder
                 .AddNodeTypeType()
                 .AddCodeType()
+                .AddReleaseType()
                 .AddMarkdownType()
                 .AddHtmlType()
                 .AddCommentType()
