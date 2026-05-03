@@ -174,6 +174,12 @@ public static class UserNodeType
                     if (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
                         || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase))
                         return Observable.Return(true);
+                    // Legacy "User/{userId}" prefix — keep the rule honouring this
+                    // shape until all in-flight data is migrated to root namespace.
+                    var legacyPrefix = "User/" + userId;
+                    if (nodePath.Equals(legacyPrefix, StringComparison.OrdinalIgnoreCase)
+                        || nodePath.StartsWith(legacyPrefix + "/", StringComparison.OrdinalIgnoreCase))
+                        return Observable.Return(true);
                 }
             }
 
