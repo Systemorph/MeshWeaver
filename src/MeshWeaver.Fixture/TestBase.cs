@@ -54,16 +54,6 @@ public class TestBase : ServiceSetup, IAsyncLifetime
 
 
 
-    /// <summary>
-    /// When <c>false</c>, <see cref="DisposeAsync"/> does NOT dispose the SP —
-    /// the test class is sharing a SP across [Fact]s (see
-    /// <c>MonolithMeshTestBase.ShareMeshAcrossTests</c>) and disposing it on the
-    /// first [Fact]'s teardown would break every subsequent [Fact] that re-uses
-    /// the cached SP. Default <c>true</c> = each [Fact] gets its own SP and
-    /// each disposal also disposes that SP.
-    /// </summary>
-    protected virtual bool DisposeServiceProviderOnTestEnd => true;
-
     public virtual ValueTask DisposeAsync()
     {
         // Log test end with class info
@@ -78,17 +68,13 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         SetOutputHelper(null);
         FileOutput.Dispose();
 
-        // Dispose the SP for non-shared test classes — releases Autofac
-        // lifetime scope + IDisposable singletons. Without this, every
-        // per-[Fact] SP we built in InitializeAsync stays rooted via the
-        // field until garbage collection, and any database/file/network
-        // handles registered as singletons never get to run their cleanup
-        // code. Shared-SP classes opt out via DisposeServiceProviderOnTestEnd
-        // — the SP outlives the test instance and is reclaimed at process exit.
-        if (DisposeServiceProviderOnTestEnd)
-        {
-            Dispose();
-        }
+        // NOTE: Earlier version called Dispose() here to release the Autofac
+        // SP at end of every [Fact]. That broke 40+ tests across PathResolution,
+        // Hosting.Monolith, FutuRe, Graph etc. — too many test classes hold
+        // singleton handles that are read AFTER DisposeAsync (e.g. via test
+        // fixture DI patterns or hub-disposal callbacks). Reverting until a
+        // safer mechanism (per-class collectible AssemblyLoadContext, or
+        // explicit opt-in flag) is in place.
 
         return ValueTask.CompletedTask;
     }
