@@ -12,7 +12,7 @@ using Azure.Core;
 using Azure.Identity;
 using Npgsql;
 
-const int ExpectedVersion = 15; // bump in lock-step with DbVersionGate.ExpectedDbVersion
+const int ExpectedVersion = 16; // bump in lock-step with DbVersionGate.ExpectedDbVersion
 
 var mode = (Args.Count > 0 ? Args[0] : "prod").ToLowerInvariant();
 var rg = mode switch
