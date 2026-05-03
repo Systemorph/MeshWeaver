@@ -446,6 +446,20 @@ public static class MemexConfiguration
         app.UseAntiforgery();
         app.UseCookiePolicy();
 
+        // User-context middleware MUST run BEFORE the terminal endpoint maps
+        // (MapMeshMcp / MapMeshWeaver / MapLinkedInConnect). Once a request
+        // matches a terminal endpoint, no further `app.UseMiddleware<…>()`
+        // registered AFTER the Map* call ever sees it. With UserContextMiddleware
+        // after MapMeshMcp, MCP-Bearer requests skipped it entirely →
+        // accessService.Context stayed null → PostPipeline fell through to its
+        // hub-address fallback and stamped the message identity as
+        // `mesh/<guid>`. SecurityService then matched accessObject="mesh/<guid>"
+        // (no match) instead of accessObject="rbuergi" (Admin) → cross-partition
+        // writes denied while same-partition self-rule writes still passed.
+        app.UseMiddleware<VirtualUserMiddleware>();
+        app.UseMiddleware<UserContextMiddleware>();
+        app.UseMiddleware<OnboardingMiddleware>();
+
         //app.MapMeshWeaverSignalRHubs();
 
         // Map MCP endpoint
@@ -456,10 +470,6 @@ public static class MemexConfiguration
         // Social publishing — LinkedIn connect/pull endpoints. Must be AFTER
         // UseAuthentication so HttpContext.User is populated.
         app.MapLinkedInConnect();
-
-        app.UseMiddleware<VirtualUserMiddleware>();
-        app.UseMiddleware<UserContextMiddleware>();
-        app.UseMiddleware<OnboardingMiddleware>();
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
         app.UseWhen(
