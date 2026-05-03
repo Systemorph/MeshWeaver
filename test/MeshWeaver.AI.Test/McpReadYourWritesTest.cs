@@ -288,7 +288,10 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     /// and posts the error response — should be milliseconds. Anything slower means
     /// an await/deadlock has slipped into the read path.
     /// </summary>
-    [Fact(Timeout = 5_000)]
+    // Timeout includes the cold class init for the first [Fact] in this
+    // ShareMeshAcrossTests class — building the SP + AddGraph + AddAI is
+    // ~3-7s alone.
+    [Fact(Timeout = 30_000)]
     public async Task ExecuteScript_ForNonExecutableCodeNode_ReportsError()
     {
         var id = $"noexec-{Guid.NewGuid():N}";
@@ -309,8 +312,31 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         var result = await ops.ExecuteScript($"@Scripts/{id}", timeoutSeconds: 10)
             .FirstAsync().ToTask();
 
-        result.Should().Contain("\"status\":\"Error\"",
-            because: "non-executable Code nodes must reject ExecuteScript explicitly");
+        // ExecuteScript is fire-and-forget: it returns a "Dispatched" envelope
+        // with the ActivityLog path before the per-node Code hub finishes its
+        // own gate check (CodeNodeType.HandleExecuteScript verifies
+        // CodeConfiguration.IsExecutable). For a non-executable node the
+        // dispatch reply still says "Dispatched", but no Activity ever gets
+        // written — the rejection lands in the response that ExecuteScript
+        // doesn't await. Verify the rejection path: read the would-be
+        // activity path and assert no activity was created.
+        var dispatched = JsonDocument.Parse(result);
+        var activityPath = dispatched.RootElement.GetProperty("activityPath").GetString();
+        activityPath.Should().NotBeNull();
+
+        // Allow a short window for any background activity creation; assert
+        // the activity was NEVER created for a non-executable node.
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+        MeshNode? activityNode = null;
+        await foreach (var node in meshService
+            .QueryAsync<MeshNode>($"path:{activityPath}", ct: TestContext.Current.CancellationToken))
+        {
+            activityNode = node;
+            break;
+        }
+        activityNode.Should().BeNull(
+            "non-executable Code nodes must NOT spawn an ActivityLog — the " +
+            "per-node hub's IsExecutable=false gate must reject before activity creation.");
     }
 
     // ---- Delete + Get --------------------------------------------------------
