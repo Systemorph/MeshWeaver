@@ -57,7 +57,17 @@ public class ServiceSetup
             ServiceProvider.GetRequiredService<TestOutputHelperAccessor>().OutputHelper = output;
     }
 
-    public virtual void Dispose() => ServiceProvider = null!;
+    public virtual void Dispose()
+    {
+        // Dispose the SP so Autofac's lifetime scope tears down + IDisposable
+        // singletons (DBs, file handles, background workers) get to release
+        // their resources. The Autofac Reflection.Emit factories themselves
+        // remain pinned in the JIT code heap until the AppDomain unloads —
+        // that is a separate problem that ShareMeshAcrossTests sidesteps by
+        // building the SP once per test class instead of once per [Fact].
+        (ServiceProvider as IDisposable)?.Dispose();
+        ServiceProvider = null!;
+    }
     protected void Initialize(ITestOutputHelper output)
     {
         Initialize();
