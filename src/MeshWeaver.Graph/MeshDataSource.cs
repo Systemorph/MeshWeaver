@@ -369,11 +369,19 @@ public static class MeshDataSourceExtensions
                         }
                         : curr);
 
+                // Capture the source node — its NodeTypeDefinition.ReleaseNotes
+                // are the markdown the user wrote BEFORE clicking Create
+                // Release. We need them to seed the new Release MeshNode's
+                // Notes field; reading from a fresh GetMeshNodeStream after
+                // the compile races the Status=Compiling write the watcher
+                // already performed (which clears nothing but emits a new
+                // snapshot the synchronous Subscribe doesn't wait for).
+                var pendingNode = node!;
                 return compilationService.CompileAndGetConfigurations(node!)
                     .Take(1)
-                    .Select(result => new CompileOutcome(result, null))
+                    .Select(result => new CompileOutcome(result, null, pendingNode))
                     .Catch<CompileOutcome, Exception>(ex =>
-                        Observable.Return(new CompileOutcome(null, ex)));
+                        Observable.Return(new CompileOutcome(null, ex, pendingNode)));
             })
             .Subscribe(
                 outcome =>
@@ -402,7 +410,29 @@ public static class MeshDataSourceExtensions
                     if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
                     {
                         newReleasePath = TryCreateReleaseNode(
-                            hub, hubPath, outcome.Result!, activityPath, logger);
+                            hub, hubPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
+
+                        // Flush the in-memory NodeTypeService caches for THIS
+                        // NodeType so the next per-node hub activation picks
+                        // up the freshly-released V2 assembly instead of the
+                        // V1 lambda that GetAssemblyPathAsync's
+                        // _compilationTasks.GetOrAdd cached. Without this,
+                        // instances re-activated after a Create Release click
+                        // keep loading the previous release's ALC. Behind
+                        // INodeTypeService so the NodeType-service-internal
+                        // dicts are dropped without exposing them.
+                        try
+                        {
+                            var nodeTypeService = hub.ServiceProvider
+                                .GetService<INodeTypeService>();
+                            nodeTypeService?.InvalidateCache(hubPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger?.LogWarning(ex,
+                                "CompileWatcher: failed to flush NodeTypeService cache after release for {HubPath}",
+                                hubPath);
+                        }
                     }
 
                     workspace.UpdateMeshNode(curr =>
@@ -480,8 +510,15 @@ public static class MeshDataSourceExtensions
         hub.RegisterForDisposal(sub);
     }
 
-    /// <summary>Local record carrying the outcome of a single compile attempt.</summary>
-    private sealed record CompileOutcome(NodeCompilationResult? Result, Exception? Error);
+    /// <summary>Local record carrying the outcome of a single compile attempt.
+    /// <see cref="PendingNode"/> is the NodeType MeshNode at the moment Pending
+    /// was observed — used by <see cref="TryCreateReleaseNode"/> to source the
+    /// markdown <c>ReleaseNotes</c> the author wrote before clicking Create
+    /// Release.</summary>
+    private sealed record CompileOutcome(
+        NodeCompilationResult? Result,
+        Exception? Error,
+        MeshNode PendingNode);
 
     /// <summary>
     /// Best-effort: write a <c>Release</c> MeshNode at
@@ -499,6 +536,7 @@ public static class MeshDataSourceExtensions
         IMessageHub hub,
         string nodeTypePath,
         NodeCompilationResult result,
+        MeshNode pendingNode,
         string? activityPath,
         ILogger? logger)
     {
@@ -507,27 +545,13 @@ public static class MeshDataSourceExtensions
             var meshService = hub.ServiceProvider.GetService<IMeshService>();
             if (meshService is null) return null;
 
-            // Read the NodeType's own MeshNode synchronously off the workspace
-            // — the compile watcher is already streaming this hub's content
-            // and the MeshNode is in cache. Can't use GetMeshNode (hub round-
-            // trip from inside our own subscription would race with the
-            // UpdateMeshNode that follows).
-            string? notes = null;
-            try
-            {
-                var workspace = hub.GetWorkspace();
-                var ownStream = workspace.GetMeshNodeStream();
-                MeshNode? ownNode = null;
-                using var sub = ownStream.Take(1).Subscribe(n => ownNode = n);
-                if (ownNode?.Content is NodeTypeDefinition def)
-                    notes = def.ReleaseNotes;
-            }
-            catch
-            {
-                // Workspace not ready — release notes will be empty for this
-                // release. Acceptable — the release itself still records the
-                // assembly path + activity link.
-            }
+            // Markdown release notes the author wrote on the NodeType's
+            // ReleaseNotes field BEFORE clicking Create Release — sourced
+            // from the captured pendingNode (the snapshot at the moment
+            // Pending was observed). Reading from the live workspace stream
+            // here would race the watcher's already-applied
+            // Status=Compiling write.
+            var notes = (pendingNode.Content as NodeTypeDefinition)?.ReleaseNotes;
 
             // Auto-stamp version: {yyyyMMddHHmmss}-{8charContentHash}. Sortable
             // chronologically + unique per content. Using sha256-truncated of
