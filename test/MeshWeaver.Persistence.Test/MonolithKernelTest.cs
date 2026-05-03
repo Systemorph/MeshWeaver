@@ -30,7 +30,12 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
     protected override bool ShareMeshAcrossTests => true;
 
-    private const int DefaultTimeoutMs = 30000;
+    // 60s per test — generous budget for cold CI runs (kernel grain activation
+    // + Roslyn compile + ALC load can total 15-20s alone, and the inner
+    // WatchForActivityLogAsync timeout is 25s). Locally tests come in ~5-15s
+    // each, so this won't slow the green path; it just stops the cold-CI
+    // tests from timing out before the kernel has finished activating.
+    private const int DefaultTimeoutMs = 60000;
 
     // AddKernel() is already included via AddGraph() in base class
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
@@ -78,7 +83,12 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Where(log => log is not null && predicate(log!))
             .Select(log => log!)
             .Take(1)
-            .Timeout(timeout ?? 15.Seconds())
+            // 25s budget — kernel session activation on cold CI Linux runners
+            // can take ~10-15s alone (Roslyn compile + ALC load), then a few
+            // hundred ms for the first script. Local repros come in at ~5-8s
+            // total; the 15s default we used to ship was tight on CI and
+            // produced spurious failures across every kernel test.
+            .Timeout(timeout ?? 25.Seconds())
             .FirstAsync()
             .ToTask(TestContext.Current.CancellationToken);
 
@@ -102,7 +112,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Should().Contain(m => m.Contains("Hello World"));
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = DefaultTimeoutMs)]
     public async Task CalculatorDirectlyThroughKernel()
     {
         const string Code = @"using MeshWeaver.Layout;

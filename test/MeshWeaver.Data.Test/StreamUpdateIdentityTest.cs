@@ -84,19 +84,19 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [HubFact]
-    public async Task StreamUpdate_WithoutAsyncLocalIdentity_DelegateSeesHubAddressFallback()
+    public async Task StreamUpdate_WithoutAsyncLocalIdentity_DelegateSeesNullContext()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
         var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
 
-        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
-        var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
-
         // Explicitly clear the AsyncLocal to simulate the "lost across async
         // boundary" case (Task.Run / Subscribe-callback / Throttle-tick).
         accessService.SetContext(null);
         accessService.SetCircuitContext(null);
+
+        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+        var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
 
         var insideDelegate = new TaskCompletionSource<string?>();
         stream.Update(_ =>
@@ -107,24 +107,17 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
 
         var seen = await insideDelegate.Task.WaitAsync(5.Seconds());
 
-        // Documented invariant: every delivery must have an AccessContext.
-        // When no caller identity is available, the post-pipeline stamps the
-        // POSTING hub's address — but `stream.Update` posts via the sync
-        // stream's INTERNAL hub (a hosted "sync/..." hub), not the host hub.
-        // That sync-hub address then becomes accessService.Context inside the
-        // delegate AND propagates downstream as the apparent "user" in any
-        // further posts the delegate triggers — which is exactly the cascade
-        // that produced the Orleans delegation failure ("user 'thread-hub-path'
-        // lacks Thread permission ..."): downstream code saw the wrapping
-        // hub's address as the user identity.
-        seen.Should().NotBeNullOrEmpty(
-            "post-pipeline must always stamp some AccessContext (user OR a hub address)");
-        seen.Should().StartWith(
-            "sync/",
-            "stream.Update posts via the sync stream's internal hub — when AsyncLocal " +
-            "isn't set, the fallback identity is that sync hub's own address. THIS is " +
-            "the cascade source: any nested post inside the delegate inherits 'sync/...' " +
-            "as the user, which downstream access checks then deny.");
+        // Post-08a9a27c1 invariant: when no caller identity is available, the
+        // post-pipeline does NOT stamp any AccessContext. The AsyncLocal stays
+        // null inside the delegate. This intentionally fails closed downstream
+        // (rather than smuggling a "sync/..." hub address as the apparent user
+        // identity, which produced the Orleans delegation cascade where access
+        // checks denied legitimate operations because the "user" had become
+        // the wrapping hub's path).
+        seen.Should().BeNull(
+            "post-pipeline no longer fabricates a hub-address fallback identity — when " +
+            "the AsyncLocal AccessContext is unset and there is no circuit context, the " +
+            "delivery rides without an AccessContext and downstream RLS fails closed.");
     }
 
     /// <summary>
