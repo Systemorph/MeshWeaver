@@ -158,8 +158,9 @@ public sealed class V10_PerUserPartitions : IMigration
         await using (var createVersionsCmd = ctx.DataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{versionsSchemaName}\""))
             await createVersionsCmd.ExecuteNonQueryAsync();
 
-        var vCsb = new NpgsqlConnectionStringBuilder(ctx.ConnectionString) { SearchPath = $"{versionsSchemaName},public" };
-        await using var versionsDs = new NpgsqlDataSourceBuilder(vCsb.ConnectionString).Build();
+        // BuildSchemaDataSource wires SSL + AAD password provider for Azure — a raw
+        // NpgsqlDataSourceBuilder skips both and dies with `28000: no pg_hba.conf entry`.
+        await using var versionsDs = SchemaHelpers.BuildSchemaDataSource(ctx.ConnectionString, versionsSchemaName, useVector: false);
 
         var schemaOpts = SchemaHelpers.BuildSchemaOptions(ctx.ConnectionString, schemaName, ctx.Options.VectorDimensions);
 

@@ -32,8 +32,10 @@ public sealed class V02_RebuildTriggerFunctions : IMigration
 
             if (hasVersions)
             {
-                var vCsb = new NpgsqlConnectionStringBuilder(ctx.ConnectionString) { SearchPath = $"{versionsSchema},public" };
-                await using var versionsDs = new NpgsqlDataSourceBuilder(vCsb.ConnectionString).Build();
+                // Use BuildSchemaDataSource for the versions schema too — it sets up SSL +
+                // AAD password provider for Azure, which a raw NpgsqlDataSourceBuilder skips,
+                // causing `28000: no pg_hba.conf entry … no encryption` against prod.
+                await using var versionsDs = SchemaHelpers.BuildSchemaDataSource(ctx.ConnectionString, versionsSchema, useVector: false);
                 await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
                     ctx.DataSource, schemaDs, versionsDs, schemaOpts, versionsSchema);
             }
