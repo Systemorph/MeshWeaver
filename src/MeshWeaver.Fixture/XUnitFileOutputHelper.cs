@@ -48,6 +48,14 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     private bool _disposed = false;
     private readonly string _baseFileName;
     private string? _currentTestMethod;
+    // Long-lived writer for the active test method. Replaces the previous
+    // `File.AppendAllText` per WriteLine — that opened, wrote, and closed
+    // the file on every call (with up to 3 retries on lock contention).
+    // Showed up at ~2.4% in autocomplete-test CPU profiles. AutoFlush
+    // preserves the "see the last line of a hung test" tail-visibility
+    // semantics; the StreamWriter is recreated on SetCurrentTestMethod
+    // (per-method log file) and disposed on Dispose.
+    private StreamWriter? _writer;
 
     static XUnitFileOutputHelper()
     {
@@ -69,30 +77,37 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     public void SetCurrentTestMethod(string methodName)
     {
         if (_disposed) return;
-        
+
         _currentTestMethod = methodName;
-        
+
         // Create simple log file name: TestClass_TestMethod.log
         var newLogPath = Path.Combine(LogDirectory, $"{_baseFileName}_{methodName}.log");
-        
+
         lock (_fileLock)
         {
             _logFilePath = newLogPath;
-            
-            // Delete the existing log file if it exists to start fresh
-            if (File.Exists(_logFilePath))
+
+            // Dispose the previous writer (if any) and open a fresh one.
+            // `append: false` truncates an existing file, so we don't need
+            // a separate File.Delete pass. FileShare.Read lets developers
+            // tail the log while the test is running.
+            try { _writer?.Dispose(); } catch { /* best-effort */ }
+            _writer = null;
+
+            try
             {
-                try
-                {
-                    File.Delete(_logFilePath);
-                }
-                catch
-                {
-                    // If we can't delete it, we'll just overwrite it
-                }
+                var stream = new FileStream(_logFilePath,
+                    FileMode.Create, FileAccess.Write, FileShare.Read);
+                _writer = new StreamWriter(stream) { AutoFlush = true };
+            }
+            catch
+            {
+                // If we can't open the file, fall back to silent — file
+                // logging is best-effort and must never break a test.
+                _writer = null;
             }
         }
-        
+
         // Write initial header now that we have a log file
         WriteToFile($"=== TEST LOG STARTED: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
         WriteToFile($"Test Method: {_baseFileName}.{methodName}");
@@ -160,41 +175,40 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     private void WriteToFile(string message)
     {
         if (_disposed) return;
-        
-        // Don't write to file if no log file has been created yet (no test method active)
-        if (string.IsNullOrEmpty(_logFilePath)) return;
 
-        // Use retry logic for file access to handle temporary conflicts
-        for (int attempt = 0; attempt < 3; attempt++)
+        // Don't write if no log file is active (no test method has started yet).
+        var writer = _writer;
+        if (writer is null) return;
+
+        // Single WriteLine on the held-open StreamWriter — no per-call file
+        // open/close, no retry loop, no IOException to chase. AutoFlush keeps
+        // the tail visible immediately for hung-test diagnostics.
+        try
         {
-            try
+            lock (_fileLock)
             {
-                lock (_fileLock)
-                {
-                    File.AppendAllText(_logFilePath, message + Environment.NewLine);
-                }
-                break; // Success, exit retry loop
+                writer.WriteLine(message);
             }
-            catch (IOException) when (attempt < 2)
-            {
-                // File might be locked, wait and retry
-                Thread.Sleep(10 + attempt * 10);
-            }
-            catch (Exception)
-            {
-                // Other exceptions or final attempt - give up silently to avoid breaking tests
-                break;
-            }
+        }
+        catch
+        {
+            // Best-effort — never break a test on a logger I/O failure.
         }
     }
 
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
-        
+
         WriteToFile($"=== TEST LOG ENDED: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
-        
+        _disposed = true;
+
+        lock (_fileLock)
+        {
+            try { _writer?.Dispose(); } catch { /* best-effort */ }
+            _writer = null;
+        }
+
         GC.SuppressFinalize(this);
     }
 }
