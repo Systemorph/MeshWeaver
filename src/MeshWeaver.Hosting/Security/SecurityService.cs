@@ -86,12 +86,18 @@ internal class SecurityService : ISecurityService
             .SelectMany(p => p.GetStaticNodes())
             .ToList();
 
-        // Also include AccessAssignment nodes from MeshConfiguration (e.g., PublicAdminAccess)
+        // Also include AccessAssignment AND PartitionAccessPolicy nodes from
+        // MeshConfiguration (e.g., PublicAdminAccess seeds, partition caps
+        // declared via AssignmentNodeFactory.Policy). The previous filter only
+        // accepted AccessAssignment, so PartitionAccessPolicy seeds added via
+        // AddMeshNodes were silently dropped — caps never applied, Admin saw
+        // Permission.All on every scope.
         if (meshConfiguration != null)
         {
             allStaticNodes.AddRange(
                 meshConfiguration.Nodes.Values
-                    .Where(n => n.NodeType == "AccessAssignment"));
+                    .Where(n => n.NodeType == "AccessAssignment"
+                                || n.NodeType == "PartitionAccessPolicy"));
         }
 
         // Collect PartitionAccessPolicy nodes from static providers (last-wins for duplicate namespaces)
