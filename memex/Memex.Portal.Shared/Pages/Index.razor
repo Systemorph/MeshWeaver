@@ -21,7 +21,9 @@
         && !UserContext.IsVirtual
         && !string.Equals(UserContext.ObjectId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase);
 
-    private string UserAddress => $"User/{UserContext?.ObjectId}";
+    // Post-v10: the User node lives at the root of its own partition
+    // (path = ObjectId, e.g. `rbuergi`) — not under a `User/` prefix.
+    private string UserAddress => UserContext?.ObjectId ?? string.Empty;
 
     protected override void OnInitialized()
     {
