@@ -86,26 +86,49 @@ internal static class SchemaHelpers
 
         if (isAzure && !hasPassword)
         {
-            dsb.UsePeriodicPasswordProvider(
-                async (_, ct) =>
-                {
-                    var token = await AzureCredential.GetTokenAsync(
-                        new TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]), ct);
-                    return token.Token;
-                },
-                successRefreshInterval: TimeSpan.FromMinutes(45),
-                failureRefreshInterval: TimeSpan.FromSeconds(30));
+            // Mirror Aspire's exact AAD wiring (src/Components/Common/ManagedIdentityTokenCredentialHelpers.cs
+            // + src/Shared/AzureCredentialHelper.cs in dotnet/aspire): per-connection
+            // UsePasswordProvider (Azure.Identity caches the token internally, so no need
+            // for UsePeriodicPasswordProvider) backed by a ManagedIdentityCredential
+            // *pinned to the UAMI client id from AZURE_CLIENT_ID*.
+            //
+            // Bare DefaultAzureCredential is wrong here: with two UAMIs attached (the
+            // db-migration's own + the shared memex_aca_mi), IMDS returns 400
+            // multiple_matching_tokens unless we disambiguate; the chain may also pick a
+            // different identity on each call. ACA always sets AZURE_CLIENT_ID to the
+            // intended UAMI; honour that explicitly.
+            var tokenScope = new TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]);
+            dsb.UsePasswordProvider(
+                _ => AzureCredential.GetToken(tokenScope, default).Token,
+                async (_, ct) => (await AzureCredential.GetTokenAsync(tokenScope, ct).ConfigureAwait(false)).Token);
         }
 
         return dsb.Build();
     }
 
     /// <summary>
-    /// Shared <see cref="DefaultAzureCredential"/> reused across per-schema
-    /// password providers — avoids re-authenticating for every schema while a
-    /// migration walks dozens of partitions.
+    /// Shared <see cref="ManagedIdentityCredential"/> reused across per-schema
+    /// datasources — avoids re-authenticating for every schema while a migration
+    /// walks dozens of partitions (Azure.Identity caches the access token internally).
+    ///
+    /// <para>This is the *exact* construction Aspire uses for AAD-on-Postgres
+    /// (see <c>src/Shared/AzureCredentialHelper.cs</c> in <c>dotnet/aspire</c>):
+    /// a <c>ManagedIdentityCredential</c> pinned to the UAMI whose client id is
+    /// in <c>AZURE_CLIENT_ID</c>. Bare <c>DefaultAzureCredential</c> is wrong in
+    /// a multi-UAMI Container App because the chain runs EnvironmentCredential /
+    /// WorkloadIdentityCredential first and IMDS returns 400
+    /// <c>multiple_matching_tokens</c> when more than one UAMI is attached and
+    /// no client id is specified — typical symptom is
+    /// <c>28P01: password authentication failed for user "app"</c>.</para>
     /// </summary>
-    private static readonly DefaultAzureCredential AzureCredential = new();
+    private static readonly ManagedIdentityCredential AzureCredential =
+        new(new ManagedIdentityCredentialOptions(
+            ManagedIdentityId.FromUserAssignedClientId(
+                Environment.GetEnvironmentVariable("AZURE_CLIENT_ID")
+                ?? throw new InvalidOperationException(
+                    "AZURE_CLIENT_ID env var must be set on the Container App so the per-schema "
+                    + "datasource can pin to the intended User-Assigned Managed Identity. "
+                    + "Aspire AppHost should set this automatically when WithRoleAssignments is wired."))));
 
     /// <summary>Build the per-schema PostgreSqlStorageOptions for a partition migration.</summary>
     public static PostgreSqlStorageOptions BuildSchemaOptions(string baseConnectionString, string schema, int vectorDimensions)
