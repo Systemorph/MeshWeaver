@@ -296,12 +296,23 @@ internal class SecurityService : ISecurityService
     {
         var roleIds = ImmutableHashSet<string>.Empty;
         var permissionCap = Permission.All;
+        var isSelfScopeOwner = userId != WellKnownUsers.Anonymous
+                               && userId != WellKnownUsers.Public;
         foreach (var scope in GetScopeHierarchy(nodePath))
         {
             if (scopeToRoles.TryGetValue(scope, out var roles))
                 roleIds = roleIds.Union(roles);
             if (_staticPolicies.TryGetValue(scope, out var policy))
                 permissionCap &= policy.GetPermissionCap();
+
+            // Self-scope: a user implicitly holds the Admin role on their own
+            // partition (path == "{userId}" or under "{userId}/"). The role
+            // composes through the same BuiltInRolePerms + PartitionAccessPolicy
+            // pipeline as any other grant, so a static policy capping the
+            // partition still applies — we don't bypass the role/cap chain.
+            if (isSelfScopeOwner
+                && string.Equals(scope, userId, StringComparison.OrdinalIgnoreCase))
+                roleIds = roleIds.Add(Role.Admin.Id);
         }
 
         // Claim-based roles: stamped by the auth pipeline onto the

@@ -301,13 +301,14 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
         => ConfigureMeshBase(builder)
             // charlie's explicit Admin assignment — used by UserWithExplicitAdmin_FallbackIsNoOp
             // to verify the self-scope fallback is a no-op when an explicit grant already exists.
-            .AddMeshNodes(AssignmentNodeFactory.UserRole("charlie", "Admin", scope: "User/charlie"));
+            // Post-v10: user partition lives at the root namespace (path={userId}).
+            .AddMeshNodes(AssignmentNodeFactory.UserRole("charlie", "Admin", scope: "charlie"));
 
     [Fact(Timeout = 10000)]
     public async Task UserAccessingOwnScope_ReturnsAdmin()
     {
         var permissions = await Mesh.GetPermissionAsync(
-            "User/alice", "alice", TestContext.Current.CancellationToken);
+            "alice", "alice", TestContext.Current.CancellationToken);
 
         permissions.Should().HaveFlag(Permission.Read);
         permissions.Should().HaveFlag(Permission.Create);
@@ -319,7 +320,7 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task UserAccessingOwnChild_ReturnsAdmin()
     {
         var permissions = await Mesh.GetPermissionAsync(
-            "User/bob/_Thread/t1", "bob", TestContext.Current.CancellationToken);
+            "bob/_Thread/t1", "bob", TestContext.Current.CancellationToken);
 
         permissions.Should().HaveFlag(Permission.Read);
         permissions.Should().HaveFlag(Permission.Create);
@@ -331,7 +332,7 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task AnonymousAccessingUserScope_NoFallback()
     {
         var permissions = await Mesh.GetPermissionAsync(
-            "User/alice", WellKnownUsers.Anonymous, TestContext.Current.CancellationToken);
+            "alice", WellKnownUsers.Anonymous, TestContext.Current.CancellationToken);
 
         permissions.Should().Be(Permission.None,
             "Anonymous should not get self-scope fallback on another user's scope");
@@ -341,7 +342,7 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task PublicAccessingUserScope_NoFallback()
     {
         var permissions = await Mesh.GetPermissionAsync(
-            "User/alice", WellKnownUsers.Public, TestContext.Current.CancellationToken);
+            "alice", WellKnownUsers.Public, TestContext.Current.CancellationToken);
 
         permissions.Should().Be(Permission.None,
             "Public should not get self-scope fallback on another user's scope");
@@ -351,7 +352,7 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
     public async Task UserAccessingOtherUserScope_NoFallback()
     {
         var permissions = await Mesh.GetPermissionAsync(
-            "User/alice", "bob", TestContext.Current.CancellationToken);
+            "alice", "bob", TestContext.Current.CancellationToken);
 
         permissions.Should().Be(Permission.None,
             "bob should not have any permissions on alice's scope without explicit assignment");
@@ -363,7 +364,7 @@ public class UserSelfScopeAccessTest(ITestOutputHelper output) : MonolithMeshTes
         // charlie's explicit Admin is seeded statically in ConfigureMesh —
         // the assertion proves the self-scope fallback doesn't conflict with it.
         var permissions = await Mesh.GetPermissionAsync(
-            "User/charlie", "charlie", TestContext.Current.CancellationToken);
+            "charlie", "charlie", TestContext.Current.CancellationToken);
 
         permissions.Should().HaveFlag(Permission.Read);
         permissions.Should().HaveFlag(Permission.Create);

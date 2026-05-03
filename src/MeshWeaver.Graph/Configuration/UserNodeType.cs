@@ -76,7 +76,13 @@ public static class UserNodeType
         NodeType = NodeType,
         ExcludeFromContext = new HashSet<string> { "search" },
         AssemblyLocation = typeof(UserNodeType).Assembly.Location,
-        Content = new NodeTypeDefinition { DefaultNamespace = "User", RestrictedToNamespaces = ["User"] },
+        // Post-v10 design: User nodes live at the ROOT namespace (path={userId}),
+        // each user gets their own per-user partition. The previous design parked
+        // them under namespace="User" — now superseded; setting an empty default
+        // namespace + a single-element restriction list pinned to "" enforces the
+        // root placement at create time, so runtime onboarding writes cannot land
+        // a user node under "User/" by accident.
+        Content = new NodeTypeDefinition { DefaultNamespace = "", RestrictedToNamespaces = [""] },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<User>())
@@ -90,9 +96,11 @@ public static class UserNodeType
     };
 
     /// <summary>
-    /// Grants public read access ONLY on the User node itself (path == "User/{id}"),
+    /// Grants public read access ONLY on the User node itself (path == "{userId}"),
     /// not on its children (threads, activities, etc.). Children inherit normal
     /// access control — the user gets read access via UserScopeGrantHandler.
+    /// Post-v10 paths are root-level ({userId}); legacy "User/{userId}" still
+    /// matches so transitional data does not lose visibility before migration.
     /// </summary>
     private static MessageHubConfiguration WithUserNodePublicRead(this MessageHubConfiguration config)
         => config.AddAccessRule(
@@ -102,8 +110,10 @@ public static class UserNodeType
                 if (string.IsNullOrEmpty(userId)) return false;
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath)) return false;
-                // Only the User node itself is public, not children
-                // "User/Alice" is public, "User/Alice/SomeThread" is not
+                // Root-level user node ("Alice") with no namespace separator: public.
+                if (!nodePath.Contains('/'))
+                    return true;
+                // Legacy path "User/Alice" (single segment under "User/"): public.
                 return nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
                        && !nodePath["User/".Length..].Contains('/');
             })
@@ -138,6 +148,10 @@ public static class UserNodeType
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath))
                     return Observable.Return(false);
+                // Root-level user node ({userId}) — readable by any authenticated user.
+                if (!nodePath.Contains('/'))
+                    return Observable.Return(!string.IsNullOrEmpty(userId));
+                // Legacy "User" namespace passthrough (transitional).
                 if (nodePath.Equals("User", StringComparison.OrdinalIgnoreCase))
                     return Observable.Return(true);
                 if (nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
@@ -183,7 +197,12 @@ public static class UserNodeType
     {
         // Check if the viewer is the node owner
         var hubPath = host.Hub.Address.ToString();
-        var nodeOwnerId = hubPath.StartsWith("User/") ? hubPath[5..] : hubPath;
+        // Post-v10: per-user partition at root, so hubPath == userId. Strip
+        // the legacy "User/" prefix when present so transitional addresses
+        // continue to resolve until all data is migrated.
+        var nodeOwnerId = hubPath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
+            ? hubPath["User/".Length..]
+            : hubPath;
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var viewerId = accessService?.Context?.ObjectId
                        ?? accessService?.CircuitContext?.ObjectId;
@@ -297,7 +316,13 @@ public static class UserNodeType
             if (string.IsNullOrEmpty(userId))
                 return Task.CompletedTask;
 
-            var userPath = createdNode.Path ?? $"User/{userId}";
+            // Post-v10: User nodes live at the root namespace, so the user's
+            // self-scope path is just {userId}. Fall back to the explicit Id
+            // when Path is somehow unset rather than reverting to the legacy
+            // "User/{userId}" shape — that would seed AccessAssignments at the
+            // wrong scope and the user would have no permissions on their
+            // actual partition.
+            var userPath = !string.IsNullOrEmpty(createdNode.Path) ? createdNode.Path : userId;
             var assignmentNode = new MeshNode($"{userId}_Access", $"{userPath}/_Access")
             {
                 NodeType = "AccessAssignment",

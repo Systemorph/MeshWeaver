@@ -1,0 +1,15 @@
+{
+  "id": "ACME",
+  "name": "ACME",
+  "nodeType": "Organization",
+  "description": "Project and task management demo showcasing MeshWeaver's collaborative workflows and AI agent integration",
+  "icon": "/static/storage/content/ACME/icon.svg",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "$type": "Organization",
+    "name": "ACME",
+    "description": "ACME Demo Organization",
+    "category": "Task Management"
+  }
+}
