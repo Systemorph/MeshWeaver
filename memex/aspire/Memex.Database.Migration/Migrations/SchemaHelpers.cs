@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
 using MeshWeaver.Hosting.PostgreSql;
@@ -84,27 +85,115 @@ internal static class SchemaHelpers
         var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
         if (useVector) dsb.UseVector();
 
-        if (isAzure && !hasPassword)
+        if (isAzure)
         {
-            // Mirror Aspire's exact AAD wiring (src/Components/Common/ManagedIdentityTokenCredentialHelpers.cs
-            // + src/Shared/AzureCredentialHelper.cs in dotnet/aspire): per-connection
-            // UsePasswordProvider (Azure.Identity caches the token internally, so no need
-            // for UsePeriodicPasswordProvider) backed by a ManagedIdentityCredential
-            // *pinned to the UAMI client id from AZURE_CLIENT_ID*.
+            // Mirror Aspire's exact AAD wiring (release/13.2 src/Components/Common/
+            // ManagedIdentityTokenCredentialHelpers.cs::ConfigureEntraIdAuthentication).
+            // Two pieces are required, and the per-schema datasource has historically
+            // missed both:
             //
-            // Bare DefaultAzureCredential is wrong here: with two UAMIs attached (the
-            // db-migration's own + the shared memex_aca_mi), IMDS returns 400
-            // multiple_matching_tokens unless we disambiguate; the chain may also pick a
-            // different identity on each call. ACA always sets AZURE_CLIENT_ID to the
-            // intended UAMI; honour that explicitly.
-            var tokenScope = new TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]);
-            dsb.UsePasswordProvider(
-                _ => AzureCredential.GetToken(tokenScope, default).Token,
-                async (_, ct) => (await AzureCredential.GetTokenAsync(tokenScope, ct).ConfigureAwait(false)).Token);
+            //   1. Username derivation. The conn string Aspire injects has NO Username —
+            //      Aspire fills it at runtime from the access token's `xms_mirid` claim
+            //      (last segment after `userAssignedIdentities/` → e.g.
+            //      "db_migration_identity"). Without this, Npgsql falls back to
+            //      Environment.UserName which is "app" in mcr.microsoft.com/dotnet/aspnet:10.0,
+            //      and Postgres rejects with 28P01: password authentication failed for user "app".
+            //   2. Per-connection UsePasswordProvider with the ossrdbms scope. Azure.Identity
+            //      caches tokens internally, so no need for UsePeriodicPasswordProvider.
+            if (string.IsNullOrEmpty(csb.Username))
+            {
+                // Management scope first — its tokens carry user-name claims for both UAMIs
+                // and SPs (Aspire does the same).
+                var mgmtToken = AzureCredential.GetToken(s_managementTokenRequestContext, default);
+                if (TryGetUsernameFromToken(mgmtToken.Token, out var username) ||
+                    TryGetUsernameFromToken(
+                        AzureCredential.GetToken(s_databaseForPostgresSqlTokenRequestContext, default).Token,
+                        out username))
+                {
+                    csb.Username = username;
+                }
+                // If neither token carries a username, leave Username unset and let Npgsql
+                // surface the misconfiguration on connect (Aspire does the same).
+            }
+
+            if (!hasPassword)
+            {
+                dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+                if (useVector) dsb.UseVector();
+
+                dsb.UsePasswordProvider(
+                    _ => AzureCredential.GetToken(s_databaseForPostgresSqlTokenRequestContext, default).Token,
+                    async (_, ct) => (await AzureCredential.GetTokenAsync(s_databaseForPostgresSqlTokenRequestContext, ct).ConfigureAwait(false)).Token);
+            }
         }
 
         return dsb.Build();
     }
+
+    private static readonly TokenRequestContext s_databaseForPostgresSqlTokenRequestContext =
+        new(["https://ossrdbms-aad.database.windows.net/.default"]);
+    private static readonly TokenRequestContext s_managementTokenRequestContext =
+        new(["https://management.azure.com/.default"]);
+
+    // Verbatim port of Aspire's TryGetUsernameFromToken /
+    // ParsePrincipalName / AddBase64Padding from release/13.2
+    // src/Components/Common/ManagedIdentityTokenCredentialHelpers.cs.
+    private static bool TryGetUsernameFromToken(string jwtToken, out string? username)
+    {
+        username = null;
+        try
+        {
+            var tokenParts = jwtToken.Split('.');
+            if (tokenParts.Length != 3) return false;
+
+            var payload = AddBase64Padding(tokenParts[1]);
+            var decodedBytes = Convert.FromBase64String(payload);
+            var reader = new Utf8JsonReader(decodedBytes);
+            var payloadJson = JsonElement.ParseValue(ref reader);
+
+            if (payloadJson.TryGetProperty("xms_mirid", out var mirid) &&
+                mirid.GetString() is string miridString &&
+                ParsePrincipalName(miridString) is string principalName)
+            {
+                username = principalName;
+            }
+            else if (payloadJson.TryGetProperty("upn", out var upn))
+                username = upn.GetString();
+            else if (payloadJson.TryGetProperty("preferred_username", out var preferred))
+                username = preferred.GetString();
+            else if (payloadJson.TryGetProperty("unique_name", out var unique))
+                username = unique.GetString();
+
+            return username != null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? ParsePrincipalName(string xmsMirid)
+    {
+        var lastSlash = xmsMirid.LastIndexOf('/');
+        if (lastSlash == -1) return null;
+
+        var beginning = xmsMirid.AsSpan(0, lastSlash);
+        var principalName = xmsMirid.AsSpan(lastSlash + 1);
+
+        if (principalName.IsEmpty ||
+            !beginning.EndsWith("providers/Microsoft.ManagedIdentity/userAssignedIdentities", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+        return principalName.ToString();
+    }
+
+    private static string AddBase64Padding(string base64) => (base64.Length % 4) switch
+    {
+        2 => base64 + "==",
+        3 => base64 + "=",
+        _ => base64,
+    };
 
     /// <summary>
     /// Shared <see cref="ManagedIdentityCredential"/> reused across per-schema
