@@ -256,13 +256,16 @@ public record MessageHubConfiguration
                     syncPipeline.Hub.Address,
                     d.Message?.GetType().Name ?? "(null)");
             }
-            logger?.LogDebug(
-                "PostPipeline: hub={Hub}, message={MessageType}, user={User} (context={Context}, circuit={Circuit})",
-                syncPipeline.Hub.Address,
-                d.Message?.GetType().Name ?? "(null)",
-                d.AccessContext?.ObjectId ?? "(no-context)",
-                userService?.Context?.ObjectId ?? "(null)",
-                userService?.CircuitContext?.ObjectId ?? "(null)");
+            // Per-message; gate on Debug so the 5 arg evaluations + boxing are
+            // skipped when not enabled.
+            if (logger?.IsEnabled(LogLevel.Debug) == true)
+                logger.LogDebug(
+                    "PostPipeline: hub={Hub}, message={MessageType}, user={User} (context={Context}, circuit={Circuit})",
+                    syncPipeline.Hub.Address,
+                    d.Message?.GetType().Name ?? "(null)",
+                    d.AccessContext?.ObjectId ?? "(no-context)",
+                    userService?.Context?.ObjectId ?? "(null)",
+                    userService?.CircuitContext?.ObjectId ?? "(null)");
             return next(d);
         });
     }
@@ -332,12 +335,14 @@ public record MessageHubConfiguration
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
             var accessContext = d.AccessContext;
-            logger?.LogDebug(
-                "DeliveryPipeline: hub={Hub}, message={MessageType}, user={User}, sender={Sender}",
-                asyncPipeline.Hub.Address,
-                d.Message?.GetType().Name ?? "(null)",
-                accessContext?.ObjectId ?? "(no-context)",
-                d.Sender);
+            // Per-message; gate on Debug.
+            if (logger?.IsEnabled(LogLevel.Debug) == true)
+                logger.LogDebug(
+                    "DeliveryPipeline: hub={Hub}, message={MessageType}, user={User}, sender={Sender}",
+                    asyncPipeline.Hub.Address,
+                    d.Message?.GetType().Name ?? "(null)",
+                    accessContext?.ObjectId ?? "(no-context)",
+                    d.Sender);
             userService?.SetContext(accessContext);
             try
             {

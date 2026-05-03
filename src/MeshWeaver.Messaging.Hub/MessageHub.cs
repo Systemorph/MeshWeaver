@@ -39,18 +39,23 @@ public sealed class MessageHub : IMessageHub
         long RegisteredAtTicks);
 
     /// <summary>
-    /// Cross-process dispose trace. Every phase boundary (Quiescing entry/exit,
+    /// Cross-process dispose trace. Off by default — set <c>MESHWEAVER_DISPOSE_TRACE=1</c>
+    /// to enable. When enabled, every phase boundary (Quiescing entry/exit,
     /// DisposeHostedHubs entry/exit, ShutDown entry/exit) appends a single line
-    /// with timestamp, hub address, phase, and elapsed-ms. Path is fixed so the
-    /// developer can `tail -f` it during a test run and spot a stalled phase
-    /// immediately, without waiting for the suite to finish.
+    /// with timestamp, hub address, phase, and elapsed-ms; the developer can
+    /// <c>tail -f</c> the file to spot a stalled phase. Disabled by default
+    /// because the global file lock + per-call string formatting + AppendAllText
+    /// open/close serializes hub teardown — showed up at ~0.7% of test thread-time.
     /// </summary>
+    private static readonly bool DisposeTraceEnabled =
+        Environment.GetEnvironmentVariable("MESHWEAVER_DISPOSE_TRACE") is "1" or "true" or "True";
     private static readonly string DisposeTraceLogPath =
         Path.Combine(Path.GetTempPath(), "meshweaver-dispose-trace.log");
     private static readonly object DisposeTraceLogLock = new();
 
     private static void DisposeTrace(Address address, string phase, long elapsedMs, string? extra = null)
     {
+        if (!DisposeTraceEnabled) return;
         try
         {
             var line = extra is null
@@ -68,6 +73,7 @@ public sealed class MessageHub : IMessageHub
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
     private readonly HostedHubsCollection hostedHubs;
+    private readonly AccessService accessService;
 
     public long Version { get; private set; }
 
@@ -142,6 +148,7 @@ public sealed class MessageHub : IMessageHub
         ServiceProvider = serviceProvider;
         Configuration = configuration;
         parentAddress = parentHub?.Address;
+        accessService = serviceProvider.GetRequiredService<AccessService>();
 
 
         messageService = new MessageService(configuration.Address,
@@ -324,28 +331,27 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    private Task<IMessageDelivery> HandleMessageAsync(
+    private async Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         LinkedListNode<AsyncDelivery> node,
         CancellationToken cancellationToken
-    ) => HandleMessageAsyncImpl(delivery, node, cancellationToken, 0);
-
-    private async Task<IMessageDelivery> HandleMessageAsyncImpl(
-        IMessageDelivery delivery,
-        LinkedListNode<AsyncDelivery> node,
-        CancellationToken cancellationToken,
-        int depth
     )
     {
-        if (depth > 500)
-            throw new InvalidOperationException($"HandleMessageAsync recursion depth exceeded 500 in hub {Address} for {delivery.Message.GetType().Name}");
-
-        delivery = await node.Value.Invoke(delivery, cancellationToken);
-
-        if (node.Next == null)
-            return delivery;
-
-        return await HandleMessageAsyncImpl(delivery, node.Next, cancellationToken, depth + 1);
+        // Iterative — every rule becomes one continuation in the SAME async state
+        // machine instead of N nested ones. The previous shape recursed
+        // HandleMessageAsyncImpl(node.Next, depth+1), allocating one state machine
+        // per rule per message. Hubs accumulate ~10–20 rules; the dispatch loop
+        // showed up at 0.82% inclusive in the Orleans test profile.
+        LinkedListNode<AsyncDelivery>? current = node;
+        var depth = 0;
+        while (current is not null)
+        {
+            if (depth++ > 500)
+                throw new InvalidOperationException($"HandleMessageAsync recursion depth exceeded 500 in hub {Address} for {delivery.Message.GetType().Name}");
+            delivery = await current.Value.Invoke(delivery, cancellationToken);
+            current = current.Next;
+        }
+        return delivery;
     }
 
     public bool OpenGate(string name)
@@ -361,8 +367,16 @@ public sealed class MessageHub : IMessageHub
     {
         ++Version;
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Version: {Version}",
-            delivery.Message.GetType().Name, Address, delivery.Id, Version);
+        // Trace is off in steady-state runs (incl. all CI/test profiles); the
+        // IsEnabled gate skips both the message-template formatter AND the
+        // per-arg evaluation (GetType().Name, params object[] boxing of long
+        // Version, etc). Cache GetType().Name once for the few callers that DO
+        // need it within this method.
+        var traceEnabled = logger.IsEnabled(LogLevel.Trace);
+        string? messageTypeName = traceEnabled ? delivery.Message.GetType().Name : null;
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Version: {Version}",
+                messageTypeName, Address, delivery.Id, Version);
 
         // Log only important messages during disposal
         if (IsDisposing && delivery.Message is ShutdownRequest shutdownReq)
@@ -373,26 +387,30 @@ public sealed class MessageHub : IMessageHub
 
         if (rules.First != null)
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}",
-                delivery.Message.GetType().Name, Address, delivery.Id, rules.Count);
+            if (traceEnabled)
+                logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}",
+                    messageTypeName, Address, delivery.Id, rules.Count);
             delivery = await HandleMessageAsync(delivery, rules.First, cancellationToken);
         }
-        else
+        else if (traceEnabled)
         {
             logger.LogTrace("MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
+                messageTypeName, Address, delivery.Id);
         }
 
         var result = FinishDelivery(delivery);
-        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
-            delivery.Message.GetType().Name, Address, delivery.Id, result.State);
+        if (traceEnabled)
+            logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
+                messageTypeName, Address, delivery.Id, result.State);
         return result;
     }
 
     private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
     {
-        logger.LogDebug("FinishDelivery called for {MessageType} (ID: {MessageId}) with state {State} in {Address}",
-            delivery.Message.GetType().Name, delivery.Id, delivery.State, Address);
+        // Per-message hot path. Skip the GetType().Name + boxing when Debug is off.
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug("FinishDelivery called for {MessageType} (ID: {MessageId}) with state {State} in {Address}",
+                delivery.Message.GetType().Name, delivery.Id, delivery.State, Address);
 
         if (delivery.State == MessageDeliveryState.Submitted)
         {
@@ -473,8 +491,7 @@ public sealed class MessageHub : IMessageHub
         // arrives on the hub action block where AsyncLocal is the receiving hub's
         // identity (impersonated). Without re-seeding here, every Subscribe callback
         // would post under the wrong identity. See AsynchronousCalls.md.
-        var accessService = ServiceProvider.GetService<AccessService>();
-        var capturedCtx = accessService?.Context;
+        var capturedCtx = accessService.Context;
         var messageId = Guid.NewGuid().AsString();
         // Resolve the target up-front so the pending-callback diagnostic can name
         // which hub we're waiting on. We only run `options(...)` once — Post below
@@ -508,10 +525,7 @@ public sealed class MessageHub : IMessageHub
     {
         if (capturedCtx is null)
             return source;
-        return source.Do(_ =>
-        {
-            ServiceProvider.GetService<AccessService>()?.SetContext(capturedCtx);
-        });
+        return source.Do(_ => accessService.SetContext(capturedCtx));
     }
 
     private IObservable<IMessageDelivery> ApplyTimeout(
