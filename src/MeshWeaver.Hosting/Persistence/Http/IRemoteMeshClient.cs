@@ -3,6 +3,19 @@ using MeshWeaver.Mesh;
 namespace MeshWeaver.Hosting.Persistence.Http;
 
 /// <summary>
+/// Factory for <see cref="IRemoteMeshClient"/>. Production registration
+/// (<see cref="McpRemoteMeshClientFactory"/>) creates an MCP-over-HTTP client
+/// against the given remote portal. Tests register a stub implementation
+/// that returns a recording fake — verifies the mirror handler talks to the
+/// right tools without standing up a real MCP server.
+/// </summary>
+public interface IRemoteMeshClientFactory
+{
+    /// <summary>Open an <see cref="IRemoteMeshClient"/> against the named remote portal + token.</summary>
+    IRemoteMeshClient Create(string remoteBaseUrl, string remoteToken);
+}
+
+/// <summary>
 /// Thin abstraction over a remote MeshWeaver portal's MCP tool surface — exposes
 /// just the operations <see cref="HttpMeshStorageAdapter"/> needs (Get / Create /
 /// Update / Delete / Search). Production implementation

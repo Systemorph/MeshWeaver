@@ -297,30 +297,16 @@ Network: this instance must have outbound HTTPS reach to `remoteBaseUrl`. Prod c
         [Description("Optional remote path to write under. Defaults to sourcePath.")] string? targetPath = null,
         [Description("If true, delete remote nodes that don't exist locally (DESTRUCTIVE).")] bool removeMissing = false,
         [Description("If true, only enumerate what would be touched without writing.")] bool dryRun = false)
-        => new MirrorOperations(sessionHub)
-            .Push(new MirrorRequest
-            {
-                RemoteBaseUrl = remoteBaseUrl,
-                RemoteToken = remoteToken,
-                SourcePath = sourcePath,
-                TargetPath = targetPath,
-                RemoveMissing = removeMissing,
-                DryRun = dryRun,
-            })
-            .Catch((Exception ex) =>
-            {
-                logger.LogError(ex, "MirrorToRemote failed for {Source} → {Url}", sourcePath, remoteBaseUrl);
-                return Observable.Return(new MirrorResult
-                {
-                    Status = "Error",
-                    Direction = "Push",
-                    SourcePath = sourcePath,
-                    TargetPath = targetPath ?? sourcePath,
-                    Error = ex.Message,
-                });
-            })
-            .Select(r => JsonSerializer.Serialize(r, sessionHub.JsonSerializerOptions))
-            .FirstAsync().ToTask();
+        => PostMirror(new MirrorRequest
+        {
+            RemoteBaseUrl = remoteBaseUrl,
+            RemoteToken = remoteToken,
+            SourcePath = sourcePath,
+            TargetPath = targetPath,
+            Direction = "Push",
+            RemoveMissing = removeMissing,
+            DryRun = dryRun,
+        });
 
     [McpServerTool]
     [Description(@"Mirror a subtree from a remote MeshWeaver portal DOWN to THIS instance. The local instance pulls from `remoteBaseUrl` over HTTPS — the remote must be reachable from here. Use to seed dev with prod data, or to mirror Doc/Architecture markdown into a partition you can edit.
@@ -333,27 +319,39 @@ Returns the same JSON summary shape as MirrorToRemote, with direction='Pull'. Sa
         [Description("Optional local path to write under. Defaults to sourcePath.")] string? targetPath = null,
         [Description("If true, delete LOCAL nodes that don't exist on the remote (DESTRUCTIVE).")] bool removeMissing = false,
         [Description("If true, only enumerate what would be touched without writing.")] bool dryRun = false)
-        => new MirrorOperations(sessionHub)
-            .Pull(new MirrorRequest
-            {
-                RemoteBaseUrl = remoteBaseUrl,
-                RemoteToken = remoteToken,
-                SourcePath = sourcePath,
-                TargetPath = targetPath,
-                RemoveMissing = removeMissing,
-                DryRun = dryRun,
-            })
+        => PostMirror(new MirrorRequest
+        {
+            RemoteBaseUrl = remoteBaseUrl,
+            RemoteToken = remoteToken,
+            SourcePath = sourcePath,
+            TargetPath = targetPath,
+            Direction = "Pull",
+            RemoveMissing = removeMissing,
+            DryRun = dryRun,
+        });
+
+    /// <summary>
+    /// Shared MCP-tool body: posts the mirror request at the mesh hub via
+    /// the standard request/response pattern (`hub.Observe`) and serialises
+    /// the response. The handler is registered by
+    /// <see cref="MirrorHubExtensions.AddMirrorHandler"/> on the mesh hub
+    /// (wired into every <c>AddPersistence</c>-enabled host).
+    /// </summary>
+    private Task<string> PostMirror(MirrorRequest request) =>
+        sessionHub.Observe<MirrorResult>(request, o => o.WithTarget(new Address("mesh")))
             .Catch((Exception ex) =>
             {
-                logger.LogError(ex, "PullFromRemote failed for {Source} ← {Url}", sourcePath, remoteBaseUrl);
-                return Observable.Return(new MirrorResult
-                {
-                    Status = "Error",
-                    Direction = "Pull",
-                    SourcePath = sourcePath,
-                    TargetPath = targetPath ?? sourcePath,
-                    Error = ex.Message,
-                });
+                logger.LogError(ex, "Mirror failed for {Source} {Direction} {Url}",
+                    request.SourcePath, request.Direction, request.RemoteBaseUrl);
+                return Observable.Return((IMessageDelivery<MirrorResult>)null!);
+            })
+            .Select(d => d?.Message ?? new MirrorResult
+            {
+                Status = "Error",
+                Direction = request.Direction,
+                SourcePath = request.SourcePath,
+                TargetPath = request.TargetPath ?? request.SourcePath,
+                Error = "No response from mirror handler — is the mesh hub reachable and AddPersistence configured?",
             })
             .Select(r => JsonSerializer.Serialize(r, sessionHub.JsonSerializerOptions))
             .FirstAsync().ToTask();

@@ -2,6 +2,7 @@ using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Completion;
+using MeshWeaver.Hosting.Persistence.Http;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -53,11 +54,17 @@ public static class PersistenceExtensions
     public static TBuilder RegisterMeshQueryCoreOnMeshHub<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder
     {
-        return (TBuilder)builder.ConfigureHub(config => config.WithServices(services =>
-        {
-            services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
-            return services;
-        }));
+        return (TBuilder)builder
+            .ConfigureHub(config => config.WithServices(services =>
+            {
+                services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
+                return services;
+            }))
+            // Register the cross-instance mirror handler on the mesh hub.
+            // Any caller (UI click, MCP tool, hub message) posts a MirrorRequest
+            // at this address and the handler runs StorageImporter against the
+            // remote portal. See Doc/Architecture/CrossInstanceMirror.md.
+            .ConfigureHub(config => config.AddMirrorHandler());
     }
 
     /// <summary>
