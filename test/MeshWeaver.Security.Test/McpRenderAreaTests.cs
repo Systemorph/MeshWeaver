@@ -1,7 +1,11 @@
+using System.Collections.Generic;
 using FluentAssertions;
 using MeshWeaver.Blazor.AI;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using Xunit;
 
@@ -17,10 +21,33 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class McpRenderAreaTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => ConfigureMeshBase(builder).AddMcp();
+    // Pure function tests on McpMeshPlugin.RenderArea (URL shape, content-block
+    // composition, encoding) — no mutation of mesh state. Safe to share SP.
+    protected override bool ShareMeshAcrossTests => true;
 
-    private McpMeshPlugin CreatePlugin() => new(Mesh);
+    private const string TestBaseUrl = "http://localhost:5000";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => ConfigureMeshBase(builder)
+            // Seed Mcp:BaseUrl into IConfiguration so AddMcp's
+            // .BindConfiguration("Mcp") populates McpConfiguration with the
+            // expected localhost dev URL the tests assert against. Without
+            // this, baseUrl resolves to empty and iframe URLs become
+            // host-less paths like "/Northwind/SalesByCategory".
+            .ConfigureServices(services => services.AddSingleton<IConfiguration>(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Mcp:BaseUrl"] = TestBaseUrl,
+                    })
+                    .Build()))
+            .AddMcp();
+
+    private McpMeshPlugin CreatePlugin()
+    {
+        var config = Options.Create(new McpConfiguration { BaseUrl = TestBaseUrl });
+        return new McpMeshPlugin(Mesh, config);
+    }
 
     [Fact]
     public void RenderArea_ReturnsThreeContentBlocks()
