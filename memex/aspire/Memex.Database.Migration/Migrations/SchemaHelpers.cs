@@ -70,11 +70,20 @@ internal static class SchemaHelpers
     public static NpgsqlDataSource BuildSchemaDataSource(string baseConnectionString, string schema, bool useVector = true)
     {
         var csb = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = $"{schema},public" };
-        var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
-        if (useVector) dsb.UseVector();
 
         var isAzure = csb.Host?.EndsWith(".postgres.database.azure.com", StringComparison.OrdinalIgnoreCase) == true;
         var hasPassword = !string.IsNullOrEmpty(csb.Password);
+
+        // Aspire's AddAzureNpgsqlDataSource enforces SSL via the *builder*, not the conn string.
+        // When we clone the conn string here, that enforcement is lost — the server then rejects
+        // us with `28000: no pg_hba.conf entry for host …, no encryption`. Azure Flexible Server
+        // requires SSL unconditionally, so force it on every per-schema datasource we build.
+        if (isAzure)
+            csb.SslMode = SslMode.Require;
+
+        var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+        if (useVector) dsb.UseVector();
+
         if (isAzure && !hasPassword)
         {
             dsb.UsePeriodicPasswordProvider(
