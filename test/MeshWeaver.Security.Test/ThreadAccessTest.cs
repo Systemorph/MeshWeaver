@@ -51,7 +51,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         try
         {
-            var threadPath = $"User/{userId}/{Guid.NewGuid().AsString()}";
+            var threadPath = $"{userId}/{Guid.NewGuid().AsString()}";
             var node = new MeshNode(threadPath)
             {
                 Name = "My Thread",
@@ -83,7 +83,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             // Create thread first
-            var threadPath = $"User/{userId}/{Guid.NewGuid().AsString()}";
+            var threadPath = $"{userId}/{Guid.NewGuid().AsString()}";
             await NodeFactory.CreateNode(new MeshNode(threadPath)
             {
                 Name = "Thread for Messages",
@@ -127,7 +127,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         try
         {
-            var threadPath = $"User/victim/{Guid.NewGuid().AsString()}";
+            var threadPath = $"victim/{Guid.NewGuid().AsString()}";
             var node = new MeshNode(threadPath)
             {
                 Name = "Malicious Thread",
@@ -154,7 +154,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         // First create thread as legitimate user
         var owner = "thread-owner-2";
         LoginAs(owner);
-        var threadPath = $"User/{owner}/{Guid.NewGuid().AsString()}";
+        var threadPath = $"{owner}/{Guid.NewGuid().AsString()}";
         await NodeFactory.CreateNode(new MeshNode(threadPath)
         {
             Name = "Private Thread",
@@ -286,7 +286,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         try
         {
-            var threadPath = $"User/{userId}/{Guid.NewGuid().AsString()}";
+            var threadPath = $"{userId}/{Guid.NewGuid().AsString()}";
             await NodeFactory.CreateNode(new MeshNode(threadPath)
             {
                 Name = "Readable Thread",
@@ -318,7 +318,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         // Create thread as owner
         var owner = "owner-read-test";
         LoginAs(owner);
-        var threadPath = $"User/{owner}/{Guid.NewGuid().AsString()}";
+        var threadPath = $"{owner}/{Guid.NewGuid().AsString()}";
         await NodeFactory.CreateNode(new MeshNode(threadPath)
         {
             Name = "Private Thread",
