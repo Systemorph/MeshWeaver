@@ -168,6 +168,8 @@ public record MeshBuilder
                 meshTypeRegistry.WithType(typeof(DeleteNodeResponse), nameof(DeleteNodeResponse));
                 meshTypeRegistry.WithType(typeof(UpdateNodeRequest), nameof(UpdateNodeRequest));
                 meshTypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
+                meshTypeRegistry.WithType(typeof(ExecuteScriptRequest), nameof(ExecuteScriptRequest));
+                meshTypeRegistry.WithType(typeof(ExecuteScriptResponse), nameof(ExecuteScriptResponse));
 
                 // Register additional types added via WithMeshType()
                 foreach (var (type, name) in meshTypeRegs)
