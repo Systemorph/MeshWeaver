@@ -3,8 +3,7 @@ using System.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.Hosting.Persistence.Http;
-using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
