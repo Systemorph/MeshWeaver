@@ -81,7 +81,12 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     private async Task<List<MeshNode>> QueryUntilAcmeIndexedAsync(string query, CancellationToken ct)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var deadline = DateTime.UtcNow.AddSeconds(20);
+        // 50s polling window inside the [Fact(Timeout = 60000)] cap. The
+        // FileSystem partition's catalog scan can take 20-40s on cold CI
+        // runners (Linux, fresh testhost, swap-pressured); a 20s budget hit
+        // its ceiling consistently. 50s leaves enough headroom for the test
+        // assertion + Output.WriteLine + dispose without re-flaking the cap.
+        var deadline = DateTime.UtcNow.AddSeconds(50);
         List<MeshNode> results = new();
         while (DateTime.UtcNow < deadline)
         {
@@ -165,7 +170,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // catches the ACME/_Access partition. Poll over a short window.
         var ct = TestContext.Current.CancellationToken;
         var userId = TestUsers.Admin.ObjectId;
-        var deadline = DateTime.UtcNow.AddSeconds(20);
+        var deadline = DateTime.UtcNow.AddSeconds(25);
         var hasRead = false;
         while (DateTime.UtcNow < deadline)
         {
@@ -184,7 +189,7 @@ public class AcmeSearchTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         // cache miss that returns the JSON-shape default before the markdown
         // parser runs). Poll until the typed Organization shape lands so the
         // assertion isn't flaky on cold cache.
-        var nodeDeadline = DateTime.UtcNow.AddSeconds(20);
+        var nodeDeadline = DateTime.UtcNow.AddSeconds(25);
         MeshNode? node = null;
         while (DateTime.UtcNow < nodeDeadline)
         {
