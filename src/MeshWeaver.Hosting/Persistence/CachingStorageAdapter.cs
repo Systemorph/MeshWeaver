@@ -46,7 +46,16 @@ public class CachingStorageAdapter : IStorageAdapter
     /// </summary>
     private class DirectorySnapshot
     {
-        public readonly ConcurrentDictionary<string, byte[]> Files = new(StringComparer.OrdinalIgnoreCase);
+        // Lazy<byte[]> per file: directory scan is eager (cheap — just walks
+        // file paths), bytes are deferred until first read. Tests that touch
+        // only a handful of files (e.g. a single OverviewArea render) save
+        // 90%+ of the prior eager-read cost; catalog-polling tests amortise
+        // the same total work across their queries with negligible per-query
+        // overhead (single Lazy.Value access). The previous "Parallel.ForEach
+        // + File.ReadAllBytes" upfront pre-load was paid in full even by
+        // tests that needed only a few dozen files out of hundreds — showed
+        // up at ~10% inclusive in TodoCreateFlowTest.Baseline_OverviewAreaRenders.
+        public readonly ConcurrentDictionary<string, Lazy<byte[]>> Files = new(StringComparer.OrdinalIgnoreCase);
         public readonly ConcurrentDictionary<string, HashSet<string>> Directories = new(StringComparer.OrdinalIgnoreCase);
 
         public DirectorySnapshot(string baseDirectory)
@@ -56,30 +65,26 @@ public class CachingStorageAdapter : IStorageAdapter
 
             Directories[""] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            // Parallel file read: a samples/Graph directory has ~hundreds of
-            // .md/.cs/.json files. Sequential File.ReadAllBytes per file
-            // serialised the cold-start scan and on CI's 2-CPU runner that
-            // compounded to >15 s — long enough that test queries polling the
-            // catalog ran past their 20 s deadline before the adapter snapshot
-            // landed. Parallel.ForEach distributes the I/O across threads
-            // (default DegreeOfParallelism = process count) and the underlying
-            // ConcurrentDictionary is already safe for this workload. No await,
-            // no sync-context capture — the call site is a synchronous ctor.
             var supported = new HashSet<string>(SupportedExtensions, StringComparer.OrdinalIgnoreCase);
-            var allFiles = Directory.GetFiles(baseDirectory, "*.*", SearchOption.AllDirectories);
-            Parallel.ForEach(allFiles, file =>
+            // Sequential path scan — no Parallel.ForEach because there's no
+            // I/O per entry to parallelise. The actual file bytes are read
+            // lazily through Lazy<byte[]> when ReadAsync first needs them.
+            foreach (var file in Directory.EnumerateFiles(baseDirectory, "*.*", SearchOption.AllDirectories))
             {
                 var ext = Path.GetExtension(file).ToLowerInvariant();
                 if (!supported.Contains(ext))
-                    return;
+                    continue;
 
                 var relativePath = Path.GetRelativePath(baseDirectory, file)
                     .Replace(Path.DirectorySeparatorChar, '/');
-                Files[relativePath] = File.ReadAllBytes(file);
+                var capturedFile = file;
+                Files[relativePath] = new Lazy<byte[]>(
+                    () => File.ReadAllBytes(capturedFile),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
 
                 var dir = Path.GetDirectoryName(relativePath)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
                 EnsureDirectoryEntry(dir, relativePath);
-            });
+            }
 
             foreach (var dir in Directory.GetDirectories(baseDirectory, "*", SearchOption.AllDirectories))
             {
@@ -98,10 +103,10 @@ public class CachingStorageAdapter : IStorageAdapter
             var parts = dir;
             while (true)
             {
-                // GetOrAdd is atomic — under Parallel.ForEach two workers can
-                // race the prior TryGetValue+set pattern and clobber each
-                // other's HashSet. The indexer/lock that followed only
-                // protected the AddItem, not the TryGetValue→assign window.
+                // GetOrAdd is atomic; the indexer/lock that followed the prior
+                // TryGetValue+set pattern only protected the AddItem, not the
+                // TryGetValue→assign window. Sequential ctor now means no race,
+                // but GetOrAdd is still the cleanest expression.
                 var entries = Directories.GetOrAdd(parts,
                     static _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
                 lock (entries) entries.Add(entry);
@@ -122,10 +127,12 @@ public class CachingStorageAdapter : IStorageAdapter
 
         // Find file with supported extensions
         var (relativePath, extension) = FindCachedFile(normalizedPath);
-        if (relativePath == null || !_snapshot.Files.TryGetValue(relativePath, out var bytes))
+        if (relativePath == null || !_snapshot.Files.TryGetValue(relativePath, out var lazyBytes))
             return null;
 
-        var content = System.Text.Encoding.UTF8.GetString(bytes);
+        // Lazy.Value triggers File.ReadAllBytes on first access for this file
+        // and caches the result for subsequent accesses across the process.
+        var content = System.Text.Encoding.UTF8.GetString(lazyBytes.Value);
         var filePath = Path.Combine(_baseDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
         MeshNode? node;
@@ -336,7 +343,7 @@ public class CachingStorageAdapter : IStorageAdapter
                 object? obj = null;
                 try
                 {
-                    var json = System.Text.Encoding.UTF8.GetString(kvp.Value);
+                    var json = System.Text.Encoding.UTF8.GetString(kvp.Value.Value);
                     obj = JsonSerializer.Deserialize<object>(json, options);
                     if (obj != null)
                     {
@@ -355,7 +362,7 @@ public class CachingStorageAdapter : IStorageAdapter
                 CodeConfiguration? config = null;
                 try
                 {
-                    var content = System.Text.Encoding.UTF8.GetString(kvp.Value);
+                    var content = System.Text.Encoding.UTF8.GetString(kvp.Value.Value);
                     var filePath = Path.Combine(_baseDirectory, cachedRelPath.Replace('/', Path.DirectorySeparatorChar));
                     config = await _parserRegistry.CSharpParser.ParseCodeConfigurationAsync(filePath, content, ct);
                 }
@@ -430,10 +437,10 @@ public class CachingStorageAdapter : IStorageAdapter
     private async Task<MeshNode> MergeIndexMarkdownAsync(MeshNode node, string normalizedPath, CancellationToken ct)
     {
         var indexMdKey = normalizedPath + "/index.md";
-        if (!_snapshot.Files.TryGetValue(indexMdKey, out var mdBytes))
+        if (!_snapshot.Files.TryGetValue(indexMdKey, out var mdBytesLazy))
             return node;
 
-        var mdContent = System.Text.Encoding.UTF8.GetString(mdBytes);
+        var mdContent = System.Text.Encoding.UTF8.GetString(mdBytesLazy.Value);
         var filePath = Path.Combine(_baseDirectory, indexMdKey.Replace('/', Path.DirectorySeparatorChar));
 
         var mdNode = await _parserRegistry.TryParseAsync(".md", filePath, mdContent,
@@ -499,7 +506,15 @@ public class CachingStorageAdapter : IStorageAdapter
             var filePath = diskPath + ext;
             var relativePath = normalizedPath + ext;
             if (File.Exists(filePath))
-                _snapshot.Files[relativePath] = File.ReadAllBytes(filePath);
+            {
+                // Refresh: file was just modified — defer the read like the
+                // initial scan does. Captures the path; the next ReadAsync
+                // for this entry triggers the actual byte read.
+                var capturedPath = filePath;
+                _snapshot.Files[relativePath] = new Lazy<byte[]>(
+                    () => File.ReadAllBytes(capturedPath),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+            }
             else
                 _snapshot.Files.TryRemove(relativePath, out _);
         }
@@ -523,7 +538,10 @@ public class CachingStorageAdapter : IStorageAdapter
 
             var relativePath = Path.GetRelativePath(_baseDirectory, file)
                 .Replace(Path.DirectorySeparatorChar, '/');
-            _snapshot.Files[relativePath] = File.ReadAllBytes(file);
+            var capturedFile = file;
+            _snapshot.Files[relativePath] = new Lazy<byte[]>(
+                () => File.ReadAllBytes(capturedFile),
+                LazyThreadSafetyMode.ExecutionAndPublication);
         }
     }
 
