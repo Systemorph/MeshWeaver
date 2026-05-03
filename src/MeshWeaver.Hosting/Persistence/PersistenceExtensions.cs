@@ -590,6 +590,10 @@ public static class PersistenceExtensions
         // PathResolutionService owns the cache + subscribes to IMeshChangeFeed internally
         services.TryAddSingleton<PathResolutionService>();
         services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<PathResolutionService>());
+        // Replay-RefCount cache for NodeType MeshNode streams. Routing reads
+        // it to wait for compile readiness; grain activations read it for the
+        // assembly path. See ~/.claude/plans/splendid-sauteeing-garden.md.
+        services.TryAddSingleton<INodeTypeStreamCache, NodeTypeStreamCache>();
         return services;
     }
 }
