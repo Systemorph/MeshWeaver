@@ -25,6 +25,9 @@ namespace MeshWeaver.Security.Test;
 /// </summary>
 public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    // NOTE: NOT opted into ShareMeshAcrossTests — second test fails under
+    // shared SP, likely due to subscription state accumulating.
+
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
