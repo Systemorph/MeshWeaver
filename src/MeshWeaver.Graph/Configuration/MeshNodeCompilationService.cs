@@ -59,41 +59,43 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Builds the process-wide MetadataReference list — TPA assemblies plus a few
-    /// well-known additions. Two perf points worth knowing:
-    /// <list type="bullet">
-    /// <item><description>
-    /// We use <see cref="MetadataReference.CreateFromStream(Stream, MetadataReferenceProperties, DocumentationProvider, string?)"/>
-    /// instead of <c>CreateFromFile</c>. CreateFromFile mmaps and holds the file
-    /// handle for the lifetime of the reference, which the GC has to finalize on
-    /// shutdown — cost showed up at ~5.7% (GC.RunFinalizers + ReRegisterForFinalize)
-    /// in autocomplete-test CPU profiles. CreateFromStream reads into managed
-    /// memory and releases the file handle immediately; references then live in
-    /// pure GC land with no native finalizer.
-    /// </description></item>
-    /// <item><description>
-    /// File reads are parallelised. The TPA list is ~300+ DLLs; sequential opens
-    /// were ~150ms+ on cold start. A bounded parallelism (degree = 2× CPUs)
-    /// caps the amount of memory in-flight while still saturating the disk.
-    /// </description></item>
-    /// </list>
+    /// well-known additions. Uses <see cref="MetadataReference.CreateFromFile(string)"/>
+    /// (mmap, lazy read) — Roslyn typically reads only a small fraction of each
+    /// assembly's metadata, so the upfront cost is tiny. An earlier attempt at
+    /// <see cref="MetadataReference.CreateFromStream(Stream, MetadataReferenceProperties, DocumentationProvider, string?)"/>
+    /// to avoid finalizer pressure ended up reading the whole DLL into managed
+    /// memory eagerly — net 10%+ slower in the autocomplete-test CPU profile,
+    /// since most of those bytes were never touched. The file-handle finalizer
+    /// pressure those references add is also tiny in practice (the static field
+    /// holds them for the process lifetime; finalizers only run at shutdown).
     /// </summary>
     private static List<MetadataReference> GetDefaultReferences()
     {
-        var paths = new List<string>();
+        var references = new List<MetadataReference>();
 
         var trustedAssemblies = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
         if (trustedAssemblies != null)
         {
             foreach (var path in trustedAssemblies.Split(Path.PathSeparator))
             {
-                if (!string.IsNullOrEmpty(path) && File.Exists(path))
-                    paths.Add(path);
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    continue;
+                try
+                {
+                    references.Add(MetadataReference.CreateFromFile(path));
+                }
+                catch
+                {
+                    // Skip assemblies that can't be loaded
+                }
             }
         }
 
-        // Three well-known additions in case TPA didn't include them. Dedup against
-        // the TPA-derived set by absolute path (case-insensitive on Windows).
-        var seen = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+        // Three well-known additions in case TPA didn't include them. Dedup
+        // against TPA-derived set by Display path so we don't double-load.
+        var seen = new HashSet<string>(
+            references.Select(r => r.Display ?? string.Empty),
+            StringComparer.OrdinalIgnoreCase);
         foreach (var assembly in new[]
         {
             typeof(object).Assembly,                                           // System.Runtime
@@ -105,38 +107,18 @@ internal class MeshNodeCompilationService(
                 && File.Exists(assembly.Location)
                 && seen.Add(assembly.Location))
             {
-                paths.Add(assembly.Location);
-            }
-        }
-
-        // Parallel read into MetadataReference. ConcurrentBag is a thread-safe
-        // accumulator; per-path failures are swallowed (matches the previous
-        // best-effort behaviour). Result order is non-deterministic, which is
-        // fine — Roslyn does not care about reference order.
-        var refs = new ConcurrentBag<MetadataReference>();
-        Parallel.ForEach(
-            paths,
-            new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount * 2) },
-            path =>
-            {
                 try
                 {
-                    // Stream-then-dispose: the resulting PortableExecutableReference
-                    // holds the metadata bytes in managed memory; no file handle
-                    // is retained, so the GC doesn't have to finalize anything
-                    // when the process tears down.
-                    using var fs = File.OpenRead(path);
-                    refs.Add(MetadataReference.CreateFromStream(
-                        fs,
-                        filePath: path));   // preserve path for diagnostics / dedup
+                    references.Add(MetadataReference.CreateFromFile(assembly.Location));
                 }
                 catch
                 {
-                    // Skip assemblies that can't be loaded
+                    // Skip if it can't be loaded
                 }
-            });
+            }
+        }
 
-        return refs.ToList();
+        return references;
     }
 
     /// <summary>
