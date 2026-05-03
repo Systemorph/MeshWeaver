@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -117,7 +118,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act — query "sample" should match sample.docx but NOT readme.md
         var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItemsAsync("sample", ct: TestContext.Current.CancellationToken))
+        await foreach (var item in contentProvider!.GetItems("sample").ToAsyncEnumerableSequence(TestContext.Current.CancellationToken))
         {
             items.Add(item);
         }
@@ -151,7 +152,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act — exact name match
         var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItemsAsync("sample.docx", ct: TestContext.Current.CancellationToken))
+        await foreach (var item in contentProvider!.GetItems("sample.docx").ToAsyncEnumerableSequence(TestContext.Current.CancellationToken))
         {
             items.Add(item);
         }
@@ -177,7 +178,7 @@ public class DocxConversionTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Act
         var items = new List<AutocompleteItem>();
-        await foreach (var item in contentProvider!.GetItemsAsync("my doc", ct: TestContext.Current.CancellationToken))
+        await foreach (var item in contentProvider!.GetItems("my doc").ToAsyncEnumerableSequence(TestContext.Current.CancellationToken))
         {
             items.Add(item);
         }
