@@ -136,6 +136,86 @@ public static class PostgreSqlSchemaInitializer
     }
 
     /// <summary>
+    /// Acquires a Postgres session-level advisory lock keyed by
+    /// <paramref name="schema"/>, runs <paramref name="ddl"/> on the locked
+    /// connection, then releases the lock. The returned awaitable disposable
+    /// is intended for <c>await using</c> at the caller; disposing releases
+    /// the lock and the underlying connection.
+    /// <para>
+    /// Without cross-silo serialisation, two silos (HA pair, multiple
+    /// Memex.Portal.Distributed replicas, …) racing the schema-init DDL on
+    /// the same partition collide on the Postgres system catalog and
+    /// surface as <c>XX000: tuple concurrently updated</c> in
+    /// <c>simple_heap_update</c>. The cascade — schema init throws →
+    /// <c>RoutingPersistenceServiceCore.InitializeAsync</c> → MessageHub
+    /// initialise gate never opens → SubscribeRequest hangs at the timeout
+    /// → GUI sees Blazor SignalR session stuck — is exactly the prod
+    /// symptom App Insights flagged. The advisory lock keyed per schema
+    /// lets distinct schemas init in parallel while same-schema init
+    /// across silos serialises.
+    /// </para>
+    /// <para>
+    /// Key: stable FNV-1a hash of the schema name. <c>string.GetHashCode</c>
+    /// is randomised per process — different silos would compute different
+    /// keys for the same schema, defeating the purpose.
+    /// </para>
+    /// </summary>
+    public static async Task<IAsyncDisposable> AcquireSchemaInitLockAsync(
+        NpgsqlDataSource dataSource, string schema, CancellationToken ct = default)
+    {
+        var lockKey = ComputeAdvisoryLockKey(schema);
+        var conn = await dataSource.OpenConnectionAsync(ct);
+        try
+        {
+            await using var lockCmd = conn.CreateCommand();
+            lockCmd.CommandText = "SELECT pg_advisory_lock(@key)";
+            lockCmd.Parameters.AddWithValue("key", lockKey);
+            await lockCmd.ExecuteNonQueryAsync(ct);
+        }
+        catch
+        {
+            await conn.DisposeAsync();
+            throw;
+        }
+        return new SchemaInitLock(conn, lockKey);
+    }
+
+    private sealed class SchemaInitLock(NpgsqlConnection conn, long key) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                // Best-effort unlock; if the connection is being torn down
+                // anyway the lock releases at session end. Use CancellationToken.None
+                // so a caller-cancelled ct can't prevent the unlock SQL from running.
+                await using var unlockCmd = conn.CreateCommand();
+                unlockCmd.CommandText = "SELECT pg_advisory_unlock(@key)";
+                unlockCmd.Parameters.AddWithValue("key", key);
+                await unlockCmd.ExecuteNonQueryAsync(CancellationToken.None);
+            }
+            catch
+            {
+                // ignore — lock will release at session end
+            }
+            await conn.DisposeAsync();
+        }
+    }
+
+    private static long ComputeAdvisoryLockKey(string schema)
+    {
+        const ulong fnvOffsetBasis = 14695981039346656037UL;
+        const ulong fnvPrime = 1099511628211UL;
+        var hash = fnvOffsetBasis;
+        foreach (var c in schema)
+        {
+            hash ^= c;
+            hash *= fnvPrime;
+        }
+        return unchecked((long)hash);
+    }
+
+    /// <summary>
     /// Initializes mesh tables only (no history/versioning). Used for unversioned partitions (Portal, Kernel).
     /// </summary>
     public static async Task InitializeMeshTablesAsync(

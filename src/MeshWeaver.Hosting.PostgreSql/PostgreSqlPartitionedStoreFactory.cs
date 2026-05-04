@@ -81,8 +81,24 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
 
     public async Task<PartitionedStore> CreateStoreAsync(string firstSegment, CancellationToken ct = default)
     {
-        // Serialize schema creation to avoid "tuple concurrently updated" errors
-        // when multiple partitions initialize in parallel (CREATE EXTENSION, CREATE SCHEMA)
+        // Two layers of serialisation — both required:
+        //
+        // 1. Process-local SemaphoreSlim — protects within ONE silo against
+        //    concurrent partition activations racing the same DDL on the
+        //    shared _baseDataSource (e.g. multiple grain activations during
+        //    a cold start).
+        //
+        // 2. Postgres advisory lock per schema (acquired inside
+        //    CreateStoreInternalAsync via PostgreSqlSchemaInitializer
+        //    .AcquireSchemaInitLockAsync) — protects ACROSS silos. Without it,
+        //    two Memex.Portal.Distributed replicas (HA pair) running the
+        //    schema script in parallel collide on the Postgres system catalog
+        //    and surface as `XX000: tuple concurrently updated` in
+        //    `simple_heap_update`. The cascade — schema init throws →
+        //    RoutingPersistenceServiceCore.InitializeAsync → MessageHub
+        //    initialise gate never opens → SubscribeRequest hangs → GUI
+        //    Blazor SignalR session stuck — was the prod-hang App Insights
+        //    flagged.
         await _schemaInitLock.WaitAsync(ct);
         try
         {
@@ -97,6 +113,14 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     private async Task<PartitionedStore> CreateStoreInternalAsync(string firstSegment, CancellationToken ct)
     {
         var schemaName = SanitizeSchemaName(firstSegment);
+
+        // Hold the cross-silo advisory lock for the duration of the DDL
+        // sequence: extension + schema + tables + satellites. Different
+        // schemas serialise independently (lock is keyed by schema name),
+        // same-schema across silos is serial.
+        await using var schemaLock = await PostgreSqlSchemaInitializer
+            .AcquireSchemaInitLockAsync(_baseDataSource, schemaName, ct);
+
         // Ensure vector extension exists (must run in public schema context)
         await using var extCmd = _baseDataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector");
         await extCmd.ExecuteNonQueryAsync(ct);
