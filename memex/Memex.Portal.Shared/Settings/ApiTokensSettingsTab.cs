@@ -184,26 +184,20 @@ public static class ApiTokensSettingsTab
 
         stack = stack.WithView((h, _) =>
             h.Stream.GetDataStream<long>(tokenListRefreshId)
-                .SelectMany(async _ =>
-                {
-                    if (string.IsNullOrEmpty(userId))
-                        return (UiControl?)Controls.Html(
-                            "<p style=\"color: var(--neutral-foreground-hint);\">No user identity found.</p>");
-
-                    var tokens = await tokenService.GetTokensForUserAsync(userId);
-
-                    if (tokens.Count == 0)
-                        return (UiControl?)Controls.Html(
-                            "<p style=\"color: var(--neutral-foreground-hint);\">No tokens yet. Create one above.</p>");
-
-                    return (UiControl?)BuildTokenList(tokens, tokenService, tokenListRefreshId, resultDataId);
-                }));
+                .SelectMany(_ => string.IsNullOrEmpty(userId)
+                    ? Observable.Return<UiControl?>(Controls.Html(
+                        "<p style=\"color: var(--neutral-foreground-hint);\">No user identity found.</p>"))
+                    : tokenService.GetTokensForUser(userId)
+                        .Select(tokens => tokens.Count == 0
+                            ? (UiControl?)Controls.Html(
+                                "<p style=\"color: var(--neutral-foreground-hint);\">No tokens yet. Create one above.</p>")
+                            : BuildTokenList(tokens, tokenService, tokenListRefreshId, resultDataId))));
 
         return stack;
     }
 
     private static UiControl BuildTokenList(
-        List<ApiTokenInfo> tokens,
+        IReadOnlyList<ApiTokenInfo> tokens,
         ApiTokenService tokenService,
         string tokenListRefreshId,
         string resultDataId)

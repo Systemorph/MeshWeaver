@@ -262,16 +262,12 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             return null;
         }
 
-        // Update LastUsedAt (fire-and-forget, non-critical).
-        try
+        // Update LastUsedAt via remote stream (fire-and-forget, non-critical).
+        if (tokenNode != null)
         {
-            var updated = apiToken with { LastUsedAt = DateTimeOffset.UtcNow };
-            var updatedNode = tokenNode! with { Content = updated };
-            hub.Post(new UpdateNodeRequest(updatedNode));
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Failed to update LastUsedAt for token {HashPrefix}", hashPrefix);
+            hub.GetWorkspace().UpdateMeshNode(
+                node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = DateTimeOffset.UtcNow } },
+                tokenNode.Path);
         }
 
         return apiToken;
@@ -303,7 +299,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
                     var hashPrefix = apiToken.TokenHash[..12];
                     var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
                     if (tokenNodePath != indexPath)
-                        hub.Post(new DeleteNodeRequest(indexPath));
+                        nodeFactory.DeleteNode(indexPath).Subscribe(_ => { }, _ => { });
                 }
 
                 logger.LogInformation("Revoking API token at {Path}", tokenNodePath);
@@ -328,123 +324,51 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
                 {
                     var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
                     if (indexPath != tokenNodePath)
-                        hub.Post(new DeleteNodeRequest(indexPath));
+                        nodeFactory.DeleteNode(indexPath).Subscribe(_ => { }, _ => { });
                 }
 
                 logger.LogInformation("Deleting API token at {Path}", tokenNodePath);
                 return nodeFactory.DeleteNode(tokenNodePath);
             });
 
-    /// <summary>
-    /// Hard-deletes a token node (and its index entry, if present).
-    /// Used to clean up revoked/expired tokens from the UI list.
-    /// </summary>
-    public async Task DeleteTokenAsync(string tokenNodePath)
-    {
-        // Look up the node to find the hash prefix so we can clean the index too.
-        var node = await QueryAsSystemAsync($"path:{tokenNodePath}").FirstOrDefaultAsync();
-        var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
-        var hashPrefix = apiToken?.TokenHash is { Length: >= 12 } h ? h[..12] : null;
+    public IObservable<IReadOnlyList<ApiTokenInfo>> GetTokensForUser(string userId) =>
+        Observable.FromAsync(() => FetchTokensAsync(userId));
 
-        // Delete the primary token node (under User/{userId}/ApiToken/...)
-        hub.Post(new DeleteNodeRequest(tokenNodePath));
-
-        // Delete the index pointer at the top-level ApiToken namespace.
-        if (!string.IsNullOrEmpty(hashPrefix))
-        {
-            var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
-            if (indexPath != tokenNodePath)
-                hub.Post(new DeleteNodeRequest(indexPath));
-        }
-
-        logger.LogInformation("Deleted API token at {Path}", tokenNodePath);
-    }
-
-    public async Task<bool> RevokeTokenAsync(string tokenNodePath)
-    {
-        var node = await QueryAsSystemAsync($"path:{tokenNodePath}").FirstOrDefaultAsync();
-        if (node == null)
-            return false;
-
-        var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
-        if (apiToken == null)
-            return false;
-
-        var revoked = apiToken with { IsRevoked = true };
-        var updatedNode = node with { Content = revoked };
-        hub.Post(new UpdateNodeRequest(updatedNode));
-
-        // Also revoke the index node at ApiToken/{hashPrefix} if it exists
-        if (apiToken.TokenHash.Length >= 12)
-        {
-            var hashPrefix = apiToken.TokenHash[..12];
-            var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
-            if (tokenNodePath != indexPath)
-            {
-                var indexNode = await QueryAsSystemAsync($"path:{indexPath}").FirstOrDefaultAsync();
-                if (indexNode != null)
-                {
-                    hub.Post(new DeleteNodeRequest(indexPath));
-                }
-            }
-        }
-
-        logger.LogInformation("Revoked API token at {Path}", tokenNodePath);
-        return true;
-    }
-
-    public async Task<List<ApiTokenInfo>> GetTokensForUserAsync(string userId)
+    private async Task<IReadOnlyList<ApiTokenInfo>> FetchTokensAsync(string userId)
     {
         var tokens = new List<ApiTokenInfo>();
 
-        // Query user-scoped tokens (post-v10 path: per-user partition).
-        // ApiToken is a satellite type (MainNode != Path), so we need nodeType: condition
-        // to trigger GetAllChildrenAsync which includes satellites in the results.
         var userTokenNamespace = $"{userId}/{ApiTokenNamespace}";
         await foreach (var node in QueryAsSystemAsync($"namespace:{userTokenNamespace} nodeType:{NodeTypeApiToken}"))
         {
             var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
-            if (apiToken == null)
-                continue;
-
-            tokens.Add(new ApiTokenInfo
-            {
-                NodePath = node.Path,
-                Label = apiToken.Label,
-                CreatedAt = apiToken.CreatedAt,
-                ExpiresAt = apiToken.ExpiresAt,
-                LastUsedAt = apiToken.LastUsedAt,
-                IsRevoked = apiToken.IsRevoked,
-                HashPrefix = apiToken.TokenHash.Length >= 8 ? apiToken.TokenHash[..8] : apiToken.TokenHash,
-            });
+            if (apiToken == null) continue;
+            tokens.Add(ToInfo(node, apiToken));
         }
 
-        // Fallback: also check legacy tokens at top-level ApiToken namespace
+        // Fallback: legacy tokens at top-level ApiToken namespace
         await foreach (var node in QueryAsSystemAsync($"namespace:{ApiTokenNamespace} nodeType:{NodeTypeApiToken}"))
         {
             var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
-            if (apiToken == null || apiToken.UserId != userId)
-                continue;
-
-            // Skip if we already found this token in the user namespace
+            if (apiToken == null || apiToken.UserId != userId) continue;
             var hashPrefix = apiToken.TokenHash.Length >= 8 ? apiToken.TokenHash[..8] : apiToken.TokenHash;
-            if (tokens.Any(t => t.HashPrefix == hashPrefix))
-                continue;
-
-            tokens.Add(new ApiTokenInfo
-            {
-                NodePath = node.Path,
-                Label = apiToken.Label,
-                CreatedAt = apiToken.CreatedAt,
-                ExpiresAt = apiToken.ExpiresAt,
-                LastUsedAt = apiToken.LastUsedAt,
-                IsRevoked = apiToken.IsRevoked,
-                HashPrefix = hashPrefix,
-            });
+            if (tokens.Any(t => t.HashPrefix == hashPrefix)) continue;
+            tokens.Add(ToInfo(node, apiToken));
         }
 
         return tokens;
     }
+
+    private static ApiTokenInfo ToInfo(MeshNode node, ApiToken apiToken) => new()
+    {
+        NodePath = node.Path,
+        Label = apiToken.Label,
+        CreatedAt = apiToken.CreatedAt,
+        ExpiresAt = apiToken.ExpiresAt,
+        LastUsedAt = apiToken.LastUsedAt,
+        IsRevoked = apiToken.IsRevoked,
+        HashPrefix = apiToken.TokenHash.Length >= 8 ? apiToken.TokenHash[..8] : apiToken.TokenHash,
+    };
 
     public static string HashToken(string rawToken)
     {
