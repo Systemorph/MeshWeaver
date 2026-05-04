@@ -240,21 +240,44 @@ public record MessageHubConfiguration
             }
             else
             {
-                // No fallback to hub address. The previous shape stamped the
-                // post with `ObjectId = hubAddress.ToFullString()` — turning
-                // the post into "user = mesh/{guid}", which then matched no
-                // AccessAssignment and silently denied cross-partition writes
-                // OR (worse) matched a fake principal that no real seed had
-                // intended to grant. The mesh hub must never post on behalf
-                // of itself; messages without a real principal should either
-                // ride <see cref="WellKnownUsers.System"/> (via
-                // ImpersonateAsHub) or fail-closed downstream.
-                logger?.LogWarning(
-                    "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
-                    "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
-                    "fails closed. Wrap intentional system writes with AccessService.ImpersonateAsHub.",
-                    syncPipeline.Hub.Address,
-                    d.Message?.GetType().Name ?? "(null)");
+                // Two-tier fallback. The mesh hub must NEVER post on behalf of
+                // itself: it routes for everyone, so stamping
+                // `mesh/{guid}` as the principal would match no
+                // AccessAssignment and silently deny cross-partition writes —
+                // OR (worse) match a fake principal that no real seed had
+                // intended to grant. For mesh-typed hubs we fail closed and
+                // expect the caller to wrap with ImpersonateAsHub /
+                // ImpersonateAsSystem when they really do need to post.
+                //
+                // Every other hub kind (`sync/`, `portal/`, `apitoken/`,
+                // `activity/`, per-node hubs, …) IS the legitimate originator
+                // of its own internal flows: SyncStream pushing
+                // SetCurrentRequest, MessageHub posting InitializeHubRequest /
+                // ShutdownRequest to itself, LayoutAreaHost firing internal
+                // bookkeeping, etc. Those have always been "the hub
+                // self-posting" — making them fail-closed broke the layout-
+                // area sync chain (blank screens / endless spinners on prod)
+                // because every SetCurrentRequest started getting rejected.
+                // For those hubs, restore hub-self-impersonation as the
+                // fallback identity. Tests pin both branches.
+                if (syncPipeline.Hub.Address.Type == AddressExtensions.MeshType)
+                {
+                    logger?.LogWarning(
+                        "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
+                        "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
+                        "fails closed. Wrap intentional system writes with AccessService.ImpersonateAsHub.",
+                        syncPipeline.Hub.Address,
+                        d.Message?.GetType().Name ?? "(null)");
+                }
+                else
+                {
+                    var hubAddress = syncPipeline.Hub.Address;
+                    d = d.SetAccessContext(new AccessContext
+                    {
+                        ObjectId = hubAddress.ToFullString(),
+                        Name = hubAddress.ToString()
+                    });
+                }
             }
             // Per-message; gate on Debug so the 5 arg evaluations + boxing are
             // skipped when not enabled.
