@@ -22,11 +22,11 @@ namespace MeshWeaver.Data.Test;
 /// in <c>MessageService.OpenGate</c> doesn't re-flush queued items), the transform
 /// never fires and the caller's edit silently disappears.
 ///
-/// <para>The fix: <see cref="UpdateStreamRequest"/> is on the SynchronizationGate's
-/// let-through predicate. The handler reads <c>Current</c> at process time — if
-/// null (raced before SubscribeResponse), the transform receives null and returns
-/// null (no-op); once Current populates, the transform applies. No deferral ⇒ no
-/// drop.</para>
+/// <para>The fix: <see cref="MeshWeaver.Data.UpdateStreamRequest"/> is on the
+/// SynchronizationGate's let-through predicate. The handler reads <c>Current</c>
+/// at process time — if null (raced before SubscribeResponse), the transform
+/// receives null and returns null (no-op); once Current populates, the transform
+/// applies. No deferral ⇒ no drop.</para>
 /// </summary>
 public class StreamUpdateBeforeSubscribeTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -46,44 +46,31 @@ public class StreamUpdateBeforeSubscribeTest(ITestOutputHelper output) : HubTest
         // Activate the host hub.
         var host = GetHost();
         var client = GetClient();
-        var workspace = client.GetWorkspace();
+        var workspace = client.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var firstBu = TestData.BusinessUnits.First();
         var newName = "renamed-" + System.Guid.NewGuid().ToString("N")[..6];
+        var updatedBu = firstBu with { DisplayName = newName };
 
-        // OPEN the remote stream and IMMEDIATELY call Update — this is the path
-        // NodeTypeService.TryTriggerRecompile takes from a change-feed handler.
-        // The remote stream's sync/* hub is in INIT state; SynchronizationGate
-        // is closed. Without the let-through fix the Update is deferred and
-        // silently dropped when the gate opens (LinkTo doesn't replay).
-        var stream = workspace.GetRemoteStream<BusinessUnit, EntityReference>(
-            host.Address,
-            new EntityReference(typeof(BusinessUnit).FullName!, firstBu.SystemName));
+        // OPEN the remote stream and IMMEDIATELY call DataChangeRequest — this
+        // is the path that exercises UpdateStreamRequest under the gate. Pre-fix
+        // the request was deferred behind the SynchronizationGate and lost when
+        // the gate opened (TPL Dataflow LinkTo doesn't re-flush queued items).
+        // Post-fix UpdateStreamRequest passes the gate; the handler reads
+        // Current at process time and applies the transform once Current is
+        // populated by SetCurrent.
+        client.Post(new DataChangeRequest { Updates = [updatedBu] });
 
-        stream.Update(curr =>
-        {
-            // First call may see null (Current not yet populated) — return null
-            // and let the gate-let-through fix apply our transform on a later
-            // emission. After Current is populated, we mutate.
-            if (curr is null) return null;
-            var updated = curr with { DisplayName = newName };
-            return new ChangeItem<BusinessUnit>(updated, stream.StreamId, stream.StreamId,
-                ChangeType.Patch, stream.Hub.Version,
-                [new EntityUpdate(typeof(BusinessUnit).FullName!, firstBu.SystemName, updated) { OldValue = curr }]);
-        }, ex => Output.WriteLine($"Update failed: {ex}"));
-
-        // Subscribe to the stream and wait for the new name to appear (the
-        // transform landed). Pre-fix this never emits because the
-        // UpdateStreamRequest was dropped from the deferred buffer.
-        var observed = await stream
-            .Where(c => c.Value?.DisplayName == newName)
+        // Wait for the new name to propagate via the cross-hub data sync.
+        var observed = await workspace
+            .GetObservable<BusinessUnit>(firstBu.SystemName)
+            .Where(bu => bu?.DisplayName == newName)
             .Take(1)
             .Timeout(60.Seconds())
-            .Select(c => c.Value!)
             .ToTask(TestContext.Current.CancellationToken);
 
-        observed.DisplayName.Should().Be(newName,
-            "Update called before Current was populated must still apply once SetCurrent arrives — " +
-            "the SynchronizationGate's let-through predicate keeps UpdateStreamRequest from being deferred.");
+        observed!.DisplayName.Should().Be(newName,
+            "DataChangeRequest fires UpdateStreamRequest under the SynchronizationGate; pre-fix " +
+            "the request was deferred behind the gate and silently lost when the gate opened.");
     }
 }
