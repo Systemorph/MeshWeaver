@@ -499,7 +499,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return request.Processed();
             })
             .WithInitialization(InitializeAsync)
-            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest or DeliveryFailure or GetDataResponse || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
+            .WithInitializationGate(SynchronizationGate, d =>
+                // Init-time pass-through: messages that contribute to Current
+                // being populated (initial frame from owner, error responses).
+                d.Message is SetCurrentRequest or DeliveryFailure or GetDataResponse
+                || d.Message is DataChangedEvent { ChangeType: ChangeType.Full }
+                // UpdateStreamRequest must also pass: deferring it loses the
+                // request entirely (TPL Dataflow LinkTo from deferred → main
+                // doesn't re-flush the queued items in this codebase). The
+                // handler reads Current synchronously at process time — if
+                // Current is null (raced before SubscribeResponse), the
+                // transform receives null and returns null (no-op) without
+                // any harm; once Current is populated, the transform fires.
+                || d.Message is UpdateStreamRequest);
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)
