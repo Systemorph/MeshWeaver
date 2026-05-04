@@ -107,16 +107,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     /// <c>NodeTypeLayoutAreas.cs</c>) is now redundant for normal edits;
     /// it remains as an explicit re-release trigger.</para>
     /// </summary>
-    // 2026-05-04: Transparent recompile is desirable but the source-edit →
-    // CompilationStatus = Pending trigger needs a one-shot fire-and-forget
-    // primitive that doesn't leak a SubscribeRequest. workspace.UpdateMeshNode
-    // for a remote node opens a long-standing GetRemoteStream subscription
-    // that the change-feed handler can't tear down — every test that mutates
-    // a node under {NodeTypePath}/Source/... left a pending callback at
-    // dispose time. Tracked as task #47 (build-then-activate routing); when
-    // that ships, the recompile trigger can post a true DataChangeRequest
-    // and we can un-skip this test.
-    [Fact(Timeout = 90000, Skip = "Pending transparent-recompile primitive (task #47) — UpdateMeshNode on remote leaks SubscribeRequest")]
+    [Fact(Timeout = 90000)]
     public async Task CodeEdit_NewRelease_RecompilesAndServesNewVersion()
     {
         var ct = new CancellationTokenSource(60.Seconds()).Token;
