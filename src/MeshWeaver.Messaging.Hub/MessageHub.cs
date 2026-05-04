@@ -510,7 +510,41 @@ public sealed class MessageHub : IMessageHub
         Address? target = null)
     {
         var subject = GetOrAddResponseSubject(messageId, requestType, target);
-        return ApplyTimeout(subject, requestType, target, messageId);
+        return WrapWithCancelOnDispose(
+            ApplyTimeout(subject, requestType, target, messageId),
+            messageId, subject);
+    }
+
+    /// <summary>
+    /// Wraps a response observable so disposing the downstream subscription removes
+    /// the pending callback entry from <see cref="responseSubjects"/>. Without this,
+    /// a Subscribe disposed before the response arrives leaves the entry in the
+    /// dictionary until <see cref="MessageHubConfiguration.RequestTimeout"/> expires
+    /// (~30s). Test bases' quiescing-budget leak check (~0.5s) flags this as a leaked
+    /// callback even though the application-level subscription is gone.
+    /// </summary>
+    private IObservable<IMessageDelivery> WrapWithCancelOnDispose(
+        IObservable<IMessageDelivery> source,
+        string messageId,
+        System.Reactive.Subjects.AsyncSubject<IMessageDelivery> subject)
+    {
+        return System.Reactive.Linq.Observable.Create<IMessageDelivery>(observer =>
+        {
+            var sub = source.Subscribe(observer);
+            return new System.Reactive.Disposables.CompositeDisposable(
+                sub,
+                System.Reactive.Disposables.Disposable.Create(() =>
+                {
+                    lock (responseSubjects)
+                    {
+                        if (responseSubjects.TryGetValue(messageId, out var entry)
+                            && ReferenceEquals(entry.Subject, subject))
+                        {
+                            responseSubjects.Remove(messageId);
+                        }
+                    }
+                }));
+        });
     }
 
     /// <summary>

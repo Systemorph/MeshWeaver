@@ -59,38 +59,69 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 Interleave = true
             });
 
-        // Built-in NodeTypes registered via MeshBuilder.AddMeshNodes have
-        // HubConfiguration + AssemblyLocation set at registration time, so we
-        // can short-circuit synchronously without subscribing to the stream.
-        // Dynamic NodeTypes flow through the observable path.
+        logger.LogInformation("[ACTIVATE] Grain {StreamId} activating", streamId);
+
+        // 1. Static/config nodes: synchronous lookup, no grain round-trip.
         var staticNode = TryResolveStaticNode(addressPath);
         if (staticNode is { HubConfiguration: not null })
         {
+            logger.LogInformation("[ACTIVATE] Grain {StreamId}: static node found, completing activation", streamId);
             CompleteActivation(streamId, address, grainScheduler, staticNode);
             return Task.CompletedTask;
         }
 
-        // Subscribe to the cached MeshNode stream and complete activation
-        // when an emission carries a usable HubConfiguration. NO AWAIT —
-        // OnActivateAsync returns immediately. Orleans considers the grain
-        // activated; DeliverMessage awaits _hubReady.Task before processing
-        // any inbound message.
-        //
-        // The routing grain has already warmed this stream (and waited for
-        // CompilationStatus = Ok) before forwarding the first message to us,
-        // so the subscription typically fires synchronously off the cached
-        // Replay(1) snapshot.
-        _activationSubscription = streamCache.GetStream(addressPath)
-            .SelectMany(node => ResolveHubConfigurationObservable(node))
+        logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, reading from catalog", streamId);
+
+        // 2. Persisted nodes: read directly from MeshCatalog (persistence layer) without
+        //    going through the stream cache. streamCache.GetStream(addressPath) routes a
+        //    SubscribeRequest back through RoutingGrain → this same grain → awaits _hubReady
+        //    → deadlock. catalog.GetNodeForRouting reads from DB/static providers directly.
+        var catalog = meshHub.ServiceProvider.GetService<MeshCatalog>();
+        var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
+
+        var sourceStream = catalog != null
+            ? catalog.GetNodeForRouting(address)
+                .Where(n => n != null)
+                .Select(n => n!)
+            : streamCache.GetStream(addressPath);
+
+        _activationSubscription = sourceStream
+            .SelectMany(node =>
+            {
+                logger.LogInformation("[ACTIVATE] Grain {StreamId}: catalog emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                    streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
+
+                // Resolve HubConfiguration: instance node without config → look up NodeType.
+                if (node.HubConfiguration is not null)
+                    return Observable.Return(node);
+
+                if (!string.IsNullOrEmpty(node.NodeType)
+                    && meshConfig is not null
+                    && meshConfig.Nodes.TryGetValue(node.NodeType, out var ntNode)
+                    && ntNode.HubConfiguration is not null)
+                {
+                    logger.LogInformation("[ACTIVATE] Grain {StreamId}: resolved HubConfig from NodeType={NodeType}", streamId, node.NodeType);
+                    return Observable.Return(node with
+                    {
+                        HubConfiguration = ntNode.HubConfiguration,
+                        AssemblyLocation = ntNode.AssemblyLocation ?? node.AssemblyLocation
+                    });
+                }
+
+                // Dynamic compiled NodeType: delegate to factory.
+                return ResolveHubConfigurationObservable(node);
+            })
             .Where(node => node.HubConfiguration is not null)
             .Take(1)
             .Subscribe(
-                node => CompleteActivation(streamId, address, grainScheduler, node),
+                node =>
+                {
+                    logger.LogInformation("[ACTIVATE] Grain {StreamId}: completing activation from catalog", streamId);
+                    CompleteActivation(streamId, address, grainScheduler, node);
+                },
                 ex =>
                 {
-                    logger.LogError(ex,
-                        "Grain {StreamId}: activation stream faulted for {Path}",
-                        streamId, addressPath);
+                    logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
                     _hubReady.TrySetException(ex);
                 });
 
@@ -144,7 +175,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
             hub.RegisterForDisposal(_ => DeactivateOnIdle());
             _hubReady.TrySetResult(hub);
-            logger.LogDebug("Grain {StreamId} activated", streamId);
+            logger.LogInformation("[ACTIVATE] Grain {StreamId} ready", streamId);
         }
         catch (Exception ex)
         {
@@ -290,24 +321,45 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
     /// <summary>
-    /// Synchronous lookup for built-in MeshNodes that ride
-    /// <see cref="MeshConfiguration.Nodes"/> or <see cref="IStaticNodeProvider"/>.
-    /// These have <see cref="MeshNode.HubConfiguration"/> + (where applicable)
-    /// <see cref="MeshNode.AssemblyLocation"/> set at registration time, so
-    /// routing through the synchronization-stream cache is unnecessary and
-    /// would add a cross-hub round-trip on every grain cold start. Returns
-    /// <c>null</c> if no static registration exists for <paramref name="addressPath"/>;
-    /// caller falls back to the cached stream.
+    /// Synchronous lookup for built-in MeshNodes. Checks MeshConfiguration.Nodes
+    /// first (NodeType definitions), then IStaticNodeProvider. For instance nodes
+    /// that have no HubConfiguration of their own, resolves the NodeType's
+    /// HubConfiguration from MeshConfiguration.Nodes — this avoids the stream-cache
+    /// path which would route a SubscribeRequest back through this same grain and
+    /// deadlock on _hubReady. Returns null if nothing is found.
     /// </summary>
     private MeshNode? TryResolveStaticNode(string addressPath)
     {
         var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
+
+        // Direct config match — NodeType definitions and other explicitly registered nodes.
         if (meshConfig is not null && meshConfig.Nodes.TryGetValue(addressPath, out var node))
             return node;
 
-        return meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
+        // Static node providers (e.g., test seeds, user nodes).
+        var staticNode = meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
             .SelectMany(p => p.GetStaticNodes())
             .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
+
+        if (staticNode is null) return null;
+        if (staticNode.HubConfiguration is not null) return staticNode;
+
+        // Instance node (NodeType = "User", "Markdown", etc.) with no HubConfiguration.
+        // Look up the NodeType's HubConfiguration from the static registry so we can
+        // skip the stream-cache path entirely.
+        if (!string.IsNullOrEmpty(staticNode.NodeType)
+            && meshConfig is not null
+            && meshConfig.Nodes.TryGetValue(staticNode.NodeType, out var nodeTypeNode)
+            && nodeTypeNode.HubConfiguration is not null)
+        {
+            return staticNode with
+            {
+                HubConfiguration = nodeTypeNode.HubConfiguration,
+                AssemblyLocation = nodeTypeNode.AssemblyLocation ?? staticNode.AssemblyLocation
+            };
+        }
+
+        return staticNode;
     }
 }
 
