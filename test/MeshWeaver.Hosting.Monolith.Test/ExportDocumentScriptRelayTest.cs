@@ -88,12 +88,16 @@ public class ExportDocumentScriptRelayTest(ITestOutputHelper output) : MonolithM
         dispatch.Message.ActivityPath.Should().NotBeNullOrEmpty(
             "the response should carry the running activity's path");
 
-        // Step 2 — subscribe to the activity stream, project to ActivityLog,
-        // filter on terminal status, take the snapshot. The script writes its
-        // RenderedDocument as ActivityLog.ReturnValue on terminal.
-        var terminal = await Mesh.GetWorkspace()
-            .GetMeshNodeStream(dispatch.Message.ActivityPath)
-            .Select(n => n?.Content as ActivityLog)
+        // Step 2 — observe the activity via the read-side index (ObserveQuery),
+        // filter to the terminal status snapshot. Avoids the cross-hub
+        // SubscribeRequest path: ObserveQuery emits initial set + deltas as the
+        // index sees writes (the activity hub's UpdateMeshNode echoes through
+        // persistence → index), so the test never needs to subscribe directly
+        // to the per-activity hub. See AsynchronousCalls.md → "Sets / listings,
+        // live (dashboard, autocomplete) → ObserveQuery".
+        var terminal = await meshService
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{dispatch.Message.ActivityPath}"))
+            .Select(change => change.Items.FirstOrDefault()?.Content as ActivityLog)
             .Where(log => log is not null && log.Status != ActivityStatus.Running)
             .Take(1)
             .Timeout(TimeSpan.FromMinutes(2))

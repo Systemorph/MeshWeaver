@@ -1153,8 +1153,22 @@ public static class MeshExtensions
         {
             logger.LogInformation("[UpdateNode] forwarding from {Hub} (path={HubPath}) to per-node hub {Target}",
                 hub.Address, hub.Address.Path, updatedNode.Path);
+            // Propagate the original sender's AccessContext onto the forwarded delivery —
+            // without it, the per-node hub's AccessControlPipeline sees
+            // delivery.AccessContext = null and falls back to its own AccessService.Context,
+            // which on a shared hub still carries the PREVIOUS request's user (ResolveIdentity
+            // step 3). Symptom: User2's update returns "user 'user1@example.com' lacks Update
+            // permission" because User1 ran an UpdateNode immediately before. Fix: forward
+            // the originating identity explicitly so the per-node hub re-impersonates correctly.
+            var inboundCtx = request.AccessContext;
             var forwarded = hub.Post(capturedRequest,
-                o => o.WithTarget(new Address(updatedNode.Path)))!;
+                o =>
+                {
+                    var withTarget = o.WithTarget(new Address(updatedNode.Path));
+                    return inboundCtx is not null
+                        ? withTarget.WithAccessContext(inboundCtx)
+                        : withTarget;
+                })!;
             hub.Observe(forwarded)
                 .Subscribe(
                     d =>

@@ -196,8 +196,9 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             .Timeout(TimeSpan.FromSeconds(15))
             .FirstAsync();
 
-        terminal!.Status.Should().Be(ActivityStatus.Failed,
-            "cancellation surfaces as Failed status (with the cancellation message in Messages)");
+        terminal!.Status.Should().Be(ActivityStatus.Cancelled,
+            "post-ActivityControlPlane: cancellation surfaces as Cancelled (KernelExecutor " +
+            "calls activityLogger.Complete(ActivityStatus.Cancelled) on OperationCanceledException)");
         terminal.Messages.Select(m => m.Message)
             .Should().Contain(m => m.Contains("starting"), "earlier log entries survive cancellation")
             .And.NotContain(m => m.Contains("if you see this"),
