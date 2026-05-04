@@ -213,6 +213,132 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         tokenInfo.HashPrefix.Should().Be(fullHash[..8]);
     }
 
+    // ── DeleteToken (previously zero coverage; the old hub.Post pattern would deadlock) ──
+
+    [Fact]
+    public async Task DeleteToken_RemovesNodeFromStorage()
+    {
+        var service = GetService();
+        var result = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "To Delete").FirstAsync().ToTask(CT);
+
+        await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
+
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        MeshNode? stored;
+        do
+        {
+            stored = await ReadNodeAsync(result.Node.Path, CT);
+            if (stored is null) break;
+            await Task.Delay(50, CT);
+        } while (DateTimeOffset.UtcNow < deadline);
+
+        stored.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DeleteToken_AfterDelete_ValidateReturnsNull()
+    {
+        var service = GetService();
+        var result = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "To Delete").FirstAsync().ToTask(CT);
+
+        await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
+
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        ApiToken? validated;
+        do
+        {
+            validated = await service.ValidateToken(result.RawToken).FirstAsync().ToTask(CT);
+            if (validated is null) break;
+            await Task.Delay(50, CT);
+        } while (DateTimeOffset.UtcNow < deadline);
+
+        validated.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DeleteToken_AlsoRemovesIndexEntry()
+    {
+        var service = GetService();
+        var result = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Index Delete").FirstAsync().ToTask(CT);
+
+        var apiToken = result.Node.Content as ApiToken;
+        var hashPrefix = apiToken!.TokenHash[..12];
+        var indexPath = $"ApiToken/{hashPrefix}";
+
+        await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
+
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        MeshNode? index;
+        do
+        {
+            index = await ReadNodeAsync(indexPath, CT);
+            if (index is null) break;
+            await Task.Delay(50, CT);
+        } while (DateTimeOffset.UtcNow < deadline);
+
+        index.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DeleteToken_NonexistentPath_Completes()
+    {
+        var result = await GetService().DeleteToken("user1/ApiToken/nonexistent").FirstAsync().ToTask(CT);
+        result.Should().BeFalse();
+    }
+
+    // ── GetTokensForUser edge cases ──
+
+    [Fact]
+    public async Task GetTokensForUser_EmptyUser_ReturnsEmpty()
+    {
+        var tokens = await GetService().GetTokensForUser("nobody").FirstAsync().ToTask(CT);
+
+        tokens.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetTokensForUser_RevokedToken_StillAppearsAsRevoked()
+    {
+        var service = GetService();
+        var result = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Revoke Me").FirstAsync().ToTask(CT);
+        await service.RevokeToken(result.Node.Path).FirstAsync().ToTask(CT);
+
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        IReadOnlyList<ApiTokenInfo>? tokens = null;
+        do
+        {
+            tokens = await service.GetTokensForUser("user1").FirstAsync().ToTask(CT);
+            if (tokens.Any(t => t.IsRevoked)) break;
+            await Task.Delay(50, CT);
+        } while (DateTimeOffset.UtcNow < deadline);
+
+        tokens.Should().ContainSingle(t => t.Label == "Revoke Me" && t.IsRevoked);
+    }
+
+    [Fact]
+    public async Task GetTokensForUser_DeletedToken_DoesNotAppear()
+    {
+        var service = GetService();
+        var result = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Delete Me").FirstAsync().ToTask(CT);
+        await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
+
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        IReadOnlyList<ApiTokenInfo>? tokens = null;
+        do
+        {
+            tokens = await service.GetTokensForUser("user1").FirstAsync().ToTask(CT);
+            if (!tokens.Any(t => t.Label == "Delete Me")) break;
+            await Task.Delay(50, CT);
+        } while (DateTimeOffset.UtcNow < deadline);
+
+        tokens.Should().NotContain(t => t.Label == "Delete Me");
+    }
+
     [Fact]
     public void HashToken_IsDeterministic()
     {
