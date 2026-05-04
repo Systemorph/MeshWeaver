@@ -138,24 +138,22 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                         // otherwise the stale DLL keeps being served because the NodeType's
                         // own LastModified hasn't moved.
                         //
-                        // Transparent-recompile pattern: ALSO flip the owning NodeType's
-                        // CompilationStatus to Pending. The CompileWatcher (installed by
-                        // AddMeshDataSource on the per-NodeType hub) reacts to Pending
-                        // and runs Roslyn → writes the new Release MeshNode → flips
-                        // LatestReleasePath. Without this, source edits silently invalidate
-                        // the cache but the next read triggers compile only on first touch
-                        // — meaning the existing per-instance hubs keep serving the stale
-                        // ALC until something rebinds them. Same code path the GUI's
-                        // "Create Release" button uses, but driven automatically off the
-                        // source-edit signal so editors don't need to click.
+                        // Transparent-recompile is a TODO (task #47): we can't safely flip
+                        // CompilationStatus = Pending from this change-feed handler yet
+                        // because workspace.UpdateMeshNode for a remote node opens a
+                        // GetRemoteStream subscription that doesn't auto-dispose; tests
+                        // that mutate sources without explicitly waiting for the recompile
+                        // hit "leaked SubscribeRequest" at dispose. The build-then-activate
+                        // routing work (task #47) introduces a one-shot fire-and-forget
+                        // primitive that lets the recompile trigger be a true one-shot
+                        // DataChangeRequest with no lingering subscription.
                         var owning = TryResolveOwningNodeTypePath(evt.Path);
                         if (owning != null)
                         {
                             logger.LogInformation(
-                                "Cross-silo cache invalidation + transparent-recompile trigger for owning {NodeTypePath} after source change at {SourcePath} ({Kind})",
+                                "Cross-silo cache invalidation for owning {NodeTypePath} after source change at {SourcePath} ({Kind})",
                                 owning, evt.Path, evt.Kind);
                             InvalidateCache(owning);
-                            TryTriggerRecompile(owning);
                         }
                     }
                     catch (Exception handlerEx)
@@ -503,52 +501,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return null;
     }
 
-    /// <summary>
-    /// Transparent-recompile trigger. Flips
-    /// <see cref="NodeTypeDefinition.CompilationStatus"/> on
-    /// <paramref name="nodeTypePath"/> to <see cref="CompilationStatus.Pending"/>
-    /// via the per-NodeType hub's MeshNode workspace stream. The CompileWatcher
-    /// (installed by <c>AddMeshDataSource</c> on the same hub) reacts to Pending
-    /// and runs Roslyn → emits a Release MeshNode + flips
-    /// <c>LatestReleasePath</c>. Same code path the GUI Create-Release button
-    /// drives, but executed automatically when a source edit lands.
-    ///
-    /// <para>Skips the trigger if the current node is already <c>Pending</c> or
-    /// <c>Compiling</c> (the watcher will pick up the pending one); skips if the
-    /// node has no <see cref="NodeTypeDefinition"/> content (e.g. raw MeshNode);
-    /// skips if the workspace can't be resolved at this moment (best-effort, the
-    /// next source edit will retry).</para>
-    /// </summary>
-    private void TryTriggerRecompile(string nodeTypePath)
-    {
-        try
-        {
-            hub.GetWorkspace().UpdateMeshNode(curr =>
-            {
-                if (curr.Content is not NodeTypeDefinition def) return curr;
-                if (def.CompilationStatus is CompilationStatus.Pending
-                                          or CompilationStatus.Compiling) return curr;
-                return curr with
-                {
-                    Content = def with
-                    {
-                        CompilationStatus = CompilationStatus.Pending,
-                        LastCompileStartedAt = DateTimeOffset.UtcNow
-                    }
-                };
-            }, nodeTypePath);
-        }
-        catch (Exception ex)
-        {
-            // Best-effort. The next source edit (or an explicit Compile/Create
-            // Release click) will retry. Don't let a transient workspace miss
-            // crash the change-feed handler — that would silence ALL further
-            // invalidations on this silo.
-            logger.LogWarning(ex,
-                "Transparent recompile trigger failed for {NodeTypePath} (best-effort, ignored)",
-                nodeTypePath);
-        }
-    }
 
     /// <inheritdoc />
     /// <remarks>
