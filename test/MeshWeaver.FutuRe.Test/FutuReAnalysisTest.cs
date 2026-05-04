@@ -137,10 +137,14 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for EuropeRe Overview control...");
+        // Wait for the FULL render — Overview's CombineLatest emits a placeholder
+        // StackControl with one NamedArea before the per-area children resolve.
+        // Without the .Areas.Count predicate the test races the placeholder on
+        // CI and fast-fails (~400ms) while the full render arrives a beat later.
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
+            .Timeout(TimeSpan.FromSeconds(20))
+            .FirstAsync(x => x is StackControl s && s.Areas.Count >= 2);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Overview area should render for EuropeRe business unit");

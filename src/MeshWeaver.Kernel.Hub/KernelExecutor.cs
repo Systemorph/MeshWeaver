@@ -275,10 +275,19 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // Pull in every loaded non-dynamic assembly with a usable Location so scripts
         // can reach types from packages the host already loaded (Markdig, Newtonsoft,
         // Microsoft.Extensions.*, etc.). Mirrors ScriptCompilationService's TPA scan.
+        //
+        // Filter out assemblies whose Location file no longer exists on disk —
+        // collectible NodeType ALCs leave Assembly objects in AppDomain after a
+        // test deletes their cache directory; Roslyn would call
+        // MetadataReference.CreateFromFile(Location) and throw "Could not find a
+        // part of the path", which silently drops the ENTIRE references set
+        // (so even MeshWeaver.Layout becomes invisible — see kernel test cluster
+        // failure on shared-process CI runs).
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
             if (asm.IsDynamic) continue;
             if (string.IsNullOrEmpty(asm.Location)) continue;
+            if (!File.Exists(asm.Location)) continue;
             refs.Add(asm);
         }
 

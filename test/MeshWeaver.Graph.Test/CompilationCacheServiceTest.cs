@@ -214,9 +214,14 @@ public class CompilationCacheServiceTest : IDisposable
     }
 
     [Fact]
-    public void InvalidateCache_DeletesCacheFiles()
+    public void InvalidateCache_FlipsValidityFalse()
     {
-        // Arrange
+        // Post-NodeTypeReleaseRedesign: InvalidateCache no longer deletes cache
+        // files (release DLLs are content-keyed and accumulate; deleting them
+        // races still-mapped ALCs on Windows). Instead it flips a sticky
+        // invalidation flag the next IsCacheValid honours, and unloads the ALC
+        // for the affected NodeType. Verify the validity contract here; ALC
+        // unload is exercised by NodeTypeService / CodeEditRecompileTest.
         var nodeName = "to_invalidate";
         var dllPath = _service.GetDllPath(nodeName);
         var pdbPath = _service.GetPdbPath(nodeName);
@@ -226,13 +231,22 @@ public class CompilationCacheServiceTest : IDisposable
         File.WriteAllText(pdbPath, "dummy pdb");
         File.WriteAllText(sourcePath, "dummy source");
 
-        // Act
+        // Stamp all three forward of "now" so they're newer than any partition
+        // last-modified the call site would pass.
+        var futureStamp = DateTime.UtcNow.AddHours(1);
+        File.SetLastWriteTimeUtc(dllPath, futureStamp);
+        File.SetLastWriteTimeUtc(pdbPath, futureStamp);
+        File.SetLastWriteTimeUtc(sourcePath, futureStamp);
+
+        var anyTime = DateTimeOffset.UtcNow.AddMinutes(-30);
+        _service.IsCacheValid(nodeName, anyTime).Should().BeTrue(
+            "all three artifacts exist and are newer than the lastModified");
+
         _service.InvalidateCache(nodeName);
 
-        // Assert
-        File.Exists(dllPath).Should().BeFalse();
-        File.Exists(pdbPath).Should().BeFalse();
-        File.Exists(sourcePath).Should().BeFalse();
+        _service.IsCacheValid(nodeName, anyTime).Should().BeFalse(
+            "InvalidateCache flips a sticky flag; the next IsCacheValid must return false " +
+            "until a fresh compile + MarkCacheFresh clears it");
     }
 
     [Fact]
