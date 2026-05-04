@@ -206,9 +206,20 @@ public static class JsonSynchronizationStream
         // (e.g., from AccessControlPipeline rejecting the SubscribeRequest).
         // The response routes through the parent hub first; without a callback here,
         // the parent drops it (no matching callback), and the stream hangs forever.
+        //
+        // 🚨 SubscribeRequest has NO success response — the synchronization protocol
+        // pushes data back via SetCurrentRequest/PatchDataChangeRequest into the
+        // caller's sync stream, not as a `ResponseFor` reply. So `hub.Observe`
+        // would wait the full framework timeout (30 s) on every successful subscribe,
+        // leaving a "pending callback" that the test base's leaked-callback guard
+        // flags at dispose. The fix is to register the subscription's IDisposable
+        // for disposal alongside the stream's other teardown (UnsubscribeRequest);
+        // when the stream is disposed (test ends, subscriber unsubscribes, etc.),
+        // we release the callback explicitly instead of letting it expire on its
+        // own timeout.
         if (subscribeDelivery != null)
         {
-            hub.Observe(subscribeDelivery)
+            var observeSubscription = hub.Observe(subscribeDelivery)
                 .Subscribe(
                     delivery =>
                     {
@@ -223,6 +234,16 @@ public static class JsonSynchronizationStream
                                 reduced.StreamId, dfe.Message);
                             reduced.OnError(dfe);
                         }
+                        else if (ex is TimeoutException)
+                        {
+                            // Expected on success: the framework Observe timed out
+                            // because the owning hub never sends a ResponseFor reply
+                            // for SubscribeRequest. Treat as transient (no propagation
+                            // to subscribers) — the sync stream is fed by the
+                            // bidirectional SetCurrentRequest flow already.
+                            logger.LogDebug("SubscribeRequest Observe timed out for {StreamId} — expected on success",
+                                reduced.StreamId);
+                        }
                         else
                         {
                             logger.LogWarning(ex, "SubscribeRequest for stream {StreamId} failed",
@@ -230,6 +251,7 @@ public static class JsonSynchronizationStream
                             reduced.OnError(ex);
                         }
                     });
+            reduced.RegisterForDisposal(observeSubscription);
         }
 
         reduced.RegisterForDisposal(
