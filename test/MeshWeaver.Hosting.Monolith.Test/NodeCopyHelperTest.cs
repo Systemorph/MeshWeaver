@@ -23,11 +23,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// test edge). Node reads via <c>hub.GetMeshNode(path)</c> (per-node hub
 /// MeshNodeReference reducer).
 /// </summary>
-// Skipped at class level: tests fail with NRE + leaked GetDataRequest@workspace/Acme
-// callback that wedges the testhost in subsequent test classes (Hosting.Monolith.Test
-// then exit=124 TIMEOUT at 6m wallclock cap). Needs the unique-path refactor + the
-// underlying CopyNodeTree NRE + leaked-callback bug fixed before re-enabling.
-[Trait("Category", "Skip-Until-NodeCopyHelper-Fixed")]
 public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // NOTE: not opted into ShareMeshAcrossTests — multiple tests create the same
@@ -57,7 +52,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
             .FirstAsync()
             .ToTask(TestContext.Current.CancellationToken);
 
-    [Fact(Skip = "NodeCopyHelperTest tests fail with NRE + leaked GetDataRequest callback that wedges Hosting.Monolith.Test until 6m wallclock cap. Needs unique-path refactor + leaked-callback bug fix.")]
+    [Fact]
     public async Task CopySingleNode_ToNewNamespace()
     {
         await CreateNode("org/Acme", "Acme Corp", "Markdown");
@@ -73,7 +68,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         target.State.Should().Be(MeshNodeState.Active);
     }
 
-    [Fact(Skip = "NodeCopyHelperTest tests fail with NRE + leaked GetDataRequest callback that wedges Hosting.Monolith.Test until 6m wallclock cap. Needs unique-path refactor + leaked-callback bug fix.")]
+    [Fact]
     public async Task CopyNodeTree_WithDescendants()
     {
         await CreateNode("org/Acme", "Acme Corp", "Markdown");
@@ -94,7 +89,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         alice!.Name.Should().Be("Alice");
     }
 
-    [Fact(Skip = "NodeCopyHelperTest tests fail with NRE + leaked GetDataRequest callback that wedges Hosting.Monolith.Test until 6m wallclock cap. Needs unique-path refactor + leaked-callback bug fix.")]
+    [Fact]
     public async Task CopyNodeTree_SkipsExistingWhenNotForced()
     {
         await CreateNode("org/Acme", "Acme Corp", "Markdown");
@@ -109,7 +104,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         existing!.Name.Should().Be("Existing Acme");
     }
 
-    [Fact(Skip = "NodeCopyHelperTest tests fail with NRE + leaked GetDataRequest callback that wedges Hosting.Monolith.Test until 6m wallclock cap. Needs unique-path refactor + leaked-callback bug fix.")]
+    [Fact]
     public async Task CopyNodeTree_OverwritesExistingWhenForced()
     {
         await CreateNode("org/Acme", "Acme Corp", "Markdown");
@@ -123,7 +118,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         overwritten!.Name.Should().Be("Acme Corp");
     }
 
-    [Fact(Skip = "NodeCopyHelperTest tests fail with NRE + leaked GetDataRequest callback that wedges Hosting.Monolith.Test until 6m wallclock cap. Needs unique-path refactor + leaked-callback bug fix.")]
+    [Fact]
     public async Task CopyNodeTree_ThrowsWhenSourceNotFound()
     {
         var act = () => CopyTree("nonexistent/path", "workspace", force: false);
@@ -131,7 +126,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
             .WithMessage("*Source node not found*");
     }
 
-    [Fact(Skip = "NodeCopyHelperTest tests fail with NRE + leaked GetDataRequest callback that wedges Hosting.Monolith.Test until 6m wallclock cap. Needs unique-path refactor + leaked-callback bug fix.")]
+    [Fact]
     public async Task CopyNodeTree_ToEmptyNamespace()
     {
         await CreateNode("org/Acme", "Acme Corp", "Markdown");
@@ -145,7 +140,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         (await GetNode("Acme/Sub")).Should().NotBeNull();
     }
 
-    [Fact(Skip = "NodeCopyHelperTest tests fail with NRE + leaked GetDataRequest callback that wedges Hosting.Monolith.Test until 6m wallclock cap. Needs unique-path refactor + leaked-callback bug fix.")]
+    [Fact]
     public async Task CopyNodeTree_PreservesContent()
     {
         var content = new Dictionary<string, object?> { ["key"] = "value" };
@@ -160,7 +155,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : MonolithMeshTestBase
         target!.Content.Should().NotBeNull();
     }
 
-    [Fact(Skip = "NodeCopyHelperTest tests fail with NRE + leaked GetDataRequest callback that wedges Hosting.Monolith.Test until 6m wallclock cap. Needs unique-path refactor + leaked-callback bug fix.")]
+    [Fact]
     public async Task CopyRootLevelNode_ToNamespace()
     {
         await CreateNode("TopLevel", "Top Level Node", "Markdown");

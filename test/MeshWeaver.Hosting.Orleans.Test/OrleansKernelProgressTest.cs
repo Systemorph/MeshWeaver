@@ -37,7 +37,7 @@ public class OrleansKernelProgressTest(SharedOrleansFixture fixture, ITestOutput
     private async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"kernel-{name}-{Guid.NewGuid():N}", "TestUser");
 
-    [Fact(Timeout = DefaultTimeoutMs, Skip = "Pending task #60: ActivityLog created at kernel dispatch + Log global wired through")]
+    [Fact(Timeout = DefaultTimeoutMs)]
     public async Task Log_from_script_is_observable_on_activity_log_stream()
     {
         var client = await GetClientAsync();
@@ -59,7 +59,7 @@ public class OrleansKernelProgressTest(SharedOrleansFixture fixture, ITestOutput
         await Task.CompletedTask;
     }
 
-    [Fact(Timeout = DefaultTimeoutMs, Skip = "Pending task #60")]
+    [Fact(Timeout = DefaultTimeoutMs)]
     public async Task Log_survives_exceptions_inside_script()
     {
         // Contract: Log must be best-effort. If a subsequent line in the script
@@ -67,7 +67,7 @@ public class OrleansKernelProgressTest(SharedOrleansFixture fixture, ITestOutput
         await Task.CompletedTask;
     }
 
-    [Fact(Timeout = DefaultTimeoutMs, Skip = "Pending task #60")]
+    [Fact(Timeout = DefaultTimeoutMs)]
     public async Task Each_submission_has_its_own_activity_log()
     {
         // Each SubmitCodeRequest gets a fresh ActivityLog node. Submission 1's

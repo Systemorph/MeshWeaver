@@ -62,7 +62,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     /// <summary>
     /// Tests parallel updates to the synchronization stream with concurrent modifications
     /// </summary>
-    [Fact(Skip = "Unstable")]
+    [Fact]
     public async Task ParallelUpdate()
     {
         List<MyData> tracker = new();
