@@ -64,39 +64,41 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
     /// Lists all tokens for the current user. Never returns raw tokens.
     /// </summary>
     [HttpGet]
-    public async Task<IActionResult> ListTokens()
+    public Task<IActionResult> ListTokens(CancellationToken ct)
     {
         var userId = User.FindFirstValue("preferred_username")
                      ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
                      ?? "";
 
         if (string.IsNullOrEmpty(userId))
-            return Unauthorized("No user identity found");
+            return Task.FromResult<IActionResult>(Unauthorized("No user identity found"));
 
-        var tokens = await tokenService.GetTokensForUserAsync(userId);
-        return Ok(tokens);
+        return tokenService.GetTokensForUser(userId)
+            .Select(tokens => (IActionResult)Ok(tokens))
+            .FirstAsync()
+            .ToTask(ct);
     }
 
     /// <summary>
     /// Revokes a token by its node path.
     /// </summary>
     [HttpDelete("{*nodePath}")]
-    public async Task<IActionResult> RevokeToken(string nodePath)
+    public Task<IActionResult> RevokeToken(string nodePath, CancellationToken ct)
     {
-        // Verify the token belongs to the current user
         var userId = User.FindFirstValue("preferred_username")
                      ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
                      ?? "";
 
         if (string.IsNullOrEmpty(userId))
-            return Unauthorized("No user identity found");
+            return Task.FromResult<IActionResult>(Unauthorized("No user identity found"));
 
-        var tokens = await tokenService.GetTokensForUserAsync(userId);
-        if (!tokens.Any(t => t.NodePath == nodePath))
-            return NotFound("Token not found or does not belong to you");
-
-        var success = await tokenService.RevokeTokenAsync(nodePath);
-        return success ? Ok() : NotFound();
+        return tokenService.GetTokensForUser(userId)
+            .SelectMany(tokens => tokens.Any(t => t.NodePath == nodePath)
+                ? tokenService.RevokeToken(nodePath)
+                    .Select(success => success ? (IActionResult)Ok() : NotFound())
+                : Observable.Return<IActionResult>(NotFound("Token not found or does not belong to you")))
+            .FirstAsync()
+            .ToTask(ct);
     }
 }
 
