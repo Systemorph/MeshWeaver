@@ -530,8 +530,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             // SynchronizationStream.UpdateStreamRequest (reads Current right
             // before invoking the transform — see SynchronizationStream.cs:466).
             var stream = GetOrCreateWritableStream(nodeTypePath);
-            logger.LogDebug("[TRIGGER-RECOMPILE] got stream {StreamId} (Hub.RunLevel={RunLevel}, IsDisposed={IsDisposed}) — calling Update",
-                stream.StreamId, stream.Hub?.RunLevel.ToString() ?? "(null)", stream.Hub == null);
 
             // Direct stream.Update — the sync hub's handler runs the transform
             // against the stream's Current snapshot. If Current is already
@@ -541,8 +539,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             // retry against a now-populated Current.
             stream.Update(curr =>
             {
-                logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} Update lambda fired (curr is null: {IsNull})",
-                    nodeTypePath, curr is null);
                 // Cross-hub Update lambdas receive the MeshNode after JSON
                 // round-trip — Content is typed when the receiver's TypeRegistry
                 // recognises NodeTypeDefinition (always at the per-NodeType hub),
