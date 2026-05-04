@@ -2,6 +2,7 @@
 using System.Net;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -72,6 +73,17 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     // Subscription to the cross-silo change feed — disposed with the service.
     private readonly IDisposable? _changeFeedSubscription;
+
+    // Cached remote write-streams (ISynchronizationStream<MeshNode>) per
+    // owning NodeType path. Held on the singleton service for the life of
+    // the mesh so subsequent UpdateMeshNode calls land on a stream whose
+    // Current is already populated (the first SubscribeRequest round-trip
+    // happens once, at first touch). Without this cache, every TryTriggerRecompile
+    // opens a fresh GetRemoteStream — Current is null on the first
+    // Update call, the lambda receives null, and the update is silently
+    // dropped (SynchronizationStream.cs:466 reads Current before invoking
+    // the transform).
+    private readonly ConcurrentDictionary<string, ISynchronizationStream<MeshNode>> _writableStreams = new();
 
     public NodeTypeService(
         IMessageHub hub,
@@ -506,12 +518,71 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         try
         {
             logger.LogDebug("[TRIGGER-RECOMPILE] flipping CompilationStatus = Pending on {NodeTypePath}", nodeTypePath);
-            hub.GetWorkspace().UpdateMeshNode(curr =>
+
+            // Use the cached remote stream (one per NodeType path, held on this
+            // singleton). After the first SubscribeRequest round-trip the stream's
+            // Current is populated; the UpdateStreamRequest handler at the
+            // sync hub reads Current and invokes the transform.
+            //
+            // Without the cache: every trigger opens a fresh GetRemoteStream,
+            // Current is null on the first Update call, the lambda gets null,
+            // and the update is silently dropped by
+            // SynchronizationStream.UpdateStreamRequest (reads Current right
+            // before invoking the transform — see SynchronizationStream.cs:466).
+            var stream = GetOrCreateWritableStream(nodeTypePath);
+            logger.LogDebug("[TRIGGER-RECOMPILE] got stream {StreamId} (Hub.RunLevel={RunLevel}, IsDisposed={IsDisposed}) — calling Update",
+                stream.StreamId, stream.Hub?.RunLevel.ToString() ?? "(null)", stream.Hub == null);
+
+            // Direct stream.Update — the sync hub's handler runs the transform
+            // against the stream's Current snapshot. If Current is already
+            // populated (steady state after first warm-up), the lambda fires
+            // immediately. If still null on the very first call, the lambda
+            // returns null and we no-op; the next change-feed event will
+            // retry against a now-populated Current.
+            stream.Update(curr =>
             {
-                if (curr.Content is not NodeTypeDefinition def) return curr;
+                logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} Update lambda fired (curr is null: {IsNull})",
+                    nodeTypePath, curr is null);
+                // Cross-hub Update lambdas receive the MeshNode after JSON
+                // round-trip — Content is typed when the receiver's TypeRegistry
+                // recognises NodeTypeDefinition (always at the per-NodeType hub),
+                // but stays as JsonElement when this lambda runs on the SENDER
+                // (mesh hub) where the discriminator may not yet be registered.
+                // Handle both shapes so the trigger lands either way.
+                if (curr is null)
+                {
+                    logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} stream Current is null — first-touch race, will retry next event",
+                        nodeTypePath);
+                    return null;
+                }
+                NodeTypeDefinition? def = curr.Content as NodeTypeDefinition;
+                if (def is null && curr.Content is JsonElement je)
+                {
+                    try { def = je.Deserialize<NodeTypeDefinition>(hub.JsonSerializerOptions); }
+                    catch { /* malformed — leave def null */ }
+                }
+                if (def is null)
+                {
+                    logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} content is {Type} — skip",
+                        nodeTypePath, curr.Content?.GetType().Name ?? "null");
+                    return null;
+                }
                 if (def.CompilationStatus is CompilationStatus.Pending
-                                          or CompilationStatus.Compiling) return curr;
-                return curr with
+                                          or CompilationStatus.Compiling) return null;
+                // Only kick off compile if no assembly path yet. Static NodeTypes
+                // (built-in via AddMeshNodes) carry AssemblyLocation from
+                // CreateMeshNode() — they don't need recompilation.
+                // Dynamic NodeTypes have empty AssemblyLocation until the first
+                // CompileWatcher run sets it; subsequent source edits set Pending
+                // through the cache invalidation flow above (InvalidateCache),
+                // and the watcher will re-emit Ok with a new AssemblyLocation.
+                if (!string.IsNullOrEmpty(curr.AssemblyLocation))
+                {
+                    logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} already has AssemblyLocation — skip kick (recompile via InvalidateCache + next access)",
+                        nodeTypePath);
+                    return null;
+                }
+                var updated = curr with
                 {
                     Content = def with
                     {
@@ -519,7 +590,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                         LastCompileStartedAt = DateTimeOffset.UtcNow
                     }
                 };
-            }, nodeTypePath);
+                return new ChangeItem<MeshNode>(updated, stream.StreamId, stream.StreamId,
+                    ChangeType.Patch, stream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = curr }]);
+            }, ex => logger.LogWarning(ex,
+                "[TRIGGER-RECOMPILE] stream.Update failed for {NodeTypePath}", nodeTypePath));
         }
         catch (Exception ex)
         {
@@ -527,6 +602,32 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 "[TRIGGER-RECOMPILE] failed for {NodeTypePath} (best-effort)", nodeTypePath);
         }
     }
+
+    /// <summary>
+    /// Opens (and caches) the remote MeshNode stream for the owning NodeType
+    /// at <paramref name="nodeTypePath"/>. The cache holds the subscription
+    /// open for the lifetime of this singleton — first call pays the
+    /// SubscribeRequest round-trip, subsequent calls find a stream whose
+    /// <c>Current</c> is already populated. This is what lets
+    /// <see cref="TryTriggerRecompile"/> work as a one-shot fire-and-forget
+    /// without leaking SubscribeRequest callbacks across multiple triggers.
+    ///
+    /// <para>The SubscribeRequest is sent under a System impersonation scope:
+    /// NodeTypeService is infrastructure (no end-user identity at the time
+    /// the change-feed handler fires), and it needs unconditional read access
+    /// to every NodeType MeshNode regardless of who triggered the source
+    /// edit. Without the System scope the AccessControlPipeline at the
+    /// owning hub may reject the SubscribeRequest as anonymous → the stream
+    /// surfaces a DeliveryFailure and the trigger silently no-ops.</para>
+    /// </summary>
+    private ISynchronizationStream<MeshNode> GetOrCreateWritableStream(string nodeTypePath) =>
+        _writableStreams.GetOrAdd(nodeTypePath, p =>
+        {
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using var systemScope = accessService?.ImpersonateAsSystem();
+            return hub.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(p), new MeshNodeReference());
+        });
 
 
     /// <inheritdoc />

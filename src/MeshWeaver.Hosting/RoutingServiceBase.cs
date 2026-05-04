@@ -113,12 +113,18 @@ namespace MeshWeaver.Hosting
                     //
                     // The right response is NotFound. Period.
                     // ============================================================================
-                    if (resolution != null && !string.IsNullOrEmpty(resolution.Remainder))
+                    // Two NotFound shapes that both mean "don't activate a hub for this":
+                    //   • resolution == null            — path matched nothing at all in the catalog.
+                    //   • resolution.Remainder is non-empty — path matched only an ancestor.
+                    // Without the null branch, a delivery to a nonexistent address fell through
+                    // to RouteImpl on the original address — which in Orleans activates an empty
+                    // grain that hangs 30s waiting for HubConfiguration; in monolith, RouteImpl's
+                    // CreateHub would fail loudly but only after the same fall-through. Both
+                    // shapes deserve fail-fast NotFound.
+                    if (resolution == null || !string.IsNullOrEmpty(resolution.Remainder))
                         return Observable.Return(PostNotFound(delivery, originalAddress, resolution));
 
-                    var resolved = resolution != null
-                        ? new Address(resolution.Prefix.Split('/'))
-                        : address;
+                    var resolved = new Address(resolution.Prefix.Split('/'));
 
                     // Get node — routing-layer call. NOT a hub round-trip (would recurse —
                     // routing.MeshCatalog → catalog → routing). Bridges Persistence I/O via
@@ -140,9 +146,11 @@ namespace MeshWeaver.Hosting
 
         private IMessageDelivery PostNotFound(IMessageDelivery delivery, Address originalAddress, AddressResolution? resolution)
         {
-            var failureMessage = $"No node found at '{originalAddress}'. " +
-                $"Closest ancestor is '{resolution!.Prefix}' (remainder='{resolution.Remainder}'). " +
-                $"This usually means the node is missing, has no NodeType, or has an invalid NodeType.";
+            var failureMessage = resolution == null
+                ? $"No node found at '{originalAddress}'."
+                : $"No node found at '{originalAddress}'. " +
+                  $"Closest ancestor is '{resolution.Prefix}' (remainder='{resolution.Remainder}'). " +
+                  $"This usually means the node is missing, has no NodeType, or has an invalid NodeType.";
 
             var logger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
             logger?.LogWarning(
