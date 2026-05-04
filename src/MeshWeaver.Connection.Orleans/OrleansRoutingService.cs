@@ -137,10 +137,20 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     {
         try
         {
-            // Route the failure back to the sender so AwaitResponse callers get an exception.
-            // Must use WithTarget(sender) — not ResponseFor — because the callback is on the
-            // remote client hub, not the local silo mesh hub. The DeliveryFailure message type
-            // is excluded from recursive failure handling (delivery.Message is DeliveryFailure check).
+            // Route the failure back to the sender so hub.Observe callers get an
+            // exception. The previous shape used WithTarget(sender) ONLY — without
+            // copying the RequestId from the original delivery. That meant the
+            // DeliveryFailure arrived at the sender's hub but no callback matched
+            // (Observe matches on RequestId set by ResponseFor / WithRequestIdFrom),
+            // the failure was silently dropped, and the original Observe waited the
+            // full 30 s framework timeout. With JsonSynchronizationStream's recent
+            // SubscribeRequest fix that swallows TimeoutException as "expected on
+            // success", the failure stopped surfacing to the UI entirely — every
+            // routing-NotFound (e.g. /rbuergi before onboarding) became an endless
+            // spinner instead of an "Error loading area: No node found" markdown.
+            // WithRequestIdFrom is the right shape here (NOT ResponseFor — that
+            // also tries to set Target from the request's Sender, which we already
+            // set explicitly to delivery.Sender).
             var meshHub = serviceProvider.GetService<IMessageHub>();
             if (meshHub != null)
             {
@@ -150,7 +160,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         ErrorType = ErrorType.Failed,
                         Message = message
                     },
-                    o => o.WithTarget(delivery.Sender));
+                    o => o.WithTarget(delivery.Sender).WithRequestIdFrom(delivery));
             }
         }
         catch (Exception ex)
