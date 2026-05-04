@@ -106,9 +106,16 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 {
                     // Grain returned a non-transient failure (e.g., node doesn't exist).
                     // Send DeliveryFailure back to the caller — do NOT retry.
-                    logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {State}",
-                        delivery.Message.GetType().Name, address, result.State);
-                    SendDeliveryFailure(delivery, $"Delivery failed to {address}");
+                    // Preserve the RoutingGrain's message (e.g. "No node found at 'X'")
+                    // so the GUI's IsExpectedUserActionFailure classifier can match it
+                    // and show a friendly "Error loading area: No node found" markdown
+                    // instead of a generic spinner.
+                    var failureMessage = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
+                        ? errStr
+                        : $"Delivery failed to {address}";
+                    logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {FailureMessage}",
+                        delivery.Message.GetType().Name, address, failureMessage);
+                    SendDeliveryFailure(delivery, failureMessage);
                     return;
                 }
 

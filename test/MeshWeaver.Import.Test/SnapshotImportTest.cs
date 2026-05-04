@@ -171,52 +171,6 @@ SystemName2,DisplayName2
         ret.Should().HaveCount(2);
     }
 
-    [Fact(Skip = "Illegal case in current implementation")]
-    public async Task SnapshotImport_ZeroInstancesTest()
-    {
-        const string content =
-            @"@@MyRecord
-SystemName,DisplayName,Number
-A1,A,1
-A2,A,2
-B3,B,3
-B4,B,4
-";
-
-        var client = GetClient();
-        var importRequest = new ImportRequest(content);
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
-        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-
-        var ret = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count >= 4);
-
-        ret.Should().HaveCount(4);
-
-        const string content2 =
-            @"@@MyRecord
-SystemName,DisplayName,Number
-";
-
-        importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
-        importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
-        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
-
-        ret = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count == 0);
-
-        ret.Should().BeEmpty();
-    }
-
     private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(
         Address address,
         System.Func<IReadOnlyCollection<TData>, bool> predicate,

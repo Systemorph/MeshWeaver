@@ -607,24 +607,34 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     };
 
     /// <summary>
-    /// Wires a single subscription per stream that combines (a) the latest
-    /// non-null MeshNode emitted by the stream and (b) the buffered transforms
-    /// pushed via the per-path Subject. On every transform pushed, applies it
-    /// against the current MeshNode via <c>stream.Update</c>. This handles
-    /// the first-touch race: trigger before SubscribeResponse arrives → the
-    /// transform sits in the subject; SubscribeResponse arrives → Current
-    /// populates → CombineLatest emits → stream.Update applies the transform
-    /// against a populated Current.
+    /// Wires a single subscription per stream that drains the per-path Subject
+    /// of pending transforms onto the stream via <c>stream.Update</c>. Combines
+    /// each pushed transform with the stream's latest non-null emission so the
+    /// transform is held until Current populates (handles the first-touch race
+    /// where the trigger fires before SubscribeResponse arrives).
+    ///
+    /// <para>The combination uses <c>WithLatestFrom</c>: each transform
+    /// pushed via the Subject is paired with the most recent non-null stream
+    /// value. If no stream value has been seen yet, the pairing is held until
+    /// the first stream emission with non-null Value arrives — then the
+    /// transform fires.</para>
     /// </summary>
     private void EnsureStreamSubscription(
         string nodeTypePath,
         ISynchronizationStream<MeshNode> stream,
         System.Reactive.Subjects.Subject<Func<MeshNode, ChangeItem<MeshNode>?>> subject)
     {
+        // Use ReplaySubject to buffer transforms until the stream emits its
+        // first non-null Current. CombineLatest waits for both sides; once the
+        // stream side emits, ALL buffered transforms fire (each paired with
+        // the latest stream value).
+        var streamSeed = stream.Where(c => c?.Value is not null);
         var sub = subject
-            .CombineLatest(stream.Where(c => c?.Value is not null), (transform, _) => transform)
+            .CombineLatest(streamSeed, (transform, _) => transform)
             .Subscribe(transform =>
             {
+                logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} draining buffered transform via stream.Update",
+                    nodeTypePath);
                 stream.Update(curr => transform(curr!),
                     ex => logger.LogWarning(ex,
                         "[TRIGGER-RECOMPILE] stream.Update failed for {NodeTypePath}", nodeTypePath));

@@ -223,15 +223,20 @@ public class SyncedQueryTest(ITestOutputHelper output)
 
     /// <summary>
     /// A property change that flips the node out of the query result set —
-    /// here, changing <see cref="MeshNode.NodeType"/> to a value the
-    /// <c>nodeType:Markdown</c> filter rejects — must remove the node from
-    /// the synced collection. Distinct from outright deletion.
+    /// here, changing <see cref="MeshNode.State"/> from Active to Inactive
+    /// while the query filter has <c>state:Active</c> — must remove the node
+    /// from the synced collection. Distinct from outright deletion.
+    ///
+    /// <para>Originally this test flipped NodeType, but MeshExtensions now
+    /// rejects NodeType changes ("Cannot change NodeType from X to Y") so we
+    /// switched to a mutable property the validator allows.</para>
     /// </summary>
-    [Fact(Timeout = 30000, Skip = "MeshExtensions now rejects NodeType changes (Cannot change NodeType from X to Y) — needs rewrite using a mutable filter property like state:Active")]
+    [Fact(Timeout = 30000)]
     public async Task PropertyChange_NoLongerMatchesQuery_RemovesFromCollection()
     {
         var ct = TestContext.Current.CancellationToken;
-        var observable = CreateQuery("$flip-test");
+        // Add a state:Active filter; the seed Markdown node has State=Active.
+        var observable = CreateQuery("$flip-test", "state:Active");
 
         var collection = observable.Replay(1).RefCount();
         using var keepAlive = collection.Subscribe();
@@ -245,9 +250,8 @@ public class SyncedQueryTest(ITestOutputHelper output)
             .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
         var current = afterCreate.Single(n => n.Path == path);
 
-        // Flip NodeType to Code — the synced query (nodeType:Markdown)
-        // should no longer match.
-        await NodeFactory.UpdateNode(current with { NodeType = "Code" })
+        // Flip State to Deleted — the synced query (state:Active) should no longer match.
+        await NodeFactory.UpdateNode(current with { State = MeshNodeState.Deleted })
             .FirstAsync().ToTask(ct);
 
         await collection

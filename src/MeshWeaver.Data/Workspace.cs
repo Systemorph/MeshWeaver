@@ -200,8 +200,13 @@ public class Workspace : IWorkspace
         where TReference : WorkspaceReference
     {
         var key = (address, (WorkspaceReference)reference);
-        // Check if cached stream is still alive; if disposed, replace it
-        if (_remoteStreamCache.TryGetValue(key, out var cached) && cached.Hub.RunLevel <= MessageHubRunLevel.Started)
+        // Check if cached stream is still alive. Hub.RunLevel alone is not
+        // sufficient because hub shutdown is async: right after stream.Dispose()
+        // is called, RunLevel is still Running even though disposal was triggered.
+        // Cast to the concrete type to access IsDisposing (not on interface).
+        if (_remoteStreamCache.TryGetValue(key, out var cached)
+            && cached.Hub?.RunLevel <= MessageHubRunLevel.Started
+            && cached.Hub is not MessageHub { IsDisposing: true })
             return (ISynchronizationStream<TReduced>)cached;
 
         var stream = (ISynchronizationStream)this.CreateExternalClient<TReduced, TReference>(address, reference);
@@ -308,6 +313,29 @@ public class Workspace : IWorkspace
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Workspace {WorkspaceId} error disposing sync disposable {DisposableType}", Id, d.GetType().Name);
+            }
+        }
+
+        // Dispose any cached remote streams that haven't been removed yet. Each
+        // SynchronizationStream registers its own SubscribeRequest hub.Observe
+        // callback for disposal here; without this loop the parent hub's
+        // responseSubjects entry for each open SubscribeRequest leaks past the
+        // test base's quiescing-budget leak check.
+        if (!_remoteStreamCache.IsEmpty)
+        {
+            _logger.LogDebug("Workspace {WorkspaceId} disposing {RemoteStreamCount} cached remote streams",
+                Id, _remoteStreamCache.Count);
+            foreach (var key in _remoteStreamCache.Keys)
+            {
+                if (_remoteStreamCache.TryRemove(key, out var cached))
+                {
+                    try { cached.Dispose(); }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Workspace {WorkspaceId} error disposing remote stream {Key}",
+                            Id, key);
+                    }
+                }
             }
         }
 

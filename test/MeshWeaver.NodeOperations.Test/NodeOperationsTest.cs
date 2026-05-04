@@ -242,24 +242,23 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
             .WithMessage("*not found*");
     }
 
-    [Fact(Skip = "Non-recursive delete via message routing not yet supported — needs proper node hub target")]
+    [Fact]
     public async Task DeleteNode_WithChildren_NonRecursive_ShouldFail()
     {
-        // Arrange
-        var client = GetClient();
+        var ct = TestContext.Current.CancellationToken;
 
-        // Create parent node under TestData partition (Markdown hub with node operation handlers)
         var parent = new MeshNode("HierParent", TestPartition) { Name = "Parent", NodeType = "Markdown" };
         await NodeFactory.CreateNode(parent);
 
-        // Create child node
         var child = new MeshNode("HierChild", $"{TestPartition}/HierParent") { Name = "Child", NodeType = "Markdown" };
         await NodeFactory.CreateNode(child);
 
-        // Act - try to delete parent without recursive flag — target the TestData partition node (real Markdown hub)
-        var deleteResponse = await client.Observe(new DeleteNodeRequest($"{TestPartition}/HierParent") { Recursive = false }, o => o.WithTarget(new Address(TestPartition))).FirstAsync().ToTask();
+        // DeleteNodeRequest handler lives on the mesh hub — target Mesh.Address, not the partition hub.
+        var deleteResponse = await AwaitResponseAsync(
+            new DeleteNodeRequest($"{TestPartition}/HierParent"),
+            o => o.WithTarget(Mesh.Address),
+            ct: ct);
 
-        // Assert
         deleteResponse.Message.Success.Should().BeFalse();
         deleteResponse.Message.RejectionReason.Should().Be(NodeDeletionRejectionReason.HasChildren);
         deleteResponse.Message.Error.Should().Contain("has children");

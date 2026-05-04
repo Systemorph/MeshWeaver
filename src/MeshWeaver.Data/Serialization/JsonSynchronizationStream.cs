@@ -251,7 +251,24 @@ public static class JsonSynchronizationStream
                             reduced.OnError(ex);
                         }
                     });
+            // Register on BOTH the child stream hub AND the parent hub.
+            //
+            // Child-hub registration (existing): when the stream is explicitly
+            // disposed (e.g. workspace cache eviction), the stream's inner hub
+            // tears down and cleans up the subscription.
+            //
+            // Parent-hub registration (new): when the parent hub enters its
+            // Quiescing phase, `asyncDisposeActions` run BEFORE the 0.5s
+            // quiescing poll. Without this the parent's `responseSubjects` entry
+            // for the SubscribeRequest outlives the poll window, causing the
+            // test-base leak guard to fail. Double-calling Dispose() is safe
+            // (WrapWithCancelOnDispose uses a lock+Remove guard; Rx is idempotent).
             reduced.RegisterForDisposal(observeSubscription);
+            hub.RegisterForDisposal((_, _) =>
+            {
+                observeSubscription.Dispose();
+                return Task.CompletedTask;
+            });
         }
 
         reduced.RegisterForDisposal(

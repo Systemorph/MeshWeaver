@@ -190,35 +190,4 @@ A,B";
 
     }
 
-    [Fact(Skip = "Currently not implemented functionality")]
-    public async Task ImportWithCategoryValidationTest()
-    {
-        const string content =
-            @"@@Country
-SystemName,DisplayName
-RU,Russia
-FR,France
-@@Address
-Street,Country
-Red,RU
-Blue,FR";
-
-        var client = GetClient();
-        var importRequest = new ImportRequest(content) { Format = "Test2" };
-        var importResponse = await client.Observe(importRequest, o => o.WithTarget(TestDomain.TestImportAddress.Create())).FirstAsync().ToTask(CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
-            ).Token);
-        importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
-
-        importResponse
-            .Message.Log.Messages
-            .Should()
-            .ContainSingle(x => x.LogLevel == LogLevel.Error)
-            .Which.Message.Should()
-            .Be(ImportManager.ImportFailed);
-
-        // Workspace check removed - the workspace observable doesn't emit for failed imports
-        // where no data was written, causing a race condition/timeout
-    }
 }
