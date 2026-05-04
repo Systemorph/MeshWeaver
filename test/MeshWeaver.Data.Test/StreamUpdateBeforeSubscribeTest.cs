@@ -1,14 +1,13 @@
-using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Data.Serialization;
+using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;
@@ -31,32 +30,35 @@ namespace MeshWeaver.Data.Test;
 /// </summary>
 public class StreamUpdateBeforeSubscribeTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    public record Item(string Id, int Value);
-
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
             .AddData(data => data.AddSource(ds => ds
-                .WithType<Item>(t => t
-                    .WithKey(i => i.Id)
-                    .WithInitialData(_ => Task.FromResult<IEnumerable<Item>>([new Item("k", 1)])))));
+                .WithType<BusinessUnit>(t => t.WithInitialData(TestData.BusinessUnits))));
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration)
+            .AddData(data => data.AddHubSource(CreateHostAddress(),
+                ds => ds.WithType<BusinessUnit>()));
 
     [HubFact]
     public async Task UpdateImmediatelyAfterGetRemoteStream_AppliesAfterCurrentPopulated()
     {
-        // Activate the host hub once so the catalog/router knows about it.
+        // Activate the host hub.
         var host = GetHost();
-
-        var client = GetClient(c => c.AddData(d => d));
+        var client = GetClient();
         var workspace = client.GetWorkspace();
+
+        var firstBu = TestData.BusinessUnits.First();
+        var newName = "renamed-" + System.Guid.NewGuid().ToString("N")[..6];
 
         // OPEN the remote stream and IMMEDIATELY call Update — this is the path
         // NodeTypeService.TryTriggerRecompile takes from a change-feed handler.
         // The remote stream's sync/* hub is in INIT state; SynchronizationGate
         // is closed. Without the let-through fix the Update is deferred and
         // silently dropped when the gate opens (LinkTo doesn't replay).
-        var stream = workspace.GetRemoteStream<Item, EntityReference>(
+        var stream = workspace.GetRemoteStream<BusinessUnit, EntityReference>(
             host.Address,
-            new EntityReference(typeof(Item).FullName!, "k"));
+            new EntityReference(typeof(BusinessUnit).FullName!, firstBu.SystemName));
 
         stream.Update(curr =>
         {
@@ -64,23 +66,23 @@ public class StreamUpdateBeforeSubscribeTest(ITestOutputHelper output) : HubTest
             // and let the gate-let-through fix apply our transform on a later
             // emission. After Current is populated, we mutate.
             if (curr is null) return null;
-            var updated = curr with { Value = 42 };
-            return new ChangeItem<Item>(updated, stream.StreamId, stream.StreamId,
+            var updated = curr with { DisplayName = newName };
+            return new ChangeItem<BusinessUnit>(updated, stream.StreamId, stream.StreamId,
                 ChangeType.Patch, stream.Hub.Version,
-                [new EntityUpdate(typeof(Item).FullName!, "k", updated) { OldValue = curr }]);
-        }, ex => Logger.LogWarning(ex, "Update failed"));
+                [new EntityUpdate(typeof(BusinessUnit).FullName!, firstBu.SystemName, updated) { OldValue = curr }]);
+        }, ex => Output.WriteLine($"Update failed: {ex}"));
 
-        // Subscribe to the stream and wait for Value=42 to appear (the transform
-        // landed). Pre-fix this never emits because the UpdateStreamRequest was
-        // dropped from the deferred buffer.
+        // Subscribe to the stream and wait for the new name to appear (the
+        // transform landed). Pre-fix this never emits because the
+        // UpdateStreamRequest was dropped from the deferred buffer.
         var observed = await stream
-            .Where(c => c.Value?.Value == 42)
+            .Where(c => c.Value?.DisplayName == newName)
             .Take(1)
             .Timeout(60.Seconds())
             .Select(c => c.Value!)
             .ToTask(TestContext.Current.CancellationToken);
 
-        observed.Value.Should().Be(42,
+        observed.DisplayName.Should().Be(newName,
             "Update called before Current was populated must still apply once SetCurrent arrives — " +
             "the SynchronizationGate's let-through predicate keeps UpdateStreamRequest from being deferred.");
     }
