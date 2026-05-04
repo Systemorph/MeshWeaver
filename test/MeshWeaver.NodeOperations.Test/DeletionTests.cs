@@ -122,22 +122,30 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         deleted.Should().BeEmpty("target subtree should be fully deleted");
     }
 
-    [Fact(Skip = "Delete via message routing needs proper node hub target")]
+    [Fact]
     public async Task Delete_ViaClient_WithDeleteNodeRequest()
     {
-        // Arrange â€” create a node and use the client messaging pattern
+        // Arrange — create a node and use the client messaging pattern. Use a
+        // root path under TestPartition so the parent hub exists (the routing
+        // service refuses to route to "del5" otherwise — there's no node there).
+        var nodePath = $"{TestPartition}/del5target";
         await NodeFactory.CreateNode(
-            MeshNode.FromPath("del5/target") with { Name = "Target", NodeType = "Markdown" });
+            new MeshNode("del5target", TestPartition) { Name = "Target", NodeType = "Markdown" });
 
         var client = GetClient();
 
-        // Act â€” send DeleteNodeRequest via client hub (target the parent namespace hub)
-        var response = await client.Observe(new DeleteNodeRequest("del5/target") { DeletedBy = "test-user" }, o => o.WithTarget(new Address("del5"))).FirstAsync().ToTask();
+        // Act — send DeleteNodeRequest via client hub. Target the mesh hub
+        // (CRUD handlers are registered there); the mesh hub forwards to the
+        // owning per-node hub via the standard HandleDeleteNodeRequest pipeline.
+        var response = await client.Observe(
+                new DeleteNodeRequest(nodePath) { DeletedBy = "test-user" },
+                o => o.WithTarget(Mesh.Address))
+            .FirstAsync().ToTask();
 
         // Assert
         response.Message.Success.Should().BeTrue("deletion via client should succeed");
 
-        var result = await ReadNodeAsync("del5/target", TestTimeout);
+        var result = await ReadNodeAsync(nodePath, TestTimeout);
         result.Should().BeNull("node should be deleted");
     }
 
