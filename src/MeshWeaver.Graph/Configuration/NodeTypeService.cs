@@ -134,26 +134,18 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                         // Owning-NodeType match: the changed node lives under a NodeType's
                         // Source/ folder (convention: {NodeTypePath}/Source/{File}). Updates
                         // to these Code pieces change what the NodeType compiles to, so the
-                        // owning NodeType's cache (in-memory + on-disk DLL) must be flushed —
-                        // otherwise the stale DLL keeps being served because the NodeType's
-                        // own LastModified hasn't moved.
-                        //
-                        // Transparent-recompile is a TODO (task #47): we can't safely flip
-                        // CompilationStatus = Pending from this change-feed handler yet
-                        // because workspace.UpdateMeshNode for a remote node opens a
-                        // GetRemoteStream subscription that doesn't auto-dispose; tests
-                        // that mutate sources without explicitly waiting for the recompile
-                        // hit "leaked SubscribeRequest" at dispose. The build-then-activate
-                        // routing work (task #47) introduces a one-shot fire-and-forget
-                        // primitive that lets the recompile trigger be a true one-shot
-                        // DataChangeRequest with no lingering subscription.
+                        // owning NodeType's cache (in-memory + on-disk DLL) must be flushed.
+                        // Transparent-recompile (debug-instrumented): also flip the owning
+                        // NodeType's CompilationStatus to Pending so the CompileWatcher
+                        // ships the new release without an explicit Create-Release click.
                         var owning = TryResolveOwningNodeTypePath(evt.Path);
                         if (owning != null)
                         {
-                            logger.LogInformation(
-                                "Cross-silo cache invalidation for owning {NodeTypePath} after source change at {SourcePath} ({Kind})",
-                                owning, evt.Path, evt.Kind);
+                            logger.LogDebug(
+                                "[CHANGEFEED] source-change at {SourcePath} ({Kind}) → invalidate + trigger recompile on {NodeTypePath}",
+                                evt.Path, evt.Kind, owning);
                             InvalidateCache(owning);
+                            TryTriggerRecompile(owning);
                         }
                     }
                     catch (Exception handlerEx)
@@ -499,6 +491,41 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 return string.Join("/", segments.Take(i));
         }
         return null;
+    }
+
+    /// <summary>
+    /// Transparent-recompile trigger. Flips the owning NodeType's
+    /// <see cref="NodeTypeDefinition.CompilationStatus"/> to <see cref="CompilationStatus.Pending"/>
+    /// via <c>workspace.UpdateMeshNode</c>. The CompileWatcher (installed by
+    /// <c>AddMeshDataSource</c> on the per-NodeType hub) reacts to Pending and runs Roslyn.
+    /// Same code path the GUI Create-Release button uses, but driven automatically off the
+    /// MeshChangeFeed source-edit signal so the editor's Save button is enough.
+    /// </summary>
+    private void TryTriggerRecompile(string nodeTypePath)
+    {
+        try
+        {
+            logger.LogDebug("[TRIGGER-RECOMPILE] flipping CompilationStatus = Pending on {NodeTypePath}", nodeTypePath);
+            hub.GetWorkspace().UpdateMeshNode(curr =>
+            {
+                if (curr.Content is not NodeTypeDefinition def) return curr;
+                if (def.CompilationStatus is CompilationStatus.Pending
+                                          or CompilationStatus.Compiling) return curr;
+                return curr with
+                {
+                    Content = def with
+                    {
+                        CompilationStatus = CompilationStatus.Pending,
+                        LastCompileStartedAt = DateTimeOffset.UtcNow
+                    }
+                };
+            }, nodeTypePath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "[TRIGGER-RECOMPILE] failed for {NodeTypePath} (best-effort)", nodeTypePath);
+        }
     }
 
 

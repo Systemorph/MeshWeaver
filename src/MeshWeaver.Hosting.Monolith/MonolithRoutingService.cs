@@ -10,7 +10,9 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Monolith;
 
-internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
+internal class MonolithRoutingService(
+    IMessageHub hub,
+    ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
 {
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
@@ -31,72 +33,101 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
     }
 
 
-    protected override async Task<IMessageDelivery> RouteImplAsync(
+    protected override IObservable<IMessageDelivery> RouteImpl(
         IMessageDelivery delivery,
         MeshNode? node,
-        Address address,
-        CancellationToken cancellationToken)
+        Address address)
     {
+        logger.LogDebug("[ROUTE-IMPL] enter {MessageType} → {Address} (node={NodePath} streamFound={StreamFound})",
+            delivery.Message.GetType().Name, address, node?.Path ?? "(null)", streams.ContainsKey(address));
+
         if (streams.TryGetValue(address, out var stream))
-            return await stream.Invoke(delivery, cancellationToken);
-
-        var hub = await CreateHubAsync(node, address);
-        if (hub is null)
         {
-            var isShuttingDown = Mesh.Disposal is not null;
-            string errorMessage;
-            if (isShuttingDown)
-                errorMessage = $"Mesh is shutting down, cannot route to {address}";
-            else if (node is null)
-                errorMessage = $"No node found for address {address}";
-            else
-                errorMessage = $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType ?? "null"}). Ensure the node type is registered via AddGraph() or a custom builder extension.";
-
-            logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
-                delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
-
-            // Post DeliveryFailure response so AwaitResponse callers get an exception.
-            // Guard: don't post DeliveryFailure for DeliveryFailure messages or during shutdown.
-            if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
-            {
-                Mesh.Post(
-                    new DeliveryFailure(delivery)
-                    {
-                        ErrorType = isShuttingDown ? ErrorType.Failed : ErrorType.NotFound,
-                        Message = errorMessage
-                    }, o => o.ResponseFor(delivery)
-                );
-            }
-            return delivery.Failed(errorMessage);
+            logger.LogDebug("[ROUTE-IMPL] delivering via existing stream for {Address}", address);
+            // Bridge the AsyncDelivery callback (Task-shaped) into the chain via FromAsync —
+            // single-shot, no leak. The base RouteMessageAsync re-bridges to Task at the
+            // framework boundary.
+            return Observable.FromAsync(ct => stream.Invoke(delivery, ct));
         }
 
-        hub.DeliverMessage(delivery);
-        return delivery.Forwarded(hub.Address);
+        // 100% reactive: CreateHub returns IObservable<IMessageHub?>. Compose
+        // delivery on the same chain inside Select. No await, no inner ToTask
+        // — the only Task bridge is at the framework boundary in the base
+        // class's RouteMessageAsync. Per Doc/Architecture/AsynchronousCalls.md:
+        // "no async, 100% reactive. async deadlocks".
+        return CreateHub(node, address)
+            .Select(hub =>
+            {
+                if (hub is null)
+                    return PostNotFound(delivery, node, address);
+
+                logger.LogDebug("[ROUTE-IMPL] delivering {MessageType} to created hub {HubAddr}",
+                    delivery.Message.GetType().Name, hub.Address);
+                hub.DeliverMessage(delivery);
+                return delivery.Forwarded(hub.Address);
+            });
     }
 
-    private async Task<IMessageHub?> CreateHubAsync(MeshNode? node, Address address)
+    private IMessageDelivery PostNotFound(IMessageDelivery delivery, MeshNode? node, Address address)
+    {
+        var isShuttingDown = Mesh.Disposal is not null;
+        string errorMessage;
+        if (isShuttingDown)
+            errorMessage = $"Mesh is shutting down, cannot route to {address}";
+        else if (node is null)
+            errorMessage = $"No node found for address {address}";
+        else
+            errorMessage = $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType ?? "null"}). Ensure the node type is registered via AddGraph() or a custom builder extension.";
+
+        logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
+            delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
+
+        if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+        {
+            Mesh.Post(
+                new DeliveryFailure(delivery)
+                {
+                    ErrorType = isShuttingDown ? ErrorType.Failed : ErrorType.NotFound,
+                    Message = errorMessage
+                }, o => o.ResponseFor(delivery)
+            );
+        }
+        return delivery.Failed(errorMessage);
+    }
+
+    /// <summary>
+    /// Returns an <see cref="IObservable{T}"/> that emits the per-node hub
+    /// once <c>ResolveHubConfiguration</c> settles. 100% reactive composition —
+    /// no <c>await</c>, no inner <c>.ToTask()</c>. The caller bridges to <see cref="Task"/>
+    /// once at the framework boundary (<see cref="RouteImplAsync"/>).
+    /// </summary>
+    private IObservable<IMessageHub?> CreateHub(MeshNode? node, Address address)
     {
         if (Mesh.Disposal is not null || node is null)
-            return null;
+            return Observable.Return<IMessageHub?>(null);
 
         var hubFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeHubFactory>();
 
-        // Single Task bridge at the framework boundary (RouteImplAsync is
-        // Task<IMessageDelivery> by signature). The reactive chain inside
-        // ResolveHubConfiguration runs on the producer's scheduler — it does
-        // NOT capture this caller's synchronization context, so a CompileRequest
-        // routed back through this same RoutingService while we're awaiting
-        // here doesn't deadlock the way the previous Task-returning
-        // ResolveHubConfigurationAsync did.
-        node = await hubFactory.ResolveHubConfiguration(node).FirstAsync().ToTask();
+        logger.LogDebug("[ROUTE-CREATE] CreateHub entering for {Address} (NodeType={NodeType})",
+            address, node.NodeType);
 
-        if (node.HubConfiguration is null)
-            throw new InvalidOperationException(
-                $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType}). " +
-                $"Ensure the node type is registered via AddGraph() or has a HubConfiguration set.");
+        return hubFactory.ResolveHubConfiguration(node)
+            .Select(enriched =>
+            {
+                logger.LogDebug("[ROUTE-CREATE] ResolveHubConfiguration returned for {Address}: HubConfig={HasHubConfig}, AssemblyLocation={AssemblyLocation}",
+                    address, enriched.HubConfiguration is not null, enriched.AssemblyLocation ?? "(null)");
 
-        var hub = Mesh.GetHostedHub(address, node.HubConfiguration!);
-        hub?.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
-        return hub;
+                if (enriched.HubConfiguration is null)
+                    throw new InvalidOperationException(
+                        $"No hub configuration for node '{enriched.Path}' (NodeType: {enriched.NodeType}). " +
+                        "Ensure the node type is registered via AddGraph() or has a HubConfiguration set.");
+
+                var createdHub = Mesh.GetHostedHub(address, enriched.HubConfiguration!);
+                logger.LogDebug("[ROUTE-CREATE] GetHostedHub returned {HubAddr} for {Address}",
+                    createdHub?.Address.ToString() ?? "(null)", address);
+
+                createdHub?.RegisterForDisposal((_, _) => UnregisterStreamAsync(createdHub.Address));
+                return createdHub;
+            });
     }
 }
