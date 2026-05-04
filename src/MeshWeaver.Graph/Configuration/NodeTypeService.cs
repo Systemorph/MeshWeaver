@@ -85,6 +85,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // the transform).
     private readonly ConcurrentDictionary<string, ISynchronizationStream<MeshNode>> _writableStreams = new();
 
+    // Pending transforms per NodeType path. CombineLatest with the writable
+    // stream's emissions drains transforms that arrive before Current is
+    // populated by SubscribeResponse — handles the first-touch race.
+    private readonly ConcurrentDictionary<string, System.Reactive.Subjects.Subject<Func<MeshNode, ChangeItem<MeshNode>?>>> _pendingTransforms = new();
+
     public NodeTypeService(
         IMessageHub hub,
         IEnumerable<IMeshQueryProvider> queryProviders,
@@ -531,72 +536,102 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             // before invoking the transform — see SynchronizationStream.cs:466).
             var stream = GetOrCreateWritableStream(nodeTypePath);
 
-            // Direct stream.Update — the sync hub's handler runs the transform
-            // against the stream's Current snapshot. If Current is already
-            // populated (steady state after first warm-up), the lambda fires
-            // immediately. If still null on the very first call, the lambda
-            // returns null and we no-op; the next change-feed event will
-            // retry against a now-populated Current.
-            stream.Update(curr =>
+            // Buffer the transform. The stream subscriber (registered once per
+            // path) drains buffered transforms on each emission with non-null
+            // Current — handles both the first-touch race (Current null at
+            // trigger time, populated after SubscribeResponse) AND steady-state
+            // (Current already populated, transform fires immediately on the
+            // current cached emission via ReplaySubject(1)).
+            var pending = _pendingTransforms.GetOrAdd(nodeTypePath, _ =>
             {
-                // Cross-hub Update lambdas receive the MeshNode after JSON
-                // round-trip — Content is typed when the receiver's TypeRegistry
-                // recognises NodeTypeDefinition (always at the per-NodeType hub),
-                // but stays as JsonElement when this lambda runs on the SENDER
-                // (mesh hub) where the discriminator may not yet be registered.
-                // Handle both shapes so the trigger lands either way.
-                if (curr is null)
-                {
-                    logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} stream Current is null — first-touch race, will retry next event",
-                        nodeTypePath);
-                    return null;
-                }
-                NodeTypeDefinition? def = curr.Content as NodeTypeDefinition;
-                if (def is null && curr.Content is JsonElement je)
-                {
-                    try { def = je.Deserialize<NodeTypeDefinition>(hub.JsonSerializerOptions); }
-                    catch { /* malformed — leave def null */ }
-                }
-                if (def is null)
-                {
-                    logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} content is {Type} — skip",
-                        nodeTypePath, curr.Content?.GetType().Name ?? "null");
-                    return null;
-                }
-                if (def.CompilationStatus is CompilationStatus.Pending
-                                          or CompilationStatus.Compiling) return null;
-                // Only kick off compile if no assembly path yet. Static NodeTypes
-                // (built-in via AddMeshNodes) carry AssemblyLocation from
-                // CreateMeshNode() — they don't need recompilation.
-                // Dynamic NodeTypes have empty AssemblyLocation until the first
-                // CompileWatcher run sets it; subsequent source edits set Pending
-                // through the cache invalidation flow above (InvalidateCache),
-                // and the watcher will re-emit Ok with a new AssemblyLocation.
-                if (!string.IsNullOrEmpty(curr.AssemblyLocation))
-                {
-                    logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} already has AssemblyLocation — skip kick (recompile via InvalidateCache + next access)",
-                        nodeTypePath);
-                    return null;
-                }
-                var updated = curr with
-                {
-                    Content = def with
-                    {
-                        CompilationStatus = CompilationStatus.Pending,
-                        LastCompileStartedAt = DateTimeOffset.UtcNow
-                    }
-                };
-                return new ChangeItem<MeshNode>(updated, stream.StreamId, stream.StreamId,
-                    ChangeType.Patch, stream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = curr }]);
-            }, ex => logger.LogWarning(ex,
-                "[TRIGGER-RECOMPILE] stream.Update failed for {NodeTypePath}", nodeTypePath));
+                var subject = new System.Reactive.Subjects.Subject<Func<MeshNode, ChangeItem<MeshNode>?>>();
+                EnsureStreamSubscription(nodeTypePath, stream, subject);
+                return subject;
+            });
+
+            pending.OnNext(BuildPendingTransform(nodeTypePath, stream));
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex,
                 "[TRIGGER-RECOMPILE] failed for {NodeTypePath} (best-effort)", nodeTypePath);
         }
+    }
+
+    /// <summary>
+    /// Builds the read-modify-write lambda for the recompile trigger. Captures
+    /// <paramref name="stream"/> so the resulting <see cref="ChangeItem{MeshNode}"/>
+    /// carries the right StreamId/Version metadata.
+    /// </summary>
+    private Func<MeshNode, ChangeItem<MeshNode>?> BuildPendingTransform(
+        string nodeTypePath, ISynchronizationStream<MeshNode> stream) => curr =>
+    {
+        if (curr is null)
+        {
+            logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} stream Current is null — drained, will replay on next emission",
+                nodeTypePath);
+            return null;
+        }
+        NodeTypeDefinition? def = curr.Content as NodeTypeDefinition;
+        if (def is null && curr.Content is JsonElement je)
+        {
+            try { def = je.Deserialize<NodeTypeDefinition>(hub.JsonSerializerOptions); }
+            catch { /* malformed — leave def null */ }
+        }
+        if (def is null)
+        {
+            logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} content is {Type} — skip",
+                nodeTypePath, curr.Content?.GetType().Name ?? "null");
+            return null;
+        }
+        if (def.CompilationStatus is CompilationStatus.Pending
+                                  or CompilationStatus.Compiling) return null;
+        if (!string.IsNullOrEmpty(curr.AssemblyLocation))
+        {
+            logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} already has AssemblyLocation — skip kick",
+                nodeTypePath);
+            return null;
+        }
+        var updated = curr with
+        {
+            Content = def with
+            {
+                CompilationStatus = CompilationStatus.Pending,
+                LastCompileStartedAt = DateTimeOffset.UtcNow
+            }
+        };
+        logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} flipping Pending — applying transform", nodeTypePath);
+        return new ChangeItem<MeshNode>(updated, stream.StreamId, stream.StreamId,
+            ChangeType.Patch, stream.Hub.Version,
+            [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = curr }]);
+    };
+
+    /// <summary>
+    /// Wires a single subscription per stream that combines (a) the latest
+    /// non-null MeshNode emitted by the stream and (b) the buffered transforms
+    /// pushed via the per-path Subject. On every transform pushed, applies it
+    /// against the current MeshNode via <c>stream.Update</c>. This handles
+    /// the first-touch race: trigger before SubscribeResponse arrives → the
+    /// transform sits in the subject; SubscribeResponse arrives → Current
+    /// populates → CombineLatest emits → stream.Update applies the transform
+    /// against a populated Current.
+    /// </summary>
+    private void EnsureStreamSubscription(
+        string nodeTypePath,
+        ISynchronizationStream<MeshNode> stream,
+        System.Reactive.Subjects.Subject<Func<MeshNode, ChangeItem<MeshNode>?>> subject)
+    {
+        var sub = subject
+            .CombineLatest(stream.Where(c => c?.Value is not null), (transform, _) => transform)
+            .Subscribe(transform =>
+            {
+                stream.Update(curr => transform(curr!),
+                    ex => logger.LogWarning(ex,
+                        "[TRIGGER-RECOMPILE] stream.Update failed for {NodeTypePath}", nodeTypePath));
+            },
+            ex => logger.LogWarning(ex,
+                "[TRIGGER-RECOMPILE] subject pump errored for {NodeTypePath}", nodeTypePath));
+        _subscriptions[$"trigger-recompile:{nodeTypePath}"] = sub;
     }
 
     /// <summary>
