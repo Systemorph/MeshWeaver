@@ -73,6 +73,63 @@ The Task boundary belongs at the test edge (`.FirstAsync().ToTask(ct)`) or at fr
 
 **No exceptions. No "it's a small helper". No "we wrap it in `Observable.FromAsync` so it's safe".** If you find yourself reaching for any of those, the design is wrong — the public method should return `IObservable<T>`, the call site should `.Subscribe(...)`, and the chain should never touch a Task.
 
+## 🚨 Cold observables: Subscribe is mandatory, errors propagate to the subscriber
+
+Every method that performs a write or any other side effect returns `IObservable<T>` and is **cold** — the side effect runs on `Subscribe`, never on call. Forgetting to subscribe means the work silently doesn't happen. The most common shape:
+
+```csharp
+// ❌ WRONG — fire-and-forget. UpdateMeshNode is a cold IObservable<MeshNode>;
+//   the dsStream.Update side effect only runs on Subscribe, so this is a no-op.
+//   This was the "chat doesn't work in prod" root cause: AppendUserInput called
+//   workspace.UpdateMeshNode and discarded the IObservable, so the thread state
+//   never changed and the watcher never dispatched.
+workspace.GetMeshNodeStream().Update(node => node with { Content = … });
+
+// ✅ RIGHT — subscribe with explicit success / error handlers. No fire-and-forget;
+//   errors propagate to the caller (logged here; can also be re-thrown via OnError
+//   into a wider chain).
+var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
+    ?.CreateLogger("MyComponent");
+workspace.GetMeshNodeStream().Update(node => node with { Content = … })
+    .Subscribe(
+        _ => { /* optional success follow-up */ },
+        ex => logger?.LogWarning(ex, "Update failed for {Path}", path));
+```
+
+**Where the next step depends on the commit completing**, chain via `SelectMany` so success/error flow through one observable:
+
+```csharp
+meshService.CreateNode(satelliteCell)
+    .SelectMany(_ => workspace.GetMeshNodeStream().Update(node => CommitState(node)))
+    .Subscribe(
+        committed => hub.Post(new NextStepRequest(committed.Id), …),
+        ex => onFailure(ex));
+```
+
+### Detecting fire-and-forget at runtime
+
+`workspace.GetMeshNodeStream().Update(...)` returns a `RequireSubscribeObservable<MeshNode>` that logs a warning at GC if `Subscribe` was never called:
+
+> *Fire-and-forget callsite detected: 'MeshNodeStreamHandle.Update(path='…')' returned a cold IObservable that was never subscribed — the side effect did NOT run. Add .Subscribe(_ => { }, ex => logger.LogWarning(ex, ...)) at the callsite.*
+
+Treat that warning as a hard failure — search the log channel `MeshWeaver.Mesh.RequireSubscribe` after every test/CI run.
+
+### Compile-time signal
+
+The legacy `workspace.UpdateMeshNode(update)` extension is `[Obsolete]` and points at the new API:
+
+> *Use `workspace.GetMeshNodeStream(path?).Update(update).Subscribe(...)` — uniform read/write API; callers must subscribe so writes can't be silently dropped.*
+
+Any obsolete-warning hit on a build is a missing-Subscribe bug; fix the callsite, don't suppress the warning.
+
+### The same rule for every cold-write surface
+
+The Subscribe-mandatory contract isn't just MeshNode updates. Any IObservable returned from a service that performs a side effect on Subscribe must be subscribed at every callsite:
+
+- `meshService.CreateNode(node) / UpdateNode(node) / DeleteNode(path)` — cold; subscribe to commit.
+- `meshService.MoveNode(...)` / `meshService.CreateTransient(node)` — cold; subscribe.
+- `remoteStream.Update(current => updated, ex => …)` — `ex` callback fires on the stream's hub; the returned `void` IS the subscription. (But the patch routing is hub.Post, so this is hot — the exception in the lambda below is the only way to surface `OnError` here.)
+
 ## 🚨 `No handler found for message type X` is almost always a serialization/type-registry bug
 
 When a routed `IRequest<T>` comes back as a `DeliveryFailure` saying *"No handler found for message type X"*, the handler usually IS registered via `WithHandler<X>(...)` on the target hub. The framework's `FinishDelivery` only emits this when an `IRequest<T>` reached the hub but no `Register<T>(...)` filter matched — and the most common reason is the message arriving on the wire **deserialized as a different type** (or as `JsonElement`) because the receiving hub's `ITypeRegistry` is missing the `WithType(typeof(X), nameof(X))` entry that the sender used as the `$type` discriminator.

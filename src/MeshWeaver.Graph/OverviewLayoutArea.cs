@@ -6,6 +6,9 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -191,7 +194,14 @@ public static class OverviewLayoutArea
                     // captured snapshot). The owning hub's MeshDataSource
                     // processes the patch and broadcasts to subscribers
                     // (Doc/Architecture/InitializationGates.md).
-                    host.Workspace.UpdateMeshNode(current => current with { Content = updatedContent }, node.Path);
+                    var saveLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Graph.OverviewLayoutArea");
+                    host.Workspace.GetMeshNodeStream(node.Path)
+                        .Update(current => current with { Content = updatedContent })
+                        .Subscribe(
+                            _ => { },
+                            ex => saveLogger?.LogWarning(ex,
+                                "OverviewLayoutArea.AutoSave: UpdateMeshNode failed for {NodePath}", node.Path));
                 }));
     }
 

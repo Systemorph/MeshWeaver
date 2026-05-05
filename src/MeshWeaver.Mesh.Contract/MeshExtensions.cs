@@ -1318,7 +1318,7 @@ public static class MeshExtensions
                 // was queued, racing the stream tick — read-after-write callers (and a fresh
                 // GetRemoteStream<MeshNode, MeshNodeReference> subscription opened right
                 // after the await returns) saw the pre-update snapshot.
-                workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path)
+                workspace.GetMeshNodeStream(nodeToSave.Path).Update(_ => nodeToSave)
                     .Select(saved => (nodeToSave, saved)))
             .Subscribe(
                 pair =>

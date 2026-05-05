@@ -81,11 +81,16 @@ public class WorkspaceUpdateMeshNodePropagationTest(ITestOutputHelper output) : 
         emissions[^1].Name.Should().Be("initial");
         Output.WriteLine($"Initial snapshot OK: {emissions.Count} emission(s)");
 
-        // 5. Write through workspace.UpdateMeshNode — this goes via the data source's
-        //    primary EntityStore stream.
+        // 5. Write through workspace.GetMeshNodeStream().Update — this goes via the
+        //    data source's primary EntityStore stream. Subscribe is mandatory: the API
+        //    returns a cold IObservable<MeshNode>; the side effect runs on Subscribe.
         var beforeCount = emissions.Count;
         var marker = $"updated-{Guid.NewGuid().ToString("N")[..8]}";
-        workspace.UpdateMeshNode(node => node with { Name = marker });
+        using var updateSub = workspace.GetMeshNodeStream()
+            .Update(node => node with { Name = marker })
+            .Subscribe(
+                _ => Output.WriteLine($"UpdateMeshNode emission: {marker}"),
+                ex => Output.WriteLine($"UpdateMeshNode error: {ex.Message}"));
 
         // 6. The subscriber MUST receive the new state. This is the propagation
         //    contract — without the resolver fix, the subscriber received the

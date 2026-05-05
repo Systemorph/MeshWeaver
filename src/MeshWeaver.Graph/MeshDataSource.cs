@@ -610,7 +610,7 @@ public static class MeshDataSourceExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
 
-        workspace.UpdateMeshNode(curr =>
+        workspace.GetMeshNodeStream().Update(curr =>
             curr.Content is NodeTypeDefinition def
                 ? curr with
                 {
@@ -659,7 +659,7 @@ public static class MeshDataSourceExtensions
                         // MeshNode, so there's no NodeTypeService cache to flush.
                     }
 
-                    workspace.UpdateMeshNode(curr =>
+                    workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def)
                             return curr;

@@ -7,6 +7,8 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -144,7 +146,14 @@ public static class MarkdownEditLayoutArea
 
                     // Persist via remote stream Update — apply props to the LATEST
                     // node (Doc/Architecture/InitializationGates.md).
-                    host.Workspace.UpdateMeshNode(current => updatedProps.ApplyTo(current), node.Path);
+                    var saveLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Graph.MarkdownEditLayoutArea");
+                    host.Workspace.GetMeshNodeStream(node.Path)
+                        .Update(current => updatedProps.ApplyTo(current))
+                        .Subscribe(
+                            _ => { },
+                            ex => saveLogger?.LogWarning(ex,
+                                "SetupNodeMetadataAutoSave: UpdateMeshNode failed for {NodePath}", node.Path));
                 }));
     }
 }

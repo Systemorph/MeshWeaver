@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -112,11 +113,15 @@ public static class RunningActivitiesStripe
         {
             cancel = cancel.WithClickAction(ctx =>
             {
-                ctx.Host.Hub.GetWorkspace().UpdateMeshNode(curr =>
+                var cancelLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.Graph.RunningActivitiesStripe");
+                ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(activity.Path).Update(curr =>
                     curr.Content is ActivityLog l
                         ? curr with { Content = l with { RequestedStatus = ActivityStatus.Cancelled } }
-                        : curr,
-                    nodePath: activity.Path);
+                        : curr).Subscribe(
+                            _ => { },
+                            ex => cancelLogger?.LogWarning(ex,
+                                "RunningActivitiesStripe.Cancel: UpdateMeshNode failed for {Path}", activity.Path));
                 return Task.CompletedTask;
             });
         }
