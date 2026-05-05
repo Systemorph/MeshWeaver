@@ -72,7 +72,11 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         var result = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Test").FirstAsync().ToTask(CT);
 
-        var stored = await ReadNodeAsync(result.Node.Path!, CT);
+        // ApiToken nodes don't activate per-node hubs (IsSatelliteType), so
+        // ReadNodeAsync would hang waiting for a route — read via the same
+        // mesh-level index ApiTokenService uses internally. Poll briefly to
+        // absorb read-side index lag (the create just landed).
+        var stored = await PollQueryAsync(result.Node.Path!, n => n is not null, CT);
         stored.Should().NotBeNull();
         stored!.NodeType.Should().Be("ApiToken");
     }
@@ -226,15 +230,10 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
 
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        MeshNode? stored;
-        do
-        {
-            stored = await ReadNodeAsync(result.Node.Path, CT);
-            if (stored is null) break;
-            await Task.Delay(50, CT);
-        } while (DateTimeOffset.UtcNow < deadline);
-
+        // ApiToken nodes don't activate per-node hubs — read via the same
+        // mesh-level path:X query the production service uses, polling to
+        // absorb read-side index lag.
+        var stored = await PollQueryAsync(result.Node.Path, n => n is null, CT);
         stored.Should().BeNull();
     }
 
@@ -272,15 +271,9 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         await service.DeleteToken(result.Node.Path).FirstAsync().ToTask(CT);
 
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        MeshNode? index;
-        do
-        {
-            index = await ReadNodeAsync(indexPath, CT);
-            if (index is null) break;
-            await Task.Delay(50, CT);
-        } while (DateTimeOffset.UtcNow < deadline);
-
+        // Same primitive as DeleteToken_RemovesNodeFromStorage — query, not
+        // ReadNodeAsync (no per-node hub at ApiToken/{hash} either).
+        var index = await PollQueryAsync(indexPath, n => n is null, CT);
         index.Should().BeNull();
     }
 
@@ -414,5 +407,40 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         validated.Should().NotBeNull();
         validated!.UserId.Should().Be("user1");
+    }
+
+    /// <summary>
+    /// Waits for the MeshNode at <paramref name="path"/> to satisfy <paramref name="condition"/>
+    /// using the live <see cref="IMeshService.ObserveQuery"/> stream — Initial / Added / Updated /
+    /// Removed events fold into a single <c>MeshNode?</c> that we filter with <c>.Where</c>. No
+    /// polling, no <c>Task.Delay</c>: the timeout fires only if the condition genuinely never
+    /// becomes true.
+    /// <para>
+    /// Required for ApiToken paths because those nodes are <c>IsSatelliteType</c> and have no
+    /// per-node hub — the test base's <c>ReadNodeAsync</c> (and <c>GetMeshNodeStream(path)</c>)
+    /// would hang for 30s waiting for a route. The mesh-level <c>ObserveQuery</c> reads the
+    /// authoritative persistence state through the same pipeline production <c>ApiTokenService</c>
+    /// uses for its own reads, with live change-notifier deltas instead of a polling loop.
+    /// </para>
+    /// </summary>
+    private Task<MeshNode?> PollQueryAsync(string path, Func<MeshNode?, bool> condition, CancellationToken ct)
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        return meshService
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}", WellKnownUsers.System))
+            .Scan((MeshNode?)null, (current, change) => change.ChangeType switch
+            {
+                QueryChangeType.Initial or QueryChangeType.Reset =>
+                    change.Items.FirstOrDefault(),
+                QueryChangeType.Added or QueryChangeType.Updated =>
+                    change.Items.FirstOrDefault() ?? current,
+                QueryChangeType.Removed => null,
+                _ => current,
+            })
+            .Where(node => condition(node))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(ct);
     }
 }
