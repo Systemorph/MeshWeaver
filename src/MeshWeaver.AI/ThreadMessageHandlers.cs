@@ -27,7 +27,9 @@ public static class ThreadMessageHandlers
         IMessageDelivery<DeleteFromMessageRequest> delivery)
     {
         var request = delivery.Message;
-        hub.GetWorkspace().UpdateMeshNode(node =>
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadMessageHandlers");
+        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             var msgIndex = thread.Messages.IndexOf(request.MessageId);
@@ -36,7 +38,10 @@ public static class ThreadMessageHandlers
             {
                 Content = thread with { Messages = thread.Messages.Take(msgIndex).ToImmutableList() }
             };
-        });
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "HandleDeleteFromMessage: UpdateMeshNode failed for {ThreadPath}", hub.Address.Path));
         return delivery.Processed();
     }
 

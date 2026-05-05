@@ -313,39 +313,43 @@ public static class ThreadSubmission
         // ReadNode at {threadPath}/{errorResponseId} returned null.
         var workspace = hub.GetWorkspace();
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        meshService.CreateNode(errorCell).Subscribe(
-            _ =>
+        // Chain CreateNode → UpdateMeshNode via SelectMany so the response is only posted
+        // after the satellite cell is persisted AND the parent's state commit completes.
+        // UpdateMeshNode returns a cold IObservable<MeshNode>; SelectMany subscribes it,
+        // which triggers the dsStream.Update side effect. Without the SelectMany subscribe,
+        // the parent state never updated.
+        meshService.CreateNode(errorCell)
+            .SelectMany(_ => workspace.GetMeshNodeStream().Update(node =>
             {
-                workspace.UpdateMeshNode(node =>
+                var t = node.Content as MeshThread ?? new MeshThread();
+                var msgs = t.Messages;
+                if (!msgs.Contains(req.UserMessageId)) msgs = msgs.Add(req.UserMessageId);
+                if (!msgs.Contains(errorResponseId)) msgs = msgs.Add(errorResponseId);
+                var userIds = t.UserMessageIds.Contains(req.UserMessageId)
+                    ? t.UserMessageIds
+                    : t.UserMessageIds.Add(req.UserMessageId);
+                var ingested = t.IngestedMessageIds.Contains(req.UserMessageId)
+                    ? t.IngestedMessageIds
+                    : t.IngestedMessageIds.Add(req.UserMessageId);
+                return node with
                 {
-                    var t = node.Content as MeshThread ?? new MeshThread();
-                    var msgs = t.Messages;
-                    if (!msgs.Contains(req.UserMessageId)) msgs = msgs.Add(req.UserMessageId);
-                    if (!msgs.Contains(errorResponseId)) msgs = msgs.Add(errorResponseId);
-                    var userIds = t.UserMessageIds.Contains(req.UserMessageId)
-                        ? t.UserMessageIds
-                        : t.UserMessageIds.Add(req.UserMessageId);
-                    var ingested = t.IngestedMessageIds.Contains(req.UserMessageId)
-                        ? t.IngestedMessageIds
-                        : t.IngestedMessageIds.Add(req.UserMessageId);
-                    return node with
+                    Content = t with
                     {
-                        Content = t with
-                        {
-                            Messages = msgs,
-                            UserMessageIds = userIds,
-                            IngestedMessageIds = ingested,
-                            // Clear any pending text for this message so the watcher doesn't dispatch it again.
-                            PendingUserMessage = null
-                        }
-                    };
-                });
-
-                hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
-            },
-            ex => hub.Post(
-                new AppendUserMessageResponse { Success = false, Error = ex.Message },
-                o => o.ResponseFor(delivery)));
+                        Messages = msgs,
+                        UserMessageIds = userIds,
+                        IngestedMessageIds = ingested,
+                        // Clear any pending text for this message so the watcher doesn't dispatch it again.
+                        PendingUserMessage = null
+                    }
+                };
+            }))
+            .Subscribe(
+                _ => hub.Post(
+                    new AppendUserMessageResponse { Success = true },
+                    o => o.ResponseFor(delivery)),
+                ex => hub.Post(
+                    new AppendUserMessageResponse { Success = false, Error = ex.Message },
+                    o => o.ResponseFor(delivery)));
 
         return delivery.Processed();
     }
@@ -396,7 +400,9 @@ public static class ThreadSubmission
             hub.Post(new UpdateNodeRequest(updatedCell), o => o.WithTarget(hub.Address));
         }
 
-        hub.GetWorkspace().UpdateMeshNode(node =>
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
+        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var t = node.Content as MeshThread ?? new MeshThread();
             var idx = t.Messages.IndexOf(userMessageId);
@@ -420,7 +426,11 @@ public static class ThreadSubmission
                     PendingModelName = modelName ?? t.PendingModelName
                 }
             };
-        });
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "ApplyResubmit: UpdateMeshNode failed for thread {ThreadPath} message {MessageId}",
+                threadPath, userMessageId));
     }
 }
 
@@ -715,7 +725,13 @@ internal static class ThreadSubmissionServer
                         //
                         // The IsExecuting check is the idempotency guard — every other watcher
                         // emission in this round skips, so this body runs exactly once per round.
-                        hub.GetWorkspace().UpdateMeshNode(node =>
+                        //
+                        // Subscribe is mandatory: GetMeshNodeStream().Update returns a cold
+                        // IObservable<MeshNode>; the dsStream.Update side effect only runs on
+                        // Subscribe. The downstream hub.Posts (UpdateThreadMessageContent +
+                        // SubmitMessageRequest) chain off the Subscribe(onNext) so they only
+                        // fire after the round commit is persisted.
+                        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
                         {
                             var t = node.Content as MeshThread ?? new MeshThread();
                             if (t.IsExecuting) return node;
@@ -756,32 +772,41 @@ internal static class ThreadSubmissionServer
                                     PendingAttachments = dispatch.Attachments?.ToImmutableList()
                                 }
                             };
-                        });
-
-                        hub.Post(
-                            new UpdateThreadMessageContent { Text = "Allocating agent..." },
-                            o => o.WithTarget(new Address(responsePath)));
-
-                        // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
-                        var executionHub = hub.GetHostedHub(
-                            new Address($"{hub.Address}/_Exec"),
-                            config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
-                            HostedHubCreation.Always);
-
-                        executionHub!.Post(
-                            new SubmitMessageRequest
+                        }).Subscribe(
+                            _ =>
                             {
-                                ThreadPath = threadPath,
-                                UserMessageText = combinedUserText,
-                                UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
-                                ResponseMessageId = responseMsgId,
-                                ResponsePath = responsePath,
-                                AgentName = dispatch.AgentName,
-                                ModelName = dispatch.ModelName,
-                                ContextPath = dispatch.ContextPath,
-                                Attachments = dispatch.Attachments
+                                hub.Post(
+                                    new UpdateThreadMessageContent { Text = "Allocating agent..." },
+                                    o => o.WithTarget(new Address(responsePath)));
+
+                                // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
+                                var executionHub = hub.GetHostedHub(
+                                    new Address($"{hub.Address}/_Exec"),
+                                    config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
+                                    HostedHubCreation.Always);
+
+                                executionHub!.Post(
+                                    new SubmitMessageRequest
+                                    {
+                                        ThreadPath = threadPath,
+                                        UserMessageText = combinedUserText,
+                                        UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
+                                        ResponseMessageId = responseMsgId,
+                                        ResponsePath = responsePath,
+                                        AgentName = dispatch.AgentName,
+                                        ModelName = dispatch.ModelName,
+                                        ContextPath = dispatch.ContextPath,
+                                        Attachments = dispatch.Attachments
+                                    },
+                                    o => userCtx != null ? o.WithAccessContext(userCtx) : o);
                             },
-                            o => userCtx != null ? o.WithAccessContext(userCtx) : o);
+                            ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "[ThreadSubmission] Round commit UpdateMeshNode failed for {ResponseMsgId} on {ThreadPath}",
+                                    responseMsgId, threadPath);
+                                onFailure?.Invoke();
+                            });
                     },
                     ex =>
                     {

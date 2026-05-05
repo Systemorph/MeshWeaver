@@ -115,11 +115,7 @@ public class McpMeshPlugin
             address,
             sessionConfig => sessionConfig
                 .AddData()
-                .WithInitialization(async (hub, _) =>
-                {
-                    var registry = await routingService.RegisterStreamAsync(hub);
-                    hub.RegisterForDisposal(registry);
-                }),
+                .WithInitialization(hub => { _ = routingService.RegisterStreamAsync(hub); }),
             HostedHubCreation.Always)
             ?? throw new InvalidOperationException(
                 $"Failed to materialise MCP session hub at {address}.");

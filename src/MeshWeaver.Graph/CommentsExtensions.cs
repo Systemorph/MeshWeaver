@@ -119,18 +119,17 @@ public static class CommentsExtensions
                 Content = comment
             };
 
-            // Create comment/reply node first, then update parent in onNext callback
-            // (same pattern as ThreadExecution: create cells → update parent in callback)
-            meshService.CreateNode(commentNode).Subscribe(
-                _ =>
+            // Create comment/reply node first, then update parent. Chain via SelectMany
+            // so the response is only posted after the parent update commits — fire-and-forget
+            // would silently drop the parent mutation if the workspace update raced GC.
+            meshService.CreateNode(commentNode)
+                .SelectMany(_ =>
                 {
-                    try
-                    {
-                        logger?.LogInformation("[CreateComment] Node created: {Id} on {Path}", markerId, nodePath);
+                    logger?.LogInformation("[CreateComment] Node created: {Id} on {Path}", markerId, nodePath);
 
-                        // Update parent node via workspace stream
-                        workspace.UpdateMeshNode(node =>
-                        {
+                    // Update parent node via workspace stream
+                    return workspace.GetMeshNodeStream().Update(node =>
+                    {
                             // Markdown node: inject comment markers using fragment-based matching.
                             // JS sends start/end fragments (first/last few words of the selection).
                             // We find them in the rendered plain text and map back to source positions.
@@ -195,25 +194,21 @@ public static class CommentsExtensions
                                 };
                             }
 
-                            return node;
-                        });
-
+                        return node;
+                    });
+                })
+                .Subscribe(
+                    _ =>
+                    {
                         hub.Post(new CreateCommentResponse { Success = true, CommentId = markerId, MarkerId = markerId },
                             o => o.ResponseFor(request));
-                    }
-                    catch (Exception ex)
+                    },
+                    ex =>
                     {
-                        logger?.LogError(ex, "[CreateComment] Error in onNext for {Path}", nodePath);
+                        logger?.LogWarning(ex, "[CreateComment] FAILED for {Path}", nodePath);
                         hub.Post(new CreateCommentResponse { Success = false, Error = ex.Message },
                             o => o.ResponseFor(request));
-                    }
-                },
-                ex =>
-                {
-                    logger?.LogWarning(ex, "[CreateComment] FAILED for {Path}", nodePath);
-                    hub.Post(new CreateCommentResponse { Success = false, Error = ex.Message },
-                        o => o.ResponseFor(request));
-                });
+                    });
 
             return request.Processed();
         }

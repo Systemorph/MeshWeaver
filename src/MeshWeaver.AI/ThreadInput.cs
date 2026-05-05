@@ -2,6 +2,8 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.AI;
@@ -77,11 +79,13 @@ public static class ThreadInput
         // it add the id into Messages (in the same atomic update that flips
         // IsExecuting=true alongside the response cell id).
         //
-        // Using the no-address overload (FirstOrDefault) avoids a pre-existing
-        // path-vs-id key mismatch in the address-aware overload. This call expects
-        // to run on the thread's own hub (e.g., from the AppendUserMessageRequest
-        // handler) where there's exactly one node in the collection.
-        workspace.UpdateMeshNode(node =>
+        // Subscribe is mandatory — UpdateMeshNode returns a cold IObservable<MeshNode>
+        // and the side effect (dsStream.Update) only runs on Subscribe. Without this
+        // chain, AppendUserInput is silently a no-op and the chat workflow never
+        // dispatches the message — the original "chat doesn't work in prod" symptom.
+        var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadInput");
+        workspace.GetMeshNodeStream().Update(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             var userIds = thread.UserMessageIds.Contains(msgId)
@@ -100,7 +104,11 @@ public static class ThreadInput
                     PendingAttachments = message.Attachments ?? thread.PendingAttachments
                 }
             };
-        });
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "AppendUserInput: UpdateMeshNode failed for thread {ThreadPath} message {MessageId}",
+                threadPath, msgId));
 
         return msgId;
     }

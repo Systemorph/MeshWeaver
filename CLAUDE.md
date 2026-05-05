@@ -107,6 +107,20 @@ dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Doc
 - `TaskCompletionSource` in hub code = red flag — delete it, return `IObservable<T>`.
 - **Tests only**: `await .FirstAsync().ToTask()` is acceptable.
 
+**🚨 Cold observables: Subscribe is mandatory.** Every method that performs a write returns a cold `IObservable<T>` — the side effect runs on `Subscribe`, not on call. Forgetting to subscribe means the work silently doesn't happen.
+
+```csharp
+// ❌ WRONG — fire-and-forget. UpdateMeshNode is cold; the dsStream.Update side
+//   effect only runs on Subscribe. This was the chat-doesn't-work root cause.
+workspace.GetMeshNodeStream().Update(node => node with { … });
+
+// ✅ RIGHT — subscribe with explicit error propagation.
+workspace.GetMeshNodeStream().Update(node => node with { … })
+    .Subscribe(_ => { }, ex => logger.LogWarning(ex, "Update failed for {Path}", path));
+```
+
+`workspace.GetMeshNodeStream()` returns a `MeshNodeStreamHandle` that is both `IObservable<MeshNode>` (read) AND has `.Update(update)` (write). Writes return `RequireSubscribeObservable<MeshNode>` which **logs a warning at GC if Subscribe was never called** — search the `MeshWeaver.Mesh.RequireSubscribe` log channel after every CI run. Old API `workspace.UpdateMeshNode(...)` is `[Obsolete]`.
+
 **Auto-save pattern:** Form fields update the MeshNode via `stream.UpdateMeshNode` (debounced). The click action reads nothing — just flips a trigger field. No `Take(1)` on a hot stream.
 
 Full patterns + mistake ledger: [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md)

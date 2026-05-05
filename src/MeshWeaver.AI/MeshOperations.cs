@@ -1402,10 +1402,13 @@ public class MeshOperations
 
             try
             {
-                workspace.UpdateMeshNode(node => node with
+                workspace.GetMeshNodeStream(resolvedPath).Update(node => node with
                 {
                     Content = WithPendingCompilationStatus(node.Content)
-                }, resolvedPath);
+                }).Subscribe(
+                    _ => { },
+                    ex => logger.LogWarning(ex,
+                        "Compile: UpdateMeshNode failed for {Path}", resolvedPath));
             }
             catch (Exception ex)
             {

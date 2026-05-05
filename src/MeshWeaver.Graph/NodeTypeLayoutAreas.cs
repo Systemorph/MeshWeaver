@@ -14,6 +14,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -898,7 +899,9 @@ public static class NodeTypeLayoutAreas
                     // Write through the live stream — this is what GetStream(new MeshNodeReference())
                     // subscribers observe. UpdateMeshNode reads the latest node, applies the lambda,
                     // and emits a patch on the MeshNode data-source stream.
-                    host.Workspace.UpdateMeshNode(liveNode =>
+                    var saveLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Graph.NodeTypeLayoutAreas");
+                    host.Workspace.GetMeshNodeStream(node.Path).Update(liveNode =>
                     {
                         var baseDef = (liveNode.Content as NodeTypeDefinition)
                             ?? originalDefinition
@@ -917,7 +920,10 @@ public static class NodeTypeLayoutAreas
                             Icon = string.IsNullOrWhiteSpace(form.Icon) ? null : form.Icon,
                             Content = nextDefinition
                         };
-                    }, nodePath: node.Path);
+                    }).Subscribe(
+                        _ => { },
+                        ex => saveLogger?.LogWarning(ex,
+                            "SetupNodeTypeConfigAutoSave: UpdateMeshNode failed for {NodePath}", node.Path));
                 }));
     }
 

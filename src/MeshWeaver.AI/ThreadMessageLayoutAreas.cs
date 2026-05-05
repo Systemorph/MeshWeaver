@@ -114,7 +114,7 @@ public static class ThreadMessageLayoutAreas
             ?.CreateLogger("MeshWeaver.AI.MsgLayout");
         logger?.LogInformation("[MsgLayout] HANDLE_UPDATE: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
             hub.Address, msg.Text?.Length ?? -1, msg.ToolCalls?.Count ?? -1);
-        hub.GetWorkspace().UpdateMeshNode(node =>
+        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
             // Prefer incremental append (TextDelta). Full Text replacement is only used
@@ -137,7 +137,10 @@ public static class ThreadMessageLayoutAreas
                     CompletedAt = msg.CompletedAt ?? current.CompletedAt
                 }
             };
-        });
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "HandleUpdateContent: UpdateMeshNode failed for {Hub}", hub.Address));
         return delivery.Processed();
     }
 

@@ -18,6 +18,7 @@ using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -363,6 +364,8 @@ public static class MeshNodePropertyEditor
             .WithClickAction(ctx =>
             {
                 // Sync click action — Subscribe to data stream snapshot, then post update.
+                var saveLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.Graph.MeshNodePropertyEditor");
                 ctx.Host.Stream.GetDataStream<JsonElement>(dataId)
                     .Take(1)
                     .Subscribe(updatedContent =>
@@ -370,7 +373,12 @@ public static class MeshNodePropertyEditor
                         // Persist via remote stream Update — read-modify-write
                         // inside the lambda atop the LATEST node. Edit-state cleared
                         // optimistically; subscribers re-render with the patched content.
-                        ctx.Host.Workspace.UpdateMeshNode(current => current with { Content = updatedContent }, nodePath);
+                        ctx.Host.Workspace.GetMeshNodeStream(nodePath)
+                            .Update(current => current with { Content = updatedContent })
+                            .Subscribe(
+                                _ => { },
+                                ex => saveLogger?.LogWarning(ex,
+                                    "MeshNodePropertyEditor.Save: UpdateMeshNode failed for {NodePath}", nodePath));
                         ctx.Host.UpdateData(editStateId, false);
                     });
                 return Task.CompletedTask;

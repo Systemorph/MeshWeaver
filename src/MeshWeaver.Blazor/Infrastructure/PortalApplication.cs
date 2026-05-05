@@ -40,11 +40,7 @@ public class PortalApplication : IDisposable
         //   "The JSON payload for polymorphic interface or abstract type 'UiControl' must
         //    specify a type discriminator."
         config.TypeRegistry.AddMarkdownExportTypes();
-        return config.WithInitialization(async (hub, _) =>
-            {
-                var meshRegistry = await routingService.RegisterStreamAsync(hub);
-                hub.RegisterForDisposal(meshRegistry);
-            })
+        return config.WithInitialization(hub => { _ = routingService.RegisterStreamAsync(hub); })
             // Route kernel addresses to local hosted hubs — never delegate to grains.
             .WithRoutes(routes => routes.RouteAddressToHostedHub(
                 AddressExtensions.KernelType,

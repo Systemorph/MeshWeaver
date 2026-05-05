@@ -160,7 +160,7 @@ public static class ThreadExecution
             }
 
             // Clear thread execution state
-            workspace.UpdateMeshNode(node =>
+            workspace.GetMeshNodeStream().Update(node =>
             {
                 var t = node.Content as Thread ?? new Thread();
                 var cancelledAt = DateTime.UtcNow;
@@ -178,7 +178,10 @@ public static class ThreadExecution
                         StreamingToolCalls = null
                     }
                 };
-            });
+            }).Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "RecoverStaleExecutingThread: UpdateMeshNode failed for {ThreadPath}", threadPath));
 
             logger?.LogInformation("[ThreadExec] Recovery: cleared stale execution on {ThreadPath}", threadPath);
         });
@@ -342,7 +345,7 @@ public static class ThreadExecution
 
         // Update Thread state. Set PendingUserMessage so WatchForExecution
         // creates cells when they don't exist (server flow, delegation flow).
-        hub.GetWorkspace().UpdateMeshNode(node =>
+        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             var msgs = thread.Messages;
@@ -365,7 +368,10 @@ public static class ThreadExecution
                     PendingAttachments = request.Attachments?.ToImmutableList()
                 }
             };
-        });
+        }).Subscribe(
+            _ => { },
+            ex => logger?.LogWarning(ex,
+                "HandleSubmitMessage: UpdateMeshNode failed for {ThreadPath}", threadPath));
 
         logger?.LogInformation("[ThreadExec] HandleSubmitMessage: state updated for {ThreadPath}, activeMsg={ActiveMsg}, clientCells={ClientCells}",
             threadPath, responseMsgId, clientProvidedCells);
@@ -423,11 +429,14 @@ public static class ThreadExecution
         {
             logger?.LogWarning("[ThreadExec] Cell creation failed for {ThreadPath}: {Error}", threadPath, error);
             // Clear execution state since we're not starting
-            hub.GetWorkspace().UpdateMeshNode(node =>
+            hub.GetWorkspace().GetMeshNodeStream().Update(node =>
             {
                 var t = node.Content as MeshThread ?? new MeshThread();
                 return node with { Content = t with { IsExecuting = false, ActiveMessageId = null, ExecutionStartedAt = null } };
-            });
+            }).Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "RespondWithError: UpdateMeshNode failed for {ThreadPath}", threadPath));
             hub.Post(new SubmitMessageResponse { Success = false, Error = error },
                 o => o.ResponseFor(delivery));
         }
@@ -580,15 +589,20 @@ public static class ThreadExecution
         }
 
         // Helper: update Thread execution state via parentHub workspace.
-        // parentHub.GetWorkspace().UpdateMeshNode() is a synchronous function — no message needed.
         var threadWorkspace = parentHub.GetWorkspace();
+        var execLogger = parentHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadExecution");
         void UpdateThreadExecution(Func<MeshThread, MeshThread> mutate)
         {
-            threadWorkspace.UpdateMeshNode(node =>
+            threadWorkspace.GetMeshNodeStream().Update(node =>
             {
                 var thread = node.Content as MeshThread ?? new MeshThread();
                 return node with { Content = mutate(thread) };
-            });
+            }).Subscribe(
+                _ => { },
+                ex => execLogger?.LogWarning(ex,
+                    "UpdateThreadExecution: UpdateMeshNode failed for {ThreadPath}",
+                    threadWorkspace.Hub.Address.Path));
         }
 
         // Set user access context
@@ -1246,21 +1260,23 @@ public static class ThreadExecution
 
         // Read Thread.StreamingToolCalls from workspace (runs on grain scheduler — safe).
         // Find active delegation sub-threads and propagate cancel via Post (fire-and-forget).
-        hub.GetWorkspace().UpdateMeshNode(node =>
-        {
-            var thread = node.Content as MeshThread;
-            if (thread?.StreamingToolCalls is { Count: > 0 })
+        hub.GetWorkspace().GetMeshNodeStream().Take(1).Subscribe(
+            node =>
             {
-                foreach (var tc in thread.StreamingToolCalls.Where(
-                    tc => !string.IsNullOrEmpty(tc.DelegationPath) && tc.Result == null))
+                var thread = node.Content as MeshThread;
+                if (thread?.StreamingToolCalls is { Count: > 0 })
                 {
-                    logger?.LogInformation("[ThreadExec] Propagating cancel to sub-thread {SubThread}", tc.DelegationPath);
-                    hub.Post(new CancelThreadStreamRequest { ThreadPath = tc.DelegationPath! },
-                        o => o.WithTarget(new Address(tc.DelegationPath!)));
+                    foreach (var tc in thread.StreamingToolCalls.Where(
+                        tc => !string.IsNullOrEmpty(tc.DelegationPath) && tc.Result == null))
+                    {
+                        logger?.LogInformation("[ThreadExec] Propagating cancel to sub-thread {SubThread}", tc.DelegationPath);
+                        hub.Post(new CancelThreadStreamRequest { ThreadPath = tc.DelegationPath! },
+                            o => o.WithTarget(new Address(tc.DelegationPath!)));
+                    }
                 }
-            }
-            return node; // No state change needed
-        });
+            },
+            ex => logger?.LogWarning(ex,
+                "HandleCancelStream: read failed for {ThreadPath}", threadPath));
 
         // Cancel own execution via CancellationTokenSource (streaming runs on thread pool)
         if (ExecutionCancellations.TryGetValue(threadPath, out var cts))

@@ -5,6 +5,8 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -63,10 +65,16 @@ public static class ActivityLayoutAreas
                         .WithIconStart(FluentIcons.Dismiss())
                         .WithClickAction(ctx =>
                         {
-                            ctx.Host.Workspace.UpdateMeshNode(curr =>
+                            var cancelLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                                ?.CreateLogger("MeshWeaver.Graph.ActivityLayoutAreas");
+                            ctx.Host.Workspace.GetMeshNodeStream().Update(curr =>
                                 curr.Content is ActivityLog active
                                     ? curr with { Content = active with { RequestedStatus = ActivityStatus.Cancelled } }
-                                    : curr);
+                                    : curr).Subscribe(
+                                        _ => { },
+                                        ex => cancelLogger?.LogWarning(ex,
+                                            "ActivityLayoutAreas.Overview.Cancel: UpdateMeshNode failed for {Hub}",
+                                            ctx.Host.Hub.Address));
                             return Task.CompletedTask;
                         }));
                 }
@@ -117,10 +125,16 @@ public static class ActivityLayoutAreas
                 {
                     button = button.WithClickAction(ctx =>
                     {
-                        ctx.Host.Workspace.UpdateMeshNode(curr =>
+                        var cancelLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger("MeshWeaver.Graph.ActivityLayoutAreas");
+                        ctx.Host.Workspace.GetMeshNodeStream().Update(curr =>
                             curr.Content is ActivityLog l
                                 ? curr with { Content = l with { RequestedStatus = ActivityStatus.Cancelled } }
-                                : curr);
+                                : curr).Subscribe(
+                                    _ => { },
+                                    ex => cancelLogger?.LogWarning(ex,
+                                        "ActivityLayoutAreas.CancelButton: UpdateMeshNode failed for {Hub}",
+                                        ctx.Host.Hub.Address));
                         return Task.CompletedTask;
                     });
                 }
@@ -156,10 +170,16 @@ public static class ActivityLayoutAreas
                         .WithIconStart(FluentIcons.Dismiss())
                         .WithClickAction(ctx =>
                         {
-                            ctx.Host.Workspace.UpdateMeshNode(curr =>
+                            var cancelLogger = ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                                ?.CreateLogger("MeshWeaver.Graph.ActivityLayoutAreas");
+                            ctx.Host.Workspace.GetMeshNodeStream().Update(curr =>
                                 curr.Content is ActivityLog l
                                     ? curr with { Content = l with { RequestedStatus = ActivityStatus.Cancelled } }
-                                    : curr);
+                                    : curr).Subscribe(
+                                        _ => { },
+                                        ex => cancelLogger?.LogWarning(ex,
+                                            "ActivityLayoutAreas.Progress.Cancel: UpdateMeshNode failed for {Hub}",
+                                            ctx.Host.Hub.Address));
                             return Task.CompletedTask;
                         }));
                 }
