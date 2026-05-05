@@ -30,6 +30,19 @@ public interface IChatClientFactory
     bool IsPersistent => false;
 
     /// <summary>
+    /// Returns <c>true</c> when this factory can serve <paramref name="modelName"/>.
+    /// Used for factory selection per agent: the agent's <c>PreferredModel</c> drives
+    /// which factory creates its chat client. The default implementation honours the
+    /// legacy <see cref="Models"/> list — concrete factories should override with a
+    /// shape-aware predicate (e.g. "claude-*" → AzureClaude, "*" → AzureFoundry
+    /// gateway as catch-all) so routing works even when <see cref="Models"/> is empty
+    /// (which is the default after the model-config-from-env-vars cleanup).
+    /// </summary>
+    bool Supports(string modelName) =>
+        !string.IsNullOrEmpty(modelName) && Models.Any(m =>
+            string.Equals(m, modelName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// Creates a ChatClientAgent for the given configuration.
     /// </summary>
     /// <param name="config">The agent configuration</param>

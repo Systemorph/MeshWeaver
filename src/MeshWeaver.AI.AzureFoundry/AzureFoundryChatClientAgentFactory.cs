@@ -36,6 +36,18 @@ public class AzureFoundryChatClientAgentFactory(
 
     public override int Order => configuration.Order;
 
+    /// <summary>
+    /// Multi-model gateway. Serves OpenAI-shape names (gpt-*, o*-mini, etc.), Mistral,
+    /// DeepSeek, and any other model the deployment exposes through the /models path.
+    /// Excludes claude-* (which goes through the dedicated Anthropic endpoint via
+    /// <see cref="AzureClaudeChatClientAgentFactory"/>). This catch-all is what makes
+    /// agent-declared PreferredModel work without any Models[] enumeration on the
+    /// deployment side.
+    /// </summary>
+    public override bool Supports(string modelName) =>
+        !string.IsNullOrEmpty(modelName)
+        && !modelName.StartsWith("claude", StringComparison.OrdinalIgnoreCase);
+
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         if (string.IsNullOrEmpty(configuration.Endpoint))

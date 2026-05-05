@@ -34,6 +34,16 @@ public class AzureClaudeChatClientAgentFactory(
 
     public override int Order => configuration.Order;
 
+    /// <summary>
+    /// Claude factory: serves any model name starting with "claude" (case-insensitive).
+    /// Covers claude-sonnet-4-6, claude-opus-4-7, claude-haiku-4-5, etc. without requiring
+    /// the deployed Models[] to enumerate every variant — agents can pin any Claude model
+    /// declared in their PreferredModel and routing finds this factory.
+    /// </summary>
+    public override bool Supports(string modelName) =>
+        !string.IsNullOrEmpty(modelName)
+        && modelName.StartsWith("claude", StringComparison.OrdinalIgnoreCase);
+
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         if (string.IsNullOrEmpty(configuration.Endpoint))

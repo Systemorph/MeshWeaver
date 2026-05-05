@@ -53,6 +53,15 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// </summary>
     public abstract int Order { get; }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Default implementation delegates to <see cref="Models"/> for backward compatibility.
+    /// Concrete factories with shape-aware routing (e.g. "claude-*" prefix) should override.
+    /// </remarks>
+    public virtual bool Supports(string modelName) =>
+        !string.IsNullOrEmpty(modelName) && Models.Any(m =>
+            string.Equals(m, modelName, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>
     /// Creates a ChatClientAgent for the given configuration.
     /// </summary>

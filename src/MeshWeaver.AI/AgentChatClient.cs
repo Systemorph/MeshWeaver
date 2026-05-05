@@ -1283,9 +1283,15 @@ public class AgentChatClient : IAgentChat
                 .FirstOrDefault();
         }
 
-        // Find factory that has this model
+        // Ask each factory whether it serves this model. Concrete factories
+        // implement shape-aware predicates (e.g. AzureClaude → "claude-*",
+        // AzureFoundry → catch-all for non-Claude). Falling back on Models[]
+        // (the legacy mechanism) only matters for factories that haven't
+        // overridden Supports — and Models[] is empty by default now since
+        // model env-vars were removed in favour of agent-declared PreferredModel.
         var factory = chatClientFactories
-            .FirstOrDefault(f => f.Models.Contains(modelName));
+            .OrderBy(f => f.Order)
+            .FirstOrDefault(f => f.Supports(modelName));
 
         if (factory != null)
         {
@@ -1293,7 +1299,7 @@ public class AgentChatClient : IAgentChat
         }
 
         // Fallback: return first factory
-        logger.LogWarning("[AgentChatClient] Model {ModelName} not found in any factory, using first available", modelName);
+        logger.LogWarning("[AgentChatClient] Model {ModelName} not served by any factory, using first available", modelName);
         return chatClientFactories
             .OrderBy(f => f.Order)
             .FirstOrDefault();
