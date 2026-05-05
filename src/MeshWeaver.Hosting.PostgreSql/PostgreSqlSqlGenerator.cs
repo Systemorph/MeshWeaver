@@ -437,12 +437,16 @@ public class PostgreSqlSqlGenerator
 
     private static string GenerateDescendantsClause(string path, Dictionary<string, object> parameters)
     {
+        if (string.IsNullOrEmpty(path))
+            return ""; // descendants of root = all nodes in schema, no path filter needed
         parameters["@scopePrefix"] = $"{path}/";
         return "n.path LIKE @scopePrefix || '%'";
     }
 
     private static string GenerateSubtreeClause(string path, Dictionary<string, object> parameters)
     {
+        if (string.IsNullOrEmpty(path))
+            return ""; // subtree of root = all nodes in schema, no path filter needed
         parameters["@scopePath"] = path;
         parameters["@scopePrefix"] = $"{path}/";
         return "(n.path = @scopePath OR n.path LIKE @scopePrefix || '%')";

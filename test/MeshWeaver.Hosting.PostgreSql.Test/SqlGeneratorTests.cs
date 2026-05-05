@@ -178,6 +178,18 @@ public class SqlGeneratorTests
     }
 
     [Fact]
+    public void GenerateScopeClause_Descendants_EmptyBasePath_ReturnsNoFilter()
+    {
+        // basePath="" means "descendants of root" = all nodes in schema.
+        // Must NOT generate "n.path LIKE '/%'" which matches nothing.
+        var gen = new PostgreSqlSqlGenerator();
+        var (clause, parameters) = gen.GenerateScopeClause("", QueryScope.Descendants);
+
+        clause.Should().BeEmpty("descendants of root should return all nodes with no path constraint");
+        parameters.Should().BeEmpty();
+    }
+
+    [Fact]
     public void GenerateScopeClause_Subtree()
     {
         var gen = new PostgreSqlSqlGenerator();
@@ -186,6 +198,17 @@ public class SqlGeneratorTests
         clause.Should().Contain("n.path = @scopePath");
         clause.Should().Contain("n.path LIKE @scopePrefix || '%'");
         clause.Should().Contain("OR");
+    }
+
+    [Fact]
+    public void GenerateScopeClause_Subtree_EmptyBasePath_ReturnsNoFilter()
+    {
+        // basePath="" means "subtree of root" = all nodes in schema. Same fix as Descendants.
+        var gen = new PostgreSqlSqlGenerator();
+        var (clause, parameters) = gen.GenerateScopeClause("", QueryScope.Subtree);
+
+        clause.Should().BeEmpty("subtree of root should return all nodes with no path constraint");
+        parameters.Should().BeEmpty();
     }
 
     [Fact]

@@ -108,26 +108,23 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task AtText_ReturnsCurrentNodeAndGlobal()
+    public async Task AtText_StaysWithinPartition()
     {
         var orchestrator = GetOrchestrator();
 
-        // Search for "ACME" with a namespace context (Systemorph)
+        // Search for "ACME" with Systemorph as context — should NOT cross into ACME partition
         var batches = await orchestrator.GetCompletionsAsync("@ACME", "Systemorph").ToListAsync();
 
-        // Should get at least one batch
         batches.Should().NotBeEmpty("@ACME should return results");
         var allItems = batches.SelectMany(b => b.Items).ToList();
         allItems.Should().NotBeEmpty("should find ACME-related nodes");
 
-        // InsertText starts with '@' — providers produce relative refs (`@name/`)
-        // by design (see EnsureAbsoluteInsertText in ChatCompletionOrchestrator);
-        // chat resolves relative against current context. Just sanity-check the
-        // '@' marker rather than requiring absolute form.
+        // No Global batch — non-/ queries must stay within the current partition
+        batches.Should().NotContain(b => b.Category == "Global",
+            "non-/ queries must stay within the current partition; use @/ for cross-partition search");
+
         foreach (var item in allItems)
-        {
             item.InsertText.Should().StartWith("@", "every reference InsertText should start with '@'");
-        }
     }
 
     [Fact(Timeout = 30000)]
@@ -135,16 +132,16 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     {
         var orchestrator = GetOrchestrator();
 
-        // Search with context set to "ACME" — items under ACME should rank higher
+        // Search with context set to "ACME" — items under ACME should rank higher than partition-level results
         var batches = await orchestrator.GetCompletionsAsync("@Project", "ACME").ToListAsync();
 
         var nearbyBatch = batches.FirstOrDefault(b => b.Category == "Nearby");
-        var globalBatch = batches.FirstOrDefault(b => b.Category == "Global");
+        var partitionBatch = batches.FirstOrDefault(b => b.Category == "Partition");
 
-        if (nearbyBatch != null && globalBatch != null)
+        if (nearbyBatch != null && partitionBatch != null)
         {
-            nearbyBatch.CategoryPriority.Should().BeGreaterThan(globalBatch.CategoryPriority,
-                "Nearby batch should have higher priority than Global");
+            nearbyBatch.CategoryPriority.Should().BeGreaterThan(partitionBatch.CategoryPriority,
+                "Nearby (current node) should have higher priority than Partition-level results");
         }
     }
 
@@ -185,24 +182,26 @@ public class ChatCompletionOrchestratorTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task StreamsLocalBeforeGlobal()
+    public async Task StreamsNearbyBeforePartition()
     {
         var orchestrator = GetOrchestrator();
 
-        // With a current namespace, we should get Nearby batch before Global
+        // With a current namespace, Nearby (local hub) should arrive before Partition (broadening)
         var batchCategories = new System.Collections.Generic.List<string>();
         await foreach (var batch in orchestrator.GetCompletionsAsync("@Project", "ACME"))
         {
             batchCategories.Add(batch.Category);
         }
 
-        // If both exist, Nearby should come first (it's faster — no fan-out)
+        batchCategories.Should().NotContain("Global",
+            "non-/ queries must stay within the current partition");
+
         var nearbyIndex = batchCategories.IndexOf("Nearby");
-        var globalIndex = batchCategories.IndexOf("Global");
-        if (nearbyIndex >= 0 && globalIndex >= 0)
+        var partitionIndex = batchCategories.IndexOf("Partition");
+        if (nearbyIndex >= 0 && partitionIndex >= 0)
         {
-            nearbyIndex.Should().BeLessThan(globalIndex,
-                "Nearby (current node) should stream before Global (fan-out)");
+            nearbyIndex.Should().BeLessThan(partitionIndex,
+                "Nearby (current node) should stream before Partition (broadening)");
         }
     }
 }
