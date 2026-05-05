@@ -1,9 +1,7 @@
 ---
-NodeType: "Doc/Article"
-Title: "Executing Scripts via MCP"
+Name: "Executing Scripts via MCP"
 Abstract: "Run an executable Code node's C# through the kernel from any MCP client — how to mark a node IsExecutable, call ExecuteScript, and stream the run's ActivityLog for live progress."
 Icon: "Play"
-Published: "2026-04-23"
 Thumbnail: "images/agenticai.svg"
 Authors:
   - "Roland Buergi"

@@ -1,9 +1,7 @@
 ---
-NodeType: "Doc/Article"
-Title: "AI Provider Configuration"
+Name: "AI Provider Configuration"
 Abstract: "How AI provider keys, endpoints, and models are wired in MeshWeaver: one shared Azure Foundry key, parameterised endpoints, and per-agent model selection — no provider-specific model lists."
 Icon: "Settings"
-Published: "2026-05-05"
 Thumbnail: "images/agenticai.svg"
 Authors:
   - "Roland Buergi"

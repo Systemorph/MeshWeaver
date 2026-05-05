@@ -1,9 +1,7 @@
 ---
-NodeType: "Doc/Article"
-Title: "Blazor Data Binding — How to Bind a View Without Awaiting"
+Name: "Blazor Data Binding — How to Bind a View Without Awaiting"
 Abstract: "The canonical pattern for Blazor views in MeshWeaver: subscribe in sync lifecycle methods, never await on hub-touching operations. Hold the stream as a field, render from local state populated by the Subscribe callback, dispose on tear-down."
 Icon: "Link"
-Published: "2026-04-26"
 Tags:
   - "Architecture"
   - "Blazor"
