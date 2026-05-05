@@ -313,6 +313,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         // streaming snapshots can subscribe to ScanTopN themselves at the
         // observable surface (see BlazorAutocompleteService for the live-
         // databinding shape).
+        var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var snapshot = await StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
                 (partitionKey, p, partitionCt) =>
                 {
@@ -323,7 +324,26 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             .LastOrDefaultAsync()
             .ToTask(ct);
         foreach (var s in snapshot ?? Array.Empty<QuerySuggestion>())
+        {
+            nodePaths.Add(s.Path);
             yield return s;
+        }
+
+        // Surface partition keys themselves when basePath is empty AND the partition root
+        // has no MeshNode of its own. Postgres partitions are schemas (no MeshNode at the
+        // partition root), so the per-partition fan-out above would never match the
+        // partition NAME — `@/rbu` would miss `rbuergi`. We emit these AFTER the fan-out
+        // so that partitions which DO have a root MeshNode (e.g. file-system "ACME.json")
+        // keep their richer suggestion (icon, name, etc.) and aren't shadowed by a bare
+        // partition-key entry.
+        if (string.IsNullOrEmpty(basePath))
+        {
+            foreach (var s in EnumeratePartitionKeySuggestions(prefix, searchableSchemas, limit))
+            {
+                if (nodePaths.Contains(s.Path)) continue;
+                yield return s;
+            }
+        }
     }
 
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -363,6 +383,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             AutocompleteMode.RelevanceFirst => AutocompleteByScoreThenPathLength,
             _ => AutocompleteByPathLengthThenScore,
         };
+        var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var snapshot = await StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
                 (partitionKey, p, partitionCt) =>
                 {
@@ -373,7 +394,63 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             .LastOrDefaultAsync()
             .ToTask(ct);
         foreach (var s in snapshot ?? Array.Empty<QuerySuggestion>())
+        {
+            nodePaths.Add(s.Path);
             yield return s;
+        }
+
+        // Surface partition keys themselves when basePath is empty AND the partition root
+        // has no MeshNode of its own (see the other overload for rationale).
+        if (string.IsNullOrEmpty(basePath))
+        {
+            foreach (var s in EnumeratePartitionKeySuggestions(prefix, searchableSchemas, limit))
+            {
+                if (nodePaths.Contains(s.Path)) continue;
+                yield return s;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Yields partition keys themselves as <see cref="QuerySuggestion"/>s, filtered by
+    /// <paramref name="prefix"/> (case-insensitive) and <paramref name="searchableSchemas"/>.
+    /// Used when <c>basePath</c> is empty — the fan-out only matches MeshNodes inside
+    /// each partition, but the partition root has no MeshNode in Postgres-backed setups,
+    /// so the partition NAME would otherwise never appear as a suggestion.
+    /// Score is boosted above per-node suggestions so the partition list ranks at the top.
+    /// </summary>
+    private IEnumerable<QuerySuggestion> EnumeratePartitionKeySuggestions(
+        string prefix,
+        HashSet<string>? searchableSchemas,
+        int limit)
+    {
+        var normalizedPrefix = (prefix ?? "").Trim();
+        var matches = new List<QuerySuggestion>();
+
+        foreach (var (key, _) in _router.QueryProviders)
+        {
+            if (searchableSchemas != null && !searchableSchemas.Contains(key))
+                continue;
+
+            double score;
+            if (normalizedPrefix.Length == 0)
+                score = 100;
+            else if (key.StartsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                score = 100 - (key.Length - normalizedPrefix.Length);
+            else if (key.Contains(normalizedPrefix, StringComparison.OrdinalIgnoreCase))
+                score = 50;
+            else
+                continue;
+
+            // Boost above per-node matches so the partition list always sits at the top.
+            score += 1000;
+            matches.Add(new QuerySuggestion(key, key, "Partition", score, null));
+        }
+
+        return matches
+            .OrderByDescending(s => s.Score)
+            .ThenBy(s => s.Name)
+            .Take(limit);
     }
 
     /// <summary>
@@ -471,90 +548,101 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 
-        // Fan out to all partitions (known + newly discovered), merge observables
-        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        // Fan out to all partitions (known + newly discovered), merge observables.
+        // Use synchronous Observable.Create so no TaskScheduler is captured at
+        // subscribe-time (Orleans grain handlers deadlock on captured schedulers).
+        return Observable.Create<QueryResultChange<T>>(observer =>
         {
-            // Collect all providers with their keys: already-known + newly discovered
-            var allProviders = new List<(string Key, IMeshQueryProvider Provider)>(
-                _router.QueryProviders.Select(kvp => (kvp.Key, kvp.Value)));
-            await foreach (var entry in _router.DiscoverNewProvidersAsync(ct))
-                allProviders.Add(entry);
+            var outerDisposables = new CompositeDisposable();
+            var cts = new CancellationTokenSource();
+            outerDisposables.Add(cts);
 
-            if (allProviders.Count == 0)
-            {
-                observer.OnCompleted();
-                return Disposable.Empty;
-            }
+            // DiscoverNewProviders returns IObservable<T> (pure reactive, no await).
+            // Aggregate seeds with already-known providers and appends newly-discovered ones,
+            // emitting the full combined list when discovery completes.
+            var collectProviders = _router.DiscoverNewProviders(cts.Token)
+                .Aggregate(
+                    _router.QueryProviders
+                        .Select(kvp => (Key: kvp.Key, Provider: kvp.Value))
+                        .ToList(),
+                    (list, entry) => { list.Add(entry); return list; });
 
-            if (allProviders.Count == 1)
-            {
-                var (_, prov) = allProviders[0];
-                // Don't inject DefaultPath — schema isolation already scopes data per partition,
-                // and lowercase partition keys don't match proper-cased actual paths.
-                var scopedReq = string.IsNullOrEmpty(effectivePath)
-                    ? request with { Query = fanOutQuery }
-                    : request;
-                return prov.ObserveQuery<T>(scopedReq, options).Subscribe(observer);
-            }
-
-            var observables = allProviders
-                .Select(entry =>
+            outerDisposables.Add(collectProviders.Subscribe(
+                allProviders =>
                 {
-                    var scopedReq = string.IsNullOrEmpty(effectivePath)
-                        ? request with { Query = fanOutQuery }
-                        : request;
-                    return entry.Provider.ObserveQuery<T>(scopedReq, options);
-                })
-                .ToList();
-
-            var initialItems = new List<T>();
-            var initialCount = 0;
-            var initialTarget = observables.Count;
-            var gate = new object();
-            var fanOutParsed = _parser.Parse(fanOutQuery);
-            var globalLimit = request.Limit ?? fanOutParsed.Limit;
-
-            var subscriptions = new List<IDisposable>();
-
-            foreach (var obs in observables)
-            {
-                var sub = obs.Subscribe(
-                    change =>
+                    if (allProviders.Count == 0)
                     {
-                        if (change.ChangeType == QueryChangeType.Initial)
+                        observer.OnCompleted();
+                        return;
+                    }
+
+                    if (allProviders.Count == 1)
+                    {
+                        var (_, prov) = allProviders[0];
+                        // Don't inject DefaultPath — schema isolation already scopes data
+                        // per partition, and lowercase keys don't match proper-cased paths.
+                        var scopedReq = string.IsNullOrEmpty(effectivePath)
+                            ? request with { Query = fanOutQuery }
+                            : request;
+                        outerDisposables.Add(prov.ObserveQuery<T>(scopedReq, options).Subscribe(observer));
+                        return;
+                    }
+
+                    var observables = allProviders
+                        .Select(entry =>
                         {
-                            lock (gate)
+                            var scopedReq = string.IsNullOrEmpty(effectivePath)
+                                ? request with { Query = fanOutQuery }
+                                : request;
+                            return entry.Provider.ObserveQuery<T>(scopedReq, options);
+                        })
+                        .ToList();
+
+                    var initialItems = new List<T>();
+                    var initialCount = 0;
+                    var initialTarget = observables.Count;
+                    var gate = new object();
+                    var fanOutParsed = _parser.Parse(fanOutQuery);
+                    var globalLimit = request.Limit ?? fanOutParsed.Limit;
+
+                    foreach (var obs in observables)
+                    {
+                        outerDisposables.Add(obs.Subscribe(
+                            change =>
                             {
-                                initialItems.AddRange(change.Items);
-                                initialCount++;
-
-                                if (initialCount == initialTarget)
+                                if (change.ChangeType == QueryChangeType.Initial)
                                 {
-                                    // Re-sort merged results across all partitions
-                                    IEnumerable<T> merged = initialItems;
-                                    if (fanOutParsed.OrderBy != null)
+                                    lock (gate)
                                     {
-                                        var evaluator = new QueryEvaluator();
-                                        merged = evaluator.OrderResults(merged, fanOutParsed.OrderBy);
+                                        initialItems.AddRange(change.Items);
+                                        initialCount++;
+
+                                        if (initialCount == initialTarget)
+                                        {
+                                            IEnumerable<T> merged = initialItems;
+                                            if (fanOutParsed.OrderBy != null)
+                                            {
+                                                var evaluator = new QueryEvaluator();
+                                                merged = evaluator.OrderResults(merged, fanOutParsed.OrderBy);
+                                            }
+                                            if (globalLimit.HasValue)
+                                                merged = merged.Take(globalLimit.Value);
+
+                                            observer.OnNext(change with { Items = merged.ToList() });
+                                        }
                                     }
-                                    if (globalLimit.HasValue)
-                                        merged = merged.Take(globalLimit.Value);
-
-                                    observer.OnNext(change with { Items = merged.ToList() });
                                 }
-                            }
-                        }
-                        else
-                        {
-                            observer.OnNext(change);
-                        }
-                    },
-                    ex => observer.OnError(ex));
+                                else
+                                {
+                                    observer.OnNext(change);
+                                }
+                            },
+                            ex => observer.OnError(ex)));
+                    }
+                },
+                ex => observer.OnError(ex)));
 
-                subscriptions.Add(sub);
-            }
-
-            return new CompositeDisposable(subscriptions);
+            return outerDisposables;
         });
     }
 
