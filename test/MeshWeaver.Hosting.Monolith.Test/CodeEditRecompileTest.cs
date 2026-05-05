@@ -133,10 +133,16 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var v1Html = await ReadOverviewAsync(InstancePath, ct);
         v1Html.Should().Contain("MARKER_V1", "V1 release must be served");
 
-        // 6. Modify the source to V2.
-        var codeNode = await FindNodeAsync($"{TestPartition}/CodeEditType/Source/code", ct);
-        codeNode.Should().NotBeNull();
-        await NodeFactory.UpdateNode(codeNode! with
+        // 6. Modify the source to V2. Live remote stream — path is known, no
+        // index lag (per CqrsAndContentAccess.md).
+        var sourceClient = GetClient(c => c.AddData());
+        var codeNode = await sourceClient.GetWorkspace()
+            .GetMeshNodeStream($"{TestPartition}/CodeEditType/Source/code")
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
+        await NodeFactory.UpdateNode(codeNode with
         {
             Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" }
         });
