@@ -81,7 +81,7 @@ public record PatchDataChangeRequest(
 ) : JsonChange(StreamId, Version, Change, ChangeType, ChangedBy);
 
 [RequiresPermission(Permission.Read)]
-public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<DataChangedEvent>
+public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<SubscribeAck>
 {
     public Address Subscriber { get; init; } = null!;
 
@@ -93,6 +93,14 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : 
     /// </summary>
     public string? Identity { get; init; }
 }
+
+/// <summary>
+/// Acknowledgement sent by the owner hub after a SubscribeRequest is processed.
+/// Closes the hub.Observe(subscribeRequest) pending callback immediately so it
+/// does not leak into the quiescing check (0.5 s drain budget at test teardown).
+/// DataChangedEvents flow independently via RouteStreamMessage.
+/// </summary>
+public record SubscribeAck;
 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)
