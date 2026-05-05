@@ -85,11 +85,10 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 )
             )
             .WithServices(services => services.AddScoped(CreateAreaStream))
-            .WithInitialization((hub, _) =>
+            .WithInitialization(hub =>
             {
                 DisposeOnTimeout(hub);
                 StartActivityControlPlane(hub);
-                return Task.CompletedTask;
             })
             .WithHandler<SubmitCodeRequest>(ForwardSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(ForwardCancelRequest);
