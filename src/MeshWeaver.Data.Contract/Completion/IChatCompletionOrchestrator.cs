@@ -21,7 +21,8 @@ public record CompletionBatch(
 /// 3) Partition drill-down (when a partition is selected)
 /// 4) Global fan-out across all partitions — lowest priority
 ///
-/// Results stream as IAsyncEnumerable so fast local results arrive first.
+/// Returns an <see cref="IObservable{T}"/> so consumers can detect stream completion
+/// (e.g., to hide a "loading" spinner once all providers have finished).
 /// </summary>
 public interface IChatCompletionOrchestrator
 {
@@ -29,12 +30,13 @@ public interface IChatCompletionOrchestrator
     /// Streams completion batches as they become available.
     /// Batches arrive in order of readiness (fastest first), each with a priority for sorting.
     /// The caller should merge items from all batches, sorting by CategoryPriority then item Priority.
+    ///
+    /// <para>Subscribers receive each <see cref="CompletionBatch"/> via <c>OnNext</c> as a
+    /// producer finishes. <c>OnCompleted</c> fires when all producers (current-node hub,
+    /// subtree query, partition fan-out, broadening) have completed — the chat UI uses this
+    /// to hide its loading indicator.</para>
     /// </summary>
     /// <param name="query">The raw query string including @ prefix (e.g., "@/", "@MyFile", "@/ACME/art").</param>
     /// <param name="currentNamespace">The current node namespace from INavigationService.</param>
-    /// <param name="ct">Cancellation token — cancelled when user types more.</param>
-    IAsyncEnumerable<CompletionBatch> GetCompletionsAsync(
-        string query,
-        string? currentNamespace,
-        CancellationToken ct = default);
+    IObservable<CompletionBatch> GetCompletions(string query, string? currentNamespace);
 }
