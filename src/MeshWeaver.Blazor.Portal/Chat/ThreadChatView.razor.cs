@@ -148,24 +148,30 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var ctx = _currentNavContext;
             if (ctx is not null && !string.IsNullOrEmpty(ctx.PrimaryPath) && ctx.Path != "chat")
             {
-                initialContext = ctx.PrimaryPath;
-                attachments.Add(new AttachmentInfo(ctx.PrimaryPath, ctx.Node?.Name ?? ctx.Node?.Id, IsContext: true));
+                var normalized = NormalizeContextPath(ctx.PrimaryPath);
+                initialContext = normalized;
+                if (!attachments.Any(a => a.IsContext && a.Path == normalized))
+                    attachments.Add(new AttachmentInfo(normalized, ctx.Node?.Name ?? ctx.Node?.Id, IsContext: true));
             }
         }
         else
         {
             // ViewModel.InitialContext passed the raw path (e.g., side panel with ctx.PrimaryPath).
             // Look up the display name via GetDataRequest + RegisterCallback — never await.
-            var capturedContext = initialContext;
-            attachments.Add(new AttachmentInfo(capturedContext, null, IsContext: true));
-            RequestDisplayName(capturedContext, name => InvokeAsync(() =>
+            var capturedContext = NormalizeContextPath(initialContext);
+            initialContext = capturedContext;
+            if (!attachments.Any(a => a.IsContext && a.Path == capturedContext))
             {
-                if (_isDisposed) return;
-                var idx = attachments.FindIndex(a => a.IsContext && a.Path == capturedContext);
-                if (idx >= 0)
-                    attachments[idx] = attachments[idx] with { DisplayName = name };
-                StateHasChanged();
-            }));
+                attachments.Add(new AttachmentInfo(capturedContext, null, IsContext: true));
+                RequestDisplayName(capturedContext, name => InvokeAsync(() =>
+                {
+                    if (_isDisposed) return;
+                    var idx = attachments.FindIndex(a => a.IsContext && a.Path == capturedContext);
+                    if (idx >= 0)
+                        attachments[idx] = attachments[idx] with { DisplayName = name };
+                    StateHasChanged();
+                }));
+            }
         }
 
         try
@@ -569,7 +575,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (_isDisposed) return;
         if (ctx is null || string.IsNullOrEmpty(ctx.PrimaryPath) || ctx.Path == "chat") return;
 
-        var newPath = ctx.PrimaryPath;
+        var newPath = NormalizeContextPath(ctx.PrimaryPath);
         if (newPath == initialContext) return;
 
         var name = ctx.Node?.Name ?? ctx.Node?.Id;
@@ -587,6 +593,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             attachments.Insert(0, new AttachmentInfo(newPath, name, IsContext: true));
             StateHasChanged();
         });
+    }
+
+    /// <summary>
+    /// Normalizes a node path by stripping any satellite-partition suffix
+    /// (segments starting with <c>_</c> such as <c>_Thread</c>, <c>_Comment</c>,
+    /// <c>_Access</c>, <c>_Activity</c>, <c>_Approval</c>, <c>_Tracking</c>).
+    /// Returns everything before the first such segment; returns the path
+    /// unchanged when no satellite segment is present.
+    /// </summary>
+    private static string NormalizeContextPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return path;
+
+        var segments = path.Split('/');
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (segments[i].StartsWith('_'))
+                return string.Join('/', segments, 0, i);
+        }
+        return path;
     }
 
     private void OnMessageTextChanged(string value)
@@ -834,11 +861,30 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             string.Compare(a.SortKey ?? "", b.SortKey ?? "", StringComparison.Ordinal));
 
     /// <summary>
+    /// True while a completion stream is in flight. Drives the chat input's loading
+    /// indicator: <c>SetCompletionsInflight(true)</c> on subscription, <c>false</c> when
+    /// the orchestrator's <see cref="IObservable{T}"/> emits <c>OnCompleted</c>.
+    /// </summary>
+    private bool _isCompletingInflight;
+
+    /// <summary>True while a chat-completion stream has subscribers but hasn't yet completed.</summary>
+    public bool IsCompletingInflight => _isCompletingInflight;
+
+    /// <summary>
     /// Streams top-N completion snapshots from <see cref="IChatCompletionOrchestrator"/>.
     /// The orchestrator yields batches as providers finish (fast local first, remote later);
-    /// each item flows through <see cref="ScanTopN"/>, which folds it into a sorted
-    /// snapshot. Monaco subscribes once per query and pushes each snapshot to the suggest
-    /// widget — no first-batch-then-collect-remaining bookkeeping, no Task, no await.
+    /// each item flows through <see cref="ObservableTopNExtensions.ScanTopN"/>, which folds it
+    /// into a sorted snapshot. Monaco subscribes once per query and pushes each snapshot to
+    /// the suggest widget — pure reactive, no Task, no await, no IAsyncEnumerable bridge.
+    ///
+    /// <para>The stream is wrapped in <c>Defer</c> + <c>Finally</c> so we know when it
+    /// starts and when it completes (all providers done). That toggles
+    /// <see cref="_isCompletingInflight"/> which drives the chat-input spinner via
+    /// <c>StateHasChanged</c>.</para>
+    ///
+    /// <para><c>DistinctUntilChanged</c> over the snapshot prevents redundant push-to-JS
+    /// when a producer finishes without changing the visible top-N (e.g., a partition
+    /// fan-out yields items that all rank below the existing top-N).</para>
     /// </summary>
     private IObservable<IReadOnlyList<CompletionItem>> GetCompletions(string query)
     {
@@ -847,17 +893,44 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         var currentAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
 
-        return CompletionOrchestrator.GetCompletionsAsync(query, currentAddress)
-            .ToObservableSequence()
-            .SelectMany(batch => batch.Items
-                .Select(item => AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority)))
-            .ScanTopN(CompletionTopN, CompletionBySortKey)
-            .Catch<IReadOnlyList<CompletionItem>, Exception>(ex =>
-            {
-                Logger.LogError(ex, "Error streaming completions for query: {Query}", query);
-                return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
-            });
+        return Observable.Defer(() =>
+        {
+            SetCompletionsInflight(true);
+            return CompletionOrchestrator.GetCompletions(query, currentAddress)
+                .SelectMany(batch => batch.Items
+                    .Select(item => AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority)))
+                .ScanTopN(CompletionTopN, CompletionBySortKey)
+                .DistinctUntilChanged(SnapshotKey)
+                .Catch<IReadOnlyList<CompletionItem>, Exception>(ex =>
+                {
+                    Logger.LogError(ex, "Error streaming completions for query: {Query}", query);
+                    return Observable.Return<IReadOnlyList<CompletionItem>>(Array.Empty<CompletionItem>());
+                })
+                .Finally(() => SetCompletionsInflight(false));
+        });
     }
+
+    /// <summary>
+    /// Toggles the chat-input's "loading" flag and re-renders. Idempotent — only
+    /// fires <c>StateHasChanged</c> when the value actually changes (the
+    /// <see cref="IObservable{T}"/>-equivalent is a manual <c>DistinctUntilChanged</c>
+    /// guard at the sink).
+    /// </summary>
+    private void SetCompletionsInflight(bool inflight)
+    {
+        if (_isCompletingInflight == inflight) return;
+        _isCompletingInflight = inflight;
+        if (!_isDisposed)
+            InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Stable key for a completion-snapshot. Two consecutive snapshots collapse to a
+    /// single push when their items (and their order) are identical — saves redundant
+    /// JS-interop pushes when a producer finishes without changing the visible top-N.
+    /// </summary>
+    private static string SnapshotKey(IReadOnlyList<CompletionItem> items) =>
+        string.Join('', items.Select(i => i.SortKey ?? i.InsertText ?? i.Label ?? ""));
 
     private static CompletionItem AutocompleteToCompletion(
         Data.Completion.AutocompleteItem item, string category, int categoryPriority)

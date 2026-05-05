@@ -61,6 +61,25 @@ public class AgentChatClient : IAgentChat
         chatClientFactories = serviceProvider.GetServices<IChatClientFactory>().ToImmutableList();
     }
 
+    /// <summary>
+    /// Strips any trailing satellite segments (segments starting with '_', e.g. "_Thread/&lt;slug&gt;",
+    /// "_Comment/&lt;id&gt;") from a context path so the agent reasons about the main node, not the
+    /// satellite. Returns the input unchanged when null/empty or when no '_' segment is present.
+    /// </summary>
+    private static string? NormalizeContextPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return path;
+
+        var segments = path.Split('/');
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (segments[i].StartsWith('_'))
+                return string.Join('/', segments, 0, i);
+        }
+        return path;
+    }
+
     public AgentContext? Context { get; private set; }
 
     /// <inheritdoc />
@@ -833,6 +852,14 @@ public class AgentChatClient : IAgentChat
 
     public void SetContext(AgentContext? applicationContext)
     {
+        // Normalize at the boundary: strip satellite segments (e.g. "_Thread/<slug>") so
+        // the agent reasons about the main context node, not the thread/comment under it.
+        if (applicationContext is { Path: { Length: > 0 } p })
+        {
+            var normalized = NormalizeContextPath(p);
+            if (!string.Equals(normalized, p, StringComparison.Ordinal))
+                applicationContext = applicationContext with { Path = normalized };
+        }
         Context = applicationContext;
     }
 
@@ -848,6 +875,9 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     public IObservable<AgentChatClient> Initialize(string? contextPath, string? modelName = null)
     {
+        // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
+        // their main-node path before any downstream query/cache key uses them.
+        contextPath = NormalizeContextPath(contextPath);
         currentModelName = modelName;
         lastLoadedContextPath = contextPath;
 
@@ -907,6 +937,9 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     public Task InitializeAsync(string? contextPath, string? modelName = null)
     {
+        // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
+        // their main-node path before any downstream query/cache key uses them.
+        contextPath = NormalizeContextPath(contextPath);
         currentModelName = modelName;
         lastLoadedContextPath = contextPath;
 
