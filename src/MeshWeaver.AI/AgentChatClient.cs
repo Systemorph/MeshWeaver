@@ -1136,16 +1136,23 @@ public class AgentChatClient : IAgentChat
 
         if (agentsInitialized) return;
 
-        var factory = GetFactoryForModel(currentModelName);
-        if (factory == null)
+        // Per-agent factory selection. The agent's PreferredModel is the source
+        // of truth (see ChatClientAgentFactory subclasses' CreateChatClient
+        // precedence). currentModelName (the chat dropdown selection) is only
+        // used when the agent doesn't pin a model. Selecting the factory for
+        // each agent's effective model ensures we don't try to serve, e.g.,
+        // an OpenAI model on an Azure Foundry factory.
+        // isPersistentFactory tracks the default factory's persistence mode for
+        // legacy paths that haven't been threaded through per-agent.
+        var defaultFactory = GetFactoryForModel(currentModelName);
+        if (defaultFactory == null)
         {
             logger.LogWarning("[AgentChatClient] No factory can serve model: {ModelName}", currentModelName);
             return;
         }
-
-        isPersistentFactory = factory.IsPersistent;
-        logger.LogInformation("[AgentChatClient] Using factory {FactoryName} for model {ModelName} (persistent={IsPersistent})",
-            factory.Name, currentModelName ?? "default", isPersistentFactory);
+        isPersistentFactory = defaultFactory.IsPersistent;
+        logger.LogInformation("[AgentChatClient] Default factory {FactoryName} for model {ModelName} (persistent={IsPersistent}); agents may select per-agent factories via PreferredModel",
+            defaultFactory.Name, currentModelName ?? "default", isPersistentFactory);
 
         var configs = loadedAgents.Select(a => a.AgentConfiguration).ToImmutableList();
         var createdAgents = ImmutableDictionary<string, ChatClientAgent>.Empty;
@@ -1153,7 +1160,9 @@ public class AgentChatClient : IAgentChat
 
         foreach (var agentConfig in orderedConfigs)
         {
-            var agent = factory.CreateAgent(agentConfig, this, createdAgents, configs, currentModelName);
+            var effectiveModel = agentConfig.PreferredModel ?? currentModelName;
+            var factory = GetFactoryForModel(effectiveModel) ?? defaultFactory;
+            var agent = factory.CreateAgent(agentConfig, this, createdAgents, configs, effectiveModel);
             createdAgents = createdAgents.SetItem(agentConfig.Id, agent);
             agents = agents.SetItem(agentConfig.Id, agent);
         }
@@ -1161,7 +1170,9 @@ public class AgentChatClient : IAgentChat
         var cyclicAgents = FindCyclicDelegations(configs);
         foreach (var agentConfig in cyclicAgents)
         {
-            var updatedAgent = factory.CreateAgent(agentConfig, this, createdAgents, configs, currentModelName);
+            var effectiveModel = agentConfig.PreferredModel ?? currentModelName;
+            var factory = GetFactoryForModel(effectiveModel) ?? defaultFactory;
+            var updatedAgent = factory.CreateAgent(agentConfig, this, createdAgents, configs, effectiveModel);
             createdAgents = createdAgents.SetItem(agentConfig.Id, updatedAgent);
             agents = agents.SetItem(agentConfig.Id, updatedAgent);
         }

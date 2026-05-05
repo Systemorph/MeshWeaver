@@ -42,9 +42,9 @@ public class AzureClaudeChatClientAgentFactory(
         if (string.IsNullOrEmpty(configuration.ApiKey))
             throw new InvalidOperationException("ApiKey is required in AzureClaudeConfiguration");
 
-        // Use CurrentModelName if set, fall back to agent's preferred model, otherwise use first configured model
-        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
-            : !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
+        // Agent's PreferredModel wins; CurrentModelName fills in only when the agent doesn't pin one.
+        var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
+            : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : configuration.Models.FirstOrDefault();
 
         if (string.IsNullOrEmpty(modelName))

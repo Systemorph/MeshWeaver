@@ -44,9 +44,14 @@ public class AzureOpenAIChatClientAgentFactory(
         if (string.IsNullOrEmpty(credentials.ApiKey))
             throw new InvalidOperationException("Azure OpenAI API key is required in AI configuration");
 
-        // Use CurrentModelName if set, fall back to agent's preferred model, otherwise use first configured model
-        var modelName = !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
-            : !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
+        // Agent's PreferredModel wins. CurrentModelName (the globally selected
+        // model in the chat dropdown) is only used when the agent doesn't pin a
+        // model; first configured model fills in as a last resort. Models
+        // declared in agent definitions are the source of truth — see
+        // Doc/AI/* — so a globally selected model never overrides an
+        // agent-declared one.
+        var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
+            : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : credentials.Models.FirstOrDefault();
 
         if (string.IsNullOrEmpty(modelName))

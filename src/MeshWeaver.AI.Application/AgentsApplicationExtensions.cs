@@ -24,14 +24,12 @@ public static class AgentsApplicationExtensions
         => application
             .AddAIViews()
             .WithServices(services => services
-                // Model provider - uses chat client factory if available
+                // Model provider — aggregates models across every registered
+                // IChatClientFactory so the dropdown matches what the runtime
+                // can actually serve. Single-factory registration was the
+                // source of stale model names showing in prod.
                 .AddScoped<IAutocompleteProvider>(sp =>
-                {
-                    var chatClientFactory = sp.GetService<IChatClientFactory>();
-                    if (chatClientFactory != null)
-                        return new ModelAutocompleteProvider(chatClientFactory);
-                    return new ModelAutocompleteProvider();
-                })
+                    new ModelAutocompleteProvider(sp.GetServices<IChatClientFactory>()))
                 // Mesh catalog provider
                 .AddScoped<IAutocompleteProvider>(sp =>
                     new MeshCatalogAutocompleteProvider(sp)
