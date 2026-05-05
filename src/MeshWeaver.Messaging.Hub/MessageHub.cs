@@ -501,7 +501,9 @@ public sealed class MessageHub : IMessageHub
         var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target);
         Post(r, opts => options(opts).WithMessageId(messageId));
         return RestoreUserContextOnEmission(
-            ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+            WrapWithCancelOnDispose(
+                ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                messageId, subject),
             capturedCtx);
     }
 

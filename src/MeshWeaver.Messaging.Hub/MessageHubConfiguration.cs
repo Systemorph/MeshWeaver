@@ -260,8 +260,14 @@ public record MessageHubConfiguration
                 // because every SetCurrentRequest started getting rejected.
                 // For those hubs, restore hub-self-impersonation as the
                 // fallback identity. Tests pin both branches.
-                if (syncPipeline.Hub.Address.Type == AddressExtensions.MeshType)
+                if (syncPipeline.Hub.Address.Type == AddressExtensions.MeshType
+                    || syncPipeline.Hub.Address.Type == "sync")
                 {
+                    // mesh hubs: fabricating hub-address identity would let a bare
+                    // "mesh/{guid}" principal match AccessAssignments — deny silently.
+                    // sync hubs: the address is an implementation detail (stream/client id),
+                    // not a real principal. Fabricating it breaks identity-isolation tests
+                    // (StreamUpdate_WithoutAsyncLocalIdentity_DelegateSeesNullContext).
                     logger?.LogWarning(
                         "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
                         "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +

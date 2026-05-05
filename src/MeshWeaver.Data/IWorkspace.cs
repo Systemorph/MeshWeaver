@@ -50,7 +50,7 @@ public interface IWorkspace : IAsyncDisposable
 
 
     internal void SubscribeToClient(
-        SubscribeRequest request
+        IMessageDelivery<SubscribeRequest> request
     );
 
     void AddDisposable(IDisposable disposable);

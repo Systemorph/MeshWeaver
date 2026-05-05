@@ -141,9 +141,11 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         // StackControl with one NamedArea before the per-area children resolve.
         // Without the .Areas.Count predicate the test races the placeholder on
         // CI and fast-fails (~400ms) while the full render arrives a beat later.
+        // 50 s: accounts for first-activation compile time on slow CI agents
+        // when LocalAnalysis DLL isn't in the session cache yet.
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(20))
+            .Timeout(TimeSpan.FromSeconds(50))
             .FirstAsync(x => x is StackControl s && s.Areas.Count >= 2);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");

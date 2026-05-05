@@ -661,134 +661,126 @@ internal class InMemoryMeshQuery(
         JsonSerializerOptions options,
         bool useSecurityFilter)
     {
-        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        // Use the synchronous Observable.Create overload so no TaskScheduler is
+        // captured at subscribe-time. Observable.Create(async ...) captures the
+        // caller's scheduler; when that caller is an Orleans grain handler the
+        // continuation deadlocks against the grain's single-threaded scheduler.
+        return Observable.Create<QueryResultChange<T>>(observer =>
         {
             var parsedQuery = _parser.Parse(request.Query);
-
-            // Determine the effective path and scope
             var effectivePath = parsedQuery.Path;
             var effectiveScope = parsedQuery.Scope;
             if (string.IsNullOrEmpty(effectivePath))
             {
                 effectivePath = request.DefaultPath ?? "";
                 if (parsedQuery.Scope == QueryScope.Exact)
-                {
                     effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
-                }
             }
             var normalizedBasePath = NormalizePath(effectivePath);
-
-            // Track current result set for detecting changes
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            var disposables = new CompositeDisposable();
+            var cts = new CancellationTokenSource();
+            disposables.Add(cts);
 
-            IAsyncEnumerable<object> QueryStream(CancellationToken token) =>
-                useSecurityFilter ? QueryAsync(request, options, token) : QueryCoreAsync(request, options, token);
+            IAsyncEnumerable<object> QueryStream(CancellationToken ct) =>
+                useSecurityFilter ? QueryAsync(request, options, ct) : QueryCoreAsync(request, options, ct);
 
-            // Emit initial results
-            try
-            {
-                var initialItems = new List<T>();
-                await foreach (var item in QueryStream(ct))
+            // Enumerates the IAsyncEnumerable on a fresh thread-pool thread so that
+            // no custom TaskScheduler (Orleans, ASP.NET) is captured by the async
+            // state machine. Task.Factory.StartNew with TaskScheduler.Default is the
+            // explicit form of "run on thread pool, no inherited scheduler".
+            IObservable<List<(string? Path, T Item)>> RunQuery(CancellationToken ct) =>
+                Observable.Create<List<(string?, T)>>(inner =>
                 {
-                    if (item is T typedItem)
+                    Task.Factory.StartNew(async () =>
                     {
-                        initialItems.Add(typedItem);
-                        var itemPath = GetItemPath(item);
-                        if (!string.IsNullOrEmpty(itemPath))
-                            currentItems[itemPath] = typedItem;
-                    }
-                }
-
-                var initialChange = new QueryResultChange<T>
-                {
-                    ChangeType = QueryChangeType.Initial,
-                    Items = initialItems,
-                    Query = parsedQuery,
-                    Version = Interlocked.Increment(ref _version),
-                    Timestamp = DateTimeOffset.UtcNow
-                };
-                observer.OnNext(initialChange);
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-                return Disposable.Empty;
-            }
-
-            // If no change notifier is available, complete after initial results
-            if (changeNotifier == null)
-            {
-                observer.OnCompleted();
-                return Disposable.Empty;
-            }
-
-            // Subscribe to changes with debouncing
-            var changeBuffer = new Subject<DataChangeNotification>();
-            var subscription = new CompositeDisposable();
-
-            // Subscribe to the change notifier and filter by path/scope
-            var notifierSubscription = changeNotifier
-                .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
-                .Subscribe(changeBuffer);
-            subscription.Add(notifierSubscription);
-
-            // Process debounced changes
-            var debounceSubscription = changeBuffer
-                .Buffer(DefaultDebounceInterval)
-                .Where(batch => batch.Count > 0)
-                .Subscribe(async batch =>
-                {
-                    try
-                    {
-                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct, useSecurityFilter);
-                    }
-                    catch (Exception ex)
-                    {
-                        observer.OnError(ex);
-                    }
+                        var results = new List<(string?, T)>();
+                        try
+                        {
+                            await foreach (var item in QueryStream(ct))
+                            {
+                                if (item is T typed)
+                                    results.Add((GetItemPath(item), typed));
+                            }
+                            inner.OnNext(results);
+                            inner.OnCompleted();
+                        }
+                        catch (OperationCanceledException) { inner.OnCompleted(); }
+                        catch (Exception ex) { inner.OnError(ex); }
+                    }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
+                    return Disposable.Empty;
                 });
-            subscription.Add(debounceSubscription);
-            subscription.Add(changeBuffer);
 
-            return subscription;
+            disposables.Add(
+                RunQuery(cts.Token).Subscribe(
+                    initialResults =>
+                    {
+                        var initialItems = new List<T>();
+                        foreach (var (path, item) in initialResults)
+                        {
+                            initialItems.Add(item);
+                            if (!string.IsNullOrEmpty(path))
+                                currentItems[path] = item;
+                        }
+
+                        // Wire up change subscriptions BEFORE emitting Initial so that
+                        // any node mutation triggered by a subscriber reacting to Initial
+                        // is guaranteed to be captured by the changeBuffer.
+                        if (changeNotifier != null)
+                        {
+                            var changeBuffer = new Subject<DataChangeNotification>();
+                            disposables.Add(changeBuffer);
+                            disposables.Add(
+                                changeNotifier
+                                    .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
+                                    .Subscribe(changeBuffer));
+                            disposables.Add(
+                                changeBuffer
+                                    .Buffer(DefaultDebounceInterval)
+                                    .Where(batch => batch.Count > 0)
+                                    .Subscribe(batch =>
+                                        disposables.Add(
+                                            RunQuery(cts.Token).Subscribe(
+                                                newResults => ProcessBatch(batch, newResults, currentItems, parsedQuery, observer),
+                                                ex => observer.OnError(ex)))));
+                        }
+
+                        observer.OnNext(new QueryResultChange<T>
+                        {
+                            ChangeType = QueryChangeType.Initial,
+                            Items = initialItems,
+                            Query = parsedQuery,
+                            Version = Interlocked.Increment(ref _version),
+                            Timestamp = DateTimeOffset.UtcNow,
+                        });
+
+                        if (changeNotifier == null)
+                            observer.OnCompleted();
+                    },
+                    ex => observer.OnError(ex)));
+
+            return disposables;
         });
     }
 
-    private async Task ProcessChangeBatchAsync<T>(
+    private void ProcessBatch<T>(
         IList<DataChangeNotification> batch,
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        ParsedQuery parsedQuery,
+        List<(string? Path, T Item)> newResults,
         Dictionary<string, T> currentItems,
-        IObserver<QueryResultChange<T>> observer,
-        CancellationToken ct,
-        bool useSecurityFilter)
+        ParsedQuery parsedQuery,
+        IObserver<QueryResultChange<T>> observer)
     {
-        var addedItems = new List<T>();
-        var updatedItems = new List<T>();
-        var removedItems = new List<T>();
+        var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, item) in newResults)
+            if (!string.IsNullOrEmpty(path))
+                newItems[path] = item;
 
-        // Group changes by path to handle multiple changes to the same item
         var changesByPath = batch
             .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
 
-        // Re-query to get current matching items — same security flag the
-        // outer ObserveQuery was opened with.
-        var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
-        var queryStream = useSecurityFilter ? QueryAsync(request, options, ct) : QueryCoreAsync(request, options, ct);
-        await foreach (var item in queryStream)
-        {
-            if (item is T typedItem)
-            {
-                var itemPath = GetItemPath(item);
-                if (!string.IsNullOrEmpty(itemPath))
-                    newItems[itemPath] = typedItem;
-            }
-        }
-
         // Supplement re-query results with entities from notifications
-        // that haven't appeared in the file-system listing yet (write lag).
+        // that haven't appeared in the store yet (write lag).
         foreach (var (path, change) in changesByPath)
         {
             if (change.Entity is T directMatch && _evaluator.Matches(directMatch, parsedQuery))
@@ -800,77 +792,46 @@ internal class InMemoryMeshQuery(
             }
         }
 
-        // Detect added and updated items (DistinctUntilChanged: only emit if value actually differs)
+        var addedItems = new List<T>();
+        var updatedItems = new List<T>();
+        var removedItems = new List<T>();
+
         foreach (var (path, item) in newItems)
         {
-            if (currentItems.TryGetValue(path, out var existingItem))
+            if (currentItems.TryGetValue(path, out var existing))
             {
-                // Item existed before - only emit Updated if the serializable content changed
-                // (skip Func<> fields like HubConfiguration that break record Equals)
-                if (!ItemEquals(existingItem, item))
-                {
+                if (!ItemEquals(existing, item))
                     updatedItems.Add(item);
-                }
             }
             else
             {
-                // New item
                 addedItems.Add(item);
             }
         }
-
-        // Detect removed items
         foreach (var (path, item) in currentItems)
         {
             if (!newItems.ContainsKey(path))
-            {
                 removedItems.Add(item);
-            }
         }
 
-        // Update current items
         currentItems.Clear();
-        foreach (var (path, item) in newItems)
-        {
-            currentItems[path] = item;
-        }
+        foreach (var (p, v) in newItems) currentItems[p] = v;
 
-        // Emit changes
-        if (addedItems.Count > 0)
+        void Emit(QueryChangeType type, IReadOnlyList<T> items)
         {
+            if (items.Count == 0) return;
             observer.OnNext(new QueryResultChange<T>
             {
-                ChangeType = QueryChangeType.Added,
-                Items = addedItems,
+                ChangeType = type,
+                Items = items,
                 Query = parsedQuery,
                 Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
+                Timestamp = DateTimeOffset.UtcNow,
             });
         }
-
-        if (updatedItems.Count > 0)
-        {
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Updated,
-                Items = updatedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
-            });
-        }
-
-        if (removedItems.Count > 0)
-        {
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Removed,
-                Items = removedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
-            });
-        }
+        Emit(QueryChangeType.Added, addedItems);
+        Emit(QueryChangeType.Updated, updatedItems);
+        Emit(QueryChangeType.Removed, removedItems);
     }
 
     /// <summary>

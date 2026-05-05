@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -34,36 +35,34 @@ public class PostgreSqlVersionQuery : IVersionQuery
     }
 
     public IObservable<MeshNodeVersion> GetVersions(string path)
-        => Observable.Create<MeshNodeVersion>(async (observer, ct) =>
-        {
-            try
-            {
-                var (ns, id) = SplitPath(path);
-                await using var cmd = _dataSource.CreateCommand(
-                    "SELECT version, last_modified, changed_by, name, node_type " +
-                    $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 " +
-                    "ORDER BY version DESC");
-                cmd.Parameters.AddWithValue(ns);
-                cmd.Parameters.AddWithValue(id);
+        // Observable.FromAsync with Scheduler.Default runs the DB fetch on the
+        // ThreadPool — no custom TaskScheduler (Orleans) is ever captured.
+        => Observable.FromAsync(ct => FetchVersionsAsync(path, ct), Scheduler.Default)
+            .SelectMany(versions => versions.ToObservable());
 
-                await using var reader = await cmd.ExecuteReaderAsync(ct);
-                while (await reader.ReadAsync(ct))
-                {
-                    observer.OnNext(new MeshNodeVersion(
-                        path,
-                        reader.GetInt64(0),
-                        new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero),
-                        reader.IsDBNull(2) ? null : reader.GetString(2),
-                        reader.IsDBNull(3) ? null : reader.GetString(3),
-                        reader.IsDBNull(4) ? null : reader.GetString(4)));
-                }
-                observer.OnCompleted();
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-            }
-        });
+    private async Task<List<MeshNodeVersion>> FetchVersionsAsync(string path, CancellationToken ct)
+    {
+        var results = new List<MeshNodeVersion>();
+        var (ns, id) = SplitPath(path);
+        await using var cmd = _dataSource.CreateCommand(
+            "SELECT version, last_modified, changed_by, name, node_type " +
+            $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 " +
+            "ORDER BY version DESC");
+        cmd.Parameters.AddWithValue(ns);
+        cmd.Parameters.AddWithValue(id);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new MeshNodeVersion(
+                path,
+                reader.GetInt64(0),
+                new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+        return results;
+    }
 
     public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options)
         => Observable.FromAsync(async ct =>

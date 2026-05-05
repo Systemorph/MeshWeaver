@@ -31,7 +31,7 @@ public static class ApiTokensSettingsTab
                 Group: "Security",
                 Icon: FluentIcons.Key(),
                 Order: 230,
-                RequiredPermission: Permission.Read));
+                RequiredPermission: Permission.None));
     }
 
     internal static UiControl BuildApiTokensContent(

@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -275,7 +276,11 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
-        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        // Use the synchronous Observable.Create overload so no TaskScheduler is captured
+        // at subscribe-time. Observable.Create(async ...) captures the caller's scheduler;
+        // when that caller is an Orleans grain handler the continuation deadlocks against
+        // the grain's single-threaded scheduler.
+        return Observable.Create<QueryResultChange<T>>(observer =>
         {
             var parsedQuery = _parser.Parse(request.Query);
 
@@ -290,94 +295,75 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
             var normalizedBasePath = effectivePath?.Trim('/') ?? "";
 
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            var disposables = new CompositeDisposable();
 
-            try
-            {
-                var initialItems = new List<T>();
-                await foreach (var item in QueryAsync(request, options, ct))
+            // Observable.FromAsync with Scheduler.Default defers all DB work to the
+            // ThreadPool — no custom TaskScheduler (Orleans) is ever captured.
+            // CollectQueryResultsAsync is the sole async boundary (persistence layer).
+            IObservable<List<(string? Path, T Item)>> RunQuery()
+                => Observable.FromAsync(ct => CollectQueryResultsAsync<T>(request, options, ct), Scheduler.Default);
+
+            disposables.Add(RunQuery().Subscribe(
+                initialResults =>
                 {
-                    if (item is T typedItem)
+                    var initialItems = new List<T>();
+                    foreach (var (path, item) in initialResults)
                     {
-                        initialItems.Add(typedItem);
-                        var itemPath = (item as MeshNode)?.Path;
-                        if (!string.IsNullOrEmpty(itemPath))
-                            currentItems[itemPath] = typedItem;
+                        initialItems.Add(item);
+                        if (!string.IsNullOrEmpty(path))
+                            currentItems[path] = item;
                     }
-                }
 
-                observer.OnNext(new QueryResultChange<T>
-                {
-                    ChangeType = QueryChangeType.Initial,
-                    Items = initialItems,
-                    Query = parsedQuery,
-                    Version = Interlocked.Increment(ref _version),
-                    Timestamp = DateTimeOffset.UtcNow
-                });
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-                return Disposable.Empty;
-            }
-
-            if (_changeNotifier == null)
-            {
-                observer.OnCompleted();
-                return Disposable.Empty;
-            }
-
-            var changeBuffer = new Subject<DataChangeNotification>();
-            var subscription = new CompositeDisposable();
-
-            var notifierSubscription = _changeNotifier
-                .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
-                .Subscribe(changeBuffer);
-            subscription.Add(notifierSubscription);
-
-            var debounceSubscription = changeBuffer
-                .Buffer(DefaultDebounceInterval)
-                .Where(batch => batch.Count > 0)
-                .Subscribe(async batch =>
-                {
-                    try
+                    // Wire change subscriptions BEFORE emitting Initial so that any node
+                    // mutation triggered by a subscriber reacting to Initial is captured.
+                    if (_changeNotifier != null)
                     {
-                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct);
+                        var changeBuffer = new Subject<DataChangeNotification>();
+                        disposables.Add(changeBuffer);
+                        disposables.Add(
+                            _changeNotifier
+                                .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
+                                .Subscribe(changeBuffer));
+                        disposables.Add(
+                            changeBuffer
+                                .Buffer(DefaultDebounceInterval)
+                                .Where(batch => batch.Count > 0)
+                                .Subscribe(batch =>
+                                    disposables.Add(
+                                        RunQuery().Subscribe(
+                                            newResults => ProcessBatch(batch, newResults, currentItems, parsedQuery, observer),
+                                            ex => observer.OnError(ex)))));
                     }
-                    catch (Exception ex)
-                    {
-                        observer.OnError(ex);
-                    }
-                });
-            subscription.Add(debounceSubscription);
-            subscription.Add(changeBuffer);
 
-            return subscription;
+                    observer.OnNext(new QueryResultChange<T>
+                    {
+                        ChangeType = QueryChangeType.Initial,
+                        Items = initialItems,
+                        Query = parsedQuery,
+                        Version = Interlocked.Increment(ref _version),
+                        Timestamp = DateTimeOffset.UtcNow
+                    });
+
+                    if (_changeNotifier == null)
+                        observer.OnCompleted();
+                },
+                ex => observer.OnError(ex)));
+
+            return disposables;
         });
     }
 
-    private async Task ProcessChangeBatchAsync<T>(
+    private void ProcessBatch<T>(
         IList<DataChangeNotification> batch,
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        ParsedQuery parsedQuery,
+        List<(string? Path, T Item)> newResults,
         Dictionary<string, T> currentItems,
-        IObserver<QueryResultChange<T>> observer,
-        CancellationToken ct)
+        ParsedQuery parsedQuery,
+        IObserver<QueryResultChange<T>> observer)
     {
-        var changesByPath = batch
-            .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
-
         var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var item in QueryAsync(request, options, ct))
-        {
-            if (item is T typedItem)
-            {
-                var itemPath = (item as MeshNode)?.Path;
-                if (!string.IsNullOrEmpty(itemPath))
-                    newItems[itemPath] = typedItem;
-            }
-        }
+        foreach (var (path, item) in newResults)
+            if (!string.IsNullOrEmpty(path))
+                newItems[path] = item;
 
         var addedItems = new List<T>();
         var updatedItems = new List<T>();
@@ -386,16 +372,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         foreach (var (path, item) in newItems)
         {
             if (currentItems.ContainsKey(path))
-            {
-                if (changesByPath.ContainsKey(path))
-                    updatedItems.Add(item);
-            }
+                updatedItems.Add(item);
             else
-            {
                 addedItems.Add(item);
-            }
         }
-
         foreach (var (path, item) in currentItems)
         {
             if (!newItems.ContainsKey(path))
@@ -403,44 +383,23 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         }
 
         currentItems.Clear();
-        foreach (var (path, item) in newItems)
-            currentItems[path] = item;
+        foreach (var (p, v) in newItems) currentItems[p] = v;
 
-        if (addedItems.Count > 0)
+        void Emit(QueryChangeType type, IReadOnlyList<T> items)
         {
+            if (items.Count == 0) return;
             observer.OnNext(new QueryResultChange<T>
             {
-                ChangeType = QueryChangeType.Added,
-                Items = addedItems,
+                ChangeType = type,
+                Items = items,
                 Query = parsedQuery,
                 Version = Interlocked.Increment(ref _version),
                 Timestamp = DateTimeOffset.UtcNow
             });
         }
-
-        if (updatedItems.Count > 0)
-        {
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Updated,
-                Items = updatedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
-            });
-        }
-
-        if (removedItems.Count > 0)
-        {
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Removed,
-                Items = removedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
-            });
-        }
+        Emit(QueryChangeType.Added, addedItems);
+        Emit(QueryChangeType.Updated, updatedItems);
+        Emit(QueryChangeType.Removed, removedItems);
     }
 
     /// <summary>
@@ -505,5 +464,22 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
             1 => remaining[0],
             _ => new QueryOr(remaining!)
         };
+    }
+
+    /// <summary>
+    /// Persistence-layer async boundary: collects all results from <see cref="QueryAsync"/>
+    /// into a list. Called exclusively via
+    /// <see cref="Observable.FromAsync{T}(Func{CancellationToken,Task{T}},IScheduler)"/>
+    /// with <see cref="Scheduler.Default"/> so <c>await</c> always runs on the
+    /// ThreadPool — no hub/Orleans scheduler is ever captured.
+    /// </summary>
+    private async Task<List<(string? Path, T Item)>> CollectQueryResultsAsync<T>(
+        MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct)
+    {
+        var results = new List<(string?, T)>();
+        await foreach (var item in QueryAsync(request, options, ct))
+            if (item is T typed)
+                results.Add(((item as MeshNode)?.Path, typed));
+        return results;
     }
 }

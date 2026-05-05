@@ -1,8 +1,6 @@
 ﻿using System.Collections.Concurrent;
-using System.Net;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
-using System.Text.Json;
 using System.Threading;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -40,9 +38,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Release keys by nodeTypePath - tracks which release is currently loaded
     private readonly ConcurrentDictionary<string, string> _releaseKeys = new();
 
-    // Stream subscriptions for cache invalidation
-    private readonly ConcurrentDictionary<string, IDisposable> _subscriptions = new();
-
     // Cached HubConfiguration functions for fast synchronous access
     private readonly ConcurrentDictionary<string, Func<MessageHubConfiguration, MessageHubConfiguration>> _hubConfigurations = new();
 
@@ -73,22 +68,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     // Subscription to the cross-silo change feed — disposed with the service.
     private readonly IDisposable? _changeFeedSubscription;
-
-    // Cached remote write-streams (ISynchronizationStream<MeshNode>) per
-    // owning NodeType path. Held on the singleton service for the life of
-    // the mesh so subsequent UpdateMeshNode calls land on a stream whose
-    // Current is already populated (the first SubscribeRequest round-trip
-    // happens once, at first touch). Without this cache, every TryTriggerRecompile
-    // opens a fresh GetRemoteStream — Current is null on the first
-    // Update call, the lambda receives null, and the update is silently
-    // dropped (SynchronizationStream.cs:466 reads Current before invoking
-    // the transform).
-    private readonly ConcurrentDictionary<string, ISynchronizationStream<MeshNode>> _writableStreams = new();
-
-    // Pending transforms per NodeType path. CombineLatest with the writable
-    // stream's emissions drains transforms that arrive before Current is
-    // populated by SubscribeResponse — handles the first-touch race.
-    private readonly ConcurrentDictionary<string, System.Reactive.Subjects.Subject<Func<MeshNode, ChangeItem<MeshNode>?>>> _pendingTransforms = new();
 
     public NodeTypeService(
         IMessageHub hub,
@@ -159,10 +138,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                         if (owning != null)
                         {
                             logger.LogDebug(
-                                "[CHANGEFEED] source-change at {SourcePath} ({Kind}) → invalidate + trigger recompile on {NodeTypePath}",
+                                "[CHANGEFEED] source-change at {SourcePath} ({Kind}) → invalidate {NodeTypePath}",
                                 evt.Path, evt.Kind, owning);
                             InvalidateCache(owning);
-                            TryTriggerRecompile(owning);
                         }
                     }
                     catch (Exception handlerEx)
@@ -483,11 +461,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             logger.LogWarning(ex, "Failed to invalidate on-disk compilation cache for {NodeTypePath}", nodeTypePath);
         }
 
-        // Dispose subscription (will re-subscribe on next access)
-        if (_subscriptions.TryRemove(nodeTypePath, out var subscription))
-        {
-            subscription.Dispose();
-        }
     }
 
     /// <summary>
@@ -509,167 +482,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
         return null;
     }
-
-    /// <summary>
-    /// Transparent-recompile trigger. Flips the owning NodeType's
-    /// <see cref="NodeTypeDefinition.CompilationStatus"/> to <see cref="CompilationStatus.Pending"/>
-    /// via <c>workspace.UpdateMeshNode</c>. The CompileWatcher (installed by
-    /// <c>AddMeshDataSource</c> on the per-NodeType hub) reacts to Pending and runs Roslyn.
-    /// Same code path the GUI Create-Release button uses, but driven automatically off the
-    /// MeshChangeFeed source-edit signal so the editor's Save button is enough.
-    /// </summary>
-    private void TryTriggerRecompile(string nodeTypePath)
-    {
-        try
-        {
-            logger.LogDebug("[TRIGGER-RECOMPILE] flipping CompilationStatus = Pending on {NodeTypePath}", nodeTypePath);
-
-            // Use the cached remote stream (one per NodeType path, held on this
-            // singleton). After the first SubscribeRequest round-trip the stream's
-            // Current is populated; the UpdateStreamRequest handler at the
-            // sync hub reads Current and invokes the transform.
-            //
-            // Without the cache: every trigger opens a fresh GetRemoteStream,
-            // Current is null on the first Update call, the lambda gets null,
-            // and the update is silently dropped by
-            // SynchronizationStream.UpdateStreamRequest (reads Current right
-            // before invoking the transform — see SynchronizationStream.cs:466).
-            var stream = GetOrCreateWritableStream(nodeTypePath);
-
-            // Buffer the transform. The stream subscriber (registered once per
-            // path) drains buffered transforms on each emission with non-null
-            // Current — handles both the first-touch race (Current null at
-            // trigger time, populated after SubscribeResponse) AND steady-state
-            // (Current already populated, transform fires immediately on the
-            // current cached emission via ReplaySubject(1)).
-            var pending = _pendingTransforms.GetOrAdd(nodeTypePath, _ =>
-            {
-                var subject = new System.Reactive.Subjects.Subject<Func<MeshNode, ChangeItem<MeshNode>?>>();
-                EnsureStreamSubscription(nodeTypePath, stream, subject);
-                return subject;
-            });
-
-            pending.OnNext(BuildPendingTransform(nodeTypePath, stream));
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex,
-                "[TRIGGER-RECOMPILE] failed for {NodeTypePath} (best-effort)", nodeTypePath);
-        }
-    }
-
-    /// <summary>
-    /// Builds the read-modify-write lambda for the recompile trigger. Captures
-    /// <paramref name="stream"/> so the resulting <see cref="ChangeItem{MeshNode}"/>
-    /// carries the right StreamId/Version metadata.
-    /// </summary>
-    private Func<MeshNode, ChangeItem<MeshNode>?> BuildPendingTransform(
-        string nodeTypePath, ISynchronizationStream<MeshNode> stream) => curr =>
-    {
-        if (curr is null)
-        {
-            logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} stream Current is null — drained, will replay on next emission",
-                nodeTypePath);
-            return null;
-        }
-        NodeTypeDefinition? def = curr.Content as NodeTypeDefinition;
-        if (def is null && curr.Content is JsonElement je)
-        {
-            try { def = je.Deserialize<NodeTypeDefinition>(hub.JsonSerializerOptions); }
-            catch { /* malformed — leave def null */ }
-        }
-        if (def is null)
-        {
-            logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} content is {Type} — skip",
-                nodeTypePath, curr.Content?.GetType().Name ?? "null");
-            return null;
-        }
-        if (def.CompilationStatus is CompilationStatus.Pending
-                                  or CompilationStatus.Compiling) return null;
-        if (!string.IsNullOrEmpty(curr.AssemblyLocation))
-        {
-            logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} already has AssemblyLocation — skip kick",
-                nodeTypePath);
-            return null;
-        }
-        var updated = curr with
-        {
-            Content = def with
-            {
-                CompilationStatus = CompilationStatus.Pending,
-                LastCompileStartedAt = DateTimeOffset.UtcNow
-            }
-        };
-        logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} flipping Pending — applying transform", nodeTypePath);
-        return new ChangeItem<MeshNode>(updated, stream.StreamId, stream.StreamId,
-            ChangeType.Patch, stream.Hub.Version,
-            [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = curr }]);
-    };
-
-    /// <summary>
-    /// Wires a single subscription per stream that drains the per-path Subject
-    /// of pending transforms onto the stream via <c>stream.Update</c>. Combines
-    /// each pushed transform with the stream's latest non-null emission so the
-    /// transform is held until Current populates (handles the first-touch race
-    /// where the trigger fires before SubscribeResponse arrives).
-    ///
-    /// <para>The combination uses <c>WithLatestFrom</c>: each transform
-    /// pushed via the Subject is paired with the most recent non-null stream
-    /// value. If no stream value has been seen yet, the pairing is held until
-    /// the first stream emission with non-null Value arrives — then the
-    /// transform fires.</para>
-    /// </summary>
-    private void EnsureStreamSubscription(
-        string nodeTypePath,
-        ISynchronizationStream<MeshNode> stream,
-        System.Reactive.Subjects.Subject<Func<MeshNode, ChangeItem<MeshNode>?>> subject)
-    {
-        // Use ReplaySubject to buffer transforms until the stream emits its
-        // first non-null Current. CombineLatest waits for both sides; once the
-        // stream side emits, ALL buffered transforms fire (each paired with
-        // the latest stream value).
-        var streamSeed = stream.Where(c => c?.Value is not null);
-        var sub = subject
-            .CombineLatest(streamSeed, (transform, _) => transform)
-            .Subscribe(transform =>
-            {
-                logger.LogDebug("[TRIGGER-RECOMPILE] {NodeTypePath} draining buffered transform via stream.Update",
-                    nodeTypePath);
-                stream.Update(curr => transform(curr!),
-                    ex => logger.LogWarning(ex,
-                        "[TRIGGER-RECOMPILE] stream.Update failed for {NodeTypePath}", nodeTypePath));
-            },
-            ex => logger.LogWarning(ex,
-                "[TRIGGER-RECOMPILE] subject pump errored for {NodeTypePath}", nodeTypePath));
-        _subscriptions[$"trigger-recompile:{nodeTypePath}"] = sub;
-    }
-
-    /// <summary>
-    /// Opens (and caches) the remote MeshNode stream for the owning NodeType
-    /// at <paramref name="nodeTypePath"/>. The cache holds the subscription
-    /// open for the lifetime of this singleton — first call pays the
-    /// SubscribeRequest round-trip, subsequent calls find a stream whose
-    /// <c>Current</c> is already populated. This is what lets
-    /// <see cref="TryTriggerRecompile"/> work as a one-shot fire-and-forget
-    /// without leaking SubscribeRequest callbacks across multiple triggers.
-    ///
-    /// <para>The SubscribeRequest is sent under a System impersonation scope:
-    /// NodeTypeService is infrastructure (no end-user identity at the time
-    /// the change-feed handler fires), and it needs unconditional read access
-    /// to every NodeType MeshNode regardless of who triggered the source
-    /// edit. Without the System scope the AccessControlPipeline at the
-    /// owning hub may reject the SubscribeRequest as anonymous → the stream
-    /// surfaces a DeliveryFailure and the trigger silently no-ops.</para>
-    /// </summary>
-    private ISynchronizationStream<MeshNode> GetOrCreateWritableStream(string nodeTypePath) =>
-        _writableStreams.GetOrAdd(nodeTypePath, p =>
-        {
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
-            using var systemScope = accessService?.ImpersonateAsSystem();
-            return hub.GetWorkspace().GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(p), new MeshNodeReference());
-        });
-
 
     /// <inheritdoc />
     /// <remarks>
@@ -1675,11 +1487,6 @@ $@"> **⚠ {header}**
     public void Dispose()
     {
         _changeFeedSubscription?.Dispose();
-        foreach (var subscription in _subscriptions.Values)
-        {
-            subscription.Dispose();
-        }
-        _subscriptions.Clear();
         _compilationTasks.Clear();
         _releaseKeys.Clear();
         _hubConfigurations.Clear();

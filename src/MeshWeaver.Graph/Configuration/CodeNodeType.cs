@@ -59,6 +59,7 @@ public static class CodeNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<CodeConfiguration>())
+            .AddDefaultLayoutAreas()
             .AddCodeViews()
             .WithHandler<ExecuteScriptRequest>(HandleExecuteScript)
     };

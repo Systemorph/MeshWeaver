@@ -673,39 +673,43 @@ public static class NodeTypeLayoutAreas
             .WithWidth("100%")
             .WithStyle("padding: 24px; height: 100%; overflow: auto; gap: 20px;");
 
-        // Header row: title + Create Release action. The button flips
-        // CompilationStatus to Pending via the canonical workspace.UpdateMeshNode
-        // — the InstallCompileWatcher subscriber on this hub picks up Pending
-        // and runs the Roslyn pipeline. Same path MeshOperations.Compile uses.
-        // ReleaseNotes is already auto-saved through the form binding below
-        // (SetupNodeTypeConfigAutoSave), so the click just flips status — no
-        // Take(1) on a data stream, no manual read inside the action.
+        // Header row: title + Create Release + Run Tests actions.
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; gap: 16px;")
             .WithView(Controls.H2(node.Name ?? nodeId ?? "Unknown").WithStyle("margin: 0;"));
 
-        var releaseButton = Controls.Button("Create Release")
-            .WithAppearance(Appearance.Accent)
+        // IsUpToDate: combines own-node stream (CompiledSources) with live sources query.
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        var nodeTypePath = host.Hub.Address.Path;
+        var sourcesObs = meshService?.ObserveQuery<MeshNode>(
+            MeshQueryRequest.FromQuery($"namespace:{nodeTypePath}/Source nodeType:Code"))
+            ?? Observable.Return(new QueryResultChange<MeshNode>());
+        var isUpToDate = host.Workspace.GetMeshNodeStream()
+            .CombineLatest(sourcesObs, (ownNode, sources) =>
+                MeshDataSourceExtensions.IsSourcesUpToDate(ownNode?.Content as NodeTypeDefinition, sources.Items))
+            .DistinctUntilChanged();
+
+        var releaseButton = (LayoutAreaHost h, RenderingContext rc) => isUpToDate
+            .Select(upToDate => (UiControl)Controls.Button(upToDate ? "Up to Date" : "Create Release")
+                .WithAppearance(upToDate ? Appearance.Neutral : Appearance.Accent)
+                .WithIconStart(FluentIcons.Play())
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.Hub.Observe(new CreateReleaseRequest(Force: upToDate),
+                        o => o.WithTarget(ctx.Host.Hub.Address))
+                        .Subscribe(_ => { }, _ => { });
+                    return Task.CompletedTask;
+                }));
+
+        var runTestsButton = Controls.Button("Run Tests")
+            .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.Play())
             .WithClickAction(ctx =>
             {
-                // Reactive trigger: stream.Update flips Pending; the
-                // CompileWatcher (MeshDataSource.InstallCompileWatcher) reacts
-                // on the next emission and starts Roslyn. ReleaseNotes is
-                // preserved as-is — it already arrived via the form auto-save
-                // before the user clicked.
-                ctx.Host.Workspace.UpdateMeshNode(curr =>
-                    curr.Content is NodeTypeDefinition def
-                        ? curr with
-                        {
-                            Content = def with
-                            {
-                                CompilationStatus = CompilationStatus.Pending,
-                                LastCompileStartedAt = DateTimeOffset.UtcNow
-                            }
-                        }
-                        : curr);
+                ctx.Host.Hub.Observe(new RunTestsRequest(),
+                    o => o.WithTarget(ctx.Host.Hub.Address))
+                    .Subscribe(_ => { }, _ => { });
                 return Task.CompletedTask;
             });
 
@@ -729,7 +733,8 @@ public static class NodeTypeLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 12px; align-items: center;")
             .WithView(statusBadge, "CompileStatusBadge")
-            .WithView(releaseButton);
+            .WithView(releaseButton, "CreateReleaseButton")
+            .WithView(runTestsButton);
 
         headerRow = headerRow.WithView(actions);
         stack = stack.WithView(headerRow);
