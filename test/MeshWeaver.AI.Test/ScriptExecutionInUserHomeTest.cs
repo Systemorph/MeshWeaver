@@ -2,6 +2,7 @@
 
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -335,6 +336,70 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         final.Messages.Select(m => m.Message)
             .Should().Contain(m => m.Contains("0.8427") || m.Contains("erf"),
                 "the script's MathNet call should produce the well-known erf(1) value");
+    }
+
+    /// <summary>
+    /// Companion to <see cref="NuGetDirective_DownloadsPackage_AndScriptUsesIt"/>
+    /// that resolves against the repo's OWN built nupkgs in <c>dist/packages/</c>
+    /// (registered as the <c>mesh-local</c> source in <c>nuget.config</c> with a
+    /// packageSourceMapping that pins <c>MeshWeaver.*</c> there). This is the
+    /// "our nuget storage" path: scripts can <c>#r "nuget:MeshWeaver.X, …"</c>
+    /// and the resolver picks them up locally — no network round-trip, no
+    /// nuget.org outage flake, deterministic for CI.
+    ///
+    /// <para>Skipped when <c>dist/packages/MeshWeaver.Application.Styles.3.0.0-preview1.nupkg</c>
+    /// isn't present (e.g. fresh clone before the package step ran). The resolver
+    /// failure message in that case is descriptive enough to debug from the test
+    /// output; we don't want a missing artefact to mask real <c>#r</c> regressions.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task NuGetDirective_ResolvesAgainstLocalMeshFeed_AndScriptUsesIt()
+    {
+        // dist/packages/ is gitignored — populated locally by `dotnet pack` and on
+        // CI by the publish workflow's pack step. When absent, surface the reason
+        // via the test output and exit cleanly so an unprepared CI run surfaces
+        // the missing-artefact signal instead of a misleading resolver error.
+        var localPkg = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+            "dist", "packages", "MeshWeaver.Application.Styles.3.0.0-preview1.nupkg"));
+        if (!File.Exists(localPkg))
+        {
+            Output.WriteLine(
+                $"SKIP: mesh-local nupkg not found at {localPkg}. " +
+                "Run `dotnet pack` to populate dist/packages, then re-run.");
+            return;
+        }
+
+        var (codePath, _) = await SeedExecutableCodeAsync("""
+            #r "nuget:MeshWeaver.Application.Styles, 3.0.0-preview1"
+            using MeshWeaver.Application.Styles;
+            // FluentIcons is a static surface from MeshWeaver.Application.Styles —
+            // touching it proves the assembly was actually loaded into the script ALC.
+            var icon = FluentIcons.Add();
+            Log.LogInformation("Resolved icon: {Name}", icon.Id);
+            $"icon-id:{icon.Id}"
+        """);
+
+        var execResponse = await AwaitResponseAsync(
+            new ExecuteScriptRequest(),
+            o => o.WithTarget(new Address(codePath)));
+        execResponse.Message.Success.Should().BeTrue(execResponse.Message.Error ?? "exec failed");
+
+        var workspace = GetClient().GetWorkspace();
+        var final = await workspace
+            .GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(execResponse.Message.ActivityLog!), new MeshNodeReference())
+            .Select(c => c.Value?.Content as ActivityLog)
+            .Where(l => l is not null && l!.Status != ActivityStatus.Running)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(45))
+            .FirstAsync();
+
+        final!.Status.Should().Be(ActivityStatus.Succeeded,
+            "MeshWeaver.Application.Styles must resolve from dist/packages and the script must compile + run");
+        final.Messages.Select(m => m.Message)
+            .Should().Contain(m => m.Contains("icon-id:") || m.Contains("Resolved icon"),
+                "the script's FluentIcons call should produce a non-empty icon Id");
     }
 
     /// <summary>
