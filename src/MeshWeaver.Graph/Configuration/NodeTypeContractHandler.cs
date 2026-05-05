@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -42,14 +43,22 @@ internal static class NodeTypeContractHandler
             return request.Processed();
         }
 
-        // Reactive chain: read own MeshNode → compile → post response from inside Subscribe.
+        // Reactive chain: read own MeshNode → compile if needed → post response.
         // No await, no Task in the hub flow (Doc/Architecture/AsynchronousCalls.md).
+        //
+        // AwaitCompilationSettled holds the read until any in-progress compile
+        // finishes: a naive Take(1) would hand the requester the previous
+        // release's AssemblyLocation while V2 is mid-compile, and every fresh
+        // instance hub activated in that gap would render the stale layout.
+        // Same primitive used by HandleCreateRelease so request handling is
+        // serialised across the compile critical section.
         hub.GetWorkspace().GetMeshNodeStream()
+            .AwaitCompilationSettled()
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(60))
             .SelectMany(node =>
             {
-                if (node.Content is not NodeTypeDefinition)
+                if (node.Content is not NodeTypeDefinition def)
                 {
                     logger?.LogDebug(
                         "GetCompilationPathRequest at {HubPath}: MeshNode has no NodeTypeDefinition (Content={ContentType}).",
@@ -59,6 +68,55 @@ internal static class NodeTypeContractHandler
                         $"Node at '{hubPath}' is not a valid NodeType definition "
                         + $"(Content type: {node.Content?.GetType().Name ?? "null"}).")!);
                 }
+
+                // Pinned release: resolve the explicitly requested Release MeshNode
+                // and load configs from its AssemblyPath instead of the latest. Lets
+                // production hosts pin a specific historical release while authors
+                // keep iterating in the dev loop. See
+                // NodeTypeDefinition.RequestedReleasePath.
+                if (!string.IsNullOrEmpty(def.RequestedReleasePath))
+                {
+                    var requestedReleasePath = def.RequestedReleasePath!;
+                    logger?.LogDebug(
+                        "GetCompilationPathRequest at {HubPath}: resolving pinned release {ReleasePath}.",
+                        hubPath, requestedReleasePath);
+                    return hub.GetMeshNode(requestedReleasePath, TimeSpan.FromSeconds(15))
+                        .SelectMany(releaseNode =>
+                        {
+                            if (releaseNode?.Content is NodeTypeRelease release
+                                && !string.IsNullOrEmpty(release.AssemblyPath)
+                                && File.Exists(release.AssemblyPath))
+                            {
+                                logger?.LogDebug(
+                                    "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} → {AssemblyPath}.",
+                                    hubPath, requestedReleasePath, release.AssemblyPath);
+                                var pinnedNode = node with { AssemblyLocation = release.AssemblyPath };
+                                return compilationService.GetConfigurationsFromExistingAssembly(pinnedNode)
+                                    .Select(result => BuildResponse(hubPath, pinnedNode, result));
+                            }
+                            logger?.LogWarning(
+                                "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} could not be resolved.",
+                                hubPath, requestedReleasePath);
+                            return Observable.Return<GetCompilationPathResponse?>(Fail(
+                                null,
+                                $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
+                        });
+                }
+
+                // Short-circuit: if the NodeType already has a compiled assembly
+                // (set by the compile watcher on the previous successful compile),
+                // just load configs from that ALC — no Roslyn round-trip needed.
+                if (!string.IsNullOrEmpty(node.AssemblyLocation)
+                    && (node.AssemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
+                        || File.Exists(node.AssemblyLocation)))
+                {
+                    logger?.LogDebug(
+                        "GetCompilationPathRequest at {HubPath}: using existing assembly at {AssemblyLocation}.",
+                        hubPath, node.AssemblyLocation);
+                    return compilationService.GetConfigurationsFromExistingAssembly(node)
+                        .Select(result => BuildResponse(hubPath, node, result));
+                }
+
                 return compilationService.CompileAndGetConfigurations(node)
                     .Select(result => BuildResponse(hubPath, node, result));
             })

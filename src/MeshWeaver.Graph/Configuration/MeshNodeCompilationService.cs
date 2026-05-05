@@ -352,13 +352,20 @@ internal class MeshNodeCompilationService(
                 (acc, n) => n.LastModified > acc ? n.LastModified : acc));
 
     /// <summary>
-    /// Captures <c>{path → MeshNode.Version}</c> for every source Code/Test node
-    /// that feeds a compile of <paramref name="ntDef"/>. Sibling to
+    /// Captures <c>{path → MeshNode.LastModified.Ticks}</c> for every source Code/Test
+    /// node that feeds a compile of <paramref name="ntDef"/>. Sibling to
     /// <see cref="DiscoverSourceMaxLastModified"/> — same SyncedQuery, different
     /// aggregation. Used by the compile watcher to populate
     /// <c>NodeTypeDefinition.CompiledSources</c> on success so a future
-    /// recompile-needed check is a data comparison (added/removed/version-bumped)
+    /// recompile-needed check is a data comparison (added/removed/modified)
     /// instead of a max-LastModified timing guess.
+    /// <para>
+    /// Uses <c>LastModified.Ticks</c> (not <c>Version</c>) because the framework's
+    /// <c>UpdateNodeRequest</c> handler reliably refreshes <c>LastModified</c>, while
+    /// <c>MeshNode.Version</c> is bumped only by the local workspace's
+    /// <c>MeshNodeTypeSource</c> stamp and may not propagate through the synced
+    /// mesh-level query that <c>HandleCreateRelease</c> reads from.
+    /// </para>
     /// </summary>
     public IObservable<ImmutableDictionary<string, long>> DiscoverSourceVersionSnapshot(
         NodeTypeDefinition? ntDef, string selfPath) =>
@@ -368,7 +375,7 @@ internal class MeshNodeCompilationService(
                 .Where(n => !string.IsNullOrEmpty(n.Path))
                 .Aggregate(
                     ImmutableDictionary<string, long>.Empty,
-                    (acc, n) => acc.SetItem(n.Path, n.Version)));
+                    (acc, n) => acc.SetItem(n.Path, n.LastModified.UtcTicks)));
 
     /// <summary>
     /// IObservable end-to-end. Source discovery rides the cached SyncedQuery
@@ -382,7 +389,6 @@ internal class MeshNodeCompilationService(
         MeshNode node, NodeTypeDefinition? ntDef, string selfPath, ActivityLog log)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
-        var dllPath = cacheService.GetDllPath(nodeName);
         var executedQueries = CodeQueryResolver
             .ExpandAll(ntDef?.Sources, CodeQueryResolver.DefaultSources, selfPath)
             .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
@@ -489,36 +495,36 @@ internal class MeshNodeCompilationService(
                 return Observable.Defer(() =>
                         CompileAsync(codeFile, configuration, contentCollections, node, CancellationToken.None)
                             .ToObservable())
-                    .Select(_ =>
+                    .Select(actualPath =>
                     {
                         ActivityLog finalLog;
                         string? finalPath;
                         if (cacheService.IsDiskCacheEnabled)
                         {
-                            if (File.Exists(dllPath))
+                            if (actualPath != null && File.Exists(actualPath))
                             {
                                 logger.LogDebug(
                                     "Compiled assembly for node {NodePath} at {DllPath}",
-                                    node.Path, dllPath);
-                                finalPath = dllPath;
+                                    node.Path, actualPath);
+                                finalPath = actualPath;
                                 finalLog = AppendInfo(discoveryLog,
-                                    $"Compiled assembly written to {dllPath}.");
+                                    $"Compiled assembly written to {actualPath}.");
                             }
                             else
                             {
                                 logger.LogWarning(
-                                    "Assembly compilation succeeded but DLL not found at {DllPath}", dllPath);
+                                    "Assembly compilation succeeded but DLL not found at {DllPath}", actualPath);
                                 finalPath = null;
                                 finalLog = AppendError(discoveryLog,
-                                    $"Compilation succeeded but DLL not found at {dllPath}.");
+                                    $"Compilation succeeded but DLL not found at {actualPath}.");
                             }
                         }
                         else
                         {
                             logger.LogDebug("Compiled assembly for node {NodePath} (in-memory)", node.Path);
-                            finalPath = $"memory://{nodeName}";
+                            finalPath = actualPath;
                             finalLog = AppendInfo(discoveryLog,
-                                $"Compiled assembly loaded in-memory ({finalPath}).");
+                                $"Compiled assembly loaded in-memory ({actualPath}).");
                         }
                         return (finalPath, finalLog.Finish((int)hub.Version, ActivityStatus.Succeeded));
                     })
@@ -568,6 +574,21 @@ internal class MeshNodeCompilationService(
                 .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot));
         });
 
+    /// <inheritdoc />
+    public IObservable<NodeCompilationResult?> GetConfigurationsFromExistingAssembly(MeshNode node)
+    {
+        var assemblyLocation = node.AssemblyLocation;
+        if (string.IsNullOrEmpty(assemblyLocation))
+            return Observable.Return((NodeCompilationResult?)null);
+
+        var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = node.Path };
+        var ntDef = node.Content as NodeTypeDefinition;
+        var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
+
+        return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "")
+            .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot));
+    }
+
     private NodeCompilationResult? CompileResultFromAssembly(
         MeshNode node, string assemblyLocation, ActivityLog log,
         ImmutableDictionary<string, long> compiledSources)
@@ -577,7 +598,14 @@ internal class MeshNodeCompilationService(
 
             try
             {
-                var assembly = cacheService.LoadAssembly(nodeName);
+                // Load from the exact path recorded on the node, not from the shared
+                // GetDllPath(nodeName) shorthand. Each release writes to a unique subdir
+                // so V1 and V2 ALCs are separate; loading from the canonical shared path
+                // would always return V1's assembly after V2 compiles. In-memory
+                // assemblies keep the old keyed-by-nodeName path.
+                var assembly = assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
+                    ? cacheService.LoadAssembly(nodeName)
+                    : cacheService.GetOrCreateLoadContextForPath(nodeName, assemblyLocation).LoadNodeAssembly();
                 if (assembly == null)
                 {
                     // Promoted from Warning → Error: this is the root cause that
@@ -642,7 +670,7 @@ internal class MeshNodeCompilationService(
     /// Compiles CodeConfiguration into an assembly using Roslyn.
     /// Supports both disk-based and in-memory compilation.
     /// </summary>
-    private async Task CompileAsync(
+    private async Task<string?> CompileAsync(
         CodeConfiguration? codeFile,
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
@@ -654,19 +682,7 @@ internal class MeshNodeCompilationService(
         await sem.WaitAsync(ct);
         try
         {
-            // Double-check inside the lock: a concurrent caller may have just compiled.
-            // If the DLL is on disk now, return early — the caller will see the file
-            // through `File.Exists(dllPath)` in CompileCore and proceed normally.
-            if (cacheService.IsDiskCacheEnabled
-                && File.Exists(cacheService.GetDllPath(nodeName)))
-            {
-                logger.LogDebug(
-                    "Skipping compile for {NodePath}: a concurrent caller already wrote {DllPath}.",
-                    node.Path, cacheService.GetDllPath(nodeName));
-                return;
-            }
-
-            await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, ct);
+            return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, ct);
         }
         finally
         {
@@ -674,7 +690,7 @@ internal class MeshNodeCompilationService(
         }
     }
 
-    private async Task CompileAsyncCore(
+    private async Task<string?> CompileAsyncCore(
         CodeConfiguration? codeFile,
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
@@ -682,9 +698,6 @@ internal class MeshNodeCompilationService(
         string nodeName,
         CancellationToken ct)
     {
-        // Invalidate old cache and prepare for recompilation
-        cacheService.InvalidateCache(nodeName);
-
         if (cacheService.IsDiskCacheEnabled)
         {
             cacheService.EnsureCacheDirectoryExists();
@@ -736,33 +749,35 @@ internal class MeshNodeCompilationService(
                 .WithOptimizationLevel(OptimizationLevel.Debug)
                 .WithPlatform(Platform.AnyCpu));
 
+        string? actualPath;
         if (cacheService.IsDiskCacheEnabled)
         {
-            // Emit to disk
-            await CompileToDiskAsync(compilation, nodeName, node.Path, ct);
+            actualPath = await CompileToDiskAsync(compilation, nodeName, node.Path, ct);
         }
         else
         {
-            // Emit to memory and load immediately
             CompileToMemory(compilation, nodeName, node.Path, ct);
+            actualPath = $"memory://{nodeName}";
         }
 
-        // The preparatory InvalidateCache above set a sticky flag so the NEXT IsCacheValid
-        // returns false; now that we've just written fresh artifacts, clear it so the
-        // immediately following call short-circuits on the new DLL.
-        cacheService.MarkCacheFresh(nodeName);
-
-        logger.LogInformation("Successfully compiled assembly for {NodePath}", node.Path);
+        logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
+        return actualPath;
     }
 
     /// <summary>
-    /// Compiles and emits assembly to disk.
+    /// Compiles and emits assembly to a unique per-compile subdirectory.
+    /// Each compile writes to {cacheDir}/{nodeName}_{ticks_hex}/ so V1 and V2
+    /// DLLs coexist on disk without overwriting — no file-lock races, no hash
+    /// collisions in TryCreateReleaseNode.
     /// </summary>
-    private async Task CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
+    private async Task<string> CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
     {
-        var dllPath = cacheService.GetDllPath(nodeName);
-        var pdbPath = cacheService.GetPdbPath(nodeName);
-        var xmlDocPath = cacheService.GetXmlDocPath(nodeName);
+        var timestamp = DateTimeOffset.UtcNow.Ticks.ToString("x");
+        var releaseDir = Path.Combine(cacheService.CacheDirectory, $"{nodeName}_{timestamp}");
+        Directory.CreateDirectory(releaseDir);
+        var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
+        var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
+        var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
 
         await using var dllStream = File.Create(dllPath);
         await using var pdbStream = File.Create(pdbPath);
@@ -776,8 +791,6 @@ internal class MeshNodeCompilationService(
 
         if (!emitResult.Success)
         {
-            cacheService.InvalidateCache(nodeName);
-
             var errors = emitResult.Diagnostics
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Select(d => d.GetMessage())
@@ -788,10 +801,12 @@ internal class MeshNodeCompilationService(
             throw new CompilationException(nodePath, errorMessage);
         }
 
-        // Close streams before loading
+        // Close streams before returning the path
         await dllStream.DisposeAsync();
         await pdbStream.DisposeAsync();
         await xmlDocStream.DisposeAsync();
+
+        return dllPath;
     }
 
     /// <summary>

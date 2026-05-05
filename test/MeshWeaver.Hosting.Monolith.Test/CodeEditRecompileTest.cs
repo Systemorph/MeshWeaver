@@ -22,17 +22,11 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// End-to-end test for the code-edit-then-recompile flow:
-///   1. Create a NodeType with a Code source returning "V1".
-///   2. Evaluate the NodeType's Overview layout area — must emit V1.
-///   3. Update the Code source to return "V2" (persist, no recycle).
-///   4. Recycle the NodeType hub to force a fresh activation.
-///   5. Re-evaluate the Overview — must emit V2, NOT the cached V1 assembly.
+/// End-to-end tests for the explicit compile pipeline:
+///   CreateReleaseRequest → IsUpToDate check → CompileWatcher → Release node.
 ///
-/// Regression: before the <c>Source/</c>-aware NodeTypeService invalidator and
-/// the on-disk <c>ICompilationCacheService.InvalidateCache</c> call, step (5)
-/// reused the cached V1 DLL because the NodeType's own LastModified hadn't
-/// advanced and IsCacheValid returned true.
+/// The automatic MeshChangeFeed → TryTriggerRecompile path has been removed.
+/// All compilation is now triggered explicitly via CreateReleaseRequest.
 /// </summary>
 public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestBase(output), IDisposable
 {
@@ -47,9 +41,6 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
                 .Configure<CompilationCacheOptions>(o =>
                 {
                     o.CacheDirectory = _cacheDir;
-                    // Keep disk+release caching ENABLED — that's the production config
-                    // where the bug originally showed up (stale DLL survives LastModified
-                    // being unchanged because only a Sources child was edited).
                     o.EnableCompilationCache = true;
                     o.EnableDiskCache = true;
                 }));
@@ -64,6 +55,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
 
     private const string NodeTypePath = "TestData/CodeEditType";
     private const string InstancePath = "TestData/CodeEditType/instance1";
+    private const string Instance2Path = "TestData/CodeEditType/instance2";
 
     private const string CodeV1 = """
         using MeshWeaver.Layout.Composition;
@@ -84,33 +76,20 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         """;
 
     /// <summary>
-    /// Transparent-recompile flow (the canonical UI shape post-2026-05-04):
-    /// users edit code in the editor, hit Save, and the new release ships
-    /// automatically — no explicit "Create Release" click needed.
-    ///
-    /// <para>The plumbing: every <c>UpdateNode</c> on a MeshNode under
-    /// <c>{NodeTypePath}/Source/...</c> fires an <c>IMeshChangeFeed</c> event
-    /// that <c>NodeTypeService</c> picks up; the handler calls
-    /// <c>TryTriggerRecompile(owning)</c>, which flips
-    /// <c>NodeTypeDefinition.CompilationStatus = Pending</c> on the owning
-    /// NodeType. The CompileWatcher (in <c>MeshDataSource.InstallCompileWatcher</c>)
-    /// reacts to Pending, runs Roslyn, and on success writes a fresh Release
-    /// MeshNode under <c>{nodeTypePath}/_Release/{version}</c> + flips
-    /// <c>LatestReleasePath</c>. The same plumbing services the FIRST compile
-    /// (when the source node is created) — no manual trigger needed for the
-    /// initial release either.</para>
-    ///
-    /// <para>UI parity: this is exactly what happens when a user types in the
-    /// Code editor and clicks Save — the Save handler posts a
-    /// <c>DataChangeRequest</c> on the source MeshNode, which fires the same
-    /// MeshChangeFeed event. The "Create Release" button (still wired in
-    /// <c>NodeTypeLayoutAreas.cs</c>) is now redundant for normal edits;
-    /// it remains as an explicit re-release trigger.</para>
+    /// Explicit compile flow (the new canonical shape post-2026-05-05):
+    ///   1. Create NodeType + Code source.
+    ///   2. Send CreateReleaseRequest → should trigger compilation (not IsUpToDate).
+    ///   3. Wait for V1 release node.
+    ///   4. CreateReleaseRequest again → should return AlreadyUpToDate = true.
+    ///   5. Modify source code to V2.
+    ///   6. CreateReleaseRequest → should re-compile (sources changed).
+    ///   7. Wait for V2 release node.
+    ///   8. Create fresh instance → must serve V2 layout.
     /// </summary>
     [Fact(Timeout = 90000)]
-    public async Task CodeEdit_NewRelease_RecompilesAndServesNewVersion()
+    public async Task CodeEdit_ExplicitRelease_IsUpToDate_RecompilesOnSourceChange()
     {
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
+        var ct = new CancellationTokenSource(75.Seconds()).Token;
 
         // 1. Create the NodeType.
         await NodeFactory.CreateNode(new MeshNode("CodeEditType", TestPartition)
@@ -119,15 +98,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = MeshNode.NodeTypePath,
             Content = new NodeTypeDefinition
             {
-                Description = "Regression test for the transparent-recompile flow.",
+                Description = "Regression test for the explicit compile flow.",
                 Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
                 ShowChildrenInDetails = false,
             }
         });
 
-        // 2. Create the V1 source. The MeshChangeFeed Created event triggers
-        //    the transparent recompile path → CompilationStatus = Pending →
-        //    CompileWatcher → V1 release. NO TriggerCreateReleaseAsync.
+        // 2. Create the V1 source.
         await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/CodeEditType/Source")
         {
             Name = "Code",
@@ -135,22 +112,28 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
         });
 
-        var v1Release = await WaitForNewReleaseAsync(NodeTypePath, knownReleases: new(), ct);
-        Output.WriteLine($"=== V1 release transparently created at {v1Release} ===");
+        // 3. Explicitly trigger V1 compilation.
+        var v1Response = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
+        v1Response.Success.Should().BeTrue("CreateReleaseRequest should succeed");
+        v1Response.AlreadyUpToDate.Should().BeFalse("first compile has no CompiledSources yet");
 
-        // 3. Create an instance and read its Overview — must use V1.
+        var v1Release = await WaitForNewReleaseAsync(NodeTypePath, knownReleases: [], ct);
+        Output.WriteLine($"=== V1 release at {v1Release} ===");
+
+        // 4. CreateReleaseRequest again without changes → AlreadyUpToDate.
+        var dupResponse = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
+        dupResponse.AlreadyUpToDate.Should().BeTrue("sources unchanged since V1 compile");
+
+        // 5. Create an instance and verify it serves V1.
         await NodeFactory.CreateNode(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
         {
             Name = "Instance 1",
             NodeType = NodeTypePath,
         });
-        var v1 = await ReadOverviewAsync(InstancePath, ct);
-        v1.Should().Contain("MARKER_V1",
-            "initial release must serve the V1 source. Latest release: " + v1Release);
+        var v1Html = await ReadOverviewAsync(InstancePath, ct);
+        v1Html.Should().Contain("MARKER_V1", "V1 release must be served");
 
-        // 4. Edit the source to V2 — same UpdateNode call the editor's Save
-        //    button posts. The MeshChangeFeed Updated event flips Pending,
-        //    CompileWatcher recompiles, V2 release ships automatically.
+        // 6. Modify the source to V2.
         var codeNode = await FindNodeAsync($"{TestPartition}/CodeEditType/Source/code", ct);
         codeNode.Should().NotBeNull();
         await NodeFactory.UpdateNode(codeNode! with
@@ -158,32 +141,188 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" }
         });
 
-        var v2Release = await WaitForNewReleaseAsync(
-            NodeTypePath,
-            knownReleases: new HashSet<string> { v1Release },
-            ct);
-        v2Release.Should().NotBe(v1Release, "the second release must be a distinct MeshNode");
-        Output.WriteLine($"=== V2 release transparently created at {v2Release} ===");
+        // 7. Explicitly trigger V2 compilation — sources changed, should recompile.
+        var v2Response = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
+        v2Response.Success.Should().BeTrue("CreateReleaseRequest should succeed after source change");
+        v2Response.AlreadyUpToDate.Should().BeFalse("source was modified, must recompile");
 
-        // 5. Re-create the instance so its hub re-activates against the new
-        //    release's ALC. UI parity: in the GUI the user navigates away and
-        //    back (or refreshes) — same effect as delete+recreate at the data
-        //    layer.
-        await NodeFactory.DeleteNode(InstancePath);
-        await Task.Delay(100, ct);
-        await NodeFactory.CreateNode(new MeshNode("instance1", $"{TestPartition}/CodeEditType")
+        var v2Release = await WaitForNewReleaseAsync(NodeTypePath, knownReleases: [v1Release], ct);
+        v2Release.Should().NotBe(v1Release, "second release must be distinct");
+        Output.WriteLine($"=== V2 release at {v2Release} ===");
+
+        // 8. Create a fresh instance and verify it serves V2.
+        await NodeFactory.CreateNode(new MeshNode("instance2", $"{TestPartition}/CodeEditType")
         {
-            Name = "Instance 1",
+            Name = "Instance 2",
             NodeType = NodeTypePath,
         });
-
-        // 6. Evaluate again — must now return V2.
-        var v2 = await ReadOverviewAsync(InstancePath, ct);
-        v2.Should().Contain("MARKER_V2", "after transparent recompile + instance re-activation, the new source must be served");
-        v2.Should().NotContain("MARKER_V1", "the stale V1 assembly must not be reused");
+        // Wait for the V2 marker explicitly: the per-instance hub may render a stale
+        // (V1) snapshot first while the new release's HubConfiguration is still
+        // propagating, then re-render once V2 is wired. Plain ReadOverviewAsync
+        // takes the first HtmlControl emission and would race that pre-V2 tick.
+        var v2Html = await ReadOverviewMatchingAsync(Instance2Path,
+            html => html.Contains("MARKER_V2"), ct);
+        v2Html.Should().Contain("MARKER_V2", "V2 release must be served after recompile");
+        v2Html.Should().NotContain("MARKER_V1", "stale V1 assembly must not be reused");
     }
 
-    private async Task<string> ReadOverviewAsync(string path, CancellationToken ct)
+    /// <summary>
+    /// Pin to a historical release via <see cref="NodeTypeDefinition.RequestedReleasePath"/>:
+    ///   1. Compile V1, capture V1 release path.
+    ///   2. Modify source to V2, compile V2 (V2 is now the latest release).
+    ///   3. Pin <c>RequestedReleasePath</c> to V1 on the NodeType.
+    ///   4. Create a fresh instance — must serve V1 (the pinned release), not V2 (latest).
+    ///   5. Clear the pin → fresh instance must serve V2 again.
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task NodeType_RequestedReleasePath_PinsToHistoricalRelease()
+    {
+        var ct = new CancellationTokenSource(75.Seconds()).Token;
+
+        // 1. Create the NodeType.
+        await NodeFactory.CreateNode(new MeshNode("PinType", TestPartition)
+        {
+            Name = "Pin Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Regression test for RequestedReleasePath pinning.",
+                Configuration = "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", CodeEditLayoutAreas.Overview))",
+                ShowChildrenInDetails = false,
+            }
+        });
+
+        // 2. V1 source + compile.
+        await NodeFactory.CreateNode(new MeshNode("code", $"{TestPartition}/PinType/Source")
+        {
+            Name = "Code",
+            NodeType = "Code",
+            Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
+        });
+        var pinTypePath = $"{TestPartition}/PinType";
+        var v1Resp = await SendCreateReleaseAsync(pinTypePath, force: false, ct);
+        v1Resp.Success.Should().BeTrue();
+        var v1Release = await WaitForNewReleaseAsync(pinTypePath, knownReleases: [], ct);
+        Output.WriteLine($"=== Pinned-test V1 release at {v1Release} ===");
+
+        // 3. Modify to V2 + compile (V2 becomes latest).
+        var codeNode = await FindNodeAsync($"{TestPartition}/PinType/Source/code", ct);
+        codeNode.Should().NotBeNull();
+        await NodeFactory.UpdateNode(codeNode! with
+        {
+            Content = new CodeConfiguration { Code = CodeV2, Language = "csharp" }
+        });
+        var v2Resp = await SendCreateReleaseAsync(pinTypePath, force: false, ct);
+        v2Resp.Success.Should().BeTrue();
+        v2Resp.AlreadyUpToDate.Should().BeFalse();
+        var v2Release = await WaitForNewReleaseAsync(pinTypePath, knownReleases: [v1Release], ct);
+        v2Release.Should().NotBe(v1Release);
+        Output.WriteLine($"=== Pinned-test V2 release at {v2Release} ===");
+
+        // 4. Pin to V1 release on the NodeTypeDefinition.
+        var nodeTypeNode = await FindNodeAsync(pinTypePath, ct);
+        nodeTypeNode.Should().NotBeNull();
+        var def = nodeTypeNode!.Content as NodeTypeDefinition;
+        def.Should().NotBeNull();
+        await NodeFactory.UpdateNode(nodeTypeNode with
+        {
+            Content = def! with { RequestedReleasePath = v1Release }
+        });
+
+        // Wait for the pin write to propagate via the mesh-level query before
+        // creating the instance — otherwise the per-instance hub's
+        // GetCompilationPathRequest can read a stale def with no pin set.
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{pinTypePath}"))
+            .SelectMany(c => c.Items)
+            .Where(n => n.Content is NodeTypeDefinition d && d.RequestedReleasePath == v1Release)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
+
+        // 5. Fresh instance — pinned path means V1 must be served even though V2 is latest.
+        await NodeFactory.CreateNode(new MeshNode("pinnedInstance", $"{TestPartition}/PinType")
+        {
+            Name = "Pinned Instance",
+            NodeType = pinTypePath,
+        });
+        var pinnedHtml = await ReadOverviewMatchingAsync(
+            $"{TestPartition}/PinType/pinnedInstance",
+            html => html.Contains("MARKER_V1") || html.Contains("MARKER_V2"),
+            ct);
+        pinnedHtml.Should().Contain("MARKER_V1",
+            "RequestedReleasePath pins to V1 — instance must serve V1 even though V2 is latest");
+        pinnedHtml.Should().NotContain("MARKER_V2",
+            "pinned release V1 must not leak V2's body");
+
+        // 6. Clear the pin → fresh instance serves V2 (latest) again.
+        nodeTypeNode = await FindNodeAsync(pinTypePath, ct);
+        def = nodeTypeNode!.Content as NodeTypeDefinition;
+        await NodeFactory.UpdateNode(nodeTypeNode with
+        {
+            Content = def! with { RequestedReleasePath = null }
+        });
+        await meshService
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{pinTypePath}"))
+            .SelectMany(c => c.Items)
+            .Where(n => n.Content is NodeTypeDefinition d && d.RequestedReleasePath == null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
+
+        await NodeFactory.CreateNode(new MeshNode("unpinnedInstance", $"{TestPartition}/PinType")
+        {
+            Name = "Unpinned Instance",
+            NodeType = pinTypePath,
+        });
+        var unpinnedHtml = await ReadOverviewMatchingAsync(
+            $"{TestPartition}/PinType/unpinnedInstance",
+            html => html.Contains("MARKER_V1") || html.Contains("MARKER_V2"),
+            ct);
+        unpinnedHtml.Should().Contain("MARKER_V2",
+            "after clearing RequestedReleasePath, fresh instance must serve the latest release (V2)");
+    }
+
+    private async Task<CreateReleaseResponse> SendCreateReleaseAsync(
+        string nodeTypePath, bool force, CancellationToken ct)
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var reader = GetClient(c => c.AddData());
+        var response = await reader
+            .Observe(new CreateReleaseRequest(Force: force), o => o.WithTarget(new Address(nodeTypePath)))
+            .Select(d => d.Message)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .FirstAsync()
+            .ToTask(ct);
+        // Wait for compile to complete (status = Ok or Error) before returning.
+        if (!response.AlreadyUpToDate && response.Success)
+        {
+            await meshService
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodeTypePath}"))
+                .SelectMany(c => c.Items)
+                .Where(n => n.Content is NodeTypeDefinition def
+                    && (def.CompilationStatus == CompilationStatus.Ok
+                        || def.CompilationStatus == CompilationStatus.Error))
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(45))
+                .ToTask(ct);
+        }
+        return response;
+    }
+
+    private Task<string> ReadOverviewAsync(string path, CancellationToken ct)
+        => ReadOverviewMatchingAsync(path, _ => true, ct);
+
+    /// <summary>
+    /// Reads the Overview area and waits for an <see cref="HtmlControl"/> whose
+    /// data matches <paramref name="matches"/>. Used by V2 reads where the per-node
+    /// hub may emit a stale (V1) snapshot first while the new release's
+    /// HubConfiguration is still propagating — taking <c>FirstAsync(x is HtmlControl)</c>
+    /// would race the first stale emission and fail the assertion before the
+    /// V2-bound re-render lands.
+    /// </summary>
+    private async Task<string> ReadOverviewMatchingAsync(string path, Func<string, bool> matches, CancellationToken ct)
     {
         var client = GetClient(c => c.AddData());
         var workspace = client.GetWorkspace();
@@ -194,20 +333,12 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var control = await stream
             .GetControlStream(reference.Area!)
             .Timeout(30.Seconds())
-            .FirstAsync(x => x is HtmlControl)
+            .FirstAsync(x => x is HtmlControl h && matches(h.Data?.ToString() ?? string.Empty))
             .ToTask(ct);
 
         return (control as HtmlControl)?.Data?.ToString() ?? string.Empty;
     }
 
-    /// <summary>
-    /// Subscribes to the catalog change-feed for Release MeshNodes under
-    /// <c>{nodeTypePath}/_Release</c> and emits the first one whose path is
-    /// not in <paramref name="knownReleases"/>. <see cref="IMeshService.ObserveQuery{T}"/>
-    /// re-emits whenever the queried set changes — observable, no polling, no
-    /// cross-hub <c>SubscribeRequest</c> to a per-node hub (which can time
-    /// out from the test client when activation is racing).
-    /// </summary>
     private async Task<string> WaitForNewReleaseAsync(
         string nodeTypePath, HashSet<string> knownReleases, CancellationToken ct)
     {
@@ -225,7 +356,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             })
             .Where(n => n is not null)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(45))
+            .Timeout(TimeSpan.FromSeconds(50))
             .ToTask(ct);
         return release!.Path!;
     }

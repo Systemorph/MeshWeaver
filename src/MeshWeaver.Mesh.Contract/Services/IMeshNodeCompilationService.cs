@@ -46,4 +46,11 @@ public interface IMeshNodeCompilationService
     /// configurations) for the node.
     /// </summary>
     IObservable<NodeCompilationResult?> CompileAndGetConfigurations(MeshNode node);
+
+    /// <summary>
+    /// Loads NodeType configurations from an already-compiled assembly without
+    /// triggering a new compile. Used when <see cref="MeshNode.AssemblyLocation"/>
+    /// is already populated (e.g. the compile watcher just finished V2 and set it).
+    /// </summary>
+    IObservable<NodeCompilationResult?> GetConfigurationsFromExistingAssembly(MeshNode node);
 }
