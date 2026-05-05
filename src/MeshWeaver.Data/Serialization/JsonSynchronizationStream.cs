@@ -266,17 +266,12 @@ public static class JsonSynchronizationStream
 
 
         // Keep the remote owner grain alive while this subscription exists.
-        // HeartBeatEvent is a no-op in monolith mode (no GrainKeepAliveCallback).
-        // On a heartbeat DeliveryFailure the owner is gone (recycled, idle-deactivated,
-        // crashed). Don't just stop — the cached snapshot here would be served forever,
-        // even though the next access would re-activate the owner grain with fresh data.
-        // Re-issue the SubscribeRequest so the new owner grain replays an Initial snapshot
-        // back to us. This is what removes the need for a Blazor circuit refresh after
-        // Recycle / delete+create on the same path.
+        // HeartBeatEvent is fire-and-forget — HandleHeartBeat returns Processed() but
+        // posts no response, so subscribing to a response would always time out and
+        // mis-trigger Resubscribe. Recycle/recreate detection runs through the mesh
+        // change feed below instead.
         if (!owner.Equals(hub.Address))
         {
-            var cts = new CancellationTokenSource();
-            IDisposable? sub = null;
             var resubscribing = 0;
 
             void Resubscribe(string reason)
@@ -306,10 +301,8 @@ public static class JsonSynchronizationStream
                         ex =>
                         {
                             logger.LogWarning(ex,
-                                "Stream {StreamId}: resubscribe failed. Stopping heartbeat.",
+                                "Stream {StreamId}: resubscribe failed.",
                                 reduced.StreamId);
-                            sub?.Dispose();
-                            cts.Cancel();
                             Interlocked.Exchange(ref resubscribing, 0);
                         });
             }
@@ -317,26 +310,18 @@ public static class JsonSynchronizationStream
             var heartbeatInterval = hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Options.IOptions<SyncStreamOptions>>()
                 ?.Value?.HeartbeatInterval ?? TimeSpan.FromSeconds(45);
-            sub = Observable.Interval(heartbeatInterval)
+            var sub = Observable.Interval(heartbeatInterval)
                 .Subscribe(_ =>
                 {
                     if (hub.RunLevel > MessageHubRunLevel.Started) return;
-                    var delivery = hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
-                    if (delivery == null) return;
-                    hub.Observe(delivery)
-                        .Subscribe(
-                            _ => { /* heartbeat ack */ },
-                            _ => Resubscribe("heartbeat failed"));
+                    hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
                 });
             reduced.RegisterForDisposal(sub);
-            reduced.RegisterForDisposal(new AnonymousDisposable(() => cts.Cancel()));
 
-            // Also resubscribe when the mesh change feed reports a change on the owner's
-            // path. Monolith hubs auto-reactivate on the next Post, so HeartBeatEvent
-            // never returns DeliveryFailure after a DisposeRequest — the heartbeat path
-            // alone can't detect that the grain was recycled and holds stale state.
-            // MeshChangeFeed fires on every create/update/delete from the persistence
-            // layer, giving us a reliable, mode-agnostic trigger.
+            // Resubscribe when the mesh change feed reports a change on the owner's
+            // path. This is the sole recycled-grain detector now that heartbeats are
+            // fire-and-forget; MeshChangeFeed fires on every create/update/delete from
+            // the persistence layer.
             var ownerPath = owner.ToString();
             var changeFeedSub = TrySubscribeOwnerPathChangeFeed(
                 hub.ServiceProvider, logger, ownerPath,
@@ -389,11 +374,14 @@ public static class JsonSynchronizationStream
                 },
                 ex =>
                 {
-                    logger.LogWarning(ex, "Workspace stream error for subscriber {Subscriber}, propagating DeliveryFailure", request.Subscriber);
-                    hub.Post(new DeliveryFailure(null!, ex.Message)
-                    {
-                        ErrorType = ErrorType.Failed,
-                    }, o => o.WithTarget(request.Subscriber));
+                    logger.LogWarning(ex, "Workspace stream error for subscriber {Subscriber}, propagating StreamErrorEvent", request.Subscriber);
+                    // StreamErrorEvent (a StreamMessage) is routed via the subscriber
+                    // hub's RouteStreamMessage to the per-stream sub-hub, which
+                    // OnErrors the local SynchronizationStream. A plain
+                    // DeliveryFailure stops at the parent hub because it isn't a
+                    // StreamMessage — the subscriber would stay live forever.
+                    hub.Post(new StreamErrorEvent(request.StreamId, ex.Message),
+                        o => o.WithTarget(request.Subscriber));
                 })
         );
 

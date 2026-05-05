@@ -582,11 +582,17 @@ internal class MeshNodeCompilationService(
             return Observable.Return((NodeCompilationResult?)null);
 
         var log = new ActivityLog(ActivityCategory.Compilation) { HubPath = node.Path };
-        var ntDef = node.Content as NodeTypeDefinition;
-        var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
 
-        return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "")
-            .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot));
+        // No source-version snapshot here — this path is taken on the instance hub's
+        // GetCompilationPathRequest hot path, where DiscoverSourceVersionSnapshot's
+        // SyncedQuery enumeration has timed out under load (see CodeEditRecompileTest
+        // failures). The snapshot only matters for HandleCreateRelease's
+        // "is up to date?" check; once the assembly exists, the instance hub just
+        // needs the HubConfiguration to render. Pass empty so the result still has
+        // a non-null CompiledSources dict for downstream consumers.
+        return Observable.Return<NodeCompilationResult?>(
+            CompileResultFromAssembly(node, assemblyLocation, log,
+                ImmutableDictionary<string, long>.Empty));
     }
 
     private NodeCompilationResult? CompileResultFromAssembly(

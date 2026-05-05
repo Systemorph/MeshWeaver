@@ -108,6 +108,15 @@ public record SubscribeAck;
 public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);
 
 /// <summary>
+/// Server-initiated stream error: routed through <c>RouteStreamMessage</c> to the
+/// per-stream sub-hub on the subscriber, where it is converted to <c>OnError</c>
+/// on the local <c>SynchronizationStream</c>. Plain <see cref="DeliveryFailure"/>
+/// is not a <see cref="StreamMessage"/> and so does not get forwarded into the
+/// hosted hub — subscribers stay live without ever observing the upstream error.
+/// </summary>
+public record StreamErrorEvent(string StreamId, string Message) : StreamMessage(StreamId);
+
+/// <summary>
 /// Request to get data by reference (collection or entity), similar to SubscribeRequest but for one-time data retrieval
 /// </summary>
 /// <param name="Reference">The workspace reference to retrieve data for</param>

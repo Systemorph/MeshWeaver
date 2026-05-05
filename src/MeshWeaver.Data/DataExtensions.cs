@@ -148,6 +148,7 @@ public static class DataExtensions
                 typeof(SubscribeRequest),
                 typeof(SubscribeAck),
                 typeof(UnsubscribeRequest),
+                typeof(StreamErrorEvent),
                 typeof(GetDomainTypesRequest),
                 typeof(DomainTypesResponse),
                 typeof(TypeDescription),
