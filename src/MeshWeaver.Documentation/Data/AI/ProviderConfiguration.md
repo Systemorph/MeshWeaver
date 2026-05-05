@@ -53,9 +53,16 @@ Factories such as `AzureOpenAIChatClientAgentFactory` and `AzureClaudeChatClient
 
 `ModelAutocompleteProvider` displays the union of every `IChatClientFactory.Models[]` array. With the `*__Models__*` env vars gone, those arrays are empty by default — so the dropdown is normally empty too. **This is by design.** Users see the agent's own selection, not a global override list. If you want to surface a curated list to humans, populate `Models[]` from a small, explicit config section — but resist the urge to mirror "everything the provider sells."
 
-## Open question: model-to-factory routing
+## Model-to-factory routing
 
-`AgentChatClient.GetFactoryForModel` currently picks a factory by `factory.Models.Contains(modelName)`. With every factory's `Models[]` empty, this falls back to the first registered factory, which may not actually serve the agent's `PreferredModel`. This is a known gap and will be addressed via an `IChatClientFactory.Supports(string modelName)` predicate (or an equivalent name-shape matcher) so that Claude model names route to the Claude factory regardless of which provider is registered first.
+`AgentChatClient.GetFactoryForModel` asks each registered `IChatClientFactory.Supports(string)` whether it serves a given model name, ordered by `Order` (lower first). Concrete factories implement shape-aware predicates so routing works without any populated `Models[]` array:
+
+| Factory | Predicate |
+| --- | --- |
+| `AzureClaudeChatClientAgentFactory` | `name.StartsWith("claude", IgnoreCase)` |
+| `AzureFoundryChatClientAgentFactory` | catch-all for non-claude (gpt-*, o*, Mistral-*, DeepSeek-*, …) |
+
+The default `IChatClientFactory.Supports` falls back to the legacy `Models[]` lookup, so factories that don't override still work via explicit `Models` config — useful for tests or for a curated subset.
 
 ## Adding a new provider
 
