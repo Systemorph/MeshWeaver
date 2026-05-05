@@ -386,6 +386,24 @@ public static class MeshExtensions
                         mode == "confirm" ? "Confirmed transient node at {Path}" : "Node created at {Path} by {CreatedBy}",
                         resultNode.Path, capturedRequest.CreatedBy ?? "system");
 
+                    // Forward the optional Argument to the new node's hub (fire-and-forget).
+                    // This lets a single CreateNodeRequest atomically create the node AND
+                    // queue its first piece of work — e.g. a Thread's first
+                    // AppendUserMessageRequest — without a second client round-trip. We
+                    // preserve the original requester's AccessContext so the target hub's
+                    // permission attribute checks against the user, not the mesh hub.
+                    if (mode == "create" && capturedRequest.Argument is { } arg)
+                    {
+                        var nodeAddress = new Address(resultNode.Path);
+                        hub.Post(arg, o =>
+                        {
+                            o = o.WithTarget(nodeAddress);
+                            return request.AccessContext is { } accessCtx
+                                ? o.WithAccessContext(accessCtx)
+                                : o;
+                        });
+                    }
+
                     // Run post-creation handlers and post the terminal response. On every
                     // terminal path (success/error) a response MUST go out so the caller never
                     // waits forever. The node is already persisted — but if a post-creation

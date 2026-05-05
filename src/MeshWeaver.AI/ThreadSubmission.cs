@@ -133,10 +133,23 @@ public static class ThreadSubmission
         }
 
         var threadNode = ThreadNodeType.BuildThreadNode(ctx.Namespace!, ctx.UserText, ctx.CreatedBy);
-        var fallbackPath = threadNode.Path!;
+
+        // Bundle the first user message into the thread create itself. The mesh hub
+        // forwards Argument to the new thread hub fire-and-forget after persistence —
+        // one round-trip end-to-end instead of CreateNodeRequest then AppendUserMessage.
+        var initialAppend = new AppendUserMessageRequest
+        {
+            ThreadPath = threadNode.Path!,
+            UserMessageId = Guid.NewGuid().ToString("N")[..8],
+            UserText = ctx.UserText,
+            AgentName = ctx.AgentName,
+            ModelName = ctx.ModelName,
+            ContextPath = ctx.ContextPath,
+            Attachments = ctx.Attachments
+        };
 
         var delivery = ctx.Hub.Post(
-            new CreateNodeRequest(threadNode),
+            new CreateNodeRequest(threadNode) { Argument = initialAppend },
             o => o.WithTarget(new Address(ctx.Namespace!)));
 
         if (delivery == null)
@@ -156,34 +169,7 @@ public static class ThreadSubmission
                         return;
                     }
 
-                    var createdNode = cnr.Node ?? threadNode;
-                    var createdPath = createdNode.Path ?? fallbackPath;
-                    ctx.OnThreadCreated?.Invoke(createdNode);
-
-                    var append = ctx.Hub.Post(
-                        new AppendUserMessageRequest
-                        {
-                            ThreadPath = createdPath,
-                            UserMessageId = Guid.NewGuid().ToString("N")[..8],
-                            UserText = ctx.UserText,
-                            AgentName = ctx.AgentName,
-                            ModelName = ctx.ModelName,
-                            ContextPath = ctx.ContextPath,
-                            Attachments = ctx.Attachments
-                        },
-                        o => o.WithTarget(new Address(createdPath)));
-
-                    if (append != null)
-                    {
-                        ctx.Hub.Observe((IMessageDelivery)append)
-                            .Subscribe(
-                                appendResp =>
-                                {
-                                    if (appendResp.Message is AppendUserMessageResponse { Success: false } fail)
-                                        ctx.OnError?.Invoke($"Append after thread create failed: {fail.Error ?? "unknown"}");
-                                },
-                                ex => ctx.OnError?.Invoke($"Append after thread create failed: {ex.Message}"));
-                    }
+                    ctx.OnThreadCreated?.Invoke(cnr.Node ?? threadNode);
                 },
                 ex => ctx.OnError?.Invoke($"Thread creation failed: {ex.Message}"));
     }
