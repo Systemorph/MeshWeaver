@@ -363,10 +363,16 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>()));
+        services.TryAddScoped<UserAccessiblePartitionsCache>(sp =>
+            new UserAccessiblePartitionsCache(
+                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
+                sp.GetService<ICrossSchemaQueryProvider>(),
+                sp.GetService<ILogger<UserAccessiblePartitionsCache>>()));
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<UserAccessiblePartitionsCache>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
@@ -513,10 +519,19 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>()));
+        // Per-user accessible-partitions cache — pre-warmed in the constructor so
+        // typing `@/` in chat is instant after the first emission. Scoped: each
+        // circuit gets its own cache keyed to that user's RLS-filtered partitions.
+        services.TryAddScoped<UserAccessiblePartitionsCache>(sp =>
+            new UserAccessiblePartitionsCache(
+                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
+                sp.GetService<ICrossSchemaQueryProvider>(),
+                sp.GetService<ILogger<UserAccessiblePartitionsCache>>()));
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<UserAccessiblePartitionsCache>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
@@ -570,10 +585,16 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>()));
+        services.TryAddScoped<UserAccessiblePartitionsCache>(sp =>
+            new UserAccessiblePartitionsCache(
+                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
+                sp.GetService<ICrossSchemaQueryProvider>(),
+                sp.GetService<ILogger<UserAccessiblePartitionsCache>>()));
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<UserAccessiblePartitionsCache>(),
                 sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -26,6 +27,7 @@ namespace MeshWeaver.Hosting.Completion;
 internal sealed class ChatCompletionOrchestrator(
     IMeshService meshService,
     IMessageHub hub,
+    UserAccessiblePartitionsCache partitionsCache,
     ILogger<ChatCompletionOrchestrator>? logger = null)
     : IChatCompletionOrchestrator
 {
@@ -74,19 +76,33 @@ internal sealed class ChatCompletionOrchestrator(
     #region PartitionList & PartitionDrillDown
 
     /// <summary>
-    /// Lists partitions for <c>@/</c> or <c>@/&lt;filter&gt;</c>. Filters the autocomplete
-    /// stream to single-segment paths only — those ARE partition keys (file-system root nodes
-    /// like <c>ACME</c>, or Postgres-schema partition keys surfaced by RoutingMeshQueryProvider).
-    /// Deeper node paths that happen to match the filter are excluded so they don't get
-    /// the partition-style trailing slash.
+    /// Lists partitions for <c>@/</c> or <c>@/&lt;filter&gt;</c>. Reads directly from
+    /// <see cref="UserAccessiblePartitionsCache"/> — pre-warmed, RLS-filtered, immutable
+    /// snapshot — so the result is instant after the first warm-up. NO fan-out into
+    /// partition contents: that only happens once the user types the second slash
+    /// (<see cref="CompletionMode.PartitionDrillDown"/>), which routes directly to
+    /// the chosen partition.
     /// </summary>
     private IObservable<CompletionBatch> ProducePartitionList(string filter)
     {
-        return meshService.AutocompleteAsync("", filter, 30)
-            .ToObservableSequence()
-            .Where(s => !string.IsNullOrEmpty(s.Path) && !s.Path.Contains('/'))
-            .Select(s => SuggestionToItem(s, PartitionListPriority, "Partitions", isPartition: true))
-            .ToArray()
+        return partitionsCache.Partitions
+            .Take(1)  // current snapshot from the ReplaySubject; instant if warm
+            .Select(map =>
+            {
+                var matches = map.Keys
+                    .Where(k => MatchesPartitionFilter(k, filter))
+                    .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+                    .Select(k => new AutocompleteItem(
+                        Label: k,
+                        InsertText: $"@/{k}/",
+                        Description: "Partition",
+                        Category: "Partitions",
+                        Priority: PartitionListPriority,
+                        Kind: AutocompleteKind.Other,
+                        Path: k))
+                    .ToArray();
+                return matches;
+            })
             .Where(items => items.Length > 0)
             .Select(items => new CompletionBatch("Partitions", PartitionListPriority, items))
             .Timeout(ProducerInactivityTimeout)
@@ -96,6 +112,13 @@ internal sealed class ChatCompletionOrchestrator(
                     logger?.LogWarning(ex, "[ChatComplete] PartitionList producer failed");
                 return Observable.Empty<CompletionBatch>();
             });
+    }
+
+    private static bool MatchesPartitionFilter(string partitionKey, string filter)
+    {
+        if (string.IsNullOrEmpty(filter)) return true;
+        return partitionKey.StartsWith(filter, StringComparison.OrdinalIgnoreCase)
+            || partitionKey.Contains(filter, StringComparison.OrdinalIgnoreCase);
     }
 
     private IObservable<CompletionBatch> ProducePartitionDrillDown(string partition, string filter)
