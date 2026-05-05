@@ -115,7 +115,18 @@ public class McpMeshPlugin
             address,
             sessionConfig => sessionConfig
                 .AddData()
-                .WithInitialization(hub => { _ = routingService.RegisterStreamAsync(hub); }),
+                .WithInitialization(hub => routingService.RegisterStreamAsync(hub)
+                    .ContinueWith(t =>
+                    {
+                        if (t.IsCompletedSuccessfully && t.Result is { } registry)
+                            hub.RegisterForDisposal(registry);
+                        else if (t.IsFaulted)
+                            hub.ServiceProvider.GetService<ILoggerFactory>()
+                                ?.CreateLogger("MeshWeaver.Routing.McpMeshPlugin")
+                                ?.LogWarning(t.Exception,
+                                    "RegisterStreamAsync failed for {Address} — replies may not route back",
+                                    hub.Address);
+                    }, TaskContinuationOptions.ExecuteSynchronously)),
             HostedHubCreation.Always)
             ?? throw new InvalidOperationException(
                 $"Failed to materialise MCP session hub at {address}.");

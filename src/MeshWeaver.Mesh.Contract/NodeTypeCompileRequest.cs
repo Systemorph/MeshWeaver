@@ -11,6 +11,17 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public record CreateReleaseRequest(bool Force = false) : IRequest<CreateReleaseResponse>;
 
+/// <summary>
+/// Result of a <see cref="CreateReleaseRequest"/>. <see cref="Success"/> reports
+/// whether the request was accepted (compile dispatched or already up-to-date);
+/// <see cref="AlreadyUpToDate"/> short-circuits when the existing release already
+/// matches the live source set.
+/// </summary>
+/// <param name="Success">True when the trigger was accepted (a compile started
+/// or the existing release was reused). False if the hub rejected the request.</param>
+/// <param name="AlreadyUpToDate">True when the existing release already matches
+/// the live sources and no new compile was dispatched.</param>
+/// <param name="Error">Failure reason when <paramref name="Success"/> is false.</param>
 public record CreateReleaseResponse(bool Success, bool AlreadyUpToDate = false, string? Error = null);
 
 /// <summary>
@@ -20,4 +31,13 @@ public record CreateReleaseResponse(bool Success, bool AlreadyUpToDate = false, 
 /// </summary>
 public record RunTestsRequest : IRequest<RunTestsResponse>;
 
+/// <summary>
+/// Result of a <see cref="RunTestsRequest"/>. Carries the activity paths created
+/// for each dispatched test so the caller can subscribe per-activity for live
+/// progress / final status.
+/// </summary>
+/// <param name="ActivityPaths">Path of each <c>ActivityLog</c> MeshNode created
+/// for the dispatched tests; empty when no tests were found or when the trigger
+/// could not run.</param>
+/// <param name="Error">Failure reason when no activities were dispatched.</param>
 public record RunTestsResponse(IReadOnlyList<string> ActivityPaths, string? Error = null);

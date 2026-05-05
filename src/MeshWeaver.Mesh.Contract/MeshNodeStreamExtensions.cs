@@ -60,7 +60,7 @@ internal sealed class RequireSubscribeObservable<T> : IObservable<T>
 /// Reactive handle to a <see cref="MeshNode"/> for both reads and writes. The handle
 /// is path-aware: with no path it targets the workspace's own hub MeshNode; with a
 /// path matching the workspace's hub address it also targets own; otherwise it
-/// targets the remote per-node hub via <see cref="WorkspaceExtensions.GetRemoteStream"/>.
+/// targets the remote per-node hub via <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>.
 /// Implements <see cref="IObservable{MeshNode}"/> so existing <c>.Where</c>/<c>.Select</c>
 /// read consumers keep working unchanged. Writers call <see cref="Update"/> — which
 /// returns an <see cref="IObservable{MeshNode}"/> that the caller MUST Subscribe to.
@@ -119,7 +119,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     ///     the data source's primary EntityStore stream so all local subscribers see
     ///     the new value and the type source's persister picks it up for save.</description></item>
     ///   <item><description><b>Remote</b> (path != hub address): calls
-    ///     <see cref="ISynchronizationStream{TStream}.Update"/> on the workspace's
+    ///     <c>ISynchronizationStream&lt;MeshNode&gt;.Update(...)</c> on the workspace's
     ///     cached remote stream so the patch routes to the owning per-node hub via
     ///     the data sync protocol.</description></item>
     /// </list>
@@ -272,7 +272,7 @@ public static class MeshNodeStreamExtensions
     ///     workspace's hub address: handle reads/writes via the local
     ///     <see cref="MeshNodeReference"/> reducer + data source primary stream.</description></item>
     ///   <item><description><b>Remote</b> — subscribes to and writes through the owning
-    ///     per-node hub via <see cref="WorkspaceExtensions.GetRemoteStream"/>.</description></item>
+    ///     per-node hub via <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>.</description></item>
     /// </list>
     /// Callers Subscribe (read) or call <c>.Update(update).Subscribe(...)</c> (write).
     /// If the node does not exist at <paramref name="path"/>, the per-node hub never
