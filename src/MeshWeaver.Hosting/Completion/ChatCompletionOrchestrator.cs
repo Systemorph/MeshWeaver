@@ -1,22 +1,27 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
-using System.Threading.Channels;
+using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Completion;
 
 /// <summary>
-/// Orchestrates chat autocomplete by blending three sources:
-/// A) AutocompleteRequest via Post+RegisterCallback to the current node hub (custom providers)
-/// B) IMeshService.QueryAsync with path:current scope:subtree (subtree search)
-/// C) Adaptive broadening — partition-level then cross-partition when results are sparse
-///
-/// Additional modes for partition list, drill-down, and tag queries remain unchanged.
-/// Results stream via IAsyncEnumerable so fast local results arrive before remote ones.
+/// Orchestrates chat autocomplete by blending multiple sources:
+/// <list type="bullet">
+///   <item>Source A — AutocompleteRequest via hub Post+Observe to the current node hub (custom providers)</item>
+///   <item>Source B — IMeshService.QueryAsync with <c>path:current scope:subtree</c> (subtree search)</item>
+///   <item>Source C — Adaptive broadening: partition-level fan-out when primary results are sparse</item>
+///   <item>Partition list — when typing <c>@/</c> or <c>@/&lt;filter&gt;</c></item>
+///   <item>Partition drill-down — when typing <c>@/Partition/</c></item>
+///   <item>Tag query — when reference matches a UCR prefix (content/, data/, schema/, ...)</item>
+/// </list>
+/// All composition is reactive: each producer is an <see cref="IObservable{CompletionBatch}"/>
+/// emitting at most one batch and then completing. The merged stream's <c>OnCompleted</c>
+/// fires when every producer has finished, which the chat UI uses to hide its loading spinner.
 /// </summary>
 internal sealed class ChatCompletionOrchestrator(
     IMeshService meshService,
@@ -24,60 +29,31 @@ internal sealed class ChatCompletionOrchestrator(
     ILogger<ChatCompletionOrchestrator>? logger = null)
     : IChatCompletionOrchestrator
 {
-    // Priority constants — higher values appear first in merged results
+    // Priority constants — higher values appear first in merged results.
     private const int AutocompleteRequestPriority = 3000;  // Source A — local hub providers
     private const int SubtreeQueryPriority = 2800;          // Source B — subtree search
     private const int PartitionDrillDownPriority = 2500;
     private const int PartitionListPriority = 2000;
     private const int PartitionSearchPriority = 2000;       // Source C phase 1
-    private const int CrossPartitionPriority = 1000;        // Source C phase 2
 
-    // Score boost applied to Source A results so local items always beat remote ones
+    // Score boost so Source A's local items always beat remote ones.
     private const int LocalProviderBoost = 200;
 
-    // Minimum results before adaptive broadening kicks in
+    // Once primary sources (A+B) yield this many items, broadening is skipped.
     private const int BroadeningThreshold = 10;
 
-    /// <summary>Tracks how many producers have completed; closes the channel when all done.</summary>
-    private sealed class ProducerTracker(int total, ChannelWriter<CompletionBatch> writer)
-    {
-        private int _completed;
-        public void OnProducerDone()
-        {
-            if (Interlocked.Increment(ref _completed) >= total)
-                writer.TryComplete();
-        }
-    }
+    // Inactivity timeout per producer — bounds the overall stream so OnCompleted
+    // fires even if a backend hangs (chat input then hides its spinner). The
+    // window is generous because cold-start fan-out across partitions can be
+    // slow (initial schema provisioning, JSON deserialization). Per-call hub
+    // timeouts (e.g., SendAutocompleteRequest = 2s) handle the fast paths.
+    private static readonly TimeSpan ProducerInactivityTimeout = TimeSpan.FromSeconds(30);
 
-    /// <summary>
-    /// Tracks result counts from primary sources (A+B) so Source C can decide
-    /// whether broadening is needed.
-    /// </summary>
-    private sealed class ResultCounter(int primaryCount)
-    {
-        private int _count;
-        private int _primaryRemaining = primaryCount;
-        private readonly TaskCompletionSource _primaryDone = new();
-
-        public void Add(int count) => Interlocked.Add(ref _count, count);
-        public int Count => Volatile.Read(ref _count);
-
-        public void SignalPrimaryDone()
-        {
-            if (Interlocked.Decrement(ref _primaryRemaining) <= 0)
-                _primaryDone.TrySetResult();
-        }
-
-        public Task WaitForPrimaryAsync(CancellationToken ct) => _primaryDone.Task.WaitAsync(ct);
-    }
-
-    public async IAsyncEnumerable<CompletionBatch> GetCompletionsAsync(
-        string query,
-        string? currentNamespace,
-        [EnumeratorCancellation] CancellationToken ct = default)
+    /// <inheritdoc />
+    public IObservable<CompletionBatch> GetCompletions(string query, string? currentNamespace)
     {
         if (string.IsNullOrWhiteSpace(query) || !query.StartsWith("@"))
-            yield break;
+            return Observable.Empty<CompletionBatch>();
 
         var reference = query[1..]; // strip @
 
@@ -85,152 +61,120 @@ internal sealed class ChatCompletionOrchestrator(
         logger?.LogDebug("[ChatComplete] query={Query}, mode={Mode}, currentNamespace={NS}",
             query, mode.Mode, currentNamespace);
 
-        var channel = Channel.CreateUnbounded<CompletionBatch>(
-            new UnboundedChannelOptions { SingleReader = true });
-
-        // Launch producers based on mode
-        switch (mode.Mode)
+        return mode.Mode switch
         {
-            case CompletionMode.PartitionList:
-            {
-                var tracker = new ProducerTracker(1, channel.Writer);
-                _ = ProducePartitionListAsync(mode.Filter, channel.Writer, tracker, ct);
-                break;
-            }
-
-            case CompletionMode.PartitionDrillDown:
-            {
-                var tracker = new ProducerTracker(1, channel.Writer);
-                _ = ProducePartitionDrillDownAsync(mode.Partition!, mode.Filter, channel.Writer, tracker, ct);
-                break;
-            }
-
-            case CompletionMode.CurrentNodeAndGlobal:
-            {
-                var seenPaths = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-                var resultCounter = new ResultCounter(2); // A + B are primary
-                var tracker = new ProducerTracker(3, channel.Writer);
-                _ = ProduceViaAutocompleteRequestAsync(reference, currentNamespace, seenPaths, resultCounter, channel.Writer, tracker, ct);
-                _ = ProduceViaSubtreeQueryAsync(reference, currentNamespace, seenPaths, resultCounter, channel.Writer, tracker, ct);
-                _ = ProduceViaBroadeningAsync(reference, currentNamespace, seenPaths, resultCounter, channel.Writer, tracker, ct);
-                break;
-            }
-
-            case CompletionMode.TagQuery:
-            {
-                var tracker = new ProducerTracker(1, channel.Writer);
-                _ = ProduceTagCompletionsAsync(reference, currentNamespace, channel.Writer, tracker, ct);
-                break;
-            }
-        }
-
-        // Honour the caller's cancellation token AND make sure a stuck producer can never
-        // hang the iterator: if ct fires before all producers complete the channel writer,
-        // force-complete it so ReadAllAsync exits cleanly. Without this, a producer that
-        // never reaches its `finally { tracker.OnProducerDone(); }` block (e.g. a deadlocked
-        // mesh query) would hold the test process forever — exactly the CI symptom we hit.
-        await using var registration = ct.Register(() => channel.Writer.TryComplete());
-        await foreach (var batch in channel.Reader.ReadAllAsync(ct))
-        {
-            yield return batch;
-        }
+            CompletionMode.PartitionList => ProducePartitionList(mode.Filter),
+            CompletionMode.PartitionDrillDown => ProducePartitionDrillDown(mode.Partition!, mode.Filter),
+            CompletionMode.TagQuery => ProduceTagCompletions(reference, currentNamespace),
+            CompletionMode.CurrentNodeAndGlobal => ProduceCurrentAndGlobal(reference, currentNamespace),
+            _ => Observable.Empty<CompletionBatch>()
+        };
     }
 
-    #region PartitionList & PartitionDrillDown (unchanged)
+    #region PartitionList & PartitionDrillDown
 
-    private async Task ProducePartitionListAsync(
-        string filter,
-        ChannelWriter<CompletionBatch> writer,
-        ProducerTracker tracker,
-        CancellationToken ct)
+    /// <summary>
+    /// Lists partitions for <c>@/</c> or <c>@/&lt;filter&gt;</c>. Filters the autocomplete
+    /// stream to single-segment paths only — those ARE partition keys (file-system root nodes
+    /// like <c>ACME</c>, or Postgres-schema partition keys surfaced by RoutingMeshQueryProvider).
+    /// Deeper node paths that happen to match the filter are excluded so they don't get
+    /// the partition-style trailing slash.
+    /// </summary>
+    private IObservable<CompletionBatch> ProducePartitionList(string filter)
     {
-        try
-        {
-            var items = new List<AutocompleteItem>();
-
-            // Get top-level partition suggestions via MeshService autocomplete
-            await foreach (var suggestion in meshService.AutocompleteAsync("", filter, 30, ct))
+        return meshService.AutocompleteAsync("", filter, 30)
+            .ToObservableSequence()
+            .Where(s => !string.IsNullOrEmpty(s.Path) && !s.Path.Contains('/'))
+            .Select(s => SuggestionToItem(s, PartitionListPriority, "Partitions", isPartition: true))
+            .ToArray()
+            .Where(items => items.Length > 0)
+            .Select(items => new CompletionBatch("Partitions", PartitionListPriority, items))
+            .Timeout(ProducerInactivityTimeout)
+            .Catch<CompletionBatch, Exception>(ex =>
             {
-                items.Add(SuggestionToItem(suggestion, PartitionListPriority, "Partitions", isPartition: true));
-            }
-
-            if (items.Count > 0)
-                await writer.WriteAsync(new CompletionBatch("Partitions", PartitionListPriority, items), ct);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "[ChatComplete] PartitionList producer failed");
-        }
-        finally
-        {
-            tracker.OnProducerDone();
-        }
+                if (ex is not (TimeoutException or OperationCanceledException))
+                    logger?.LogWarning(ex, "[ChatComplete] PartitionList producer failed");
+                return Observable.Empty<CompletionBatch>();
+            });
     }
 
-    private async Task ProducePartitionDrillDownAsync(
-        string partition,
-        string filter,
-        ChannelWriter<CompletionBatch> writer,
-        ProducerTracker tracker,
-        CancellationToken ct)
+    private IObservable<CompletionBatch> ProducePartitionDrillDown(string partition, string filter)
     {
-        try
-        {
-            var items = new List<AutocompleteItem>();
-
-            await foreach (var suggestion in meshService.AutocompleteAsync(partition, filter, 20, ct))
+        return meshService.AutocompleteAsync(partition, filter, 20)
+            .ToObservableSequence()
+            .Select(s => SuggestionToItem(s, PartitionDrillDownPriority, "Items"))
+            .ToArray()
+            .Select(items =>
             {
-                items.Add(SuggestionToItem(suggestion, PartitionDrillDownPriority, "Items"));
-            }
-
-            // Also offer tag keywords (content:, data:, etc.)
-            items.AddRange(GetTagKeywords(partition, filter));
-
-            if (items.Count > 0)
-                await writer.WriteAsync(new CompletionBatch("Items", PartitionDrillDownPriority, items), ct);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "[ChatComplete] PartitionDrillDown producer failed for {Partition}", partition);
-        }
-        finally
-        {
-            tracker.OnProducerDone();
-        }
+                var combined = new List<AutocompleteItem>(items);
+                combined.AddRange(GetTagKeywords(partition, filter));
+                return (IReadOnlyList<AutocompleteItem>)combined;
+            })
+            .Where(items => items.Count > 0)
+            .Select(items => new CompletionBatch("Items", PartitionDrillDownPriority, items))
+            .Timeout(ProducerInactivityTimeout)
+            .Catch<CompletionBatch, Exception>(ex =>
+            {
+                if (ex is not (TimeoutException or OperationCanceledException))
+                    logger?.LogWarning(ex, "[ChatComplete] PartitionDrillDown producer failed for {Partition}", partition);
+                return Observable.Empty<CompletionBatch>();
+            });
     }
 
     #endregion
 
-    #region Source A: AutocompleteRequest via messaging
+    #region CurrentNodeAndGlobal: Sources A + B + C
 
     /// <summary>
-    /// Sends AutocompleteRequest to the current node's hub address via Post+RegisterCallback.
-    /// This queries custom IAutocompleteProvider instances registered on that hub without
-    /// requiring the hub to be hosted locally.
+    /// Runs A and B in parallel (merge), then runs C only after both complete and only
+    /// when results are sparse (or the reference forces broadening with <c>../</c> / <c>/</c>).
+    /// <para>The reactive shape is <c>Merge(A, B).Concat(Defer(maybeC))</c>: <see cref="Observable.Concat"/>
+    /// subscribes to the deferred C only after the merged A+B stream completes, and the deferred
+    /// closure reads the accumulated count to decide whether to actually run broadening.</para>
     /// </summary>
-    private async Task ProduceViaAutocompleteRequestAsync(
+    private IObservable<CompletionBatch> ProduceCurrentAndGlobal(string reference, string? currentNamespace)
+    {
+        return Observable.Defer(() =>
+        {
+            var seenPaths = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            var totalCount = 0;
+
+            var a = ProduceViaAutocompleteRequest(reference, currentNamespace, seenPaths)
+                .Do(batch => Interlocked.Add(ref totalCount, batch.Items.Count));
+            var b = ProduceViaSubtreeQuery(reference, currentNamespace, seenPaths)
+                .Do(batch => Interlocked.Add(ref totalCount, batch.Items.Count));
+
+            return Observable.Merge(a, b)
+                .Concat(Observable.Defer(() =>
+                {
+                    var forcesBroadening = reference.StartsWith("../") || reference.StartsWith("/");
+                    if (!forcesBroadening && totalCount >= BroadeningThreshold)
+                        return Observable.Empty<CompletionBatch>();
+                    return ProduceViaBroadening(reference, currentNamespace, seenPaths);
+                }));
+        });
+    }
+
+    /// <summary>
+    /// Source A: AutocompleteRequest via hub Post+Observe to the current node hub.
+    /// Queries custom <c>IAutocompleteProvider</c> instances registered on that hub.
+    /// </summary>
+    private IObservable<CompletionBatch> ProduceViaAutocompleteRequest(
         string reference,
         string? currentNamespace,
-        ConcurrentDictionary<string, byte> seenPaths,
-        ResultCounter resultCounter,
-        ChannelWriter<CompletionBatch> writer,
-        ProducerTracker tracker,
-        CancellationToken ct)
+        ConcurrentDictionary<string, byte> seenPaths)
     {
-        try
-        {
-            var items = new List<AutocompleteItem>();
+        if (string.IsNullOrEmpty(currentNamespace))
+            return Observable.Empty<CompletionBatch>();
 
-            if (!string.IsNullOrEmpty(currentNamespace))
+        // Resolve to parent node for satellite contexts (threads, comments, activity).
+        // Content collections, layout areas, data live on the parent node — not on satellites.
+        var targetNamespace = ResolveParentNodeNamespace(currentNamespace);
+
+        return SendAutocompleteRequest($"@{reference}", currentNamespace, new Address(targetNamespace))
+            .Select(response =>
             {
-                // Resolve to parent node for satellite contexts (threads, comments, activity).
-                // Content collections, layout areas, data live on the parent node — not on satellites.
-                var targetNamespace = ResolveParentNodeNamespace(currentNamespace);
-                var response = await SendAutocompleteRequestAsync(
-                    $"@{reference}", currentNamespace, new Address(targetNamespace), ct);
-
+                var items = new List<AutocompleteItem>();
                 if (response?.Items != null)
                 {
                     foreach (var item in response.Items)
@@ -246,163 +190,95 @@ internal sealed class ChatCompletionOrchestrator(
                     }
                 }
 
-                // Offer tag keywords scoped to current namespace
+                // Offer tag keywords scoped to current namespace.
                 items.AddRange(GetTagKeywords(currentNamespace, reference));
-            }
-
-            resultCounter.Add(items.Count);
-
-            if (items.Count > 0)
-                await writer.WriteAsync(new CompletionBatch("Nearby", AutocompleteRequestPriority, items), ct);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "[ChatComplete] AutocompleteRequest producer failed");
-        }
-        finally
-        {
-            resultCounter.SignalPrimaryDone();
-            tracker.OnProducerDone();
-        }
+                return (IReadOnlyList<AutocompleteItem>)items;
+            })
+            .Where(items => items.Count > 0)
+            .Select(items => new CompletionBatch("Nearby", AutocompleteRequestPriority, items))
+            .Catch<CompletionBatch, Exception>(ex =>
+            {
+                logger?.LogWarning(ex, "[ChatComplete] AutocompleteRequest producer failed");
+                return Observable.Empty<CompletionBatch>();
+            });
     }
 
-    #endregion
-
-    #region Source B: Subtree query via IMeshService.QueryAsync
-
     /// <summary>
-    /// Searches the subtree under currentNamespace using the standard query infrastructure.
-    /// Query: path:{currentNamespace} scope:subtree {searchText} is:main limit:20
+    /// Source B: searches the subtree under <paramref name="currentNamespace"/> using the
+    /// standard query infrastructure (<c>path:NS scope:subtree {ref} is:main limit:20</c>).
     /// </summary>
-    private async Task ProduceViaSubtreeQueryAsync(
+    private IObservable<CompletionBatch> ProduceViaSubtreeQuery(
         string reference,
         string? currentNamespace,
-        ConcurrentDictionary<string, byte> seenPaths,
-        ResultCounter resultCounter,
-        ChannelWriter<CompletionBatch> writer,
-        ProducerTracker tracker,
-        CancellationToken ct)
+        ConcurrentDictionary<string, byte> seenPaths)
     {
-        try
-        {
-            if (string.IsNullOrEmpty(currentNamespace) || string.IsNullOrEmpty(reference))
-                return;
+        if (string.IsNullOrEmpty(currentNamespace) || string.IsNullOrEmpty(reference))
+            return Observable.Empty<CompletionBatch>();
 
-            var items = new List<AutocompleteItem>();
-            var queryStr = $"path:{currentNamespace} scope:subtree {reference} is:main limit:20";
-            var request = new MeshQueryRequest
+        var queryStr = $"path:{currentNamespace} scope:subtree {reference} is:main limit:20";
+        var request = new MeshQueryRequest
+        {
+            Query = queryStr,
+            ContextPath = currentNamespace,
+            Limit = 20
+        };
+
+        return meshService.QueryAsync(request)
+            .ToObservableSequence()
+            .OfType<MeshNode>()
+            .Where(node => !string.IsNullOrEmpty(node.Path) && seenPaths.TryAdd(node.Path!, 0))
+            .Select(node => new AutocompleteItem(
+                Label: node.Name ?? node.Id,
+                InsertText: $"@/{node.Path}",
+                Description: node.NodeType,
+                Category: "Subtree",
+                Priority: SubtreeQueryPriority,
+                Kind: AutocompleteKind.File,
+                Icon: node.Icon,
+                Path: node.Path))
+            .ToArray()
+            .Where(items => items.Length > 0)
+            .Select(items => new CompletionBatch("Subtree", SubtreeQueryPriority, items))
+            .Timeout(ProducerInactivityTimeout)
+            .Catch<CompletionBatch, Exception>(ex =>
             {
-                Query = queryStr,
-                ContextPath = currentNamespace,
-                Limit = 20
-            };
-
-            await foreach (var result in meshService.QueryAsync(request, ct))
-            {
-                if (result is MeshNode node && !string.IsNullOrEmpty(node.Path))
-                {
-                    if (seenPaths.TryAdd(node.Path, 0))
-                    {
-                        items.Add(new AutocompleteItem(
-                            Label: node.Name ?? node.Id,
-                            InsertText: $"@/{node.Path}",
-                            Description: node.NodeType,
-                            Category: "Subtree",
-                            Priority: SubtreeQueryPriority,
-                            Kind: AutocompleteKind.File,
-                            Icon: node.Icon,
-                            Path: node.Path));
-                    }
-                }
-            }
-
-            resultCounter.Add(items.Count);
-
-            if (items.Count > 0)
-                await writer.WriteAsync(new CompletionBatch("Subtree", SubtreeQueryPriority, items), ct);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "[ChatComplete] SubtreeQuery producer failed");
-        }
-        finally
-        {
-            resultCounter.SignalPrimaryDone();
-            tracker.OnProducerDone();
-        }
+                if (ex is not (TimeoutException or OperationCanceledException))
+                    logger?.LogWarning(ex, "[ChatComplete] SubtreeQuery producer failed");
+                return Observable.Empty<CompletionBatch>();
+            });
     }
 
-    #endregion
-
-    #region Source C: Adaptive broadening
-
     /// <summary>
-    /// Waits for Sources A+B to complete, then broadens the search if results are sparse.
-    /// Phase 1: Search within the current partition.
-    /// Phase 2: Cross-partition search (global fan-out).
-    /// Forced broadening when reference starts with ../ or /.
+    /// Source C: broadens the search to the current partition when A+B were sparse.
+    /// Phase 2 (global cross-partition fan-out) is intentionally absent — non-/ queries
+    /// stay within the current partition; use <c>@/</c> to search globally.
     /// </summary>
-    private async Task ProduceViaBroadeningAsync(
+    private IObservable<CompletionBatch> ProduceViaBroadening(
         string reference,
         string? currentNamespace,
-        ConcurrentDictionary<string, byte> seenPaths,
-        ResultCounter resultCounter,
-        ChannelWriter<CompletionBatch> writer,
-        ProducerTracker tracker,
-        CancellationToken ct)
+        ConcurrentDictionary<string, byte> seenPaths)
     {
-        try
-        {
-            var forcesBroadening = reference.StartsWith("../") || reference.StartsWith("/");
-            var searchText = reference.TrimStart('.', '/');
+        var partition = ExtractPartition(currentNamespace);
+        if (string.IsNullOrEmpty(partition) || partition == currentNamespace)
+            return Observable.Empty<CompletionBatch>();
 
-            if (!forcesBroadening)
+        var searchText = reference.TrimStart('.', '/');
+
+        return meshService.AutocompleteAsync(
+                partition, searchText, AutocompleteMode.RelevanceFirst, 20, currentNamespace)
+            .ToObservableSequence()
+            .Where(s => seenPaths.TryAdd(s.Path, 0))
+            .Select(s => SuggestionToItem(s, PartitionSearchPriority, "Partition"))
+            .ToArray()
+            .Where(items => items.Length > 0)
+            .Select(items => new CompletionBatch("Partition", PartitionSearchPriority, items))
+            .Timeout(ProducerInactivityTimeout)
+            .Catch<CompletionBatch, Exception>(ex =>
             {
-                // Wait for primary sources (A+B) to finish, with a timeout
-                try
-                {
-                    await resultCounter.WaitForPrimaryAsync(ct).WaitAsync(TimeSpan.FromSeconds(3), ct);
-                }
-                catch (TimeoutException) { /* proceed with broadening check */ }
-
-                if (resultCounter.Count >= BroadeningThreshold)
-                    return; // enough results, no broadening needed
-            }
-
-            // Phase 1: Search within the current partition
-            var partition = ExtractPartition(currentNamespace);
-            if (!string.IsNullOrEmpty(partition) && partition != currentNamespace)
-            {
-                var partitionItems = new List<AutocompleteItem>();
-
-                await foreach (var suggestion in meshService.AutocompleteAsync(
-                    partition, searchText, AutocompleteMode.RelevanceFirst, 20, currentNamespace, ct: ct))
-                {
-                    if (seenPaths.TryAdd(suggestion.Path, 0))
-                    {
-                        partitionItems.Add(SuggestionToItem(suggestion, PartitionSearchPriority, "Partition"));
-                    }
-                }
-
-                resultCounter.Add(partitionItems.Count);
-
-                if (partitionItems.Count > 0)
-                    await writer.WriteAsync(new CompletionBatch("Partition", PartitionSearchPriority, partitionItems), ct);
-            }
-            // Phase 2 (global cross-partition fan-out) is intentionally absent.
-            // Non-/ queries stay within the current partition; use @/ to search globally.
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "[ChatComplete] Broadening producer failed");
-        }
-        finally
-        {
-            tracker.OnProducerDone();
-        }
+                if (ex is not (TimeoutException or OperationCanceledException))
+                    logger?.LogWarning(ex, "[ChatComplete] Broadening producer failed");
+                return Observable.Empty<CompletionBatch>();
+            });
     }
 
     #endregion
@@ -411,20 +287,14 @@ internal sealed class ChatCompletionOrchestrator(
 
     /// <summary>
     /// Handles tag queries by sending AutocompleteRequest to the resolved node hub.
-    /// Supports both colon format (@path/content:readme) and slash format (@path/content/readme, @content/file).
+    /// Supports both colon format (<c>@path/content:readme</c>) and slash format
+    /// (<c>@path/content/readme</c>, <c>@content/file</c>).
     /// </summary>
-    private async Task ProduceTagCompletionsAsync(
-        string reference,
-        string? currentNamespace,
-        ChannelWriter<CompletionBatch> writer,
-        ProducerTracker tracker,
-        CancellationToken ct)
+    private IObservable<CompletionBatch> ProduceTagCompletions(string reference, string? currentNamespace)
     {
-        try
+        return Observable.Defer(() =>
         {
-            var items = new List<AutocompleteItem>();
-
-            // Find the node address by locating the UCR prefix segment
+            // Find the node address by locating the UCR prefix segment.
             string? nodeAddress = null;
 
             // Try colon format first: "Org/Sub/content:readme" → nodeAddress="Org/Sub"
@@ -437,7 +307,7 @@ internal sealed class ChatCompletionOrchestrator(
             }
             else
             {
-                // Slash format: find the UCR prefix segment
+                // Slash format: find the UCR prefix segment.
                 // "Org/Sub/content/readme" → nodeAddress="Org/Sub"
                 // "content/readme" → nodeAddress=currentNamespace
                 var segments = reference.TrimStart('/').Split('/');
@@ -453,39 +323,36 @@ internal sealed class ChatCompletionOrchestrator(
 
             nodeAddress ??= currentNamespace;
             // Resolve satellite contexts (threads, comments) to their parent node.
-            // ResolveParentNodeNamespace wants a non-null string — an empty slot means "no scope".
             nodeAddress = ResolveParentNodeNamespace(nodeAddress ?? string.Empty);
 
-            if (!string.IsNullOrEmpty(nodeAddress))
-            {
-                var response = await SendAutocompleteRequestAsync(
-                    $"@{reference}", currentNamespace, new Address(nodeAddress), ct);
+            if (string.IsNullOrEmpty(nodeAddress))
+                return Observable.Empty<CompletionBatch>();
 
-                if (response?.Items != null)
+            return SendAutocompleteRequest($"@{reference}", currentNamespace, new Address(nodeAddress))
+                .Select(response =>
                 {
-                    foreach (var item in response.Items)
+                    var items = new List<AutocompleteItem>();
+                    if (response?.Items != null)
                     {
-                        var boosted = item with
+                        foreach (var item in response.Items)
                         {
-                            InsertText = EnsureAbsoluteInsertText(item.InsertText, nodeAddress)
-                        };
-                        items.Add(boosted);
+                            var boosted = item with
+                            {
+                                InsertText = EnsureAbsoluteInsertText(item.InsertText, nodeAddress)
+                            };
+                            items.Add(boosted);
+                        }
                     }
-                }
-            }
-
-            if (items.Count > 0)
-                await writer.WriteAsync(new CompletionBatch("Content", AutocompleteRequestPriority, items), ct);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
+                    return (IReadOnlyList<AutocompleteItem>)items;
+                })
+                .Where(items => items.Count > 0)
+                .Select(items => new CompletionBatch("Content", AutocompleteRequestPriority, items));
+        })
+        .Catch<CompletionBatch, Exception>(ex =>
         {
             logger?.LogWarning(ex, "[ChatComplete] TagCompletions producer failed");
-        }
-        finally
-        {
-            tracker.OnProducerDone();
-        }
+            return Observable.Empty<CompletionBatch>();
+        });
     }
 
     #endregion
@@ -493,52 +360,32 @@ internal sealed class ChatCompletionOrchestrator(
     #region Helpers
 
     /// <summary>
-    /// Sends an AutocompleteRequest to the given address via Post+RegisterCallback
-    /// and awaits the response with a 2-second timeout.
+    /// Sends an AutocompleteRequest to the given address via Post+Observe and emits the
+    /// response (or null) within a 2-second inactivity timeout. Pure reactive — no Task,
+    /// no async; the hub.Observe stream provides the response and Rx's Timeout enforces
+    /// the deadline.
     /// </summary>
-    private async Task<AutocompleteResponse?> SendAutocompleteRequestAsync(
-        string query, string? context, Address target, CancellationToken ct)
+    private IObservable<AutocompleteResponse?> SendAutocompleteRequest(
+        string query, string? context, Address target)
     {
-        var tcs = new TaskCompletionSource<AutocompleteResponse?>();
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
-
-        try
+        return Observable.Defer<AutocompleteResponse?>(() =>
         {
             var request = new AutocompleteRequest(query, context);
             var delivery = hub.Post(request, o => o.WithTarget(target));
+            if (delivery == null)
+                return Observable.Return<AutocompleteResponse?>(null);
 
-            if (delivery != null)
-            {
-                hub.Observe((IMessageDelivery)delivery)
-                    .Subscribe(
-                        d =>
-                        {
-                            if (d.Message is AutocompleteResponse resp)
-                                tcs.TrySetResult(resp);
-                            else
-                                tcs.TrySetResult(null);
-                        },
-                        _ => tcs.TrySetResult(null));
-            }
-            else
-            {
-                tcs.TrySetResult(null);
-            }
-
-            return await tcs.Task.WaitAsync(timeoutCts.Token);
-        }
-        catch (OperationCanceledException)
+            return hub.Observe((IMessageDelivery)delivery)
+                .Take(1)
+                .Select(d => d.Message as AutocompleteResponse);
+        })
+        .Timeout(TimeSpan.FromSeconds(2))
+        .Catch<AutocompleteResponse?, Exception>(ex =>
         {
-            tcs.TrySetResult(null);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            logger?.LogDebug(ex, "[ChatComplete] AutocompleteRequest to {Target} failed", target);
-            tcs.TrySetResult(null);
-            return null;
-        }
+            if (ex is not (TimeoutException or OperationCanceledException))
+                logger?.LogDebug(ex, "[ChatComplete] AutocompleteRequest to {Target} failed", target);
+            return Observable.Return<AutocompleteResponse?>(null);
+        });
     }
 
     private enum CompletionMode
@@ -692,3 +539,4 @@ internal sealed class ChatCompletionOrchestrator(
 
     #endregion
 }
+

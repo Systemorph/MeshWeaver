@@ -140,6 +140,106 @@ protected override void OnParametersSet()
 
 The view re-renders on every change to the node. This is the right primitive for editors, dashboards, collaborative views, anywhere the user sees the content live. **Never `.Take(1)` on a long-standing display stream** — that snapshots and unsubscribes; the view stops updating.
 
+## Multi-source streams with completion-driven UI state
+
+Sometimes a view runs several producers in parallel and wants to render an
+"in-flight" indicator (a spinner, a "Loading…" hint) until **all** producers
+have finished. The reactive shape: each producer is an `IObservable<T>` that
+emits 0…N values then completes; the view subscribes once, flips a "loading"
+flag on subscription, and clears it on `OnCompleted`. The chat-completion
+orchestrator ([ChatCompletionOrchestrator](../../../MeshWeaver.Hosting/Completion/ChatCompletionOrchestrator.cs))
+is the canonical example.
+
+```csharp
+public partial class ChatInputView : ComponentBase, IDisposable
+{
+    [Inject] private IChatCompletionOrchestrator Completions { get; set; } = null!;
+
+    private bool _isCompletionsInflight;          // Drives the spinner
+    private IReadOnlyList<CompletionItem> _items = [];
+    private IDisposable? _sub;
+    private bool _isDisposed;
+
+    private void RunCompletions(string query)
+    {
+        _sub?.Dispose();
+        SetInflight(true);
+
+        _sub = Completions
+            // Returns IObservable<CompletionBatch> directly — no IAsyncEnumerable bridge.
+            .GetCompletions(query, currentNamespace: _ns)
+            .SelectMany(batch => batch.Items.Select(ToItem))
+            .ScanTopN(50, ItemSortComparer)
+
+            // ⬇ Critical: DistinctUntilChanged collapses redundant snapshots so a
+            //    producer that completes WITHOUT changing the visible top-N
+            //    doesn't trigger an extra StateHasChanged / JS-interop push.
+            //    Use a stable key over the snapshot — reference equality fails
+            //    because every Scan emits a fresh list instance.
+            .DistinctUntilChanged(SnapshotKey)
+
+            // ⬇ Finally fires on natural completion AND on early disposal,
+            //    so the spinner clears whether the stream completed cleanly,
+            //    errored, or the view tore down mid-flight.
+            .Finally(() => SetInflight(false))
+
+            .Subscribe(
+                snapshot =>
+                {
+                    _items = snapshot;
+                    if (!_isDisposed) InvokeAsync(StateHasChanged);
+                },
+                ex => Logger.LogError(ex, "Completions failed"));
+    }
+
+    private void SetInflight(bool value)
+    {
+        if (_isCompletionsInflight == value) return;   // manual DistinctUntilChanged
+        _isCompletionsInflight = value;
+        if (!_isDisposed) InvokeAsync(StateHasChanged);
+    }
+
+    private static string SnapshotKey(IReadOnlyList<CompletionItem> items) =>
+        string.Join('', items.Select(i => i.SortKey ?? i.Label ?? ""));
+
+    public void Dispose() { _isDisposed = true; _sub?.Dispose(); }
+}
+```
+
+```razor
+@if (_isCompletionsInflight)
+{
+    <FluentProgressRing Title="Loading suggestions…" />
+}
+@foreach (var item in _items) { ... }
+```
+
+### Why this works
+
+| Concern | Reactive primitive | Why |
+|---|---|---|
+| Stream lifecycle | `IObservable<T>` end-to-end | `OnCompleted` is the natural "all sources done" signal — no `ProducerTracker`, no `ChannelWriter`, no `TaskCompletionSource`. |
+| In-flight indicator | `Defer` at start + `Finally(() => SetInflight(false))` | Symmetric: subscription flips on, terminal notification flips off. Catches normal completion, error, and early dispose. |
+| Redundant updates | `DistinctUntilChanged(KeySelector)` | Each `Scan` emits a fresh list, so reference comparison always passes through. A stable string/hash key over the items makes the comparator meaningful. |
+| Cross-producer merge | Producer-side: `Observable.Merge(a, b).Concat(Defer(maybeC))` | Merge fans out A and B; Concat starts C only after the Merge completes; Defer captures the accumulated state at C-start time. No locks, no Subjects. |
+
+### Don't bridge to `IAsyncEnumerable` just to consume an `IObservable`
+
+```csharp
+// ❌ WRONG — converts to IAsyncEnumerable and back, loses OnCompleted timing,
+//    forces an extra Channel hop, and doesn't compose with DistinctUntilChanged.
+return Completions.GetCompletionsAsync(query, _ns)
+    .ToObservableSequence()
+    .ScanTopN(...)
+    .Subscribe(...);
+
+// ✅ RIGHT — the orchestrator IS an IObservable; subscribe directly.
+return Completions.GetCompletions(query, _ns)
+    .ScanTopN(...)
+    .DistinctUntilChanged(SnapshotKey)
+    .Subscribe(...);
+```
+
 ## Click handlers — sync + Subscribe, never `async ctx => await ...`
 
 ```csharp

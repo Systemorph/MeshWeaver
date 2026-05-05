@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Reactive;
 using FluentAssertions;
@@ -409,6 +411,71 @@ public class AutocompleteIntegrationTest : MonolithMeshTestBase
         allItems.Should().Contain(i =>
             i.InsertText.Contains("ACME", StringComparison.OrdinalIgnoreCase),
             "broadening should find ACME from Systemorph context");
+    }
+
+    #endregion
+
+    #region Timing Analysis
+
+    /// <summary>
+    /// Stopwatch-based latency analysis for the orchestrator. For each scenario,
+    /// records: time from subscribe → first batch (per category), time from subscribe →
+    /// OnCompleted. Prints a tab-separated table to test output so the user can compare
+    /// "partition itself appearing" vs "items inside partition appearing" vs static-vs-Postgres.
+    /// Not a pass/fail check — just timing diagnostics.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task TimingAnalysis_OrchestratorScenarios_RecordsLatencies()
+    {
+        var scenarios = new (string Label, string Query, string? Context)[]
+        {
+            ("@/ → all partitions",            "@/",                null),
+            ("@/Sys → filtered partitions",    "@/Sys",             null),
+            ("@/ACME/ → drill down (items)",   "@/ACME/",           null),
+            ("@/Doc/ → drill down (static)",   "@/Doc/",            null),
+            ("@Mark → in-partition broaden",   "@Mark",             "Systemorph"),
+            ("@ACM → cross-partition broaden", "@ACM",              "Systemorph"),
+            ("@/ACME/Project → deep path",     "@/ACME/Project",    null),
+        };
+
+        Output.WriteLine($"{"Scenario",-38} {"FirstBatch",10} {"BatchTimes (ms by category)",-50} {"Completed",10}");
+        Output.WriteLine(new string('-', 120));
+
+        foreach (var (label, query, context) in scenarios)
+        {
+            var (firstBatchMs, perCategoryMs, completedMs) =
+                await MeasureCompletionTimingsAsync(query, context, TestContext.Current.CancellationToken);
+
+            var perCategory = string.Join(", ",
+                perCategoryMs.Select(kv => $"{kv.Key}={kv.Value:F0}"));
+
+            Output.WriteLine(
+                $"{label,-38} {firstBatchMs,9:F0}ms {perCategory,-50} {completedMs,9:F0}ms");
+        }
+    }
+
+    private async Task<(double FirstBatchMs, IDictionary<string, double> PerCategoryMs, double CompletedMs)>
+        MeasureCompletionTimingsAsync(string query, string? context, CancellationToken ct)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var firstBatchMs = -1.0;
+        var perCategory = new Dictionary<string, double>();
+        var completedTcs = new TaskCompletionSource<double>();
+
+        using var sub = Orchestrator.GetCompletions(query, context).Subscribe(
+            batch =>
+            {
+                var t = sw.Elapsed.TotalMilliseconds;
+                if (firstBatchMs < 0) firstBatchMs = t;
+                if (!perCategory.ContainsKey(batch.Category))
+                    perCategory[batch.Category] = t;
+            },
+            ex => completedTcs.TrySetException(ex),
+            () => completedTcs.TrySetResult(sw.Elapsed.TotalMilliseconds));
+
+        var completedMs = await completedTcs.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+
+        return (firstBatchMs, perCategory, completedMs);
     }
 
     #endregion
