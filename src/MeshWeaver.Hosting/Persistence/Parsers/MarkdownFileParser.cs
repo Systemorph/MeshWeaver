@@ -108,12 +108,6 @@ public partial class MarkdownFileParser : IFileFormatParser
             lastModified = DateTimeOffset.UtcNow;
         }
 
-        // Use Published date if available, otherwise file last modified
-        if (frontMatter?.Published != null && DateTimeOffset.TryParse(frontMatter.Published, out var publishedDate))
-        {
-            lastModified = publishedDate;
-        }
-
         // Parse markdown and create MarkdownContent with pre-rendered HTML and code submissions
         var fullNodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
         var markdownDocument = MarkdownContent.Parse(markdownContent, relativePath, fullNodePath) with
@@ -121,14 +115,13 @@ public partial class MarkdownFileParser : IFileFormatParser
             Authors = frontMatter?.Authors,
             Tags = frontMatter?.Tags,
             Thumbnail = frontMatter?.Thumbnail,
-            Abstract = frontMatter?.Abstract ?? frontMatter?.Description
+            Abstract = frontMatter?.Abstract
         };
 
         var node = new MeshNode(id, ns)
         {
             NodeType = frontMatter?.NodeType ?? "Markdown",
-            // Name: prefer Name, then Title (legacy), then id
-            Name = frontMatter?.Name ?? frontMatter?.Title ?? id,
+            Name = frontMatter?.Name ?? id,
             Category = frontMatter?.Category,
             // Icon: prefer Icon, then Thumbnail (fallback), resolve relative paths
             Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
@@ -361,8 +354,12 @@ public partial class MarkdownFileParser : IFileFormatParser
     }
 
     /// <summary>
-    /// YAML front matter model for markdown files.
-    /// Supports both new MeshNode properties and legacy Article properties for backwards compatibility.
+    /// YAML front matter model for markdown files. Mirrors the canonical MeshNode
+    /// properties (Name, Category, Icon, State, NodeType) plus the markdown-specific
+    /// metadata captured on <see cref="MarkdownContent"/> (Authors, Tags, Thumbnail,
+    /// Abstract). The legacy <c>Title</c> / <c>Published</c> / <c>"Doc/Article"</c>
+    /// NodeType frontmatter has been retired — Markdown is the default NodeType when
+    /// the field is omitted.
     /// </summary>
     private class MarkdownFrontMatter
     {
@@ -370,18 +367,13 @@ public partial class MarkdownFileParser : IFileFormatParser
         public string? NodeType { get; set; }
         public string? Name { get; set; }
         public string? Category { get; set; }
-        public string? Description { get; set; }
         public string? Icon { get; set; }
         public string? State { get; set; }
 
-        // Legacy Article properties (for backwards compatibility when reading)
-        public string? Title { get; set; }          // Maps to Name
-        public string? Abstract { get; set; }       // Maps to Description
-        public string? Published { get; set; }      // Maps to LastModified
-
-        // Article metadata (stored in MarkdownContent)
+        // MarkdownContent metadata
         public List<string>? Authors { get; set; }
         public List<string>? Tags { get; set; }
         public string? Thumbnail { get; set; }
+        public string? Abstract { get; set; }
     }
 }

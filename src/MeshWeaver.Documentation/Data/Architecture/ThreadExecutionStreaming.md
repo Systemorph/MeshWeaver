@@ -1,9 +1,7 @@
 ---
-NodeType: "Doc/Article"
-Title: "Thread Execution & Message Rendering — Fully Data-Bound"
+Name: "Thread Execution & Message Rendering — Fully Data-Bound"
 Abstract: "How AI thread execution writes streaming content into a thread message and how the GUI renders it. Writer opens a long-lived GetRemoteStream and pushes deltas via .Update. The layout area ships a path-bound control. The Blazor view subscribes to the same per-message stream and renders directly. Single source of truth — no per-chunk hub posts, no layout data section, no JsonPointerReference chain."
 Icon: "Thread"
-Published: "2026-04-25"
 Authors:
   - "Roland Buergi"
 Tags:

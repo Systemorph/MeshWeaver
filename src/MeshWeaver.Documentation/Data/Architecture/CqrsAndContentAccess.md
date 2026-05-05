@@ -1,9 +1,7 @@
 ---
-NodeType: "Doc/Article"
-Title: "CQRS — Queries, Reads, Writes, Operations"
+Name: "CQRS — Queries, Reads, Writes, Operations"
 Abstract: "Query only for finding sets of elements. For a specific node's content use GetDataRequest for a one-shot, GetRemoteStream for a live subscription. Writes go through PatchDataChangeRequest. Operations like 'run this script' are named request types handled on the owning node's hub — the implementation (e.g. the kernel) stays private."
 Icon: "Split"
-Published: "2026-04-23"
 Thumbnail: "images/DataMesh.svg"
 Authors:
   - "Roland Buergi"

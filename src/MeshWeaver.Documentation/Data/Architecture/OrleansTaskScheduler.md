@@ -1,9 +1,7 @@
 ---
-NodeType: "Doc/Article"
-Title: "Per-Hub TaskScheduler — Actor Isolation Across the Mesh"
+Name: "Per-Hub TaskScheduler — Actor Isolation Across the Mesh"
 Abstract: "Each MeshWeaver hub is its own actor and runs on its own TaskScheduler. The root grain hub uses the Orleans grain scheduler so Orleans attributes work to the grain. Every other hub — hosted hubs, per-node hubs, _Exec, kernel hubs — uses TaskScheduler.Default by default. WithTaskScheduler is the one knob; this page explains how it's plumbed and why each hub class gets the scheduler it does."
 Icon: "Cogs"
-Published: "2026-04-25"
 Authors:
   - "Roland Buergi"
 Tags:
