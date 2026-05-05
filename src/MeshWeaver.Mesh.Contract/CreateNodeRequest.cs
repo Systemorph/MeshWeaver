@@ -19,6 +19,18 @@ public record CreateNodeRequest(MeshNode Node) : IRequest<CreateNodeResponse>
     /// The user or system requesting the creation.
     /// </summary>
     public string? CreatedBy { get; init; }
+
+    /// <summary>
+    /// Optional initialization payload forwarded to the newly-created node's hub
+    /// after persistence succeeds. Lets a single CreateNodeRequest atomically
+    /// create the node AND queue the first message of work for it — e.g. a
+    /// Thread's first <see cref="MeshWeaver.AI.AppendUserMessageRequest"/> —
+    /// without a second client round-trip. The mesh hub posts <c>Argument</c>
+    /// fire-and-forget to the new node's address with the original requester's
+    /// AccessContext; the target hub processes it through its normal handler
+    /// pipeline (including its own permission check).
+    /// </summary>
+    public object? Argument { get; init; }
 }
 
 /// <summary>
