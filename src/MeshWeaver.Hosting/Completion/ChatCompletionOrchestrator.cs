@@ -390,26 +390,9 @@ internal sealed class ChatCompletionOrchestrator(
 
                 if (partitionItems.Count > 0)
                     await writer.WriteAsync(new CompletionBatch("Partition", PartitionSearchPriority, partitionItems), ct);
-
-                // If partition results + previous results are enough, stop
-                if (resultCounter.Count >= BroadeningThreshold && !forcesBroadening)
-                    return;
             }
-
-            // Phase 2: Cross-partition (global fan-out)
-            var globalItems = new List<AutocompleteItem>();
-
-            await foreach (var suggestion in meshService.AutocompleteAsync(
-                "", searchText, AutocompleteMode.RelevanceFirst, 20, currentNamespace, ct: ct))
-            {
-                if (seenPaths.TryAdd(suggestion.Path, 0))
-                {
-                    globalItems.Add(SuggestionToItem(suggestion, CrossPartitionPriority, "Global"));
-                }
-            }
-
-            if (globalItems.Count > 0)
-                await writer.WriteAsync(new CompletionBatch("Global", CrossPartitionPriority, globalItems), ct);
+            // Phase 2 (global cross-partition fan-out) is intentionally absent.
+            // Non-/ queries stay within the current partition; use @/ to search globally.
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
