@@ -24,4 +24,9 @@
     <ProjectReference Include="..\MeshWeaver.Insurance.Domain\MeshWeaver.Insurance.Domain.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 </Project>

@@ -1,840 +1,256 @@
 # AGENTS.md
 
-This file provides guidance to AI agents when working with code in this repository.
+This file provides guidance to AI agents working with this repository.
 
 ## Git Workflow
 
-**NEVER commit or push automatically.** Always wait for the user to explicitly ask for a commit or push. Present changes for review first.
+**NEVER commit or push automatically.** Always wait for the user to explicitly ask.
 
-## Test Triage Workflow
+## Test Triage
 
-When CI fails, **DO NOT run entire test projects locally** — they take 1-5 min each, multiply across iterations, and burn the user's time. Instead:
+When CI fails, **DO NOT run entire test projects** — iterate one test at a time:
 
-1. **Read the failed test names from CI logs** — `gh run view <id> --log` already names them line-by-line in `[xUnit.net …] testName [FAIL]`. The trx artifact gives full stack traces.
-2. **Run ONE test at a time locally** with `dotnet test <project> --filter "FullyQualifiedName~<TestName>" --no-build --no-restore`. Iterate on a single failing test until it passes, then move on.
-3. **No skipping**. If a test fails, fix it. "CI-only flake" is rarely the right answer — usually the test catches a real eventually-consistent timing or shared-state bug.
+1. Read failed test names from CI logs (`gh run view <id> --log`)
+2. `dotnet test <project> --filter "FullyQualifiedName~<TestName>" --no-build --no-restore`
+3. **No skipping** — CI-only failures catch real timing/state bugs
 
-For full guidance on test-base setup, stream assertions, `Subject` vs. `ReplaySubject`, and the CI-only-failure-is-a-real-bug rule, read:
-
-- [Writing Tests in MeshWeaver](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md) — golden rules, stream assertions, the `ReadNodeAsync` primitive, how to handle CI-only failures.
-- [CQRS — Queries vs. Content Access](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) — why `QueryAsync` is the wrong read after a write.
-- [Test State Isolation](src/MeshWeaver.Documentation/Data/Architecture/TestStateIsolation.md) — required if your tests share a cluster fixture.
+Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md) · [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md) · [TestStateIsolation.md](src/MeshWeaver.Documentation/Data/Architecture/TestStateIsolation.md)
 
 ## GitHub PR Operations
 
-The `gh` CLI token has **read + push** permissions but **cannot** merge PRs, resolve review threads, or request reviewers. For these operations:
+`gh` CLI has **read + push** only — cannot merge, resolve threads, or request reviewers.
 
-### Resolve review threads + merge via GraphQL
 ```bash
-# 1. Find unresolved threads
-gh api graphql -f query='
-query($owner:String!, $repo:String!, $pr:Int!) {
-  repository(owner:$owner, name:$repo) {
-    pullRequest(number:$pr) {
-      reviewThreads(first:100) {
-        nodes { id isResolved }
-      }
-    }
-  }
-}' -f owner=Systemorph -f repo=MeshWeaver -F pr=PR_NUMBER \
+# Find unresolved review threads
+gh api graphql -f query='query($owner:String!, $repo:String!, $pr:Int!) { repository(owner:$owner, name:$repo) { pullRequest(number:$pr) { reviewThreads(first:100) { nodes { id isResolved } } } } }' \
+  -f owner=Systemorph -f repo=MeshWeaver -F pr=PR_NUMBER \
   --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | .id'
-
-# 2. Resolve each thread
+# Resolve a thread
 gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ clientMutationId }}' -f id=THREAD_ID
-
-# 3. Merge
 gh pr merge PR_NUMBER --merge
 ```
 
-**If these fail with `FORBIDDEN`**, the token lacks write scope — do it from the GitHub UI or re-authenticate with `! gh auth login`.
+**If `FORBIDDEN`**: re-authenticate with `! gh auth login`.
 
-## 🚨 Postgres schemas: one per partition (READ THIS BEFORE QUERYING THE DB)
+## 🚨 Postgres: One Schema Per Partition
 
-**`public.mesh_nodes` is empty by design.** Every mesh node lives in a per-partition schema:
+**`public.mesh_nodes` is empty by design.** Data lives in per-partition schemas (`acme.mesh_nodes`, `rbuergi.mesh_nodes`, etc.).
 
-| Path | Schema |
-|---|---|
-| `ACME/Project/Foo` | `acme.mesh_nodes` |
-| `rbuergi/Notes` | `rbuergi.mesh_nodes` (post-v10: per-user schema) |
-| `Cornerstone/Pricing` | `cornerstone.mesh_nodes` |
+Satellite table routing by path segment:
 
-When a "row isn't there", the first thing to check is the schema. The discovery query is:
-
-```sql
-SELECT schema_name FROM information_schema.schemata s
-WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes')
-  AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
-  AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\';
-```
-
-**Satellite tables are routed by path segment, not nodeType.** Same per-partition schema, different table:
-
-| Path segment in namespace | Lands in table |
+| Path segment | Table |
 |---|---|
 | `…/_Access/…` | `access` |
-| `…/_Thread/…` | `threads` (also `ThreadMessage` children of any `_Thread/{id}/…`) |
+| `…/_Thread/…` | `threads` |
 | `…/_Activity/…` | `activities` |
 | `…/_Comment/…`, `_Approval`, `_Tracking` | `annotations` |
 | `…/Source/…` or `…/Test/…` | `code` |
-| (no satellite suffix) | `mesh_nodes` |
+| (none) | `mesh_nodes` |
 
-Wrong path segment → wrong table → triggers (especially `access_changed`) never fire → silent permission denial. Repair v1 in `memex/aspire/Memex.Database.Migration/Program.cs` exists because of this exact bug.
+**`namespace` keeps the partition prefix — never strip it.** `namespace = rbuergi/ApiToken`, not `ApiToken`.
 
-**`namespace` keeps the partition prefix — do NOT strip it.** Inside `{partition}.mesh_nodes`, the `namespace` column is `rbuergi/ApiToken` (full), not bare `ApiToken`. The generated `path` is `namespace || '/' || id` — no auto-prepending. Stripping the prefix breaks dashboard queries (`namespace:rbuergi/ApiToken nodeType:ApiToken`), `ApiTokenIndex.tokenPath` lookups, and any code that builds full-path queries. (The user-identity row at `namespace='', id='rbuergi'` is a special case, not the rule.)
+**Never run raw `psql UPDATE` on a live portal** — bypasses the workspace cache. Use `MoveNodeRequest` or add a Repair vN migration. If you must SQL-edit, restart `Memex.Portal.Distributed`.
 
-**Never run raw `psql UPDATE` against a live portal to fix paths.** Direct SQL bypasses the workspace stream → portal serves stale rows from cache → MCP `get` returns "not found" while search hits the new path; token validation 401s after the 5-min cache expires; recompile-on-edit doesn't fire. Use `MoveNodeRequest` (proper hub round-trip) or add a Repair vN to `Memex.Database.Migration` and restart Aspire. If you must SQL-edit a live portal, restart `Memex.Portal.Distributed` afterwards (Aspire respawns it).
-
-Full reference: `Doc/Architecture/PostgresSchemaArchitecture.md`. Postmortem of the demo this avoidance was extracted from: `Doc/Architecture/Postmortems/PostmortemDavDemo.md`.
+Full reference: [PostgresSchemaArchitecture.md](src/MeshWeaver.Documentation/Data/Architecture/PostgresSchemaArchitecture.md)
 
 ## Documentation
 
-Documentation is embedded in `src/MeshWeaver.Documentation/` and served under the `Doc/` namespace at runtime.
+All docs embedded in `src/MeshWeaver.Documentation/` and served under `Doc/` at runtime.
 
-### Architecture
+| Topic area | Path |
+|---|---|
+| Architecture | `src/MeshWeaver.Documentation/Data/Architecture/` |
+| DataMesh | `src/MeshWeaver.Documentation/Data/DataMesh/` |
+| GUI | `src/MeshWeaver.Documentation/Data/GUI/` |
+| AI Integration | `src/MeshWeaver.Documentation/Data/AI/` |
+| Agent definitions | `src/MeshWeaver.AI/Data/Agent/` |
 
-The documentation on the architecture is accessible via src/MeshWeaver.Documentation/Data/Architecture/
+**Hub-handler test hangs or message disappears:** read [DebuggingMessageFlow.md](src/MeshWeaver.Documentation/Data/Architecture/DebuggingMessageFlow.md) first — it tells you which trace tags to grep and why you should never rerun a hung test "to see".
 
-Topics: Message-based communication, Actor model, UI streaming, AI agents, Data versioning, Serialization, Access control, Partitioned persistence, Business rules & calculations, **Debugging message flow**
+**`type 'X' is not registered in this hub's TypeRegistry`:** Fix is `WithType(typeof(X), nameof(X))` on the receiving hub. See DebuggingMessageFlow.md → "Type-registry mismatch".
 
-**When a hub-handler test hangs or a message disappears: read `Doc/Architecture/DebuggingMessageFlow.md` first.** It tells you exactly which trace tags to grep, where to crank the log levels, and **why you should never rerun a hung test 2-3 times "to see"** — the framework already prints a structured `MESSAGE_FLOW:` trace at `Trace` level. Run once, grep, fix.
+**Use `hub.Observe(...)` not `RegisterCallback`/`AwaitResponse`** — those overloads are `[Obsolete]` and deadlock. Tests use `MonolithMeshTestBase.AwaitResponseAsync(...)`.
 
-### `type 'X' is not registered in this hub's TypeRegistry` = registry parity mismatch
+## Deployment
 
-The handler is registered, but the inbound `$type` discriminator doesn't resolve on the receiver — `MessageService.DeserializeDelivery` catches the JsonElement fallback and posts `DeliveryFailure` back, so the sender's `hub.Observe(...)` surfaces this through `OnError` (no silent drop, no hang). Fix: `WithType(typeof(X), nameof(X))` on the receiving hub. For Orleans, that's both the silo hub config and any client/portal hub posting the request. Full treatment: `Doc/Architecture/DebuggingMessageFlow.md` → "Type-registry mismatch".
+**Never run bare `aspire deploy`** — Aspire 13.2 reports success even when the db-migration container crashes. Always use:
 
-### Request/response: `hub.Observe(...)` — NOT `RegisterCallback` / `AwaitResponse`
+```bash
+tools/deploy.sh prod   # production
+tools/deploy.sh test   # test environment
+```
 
-The Task-returning `IMessageHub.RegisterCallback(...)` and `IMessageHub.AwaitResponse(...)` overloads are `[Obsolete]`. Production code uses `hub.Observe(request, options?)` (returns `IObservable<IMessageDelivery<TResponse>>`) — DeliveryFailure flows via `OnError`; no Task-await deadlock; no silently-skipped callback. Tests use `MonolithMeshTestBase.AwaitResponseAsync(request, ...)` which is a thin Task wrapper for ergonomic test code only.
-
-**NEVER** `Observable.FromAsync(() => hub.RegisterCallback(...))` — bridges the Task back into Rx and the continuation captures sync-context → deadlock. `hub.Observe(...)` uses `task.ToObservable()` which is a different operator (no func re-invocation, no scheduler capture).
-
-### DataMesh
-
-The documentation on the data mesh is accessible via src/MeshWeaver.Documentation/Data/DataMesh/
-
-Topics: Node type configuration, Query syntax, Unified Path references, Interactive markdown, Collaborative editing, CRUD operations, Data modeling
-
-### GUI
-
-The documentation on the GUI is accessible via src/MeshWeaver.Documentation/Data/GUI/
-
-Topics: Container controls (Stack, Tabs, Toolbar, Splitter), Layout grid, DataGrid, Editor, Observables, Data binding, Attributes, Reactive dialogs
-
-### AI Integration
-
-The documentation on AI integration is accessible via src/MeshWeaver.Documentation/Data/AI/
-
-Topics: Agentic AI, MCP authentication, MeshPlugin tools (Get, Search, Create, Update, Delete, NavigateTo)
-
-### Deployment
-
-The documentation on deployment is accessible via src/MeshWeaver.Documentation/Data/Architecture/Deployment.md
-
-Topics: Aspire CLI deployment, deployment modes (local/test/prod/monolith), secrets management, Azure Container Apps, PostgreSQL, Orleans clustering, infrastructure provisioning
-
-**Quick deploy commands** (run from repo root):
-- **Prod**: `tools/deploy.sh prod`
-- **Test**: `tools/deploy.sh test`
-
-**🚨 Never run bare `aspire deploy` for prod/test.** Aspire 13.2 reports the pipeline as ✓ when the db-migration container *app* provisions, even if the migration container inside crashes (V02 pg_hba.conf, etc.). `tools/deploy.sh` wraps `aspire deploy` + polls the migration replica's `lastTerminationState.exitCode` + runs `check-db-version.csx` for an end-to-end version assert. The first-party deploy-time hook (`DeployingCallbackAnnotation`) lands in Aspire Wave 14; until then the wrapper is the only way to fail-loud on a half-migrated DB.
-
-Prerequisites: Azure CLI authenticated, Aspire CLI installed, Docker running, `dotnet-script` installed. See `Doc/Architecture/Deployment.md` for the full story (DbVersionGate, healthcheck, version bump procedure).
-
-### Agents
-
-Built-in agent definitions are embedded in src/MeshWeaver.AI/Data/Agent/
-
-Agents: Executor, Navigator, Planner, Research
+Full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/Deployment.md)
 
 ## Bash Command Guidelines
 
-**Stay in the root directory** (`C:\dev\MeshWeaver`) and use simple, single commands. Chained commands (`&&`, `||`), `for` loops, and `cd` all require user confirmation — avoid them.
-```bash
-# CORRECT — simple single commands from root directory
-dotnet build src/MeshWeaver.Graph/MeshWeaver.Graph.csproj
-dotnet test test/MeshWeaver.Graph.Test --no-build
-
-# WRONG — these all require extra approval:
-cd /c/dev/MeshWeaver && dotnet build    # chained cd
-for d in test/*; do dotnet test $d; done  # for loop
-dotnet build && dotnet test               # chained commands
-```
+**Stay in root** (`C:\dev\MeshWeaver`). Avoid chained commands (`&&`, `||`), `for` loops, and `cd` — they all require user confirmation.
 
 ## Development Commands
 
-### Build and Test
 ```bash
-# Build entire solution
-dotnet build
-
-# Run tests (uses xUnit v3)
-dotnet test
-
-# Run specific test project (example)
-dotnet test test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj
-
-# Clean solution
-dotnet clean
-
-# Restore packages
-dotnet restore
+dotnet build                                              # Build solution
+dotnet test test/MeshWeaver.Data.Test --no-restore        # Run one test project
+dotnet run --project memex/Memex.Portal.Monolith          # Dev portal (https://localhost:7122)
+dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker)
 ```
 
-### Running Applications
+## 🚨 Reactive Pattern — Nothing Async Ever
 
-#### Memex Portal (Recommended for Development)
-```bash
-dotnet run --project memex/Memex.Portal.Monolith
-# Access at https://localhost:7122
-```
+**No `await`, no `async`, no `Task<T>` in hub-reachable code.** All hub code is `IObservable<T>` end-to-end.
 
-The Memex Portal uses `AddGraph()` to dynamically load Graph nodes from `samples/Graph/Data/`, and `AddDocumentation()` to serve embedded documentation under the `Doc/` namespace. This is the recommended portal for development.
+- Handlers, services, layout areas → return `IObservable<T>` (or `void` for fire-and-forget). Never `Task<T>`.
+- Compose with `.SelectMany`, `.Select`, `.Where`, `.Timeout`.
+- Task-returning primitives: convert at the boundary only via `Observable.FromAsync(() => task)`.
+- MCP/SDK surface adapters: one-line `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();` is the only sanctioned exception.
+- Click actions: `WithClickAction(ctx => { ...; return Task.CompletedTask; })` — never `async ctx =>`.
+- `TaskCompletionSource` in hub code = red flag — delete it, return `IObservable<T>`.
+- **Tests only**: `await .FirstAsync().ToTask()` is acceptable.
 
-#### Microservices Portal (.NET Aspire)
-```bash
-dotnet run --project memex/aspire/Memex.AppHost
-# Access Aspire dashboard for service management
-# Requires Docker for dependencies
-```
+**Auto-save pattern:** Form fields update the MeshNode via `stream.UpdateMeshNode` (debounced). The click action reads nothing — just flips a trigger field. No `Take(1)` on a hot stream.
 
-## 🚨 Reactive Pattern — NOTHING ASYNC EVER (READ THIS FIRST)
+Full patterns + mistake ledger: [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md)
 
-> **RULE: no `await`, no `async`, no `Task<T>` return types anywhere in hub-reachable
-> code. Period. No exceptions for "just this small bit".** Mesh code is `IObservable<T>`
-> end-to-end. `async` + `await` looks innocent and deadlocks the mesh. Every recent
-> "ExecuteScript times out", "Patch hangs", "click does nothing" incident traced to
-> someone (usually me) sliding an `await` into a path that eventually flows through a
-> hub handler. **Stop doing it.**
+## 🚨 CQRS — Never Query for a Single Node's Content
 
-**What this actually means:**
-
-- **Return types**: public methods on `MeshOperations`, handlers, services, layout
-  areas → `IObservable<T>` (or `void` for fire-and-forget). Never `Task<T>`.
-- **Internals**: compose with `.SelectMany`, `.Select`, `.Where`, `.Timeout`. Convert
-  Task-returning primitives at the boundary with `Observable.FromAsync(() => task)`
-  — but never `await` the task yourself inside hub flow.
-- **MCP / external-SDK boundaries** that MUST return `Task<T>` (because the SDK
-  requires it): acceptable as a *single adapter layer* at the surface — e.g.
-  `public Task<string> Patch(...) => ops.Patch(...).FirstAsync().ToTask();`. Keep
-  the body of that adapter one line. The hub work itself still lives on
-  `IObservable<T>`.
-- **Click actions**: synchronous — `WithClickAction(ctx => { ...; return Task.CompletedTask; })`.
-  Never `async ctx =>`.
-- **Tests**: the single exception. Test code MAY `await` to block until a stream
-  emits (`.FirstAsync().ToTask()`). Everywhere else, no.
-
-**The canonical mistake ledger (what has blown up recently):**
-
-- `Patch` TCS hang — `SerialisePretty` threw inside `Subscribe`, TCS never resolved,
-  xUnit fact timed out at 30 s. Fix: `Observable.FromAsync` + composed chain, not
-  Subscribe-with-TCS-callback.
-- `ExecuteScript` silent timeout — `AwaitResponse` inside a tool method, response
-  never routed back to the scope that awaited.
-- Kernel grain activation loop — `await contentService.GetContentAsync(...)` inside
-  a script deadlocked the kernel's action block.
-- Any `TaskCompletionSource` in hub-reachable code is a code smell — a 99%-of-the-time
-  sign that someone is trying to bridge `IObservable` → `Task` inside the hub flow.
-  Delete it and return `IObservable<T>` instead.
-
-**If you catch yourself reaching for `async`/`await`/`Task<T>` in hub code: stop,
-refactor to `IObservable<T>`, and submit a PR without the async. "But this is a small
-helper" / "just a one-liner wrapper" / "the MCP SDK needs Task" are all traps — the
-wrapper either becomes part of the hot path or someone copies it into one.**
-
-### Reactive in click actions: use `stream.Update`, not `Take(1) + Subscribe + UpdateMeshNode`
-
-**Wrong (still works, but reaches into the wrong part of the API surface):**
+`QueryAsync`/`ObserveQuery` are eventually consistent — **stale after writes**. To read a specific node:
 
 ```csharp
-// Reads form data manually inside the click action.
-.WithClickAction(ctx =>
-{
-    ctx.Host.Stream.GetDataStream<MyForm>(formId)
-        .Take(1)
-        .Subscribe(form =>
-        {
-            ctx.Host.Workspace.UpdateMeshNode(curr =>
-                curr with { Content = ((MyContent)curr.Content!) with { Field = form.Field } });
-        });
-    return Task.CompletedTask;
-})
-```
-
-**Right (form auto-saves; click only flips the trigger field):**
-
-```csharp
-// In the form setup, debounce-write form fields onto the MeshNode via
-// workspace.UpdateMeshNode (composed inside SetupAutoSave).
-SetupAutoSave(host, dataId, form, node);
-
-// In the click action, read NOTHING. Just flip the trigger field — form data
-// arrived earlier through the auto-save subscription.
-.WithClickAction(ctx =>
-{
-    ctx.Host.Workspace.UpdateMeshNode(curr =>
-        curr with { Content = ((MyContent)curr.Content!) with { Status = "Pending" } });
-    return Task.CompletedTask;
-})
-```
-
-The auto-save → click split is the canonical pattern: form fields update the
-MeshNode through `stream.UpdateMeshNode` debounced; the click action runs in O(1)
-and never reads from a data stream. No `Take(1)` on a hot stream just to peek at
-"current value" — the value is already on the node.
-
-## 🚨 CQRS — never query for a single node's content
-
-> **Queries (`QueryAsync` / `ObserveQuery`) bring sets of elements. Nothing more.**
-> To read the *content* of a specific node, **never use a query** — use
-> `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(address, new MeshNodeReference())`.
-
-Queries route through a read-side index that is **eventually consistent** — it lags
-behind writes. Using `mesh.QueryAsync($"path:X").FirstOrDefaultAsync()` (or any
-`Observable.FromAsync(() => ...)` wrapper around it) to read `X` will sometimes
-return stale content right after a write. That's the bug class this rule prevents.
-
-```csharp
-// ❌ WRONG — indexed read path, lagged, stale just after writes.
+// ❌ WRONG — lagged index, stale after writes
 var node = await mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
 
-// ❌ WRONG — same bug wrapped in Observable.FromAsync to look reactive.
-return Observable.FromAsync(ct =>
-    mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync(ct).AsTask());
-
-// ✅ CORRECT — direct subscription to the owning hub's workspace. Authoritative,
-//    live (you get future updates too), no staleness.
-var workspace = hub.GetWorkspace();
-return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-        new Address(path), new MeshNodeReference())
-    .Take(1)
-    .Timeout(TimeSpan.FromSeconds(10))
-    .Select(change => change.Value);
+// ✅ CORRECT — authoritative, live
+workspace.GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference())
+    .Take(1).Timeout(TimeSpan.FromSeconds(10)).Select(change => change.Value);
 ```
 
-**Valid query uses:**
-- Listing children of a namespace (`path/*`)
-- Searching by predicate (`nodeType:X`, `name:*sales*`)
-- Checking existence (did any node match?)
-- Autocomplete / browsing
+**Valid query uses:** listing children (`path/*`), searching by predicate, existence checks, autocomplete.  
+**Wrong:** reading content by exact path, reading state before a write, polling for job completion.
 
-**Always-wrong query uses:**
-- Getting a node by exact path so you can read its content
-- Reading the current state before a Patch/Update
-- "Wait for this script/job to finish" (use `GetRemoteStream` and `Where(...).Take(1)` on the completion condition)
+`GetRemoteStream` + `Where(...).Take(1)` is also the right primitive for **waiting for work to finish**.
 
-`GetRemoteStream` is also the right primitive for **waiting for work to finish** —
-subscribe until a completion field flips in the node's content, then `Take(1)`.
-Queries polled in a loop would lag on every tick.
+Full treatment: [CqrsAndContentAccess.md](src/MeshWeaver.Documentation/Data/Architecture/CqrsAndContentAccess.md)
 
-Full treatment: `Doc/Architecture/CqrsAndContentAccess.md`.
+## Mesh URL Shape
 
-### The three building blocks
-
-1. **`IMeshService.CreateNode / UpdateNode / DeleteNode` return `IObservable<T>`** (NOT `Task<T>`). They internally `hub.Post` + `hub.Observe`. Subscribe to drive them — never call `.ToTask()` / `.FirstAsync()` / `await` on them from a click action or hub handler.
-2. **Click actions must be synchronous**: `WithClickAction(ctx => { ...; return Task.CompletedTask; })`. Never `async ctx => await ...`.
-3. **Read form data via `Subscribe(...)` with `Take(1)`**, not `await FirstAsync()`. The data stream emits its current value synchronously on subscribe.
-
-### The canonical reactive click handler
-
-```csharp
-.WithClickAction(ctx =>
-{
-    // Immediate optimistic UI feedback — the click registered.
-    ctx.Host.UpdateData(resultId, "<p>Working…</p>");
-
-    // Read form data via Subscribe (sync emission for BehaviorSubject-style streams).
-    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
-        .Take(1)
-        .Subscribe(data =>
-        {
-            var label = data?.GetValueOrDefault("label")?.ToString() ?? "";
-            if (string.IsNullOrEmpty(label))
-            {
-                ctx.Host.UpdateData(resultId, "<p>Please enter a label.</p>");
-                return;
-            }
-
-            // Reactive service call — returns IObservable<T>, no await.
-            // Service internally composes meshService.CreateNode/UpdateNode/DeleteNode chains.
-            myService.DoWork(label).Subscribe(
-                result => ctx.Host.UpdateData(resultId, $"<p>Done: {result}</p>"),
-                ex     => ctx.Host.UpdateData(resultId, $"<p>Error: {ex.Message}</p>"));
-        });
-
-    return Task.CompletedTask;  // ← click action itself is sync
-})
-```
-
-### Writing reactive services
-
-Compose `IObservable` chains with `SelectMany`, `Select`, `FirstOrDefaultAsync`. Return `IObservable<T>` (not `Task<T>`) from any method that will be called from a hub handler or click action.
-
-```csharp
-public IObservable<TokenCreationResult> CreateToken(...)
-{
-    var userNode = new MeshNode(...);
-    return nodeFactory.CreateNode(userNode)                  // IObservable<MeshNode>
-        .SelectMany(created =>
-        {
-            var indexNode = new MeshNode(...) { ... };
-            return nodeFactory.CreateNode(indexNode)         // chain the second write
-                .Select(_ => new TokenCreationResult(raw, created));
-        });
-    // No await anywhere. The consumer calls .Subscribe(onNext, onError).
-}
-
-// Wrap IAsyncEnumerable queries into observables:
-public IObservable<bool> DeleteToken(string path) =>
-    Observable.FromAsync(() =>
-            meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
-                     .FirstOrDefaultAsync().AsTask())
-        .SelectMany(node =>
-        {
-            /* ... */
-            return nodeFactory.DeleteNode(path);             // IObservable<bool>
-        });
-```
-
-### What NOT to do
-
-```csharp
-// ❌ DEADLOCKS the hub under load.
-.WithClickAction(async ctx =>
-{
-    var data = await ctx.Host.Stream.GetDataStream<T>(id).FirstAsync();
-    var result = await myService.DoWorkAsync(data);  // never awaiting hub-backed services
-    ctx.Host.UpdateData(resultId, result);
-})
-
-// ❌ Task.Run is a crutch, not a fix — identity doesn't flow, failures are invisible.
-.WithClickAction(ctx =>
-{
-    _ = Task.Run(async () => { await myService.DoWorkAsync(); });
-    return Task.CompletedTask;
-})
-
-// ❌ Hub handlers must NOT await mesh writes either.
-public async Task<IMessageDelivery> HandleFoo(IMessageDelivery<FooRequest> req)
-{
-    await meshService.CreateNodeAsync(...);   // deadlock risk
-    return req.Processed();
-}
-```
-
-### When `await` IS acceptable
-
-- Top-level app startup code (`Main`, `ConfigureServices`, `InitializeAsync` of test base classes).
-- Pure CPU / file-I/O work that does NOT flow through the hub (e.g., `File.ReadAllTextAsync`).
-- Test code that explicitly wants to block until a stream emits (use `.FirstAsync().ToTask()` then await, but only in tests).
-
-**Everywhere else, the shape is `Subscribe(onNext, onError)`.** If a service you need only exposes `…Async` / `Task<T>`, add a reactive overload that returns `IObservable<T>` and refactor.
-
-## Mesh URL shape
-
-Browser URLs are `{baseUrl}/{meshpath}` — the mesh path is appended directly to the base URL. **No `/node/` segment, no URL-escaping of path separators.**
+`{baseUrl}/{meshpath}` — no `/node/` segment, no URL-encoding of separators.
 
 | Environment | Base URL |
 |---|---|
 | Prod | `https://memex.meshweaver.cloud` |
 | Dev | `http://localhost:5000` (Memex.Portal.Monolith) |
-| Test | Same host as the deployed test ACA |
 
-Examples:
+## `@/` is Local-Only
 
-- Prod ACME Pricing: `https://memex.meshweaver.cloud/Systemorph/FutuRe/EuropeRe/AcmeSubmission2025`
-- Prod ACME Pricing Triangle view: `https://memex.meshweaver.cloud/Systemorph/FutuRe/EuropeRe/AcmeSubmission2025/Triangle`
-- A content-collection file: `https://memex.meshweaver.cloud/Systemorph/FutuRe/EuropeRe/content/LargeClaims.xlsx`
-
-The MCP server's `NavigateTo` tool and the `GetBaseUrl` tool both honour this shape. If you ever see a URL like `{host}/node/Foo%2FBar` in agent output, it's a bug — `NavigateTo` should return `{host}/Foo/Bar` with real slashes.
-
-## `@/` is Local-Only — Never in HTTP URLs or href Attributes
-
-The `@/path` prefix is a **Unified Content Reference (UCR)** used exclusively for:
-- Native markdown link syntax: `[text](@/Path)` — Markdig's `LinkUrlCleanupExtension` strips the `@` and resolves the path to an absolute URL.
-- Autocomplete / path pickers inside the mesh (chat, mention fields).
-- Tool arguments for agent plugins (`Get('@/Path')`, `Search(...)`, `NavigateTo(...)`).
-
-`@/` **MUST NOT** appear in:
-- `href="..."` attributes when writing raw HTML inside markdown (the markdown renderer does NOT reach inside `<a href>` — the `@/` will leak to the browser and produce `https://host/@/Path`, which 404s or misroutes).
-- External / HTTP URLs anywhere in code, content, or documentation.
-- Razor component navigation targets (`NavigateTo("/path")`, not `NavigateTo("/@/path")`).
-
-**Rule of thumb:** `@/` is for things the mesh resolves locally. Once it's in a URL bar or an `href`, the `@` is wrong. Write `href="/Systemorph/X"` — not `href="@/Systemorph/X"`.
-
-A safety-net redirect `GET /@/X → GET /X` (301) is in place in `MemexConfiguration.StartMemexApplication`, but authoring content with `@/` in raw HTML hrefs is still a bug — fix it at the source.
+`@/path` is a Unified Content Reference for markdown links (`[text](@/Path)`), autocomplete, and agent tool args — **never in `href=""` attributes or HTTP URLs**. Markdig strips `@` in native markdown syntax but NOT inside `<a href>`.
 
 ## Collections Policy
 
-**NEVER use mutable collections.** Always use `System.Collections.Immutable`:
-- `List<T>` → `ImmutableList<T>.Empty` + `= list.Add(item)`
-- `Dictionary<K,V>` → `ImmutableDictionary<K,V>.Empty` + `= dict.SetItem(key, val)`
-- `HashSet<T>` → `ImmutableHashSet<T>.Empty` + `= set.Add(item)`
-- `Queue<T>` → `ImmutableQueue<T>.Empty` + `= queue.Enqueue(item)` / `= queue.Dequeue(out var item)`
-- `.ToList()` → `.ToImmutableList()`, `.ToHashSet()` → `.ToImmutableHashSet()`
-
-The codebase is distributed (Orleans, reactive streams). Mutable collections cause race conditions and unpredictable behavior. The only exception is `ConcurrentDictionary` for thread-safe concurrent mutation patterns.
+**NEVER use mutable collections.** Always `System.Collections.Immutable`:  
+`List<T>` → `ImmutableList<T>`, `Dictionary<K,V>` → `ImmutableDictionary<K,V>`, `HashSet<T>` → `ImmutableHashSet<T>`, `Queue<T>` → `ImmutableQueue<T>`.  
+Exception: `ConcurrentDictionary` for concurrent mutation.
 
 ## Architecture Overview
 
-### Core Concepts
+Actor-model message hub (`MeshWeaver.Messaging.Hub`) with address-based partitioning. UI is reactive Layout Areas rendered in Blazor Server. AI agents use plugins (MeshPlugin, LayoutAreaPlugin).
 
-**Message Hub Architecture**: MeshWeaver is built on an actor-model message hub system (`MeshWeaver.Messaging.Hub`). All application interactions flow through hierarchical message routing with address-based partitioning (e.g., `@app/Address/AreaName`).
+| Directory | Contents |
+|---|---|
+| `src/` | Core framework (50+ projects) |
+| `samples/Graph/Data/` | Sample data nodes (ACME, Northwind, Cornerstone, etc.) |
+| `memex/Memex.Portal.Monolith/` | Dev portal with full Graph + Documentation support |
+| `memex/aspire/` | Microservices with .NET Aspire orchestration |
 
-**Layout Areas**: The UI system uses reactive Layout Areas - framework-agnostic UI abstractions that render in Blazor Server. Layout areas are addressed by route and automatically update via reactive streams.
-
-**AI-First Design**: First-class AI integration using Microsoft.Extensions.AI with plugins (MeshPlugin, LayoutAreaPlugin) that provide agents access to application state and functionality.
-
-### Key Directory Structure
-
-- **`src/`** - Core framework libraries (50+ projects)
-  - `MeshWeaver.Messaging.Hub` - Actor-based message routing
-  - `MeshWeaver.Layout` - Framework-agnostic UI abstractions
-  - `MeshWeaver.AI` - Agent framework with plugin architecture
-  - `MeshWeaver.Blazor` - Blazor Server implementation
-  - `MeshWeaver.Data` - CRUD operations with activity tracking
-  - `MeshWeaver.Documentation` - Embedded documentation (served under Doc/)
-  - `MeshWeaver.Graph` - Graph node configuration and node type system
-
-- **`samples/`** - Sample business domain applications
-  - `Graph/Data/` - Sample data nodes (ACME, Northwind, Cornerstone, etc.)
-  - `Graph/content/` - Static content files (icons, images, attachments)
-
-- **`memex/`** - Memex Portal (recommended for development)
-  - `Memex.Portal.Monolith/` - Development portal with full Graph support
-  - `aspire/` - Microservices with .NET Aspire orchestration
-
-### Architectural Patterns
-
-**Request-Response**: Use `hub.Observe<TResponse>(request, o => o.WithTarget(address)).Subscribe(resp => …, ex => …)` for operations requiring results.
-The response is submitted as `hub.Post(responseMessage, o => o.ResponseFor(request))`. In tests, `await MonolithMeshTestBase.AwaitResponseAsync(request, ...)` is the sanctioned Task wrapper.
-
-**Fire-and-Forget**: Use `hub.Post(message, o => o.WithTarget(address))` for notifications and events.
-
-**Address-Based Routing**: Services register at specific addresses (e.g., `bookings/q1_2025`, `app/northwind`, `pricing/id`).
-Layout areas follow the pattern `@{address}/{areaName}/{areaId}`. The areaId is optional and depends on the view.
-E.g. `{address}/Details/{itemId}` would render a details view for the item with `itemId`.
-
-Layout areas are typically kept on the same address as the underlying data.
-
-**Reactive UI**: All UI state changes flow through the message hub. Controls are immutable records that specify their current state.
+**Request-Response:** `hub.Observe<TResponse>(request, o => o.WithTarget(address)).Subscribe(resp => …, ex => …)`  
+Response sent as: `hub.Post(responseMessage, o => o.ResponseFor(request))`  
+**Fire-and-Forget:** `hub.Post(message, o => o.WithTarget(address))`  
+**Layout area route:** `@{address}/{areaName}/{areaId}`
 
 ## Data Access Patterns
 
-**IMPORTANT:** Application code must never use `IMeshStorage` or `IMeshCatalog` directly — these are internal infrastructure interfaces.
+Never use `IMeshStorage` or `IMeshCatalog` directly — internal infrastructure only.
 
-### Reads — Use IMeshService
-```csharp
-var query = hub.ServiceProvider.GetRequiredService<IMeshService>();
-var node = await query.QueryAsync("path:org/Acme", maxResults: 1).FirstOrDefaultAsync(ct);
-```
+| Operation | API |
+|---|---|
+| Read (query) | `IMeshService.QueryAsync(...)` |
+| Read (single node) | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(...)` |
+| Create/Delete | `IMeshNodeFactory.CreateNodeAsync / DeleteNodeAsync` |
+| Update | `hub.Post(new UpdateNodeRequest(node))` |
+| Move | `hub.Observe(new MoveNodeRequest(src, dst)).Subscribe(...)` |
 
-### Creates/Deletes — Use IMeshNodeFactory
-```csharp
-var factory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
-await factory.CreateNodeAsync(node, createdBy: userId, ct);
-await factory.DeleteNodeAsync(path, recursive: true, ct);
-```
+Always `GetRequiredService<T>()` — never `GetService<T>()` + null check for required services.
 
-### Updates/Moves — Use message requests
-```csharp
-hub.Post(new UpdateNodeRequest(updatedNode));
-hub.Observe(new MoveNodeRequest(sourcePath, targetPath))
-    .Subscribe(resp => /* handle resp.Message */, ex => /* DeliveryFailureException etc */);
-hub.Post(new DataChangeRequest { Updates = [entity] });
-```
-
-### Service Resolution
-Always use `GetRequiredService<T>()` for core services (`IMeshNodeFactory`, `IMeshService`). Never use `GetService<T>()` + null check for services that must be registered.
-
-For full documentation see `src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md`.
+Full reference: [DataAccessPatterns.md](src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md)
 
 ## MCP Mutations — Always Show a Diff
 
-Claude Code renders diffs only for local file Edit/Write, not for MCP tool results.
-Every time you mutate a mesh node through MCP (`patch`, `update`, `create`, `delete`,
-`move`, `copy`), **surface what changed** so the user has the same visibility as for
-file edits:
+For every MCP mutation (`patch`, `update`, `create`, `delete`, `move`, `copy`):
+1. `get @path` **before** — cache the JSON
+2. Mutate
+3. `get @path` **after** — cache the new JSON
+4. Render a ` ```diff ` block showing the changed region in your response
 
-1. `get @path` **before** the mutation — cache the JSON.
-2. Mutate.
-3. `get @path` **after** — cache the new JSON.
-4. Render a ```diff code-fence in your response with the relevant change. Claude Code
-   applies syntax highlighting to ```diff blocks, so the user sees exactly what you
-   changed on the mesh.
-
-```diff
---- Systemorph/FutuRe/Pricing/Source/Foo.cs (before)
-+++ Systemorph/FutuRe/Pricing/Source/Foo.cs (after)
-@@ @@
--public string Old { get; init; }
-+public string New { get; init; }
-```
-
-- Trim to the changed region — a full-file dump drowns out the delta.
-- For `create`, show the whole new content as additions. For `delete`, show the content
-  as removals. For `move`/`copy`, show the old path → new path.
-- Read-only / side-effect MCP tools don't need this: `get`, `search`, `recycle`,
-  `get_diagnostics`, `navigate_to`, `get_base_url`, `execute_script`.
-- If the mutation was a no-op (server rejected the change or content was already
-  equal), say so explicitly rather than rendering an empty diff.
-
-The `MeshOperations` MCP tools are being extended to return a unified diff in the
-tool response directly, so this convention holds even when other agents consume
-the MCP. Until that's universally deployed, compute the diff locally from
-before/after `get` calls.
+Read-only tools skip this: `get`, `search`, `recycle`, `get_diagnostics`, `navigate_to`, `execute_script`.
 
 ## Development Patterns
 
-### Adding New Layout Areas
-```csharp
-public static class MyLayoutArea
-{
-    public static void AddMyLayoutArea(this LayoutConfiguration config) =>
-        config.AddLayoutArea(nameof(MyLayout), MyLayout);
+For detailed patterns with code examples, read:
+- Layout areas + UI controls: [UserInterface.md](src/MeshWeaver.Documentation/Data/Architecture/UserInterface.md) and [GUI docs](src/MeshWeaver.Documentation/Data/GUI/)
+- Message handling: [MessageBasedCommunication.md](src/MeshWeaver.Documentation/Data/Architecture/MessageBasedCommunication.md)
+- AI plugins: [AI docs](src/MeshWeaver.Documentation/Data/AI/)
+- Activity control plane / operations as scripts: [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md)
+- Reactive click handlers + service patterns: [AsynchronousCalls.md](src/MeshWeaver.Documentation/Data/Architecture/AsynchronousCalls.md)
 
-    public static UiControl MyLayout(LayoutAreaHost host, RenderingContext ctx) =>
-    Controls.Stack
-            .WithView(Controls.Html("Some text")
-            .WithView(Controls.Markdown("Some markdown view"))
-    );
+**Static handlers for one-shot pipelines** — don't extract `IFooService` for DI cleanliness when there's no state. Resolve deps via `hub.ServiceProvider.GetRequiredService<T>()` inside the static handler.
 
-}
-```
-We support rich markdown with mermaid diagrams, code blocks, MathJax,
-and live execution via dynamic markdown. Layout areas can be inserted by
-using `@{address}/{areaName}/{areaId}`
-
-### Message Handling
-Messages are registered in the configuration of the hub. Also DI is set up on the level of hub configuration:
-```csharp
-public static class NorthwindHubConfiguration
-{
-    public static MessageHubConfiguration AddNorthwindHub(this MessageHubConfiguration config)
-    {
-        return config.WithHandler<MyRequestAsync>(HandleMyRequestAsync)
-                     .WithHandler<MyRequest>(HandleMyRequest);
-
-    }
-
-    public static async Task<IMessageDelivery> HandleMyRequestAsync(MessageHub hub, IMessageDelivery<MyRequestAsync> request, CancellationToken ct)
-    {
-        // Process the request
-        var result = await SomeService.ProcessAsync(request.Message);
-
-        // Send response
-        await hub.Post(new MyResponse(result), o => o.ResponseFor(request));
-        return request.Processed();
-    }
-
-    public static IMessageDelivery HandleMyRequest(MessageHub hub, IMessageDelivery<MyRequest> request)
-    {
-        // Process the request
-        var result = SomeService.Process(request.Input);
-
-        // Send response
-        hub.Post(new MyResponse(result), o => o.ResponseFor(request));
-        return request.Processed();
-    }
-}
-```
-
-### AI Plugin Development
-```csharp
-public class MyPlugin(IMessageHub hub, IAgentChat chat)
-{
-    [Description("Description on how to use")]
-    public Task<string> DoSomething([Description("Description for input")]string input)
-    {
-        var request = new MyRequest(input); // Create a request object
-        var address = GetAddress(request); // Get the address for the plugin, e.g., "app/northwind"
-        // MCP tool surface requires Task<string>; bridge once at the boundary via .ToTask().
-        // The hub round-trip stays observable end-to-end (no `await` inside hub-reachable code).
-        return hub.Observe<MyResponse>(request, o => o.WithTarget(address))
-            .Select(resp => JsonSerializer.Serialize(resp.Message, hub.JsonSerializationOptions))
-            .FirstAsync()
-            .ToTask();
-    }
-
-    public Address GetAddress(MyRequest request)
-    {
-        // Logic to determine the address based on the request
-        // the chat contains a context, which is usually good to use.
-        // can also contain agent specific mapping logic.
-        return chat.Context.Address;
-    }
-}
-```
+**Operations with inputs + progress + output** (export, import, compile, mirror) → Code MeshNode template + form-bound inputs + `RequestedStatus = Running` trigger. Not a bespoke `XxxRequest/XxxResponse` handler. See [ActivityControlPlane.md](src/MeshWeaver.Documentation/Data/Architecture/ActivityControlPlane.md).
 
 ## Key Dependencies
 
-- **.NET 10.0** - Target framework
-- **Orleans** - Distributed deployment (distributed deployment, microservices)
-- **Blazor Server** - Web UI framework
-- **Microsoft.Extensions.AI** - AI integration
-- **xUnit v3** - Testing framework
-- **FluentAssertions** - Test assertions
-- **Chart.js** - Data visualization
-- **Azure SDKs** - Cloud integration
-- **Markdig** - Markdown processing
-
+.NET 10.0 · Orleans · Blazor Server · Microsoft.Extensions.AI · xUnit v3 · FluentAssertions · Markdig · Chart.js · Azure SDKs
 
 ## Testing Guidelines
 
-**When building NodeTypes, data models, layout areas, or CSV loaders — read `src/MeshWeaver.AI/Data/Agent/Coder.md` first.** It is the canonical guide for that kind of work and includes the non-negotiable testing standard: **comprehensive unit tests per invariant + branch + boundary + degenerate-input**, not "at least one test per feature". Applies to both Coder-agent sessions and hand-written code. A NodeType with a single happy-path test is not tested; it's demoed.
+Before building NodeTypes, data models, layout areas, or CSV loaders — read [Coder.md](src/MeshWeaver.AI/Data/Agent/Coder.md) first (canonical guide + non-negotiable testing standards).
 
-Tests use xUnit v3 with structured logging and test parallelization configured via `xunit.runner.json`:
-- `parallelizeAssembly: false`
-- `parallelizeTestCollections: false`
-- `maxParallelThreads: 1`
-- `methodTimeout: 60000ms` (1 minute per test method)
+**No mocking.** Use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or core interfaces.  
+**Always `run_in_background: true`** for test runs (they take minutes).  
+**Never `--verbosity minimal`** when tests may fail — it hides stack traces.
 
-**No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or other core interfaces.
+xUnit v3 config (`xunit.runner.json`): `parallelizeAssembly: false`, `maxParallelThreads: 1`, `methodTimeout: 60000ms`.
 
-### Satellite Entity Patterns
-
-For implementing and testing satellite entities (comments, threads, tracked changes), see `src/MeshWeaver.Documentation/Data/Architecture/SatelliteEntityPatterns.md`.
-
-**Key rules:**
-- Handler must be synchronous (`IMessageDelivery`, not `async Task<IMessageDelivery>`)
-- Use `meshService.CreateNode()` (Observable) + `.Subscribe(onNext, onError)` — never `await`
-- Use `workspace.UpdateMeshNode()` for parent node content updates (in-memory, persisted via debounce)
-- Post response inside the `Subscribe(onNext)` callback, not before
-- Orleans tests: client configurator must call `AddGraph()` for type registry alignment
-- Verify via `GetDataRequest` or `GetRemoteStream` — never `QueryAsync` in distributed tests
+Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md)
 
 ### Running Tests
 
-Run tests from the root directory using sub-paths. Do NOT write output to `/tmp` or temp directories — test results (.trx) are automatically collected in the project's `bin/` directory.
-
-**CRITICAL: Always use `run_in_background: true`** for test runs. Tests can take minutes — never block the conversation waiting for them. Use `timeout: 180000` (3 min) max for Bash test commands. The xunit.runner.json `methodTimeout` is 60000ms (1 min) per test method.
-
-**Do NOT use `--verbosity minimal`** (or `-v m`) when tests are expected to fail. Minimal verbosity hides error details (stack traces, assertion messages), forcing you to re-run with normal verbosity — wasting time and frustrating the user. Use default verbosity or `--verbosity normal` so failures are visible on the first run. Only use `--verbosity minimal` when you are confident all tests will pass and just need a quick green/red check.
-
 ```bash
-# Run from root directory with sub-path
 dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore
-
-# Run a specific test project
-dotnet test test/MeshWeaver.Graph.Test --no-restore
-
-# Filter to specific tests
 dotnet test test/MeshWeaver.Graph.Test --filter "ClassName~AccessAssignment" --no-restore
 ```
 
-**Workflow:**
-1. Run tests **once** in background (`run_in_background: true`)
-2. If failures: read the output to understand errors — do NOT re-run
-3. Fix the code
-4. Run tests **once** again to verify fixes
-5. Repeat 2–4 until green
+Workflow: run once in background → read failures → fix → run once more. Never re-run to see if it was a flake.
 
-### DevLogin and Access Control in Tests
+### DevLogin and Access Control
 
-`MonolithMeshTestBase` automatically logs in `rbuergi@systemorph.com` as Admin via `TestUsers.DevLogin(Mesh)` in `InitializeAsync()`. This means all tests start with a logged-in admin user — no manual setup needed for basic CRUD.
+`MonolithMeshTestBase` auto-logs in `rbuergi@systemorph.com` as Admin. Available helpers: `TestUsers.Admin`, `TestUsers.SampleUsers()`, `builder.AddSampleUsers()`.
 
-**TestUsers** (`MeshWeaver.Hosting.Monolith.TestBase.TestUsers`):
-- `TestUsers.Admin` — default admin AccessContext
-- `TestUsers.SampleUsers()` — MeshNode array of sample users from `samples/Graph/Data/User/`
-- `TestUsers.DevLogin(mesh)` — logs in the admin user (called automatically by base class)
-- `builder.AddSampleUsers()` — extension to pre-seed user MeshNodes in `ConfigureMesh`
-
-When tests with `AddRowLevelSecurity()` need **per-user** access control (e.g., testing that User1 can't see User2's data), use explicit admin setup for data creation:
-
-```csharp
-// Before creating test data: set up admin context
-var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-await securityService.AddUserRoleAsync("setup-admin", "Admin", null, "system");
-accessService.SetCircuitContext(new AccessContext { ObjectId = "setup-admin", Name = "Setup Admin" });
-
-// ... create test nodes ...
-
-// After setup: clear admin context so tests start clean
-accessService.SetCircuitContext(null);
-```
+For per-user access control tests, use `accessService.SetCircuitContext(new AccessContext { ObjectId = "...", Name = "..." })` before creating test data; set `null` after.
 
 ### Node Types
 
-Only use **registered** node types in tests. Standard types registered by `AddGraph()`:
-`Markdown`, `Code`, `Agent`, `Group`, `User`, `VUser`, `Role`, `Notification`, `Approval`, `AccessAssignment`, `GroupMembership`, `PartitionAccessPolicy`, `ActivityLog`, `UserActivity`, `Comment`, `Thread`, `ThreadMessage`
+Standard types from `AddGraph()`: `Markdown`, `Code`, `Agent`, `Group`, `User`, `VUser`, `Role`, `Notification`, `Approval`, `AccessAssignment`, `GroupMembership`, `PartitionAccessPolicy`, `ActivityLog`, `UserActivity`, `Comment`, `Thread`, `ThreadMessage`
 
-Custom types can be registered via `builder.AddMeshNodes(new MeshNode("MyType") { Name = "My Type" })` in `ConfigureMesh`.
+Custom types: `builder.AddMeshNodes(new MeshNode("MyType") { Name = "My Type" })` in `ConfigureMesh`.
 
-### MonolithMeshTestBase (recommended for most tests)
+### Test Base Classes
 
-Reference `MeshWeaver.Hosting.Monolith.TestBase` and inherit from `MonolithMeshTestBase`:
+- **`MonolithMeshTestBase`** (recommended) — full integration with persistence, messaging, DI; use `AwaitResponseAsync(request, ...)` for request/response in tests
+- **`HubTestBase`** — message routing / layout tests; bridge to Task via `.FirstAsync().ToTask(ct)`
 
-```csharp
-public class MyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
-{
-    // Override ConfigureMesh to add services and sample users
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
-            .AddGraph()
-            .AddSampleUsers()
-            .ConfigureHub(hub => hub.AddMyHub());
+For satellite entities (comments, threads, tracked changes): [SatelliteEntityPatterns.md](src/MeshWeaver.Documentation/Data/Architecture/SatelliteEntityPatterns.md)
 
-    [Fact]
-    public async Task MyTestMethod()
-    {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+## Project Structure
 
-        // Create test data
-        await nodeFactory.CreateNodeAsync(new MeshNode("test", "Namespace") { Name = "Test" }, "testuser");
-
-        // Query
-        var result = await meshQuery.QueryAsync<MeshNode>("path:Namespace/test").FirstOrDefaultAsync();
-        result.Should().NotBeNull();
-    }
-}
-```
-
-### HubTestBase (for message routing / layout tests)
-
-```csharp
-public class MyTest : HubTestBase, IAsyncLifetime
-{
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration config)
-        => base.ConfigureHost(config).AddNorthwindHub();
-
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
-        => base.ConfigureClient(config).AddLayoutClient();
-
-    [Fact]
-    public async Task MyTestMethod()
-    {
-        var hub = GetClient();
-        // Test code: bridge to Task once via .FirstAsync().ToTask(ct).
-        // Production code MUST stay reactive — `hub.Observe(...).Subscribe(onNext, onError)`.
-        var response = await hub.Observe<MyResponse>(request, o => o.WithTarget(new HostAddress()))
-            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        response.Should().NotBeNull();
-    }
-}
-```
-
-For tests deriving from `MonolithMeshTestBase`, the helper `await AwaitResponseAsync(request, options?, hub?, ct?)` already wraps `hub.Observe(...)` with the test context's cancellation token.
-
-## Project Structure Guidelines
-
-- Framework code belongs in `src/`
-- Test code belongs in `test/`
-- Sample applications go in `samples/`
-- Each module should have its own set of hubs and address spaces (e.g., `@app/northwind`)
-- UI components should be framework-agnostic in the layout layer. The language are the controls inheriting from `UiControl`.
-- AI agents should use plugins to access application functionality
-
-## Solution Management
-
-The solution uses centralized package management via `Directory.Packages.props`. When adding new dependencies, update the central package file rather than individual project files.
-
-### Key Configuration Files
-- `Directory.Build.props` - Global MSBuild properties and versioning
-- `Directory.Packages.props` - Centralized NuGet package version management
-- `nuget.config` - NuGet package sources configuration
-- `xunit.runner.json` - Test execution configuration
-
-### Branch and Development
-- Main branch: `main` (use for PRs)
-- Solution file: `MeshWeaver.slnx` contains 50+ projects
+Framework code in `src/`, tests in `test/`, samples in `samples/`.  
+Main branch: `main`. Solution file: `MeshWeaver.slnx` (50+ projects).  
+Package management: `Directory.Packages.props` — update this, not individual `.csproj` files.
