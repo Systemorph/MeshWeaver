@@ -1,7 +1,8 @@
 ---
+NodeType: Markdown
 Name: "Thread Execution & Message Rendering — Fully Data-Bound"
 Abstract: "How AI thread execution writes streaming content into a thread message and how the GUI renders it. Writer opens a long-lived GetRemoteStream and pushes deltas via .Update. The layout area ships a path-bound control. The Blazor view subscribes to the same per-message stream and renders directly. Single source of truth — no per-chunk hub posts, no layout data section, no JsonPointerReference chain."
-Icon: "Thread"
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#00695c'/><rect x='4' y='6' width='12' height='8' rx='2' fill='white'/><rect x='8' y='12' width='12' height='8' rx='2' fill='white'/></svg>"
 Authors:
   - "Roland Buergi"
 Tags:

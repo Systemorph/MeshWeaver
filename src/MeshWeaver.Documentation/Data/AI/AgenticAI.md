@@ -1,7 +1,8 @@
 ---
+NodeType: Markdown
 Name: "Agents are also just Humans"
 Abstract: "Agentic AI represents a paradigm shift in artificial intelligence, moving beyond passive response systems to proactive, goal-oriented agents capable of autonomous decision-making and action."
-Icon: "Document"
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#e65100'/><rect x='5' y='9' width='14' height='11' rx='2' fill='white'/><circle cx='9' cy='14' r='1.3' fill='#e65100'/><circle cx='15' cy='14' r='1.3' fill='#e65100'/><rect x='11' y='4' width='2' height='5' fill='white'/></svg>"
 Thumbnail: "images/agenticai.svg"
 Authors:
   - "Roland Buergi"
