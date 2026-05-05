@@ -483,128 +483,104 @@ public sealed record RoundDispatch(
     IReadOnlyList<string>? Attachments);
 
 /// <summary>
-/// Server-side watcher: observes thread state changes and dispatches execution rounds.
-/// Installed once on thread hub initialization. Non-blocking; uses only Post + RegisterCallback
-/// and workspace stream subscriptions.
+/// Server-side watcher: reactively dispatches an execution round whenever the thread
+/// has unprocessed user messages and isn't already running. Pure observable composition
+/// via <see cref="ActivityControlPlaneExtensions.WatchSubmission{TFingerprint}"/>:
+///
+/// <list type="number">
+///   <item><description>Source: <c>workspace.GetMeshNodeStream()</c>.</description></item>
+///   <item><description><c>DistinctUntilChanged</c> on a fingerprint of
+///     (IsExecuting, Messages.Count, IngestedMessageIds.Count, PendingUserMessages.Count)
+///     so the same dispatchable state cannot fire twice.</description></item>
+///   <item><description><c>Where</c>: not currently executing AND has at least one
+///     unprocessed user id or pending message.</description></item>
+///   <item><description><c>SelectMany</c>: each dispatchable emission produces a single
+///     <see cref="DispatchRoundObs"/> observable that creates satellite cells, commits
+///     the round to the thread node, and posts to the <c>_Exec</c> hub.</description></item>
+/// </list>
+///
+/// <para>No <c>Throttle</c>, no reentrancy flag, no scheduler-hop identity workarounds —
+/// the source observable is the thread's own MeshNode stream and the chain runs in
+/// the hub's natural scheduler. The previous imperative implementation (200 lines with
+/// a <c>dispatching</c> flag + 50 ms Throttle + AsyncLocal fallbacks) is gone.</para>
 /// </summary>
 internal static class ThreadSubmissionServer
 {
     public static IDisposable InstallServerWatcher(IMessageHub threadHub)
     {
         var logger = threadHub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        var workspace = threadHub.GetWorkspace();
-        var threadPath = threadHub.Address.Path;
-
-        // Reentrancy guard: 0=idle, 1=dispatching.
-        // Held until IsExecuting=true is observed back through the same stream, so a
-        // re-emission triggered by our own response-cell write or PendingUserMessages
-        // patch can't double-dispatch.
-        var dispatching = 0;
-
-        // Subscribe to the thread's MeshNodeReference stream. Note: the stream emits on
-        // ANY MeshNode write in this hub's collection (thread node, satellite cells, ...)
-        // because ReduceToMeshNode returns the last-updated node from the collection.
-        // We MUST filter to thread-node emissions BEFORE throttling — otherwise a
-        // satellite-cell write arriving within 50ms of a thread-state commit will shadow
-        // the commit (Throttle keeps only the last) and the watcher never sees the state
-        // change. That was the resubmit-truncation flake: ApplyResubmit posts an
-        // UpdateNodeRequest for the replayed user cell *and* commits the truncation;
-        // the cell emission landed last, the watcher saw Content=ThreadMessage, skipped,
-        // and the dispatch never fired until the next unrelated write.
-        //
-        // Throttle still sits after the filter so rapid AppendUserMessageRequest patches
-        // coalesce into a single dispatch with all the queued user ids in one round.
-        var sub = workspace.GetStream(new MeshNodeReference())
-            ?.Where(change => change.Value?.Content is MeshThread)
-            ?.Throttle(TimeSpan.FromMilliseconds(50))
-            ?.Subscribe(change =>
-            {
-                var threadNode = change.Value;
-                if (threadNode?.Content is not MeshThread thread) return;
-
-                // Identity assertion at the watcher tick — informational only. The
-                // watcher's AsyncLocal is captured at Subscribe-install time (hub
-                // init, before SetThreadHubIdentity has run a separate Subscribe
-                // branch), so we expect a mismatch in the Orleans grain case where
-                // the install-time context is the hub's own address. DispatchRound
-                // resolves identity correctly via thread.CreatedBy → MeshNode.CreatedBy
-                // — the warning here exists only to surface unexpected drift.
-                var accessService = threadHub.ServiceProvider.GetService<AccessService>();
-                var asyncLocalAtTick = accessService?.Context?.ObjectId;
-                var circuitAtTick = accessService?.CircuitContext?.ObjectId;
-                var expectedIdentity = !string.IsNullOrEmpty(thread.CreatedBy)
-                    ? thread.CreatedBy
-                    : threadNode.CreatedBy;
-                if (asyncLocalAtTick != expectedIdentity)
-                {
-                    logger?.LogDebug(
-                        "[ThreadSubmission] watcher tick identity drift thread={ThreadPath} " +
-                        "asyncLocal={AsyncLocal} circuit={Circuit} expected={Expected} — " +
-                        "DispatchRound will resolve via thread.CreatedBy / MeshNode.CreatedBy.",
-                        threadPath, asyncLocalAtTick ?? "(null)",
-                        circuitAtTick ?? "(null)",
-                        expectedIdentity ?? "(null)");
-                }
-
-                logger?.LogDebug(
-                    "[ThreadSubmission] watcher tick thread={ThreadPath} IsExecuting={IsExecuting} " +
-                    "Messages=[{Messages}] Ingested=[{Ingested}] UserIds=[{UserIds}] dispatching={Dispatching}",
-                    threadPath, thread.IsExecuting,
-                    string.Join(",", thread.Messages),
-                    string.Join(",", thread.IngestedMessageIds),
-                    string.Join(",", thread.UserMessageIds),
-                    dispatching);
-
-                // IsExecuting=true is visible — we held the guard waiting for this commit.
-                if (thread.IsExecuting && dispatching == 1)
-                {
-                    Interlocked.Exchange(ref dispatching, 0);
-                    return;
-                }
-                if (thread.IsExecuting) return;
-
-                if (Interlocked.CompareExchange(ref dispatching, 1, 0) != 0)
-                {
-                    logger?.LogDebug(
-                        "[ThreadSubmission] watcher skip thread={ThreadPath} — dispatching already 1",
-                        threadPath);
-                    return;
-                }
-
-                var releaseGuard = true;
-                try
-                {
-                    var dispatch = ThreadSubmission.PlanNextRound(thread);
-                    if (dispatch is null)
-                    {
-                        logger?.LogDebug(
-                            "[ThreadSubmission] watcher idle thread={ThreadPath} — nothing to dispatch",
-                            threadPath);
-                        return;
-                    }
-
-                    logger?.LogDebug(
-                        "[ThreadSubmission] watcher dispatching thread={ThreadPath} userIds=[{UserIds}] responseId={ResponseId}",
-                        threadPath, string.Join(",", dispatch.UserMessageIds), dispatch.ResponseMessageId);
-
-                    // Hold the guard. It will be released when we observe IsExecuting=true
-                    // back on this same stream above (or on hard failure inside DispatchRound).
-                    releaseGuard = false;
-                    DispatchRound(threadHub, threadNode, dispatch, logger,
-                        onFailure: () => Interlocked.Exchange(ref dispatching, 0));
-                }
-                catch (Exception ex)
-                {
-                    logger?.LogWarning(ex, "[ThreadSubmission] Server watcher iteration failed for {ThreadPath}", threadPath);
-                }
-                finally
-                {
-                    if (releaseGuard) Interlocked.Exchange(ref dispatching, 0);
-                }
-            });
-
-        return sub ?? System.Reactive.Disposables.Disposable.Empty;
+        return threadHub.WatchSubmission(
+            fingerprint:   Fingerprint,
+            needsDispatch: NeedsDispatch,
+            dispatch:      node => DispatchRoundObs(threadHub, node, logger),
+            logger:        logger);
     }
+
+    /// <summary>
+    /// Compress the dispatchable state to a value tuple. Equality on this tuple
+    /// drives <c>DistinctUntilChanged</c> — when nothing relevant has changed,
+    /// the watcher doesn't re-dispatch.
+    /// </summary>
+    private static (bool, int, int, int) Fingerprint(MeshNode node)
+    {
+        if (node.Content is not MeshThread t) return (false, 0, 0, 0);
+        return (t.IsExecuting, t.Messages.Count, t.IngestedMessageIds.Count, t.PendingUserMessages.Count);
+    }
+
+    /// <summary>
+    /// True when this thread state warrants a new round: not executing AND
+    /// has at least one unprocessed user id or pending message.
+    /// </summary>
+    private static bool NeedsDispatch(MeshNode node)
+    {
+        if (node.Content is not MeshThread t) return false;
+        if (t.IsExecuting) return false;
+        if (t.PendingUserMessages.Count > 0) return true;
+        foreach (var id in t.UserMessageIds)
+            if (!t.IngestedMessageIds.Contains(id)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Wrap the existing <see cref="DispatchRound"/> in <c>IObservable&lt;Unit&gt;</c>
+    /// so it composes via <c>SelectMany</c>. The body fires <c>OnNext + OnCompleted</c>
+    /// on success, <c>OnCompleted</c> alone on failure (failures don't tear down the
+    /// outer subscription — the next state change retries).
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> DispatchRoundObs(
+        IMessageHub hub, MeshNode threadNode, ILogger<AgentChatClient>? logger) =>
+        Observable.Create<System.Reactive.Unit>(observer =>
+        {
+            if (threadNode.Content is not MeshThread thread)
+            {
+                observer.OnCompleted();
+                return System.Reactive.Disposables.Disposable.Empty;
+            }
+            var dispatch = ThreadSubmission.PlanNextRound(thread);
+            if (dispatch is null)
+            {
+                observer.OnCompleted();
+                return System.Reactive.Disposables.Disposable.Empty;
+            }
+            try
+            {
+                DispatchRound(hub, threadNode, dispatch, logger,
+                    onFailure: () => observer.OnCompleted());
+                // DispatchRound's last imperative step (post SubmitMessageRequest to _Exec)
+                // is fire-and-forget; from the watcher's perspective the round is
+                // "dispatched" once that post returns. We OnNext immediately so the
+                // outer SelectMany completes; the round finishes asynchronously inside
+                // the _Exec hub.
+                observer.OnNext(System.Reactive.Unit.Default);
+                observer.OnCompleted();
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "[ThreadSubmission] DispatchRoundObs failed for {ThreadPath}", hub.Address.Path);
+                observer.OnCompleted();
+            }
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
 
     /// <summary>
     /// Creates the output cell, writes the committed round to the thread node, and

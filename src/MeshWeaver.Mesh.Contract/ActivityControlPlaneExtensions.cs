@@ -75,4 +75,72 @@ public static class ActivityControlPlaneExtensions
                     "ActivityControlPlane subscription faulted on {Address}",
                     hub.Address));
     }
+
+    /// <summary>
+    /// Sibling of <see cref="WatchControlPlane"/> for job-orchestration cases where the
+    /// trigger isn't a single status field but a more general "this state needs work
+    /// done now" condition (e.g., thread has unprocessed user messages and isn't already
+    /// executing). Pure reactive composition — no flags, no Throttle, no scheduler hops:
+    ///
+    /// <list type="number">
+    ///   <item><description>Source: hub's own MeshNode stream.</description></item>
+    ///   <item><description><c>DistinctUntilChanged</c> on a caller-supplied
+    ///     fingerprint so the same actionable state isn't dispatched twice.</description></item>
+    ///   <item><description><c>Where</c> on a caller-supplied predicate to filter to
+    ///     states that warrant dispatch.</description></item>
+    ///   <item><description><c>SelectMany</c> on a caller-supplied dispatch function
+    ///     returning <c>IObservable&lt;Unit&gt;</c> — chained writes, posts, and acks
+    ///     all compose as one observable per round.</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// The returned <see cref="IDisposable"/> tears the subscription down. Caller is
+    /// expected to register it with the hub's lifetime — typically via
+    /// <c>hub.RegisterForDisposal(...)</c> from a <c>WithInitialization</c> callback.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="TFingerprint">Fingerprint type — usually a value tuple of the
+    /// dispatch-relevant fields. Equality semantics drive
+    /// <see cref="System.Reactive.Linq.Observable.DistinctUntilChanged{TSource,TKey}(IObservable{TSource},Func{TSource,TKey})"/>.</typeparam>
+    /// <param name="hub">The owning hub.</param>
+    /// <param name="fingerprint">Project a MeshNode to a value that compares equal when
+    /// the dispatchable state hasn't changed.</param>
+    /// <param name="needsDispatch">Returns <c>true</c> when this MeshNode state warrants
+    /// a dispatch round.</param>
+    /// <param name="dispatch">Returns an <c>IObservable&lt;Unit&gt;</c> that emits when
+    /// the round is fully committed. Errors propagate to the subscription's OnError;
+    /// the subscription stays alive (next state change will re-dispatch).</param>
+    /// <param name="logger">Optional logger; subscription faults are forwarded here.</param>
+    public static IDisposable WatchSubmission<TFingerprint>(
+        this IMessageHub hub,
+        Func<MeshNode, TFingerprint> fingerprint,
+        Func<MeshNode, bool> needsDispatch,
+        Func<MeshNode, IObservable<System.Reactive.Unit>> dispatch,
+        ILogger? logger = null)
+    {
+        if (hub is null) throw new ArgumentNullException(nameof(hub));
+        if (fingerprint is null) throw new ArgumentNullException(nameof(fingerprint));
+        if (needsDispatch is null) throw new ArgumentNullException(nameof(needsDispatch));
+        if (dispatch is null) throw new ArgumentNullException(nameof(dispatch));
+
+        logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.JobOrchestration");
+
+        return hub.GetWorkspace().GetMeshNodeStream()
+            .DistinctUntilChanged(fingerprint)
+            .Where(needsDispatch)
+            .SelectMany(node => dispatch(node)
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Submission dispatch failed on {Address}; next state change will retry",
+                        hub.Address);
+                    return System.Reactive.Linq.Observable.Empty<System.Reactive.Unit>();
+                }))
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogError(ex,
+                    "Submission watcher faulted on {Address}",
+                    hub.Address));
+    }
 }
