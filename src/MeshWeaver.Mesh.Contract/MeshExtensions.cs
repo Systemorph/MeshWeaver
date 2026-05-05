@@ -1304,17 +1304,19 @@ public static class MeshExtensions
                         return Observable.Return(nodeToSave);
                     });
             })
+            .SelectMany(nodeToSave =>
+                // Apply the partition write and wait for the post-update emission on the
+                // MeshNodeReference reducer before proceeding. Without this the previous
+                // implementation posted UpdateNodeResponse.Ok the moment UpdateStreamRequest
+                // was queued, racing the stream tick — read-after-write callers (and a fresh
+                // GetRemoteStream<MeshNode, MeshNodeReference> subscription opened right
+                // after the await returns) saw the pre-update snapshot.
+                workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path)
+                    .Select(saved => (nodeToSave, saved)))
             .Subscribe(
-                nodeToSave =>
+                pair =>
                 {
-                    // Direct workspace write — the data source's MeshNode partition
-                    // stream is the source of truth for the per-node hub's
-                    // MeshNodeReference reducer. UpdateMeshNode posts UpdateStreamRequest
-                    // synchronously into THIS hub's queue; subsequent messages on this
-                    // hub (including a GetDataRequest the caller sends after our
-                    // UpdateNodeResponse.Ok) are processed AFTER the stream tick, so
-                    // read-after-write is consistent.
-                    workspace.UpdateMeshNode(_ => nodeToSave, nodePath: nodeToSave.Path);
+                    var (nodeToSave, _saved) = pair;
 
                     // Explicitly persist to the underlying IMeshStorage so a
                     // subsequent ObserveQuery / persistence read sees the new
