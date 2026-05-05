@@ -321,20 +321,27 @@ public class MessageService : IMessageService
             bool shouldDefer = !gates.IsEmpty;
             if (shouldDefer)
             {
-                // System messages like ShutdownRequest must never be deferred — they are
-                // critical for disposal and would cause deadlocks if deferred behind closed
-                // gates.
+                // System messages must never be deferred — they are critical for the
+                // hub lifecycle and would cause deadlocks if deferred behind closed
+                // gates. The framework guarantees these always pass every gate so
+                // individual `WithInitializationGate(...)` predicates don't have to
+                // remember to bypass them.
                 //
-                // DeliveryFailure has the same requirement: it's the routing layer's reply
-                // to a request that couldn't be delivered. Deferring it strands the
-                // sender's hub.Observe(...) waiting for a response that's already sitting
-                // in our deferred buffer — the caller can't react via OnError, the request
-                // appears to time out, and any attempt by the routing layer to retry
-                // (which would post another DeliveryFailure) just hits the same gate.
-                // DeliveryFailure carries no state mutation; running it through every
-                // open gate is unconditionally safe and removes the per-gate need to
-                // remember to add `or DeliveryFailure` to its predicate.
-                if (delivery.Message is ShutdownRequest or DisposeRequest or DeliveryFailure)
+                // - ShutdownRequest, DisposeRequest: deferring breaks disposal.
+                // - DeliveryFailure: routing layer's reply for an undeliverable
+                //   request; deferring strands the sender's hub.Observe(...) waiting
+                //   for a response already sitting in the deferred buffer.
+                // - InitializeHubRequest: posted by the framework during construction
+                //   to mark BuildupActions complete and open the framework
+                //   InitializeGateName. If a user-defined gate (e.g. mesh-node init)
+                //   queues this, BuildupActions never finish → the gate that opens on
+                //   `Initialize` emission never opens → the hub deadlocks. Repro:
+                //   prod thread hubs whose SubscribeRequest timed out at 30s while
+                //   InitializeHubRequest sat behind MeshNodeInitGateName.
+                // - HeartBeatEvent: Orleans grain keep-alive; deferring causes
+                //   premature deactivation of an otherwise live grain.
+                if (delivery.Message is ShutdownRequest or DisposeRequest or DeliveryFailure
+                    or InitializeHubRequest or HeartBeatEvent)
                 {
                     logger.LogDebug(
                         "Allowing system message {MessageType} (ID: {MessageId}) through all gates for hub {Address}",

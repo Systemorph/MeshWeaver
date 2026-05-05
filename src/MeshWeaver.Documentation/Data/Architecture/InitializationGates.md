@@ -241,26 +241,39 @@ same deadlock pattern as awaiting inside `Initialize`.
 ## Gate-bypass predicates
 
 The predicate must return `true` for messages whose handling cannot wait for
-the gate. Common bypass cases:
+the gate. Anything user-driven (`GetDataRequest`, queries, mutations) should
+NOT bypass — that's the whole reason the gate exists.
 
-- **`CreateNodeRequest`** — the hub is being asked to come into existence.
-  Deferring the request would prevent the gate from ever being relevant.
-- **Self-targeted lifecycle messages** — `InitializeHubRequest`, internal
-  `SetupRequest`, etc. The hub is configuring itself; gating breaks the boot
-  sequence.
-- **Heartbeats** — `HeartBeatEvent` should pass through so Orleans grain
-  keep-alive isn't itself gated.
-
-Anything user-driven (`GetDataRequest`, queries, mutations) should NOT bypass
-— that's the whole reason the gate exists.
+The most common bypass case is **`CreateNodeRequest`** — the hub is being
+asked to come into existence; deferring the request would prevent the gate
+from ever being relevant.
 
 ```csharp
-.WithInitializationGate(
-    MeshNodeInitGateName,
-    d => d.Message is CreateNodeRequest                           // bootstrap
-      || d.Message is HeartBeatEvent                              // keep-alive
-      || d.Message is InitializeHubRequest)                       // self-config
+.WithInitializationGate(MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
 ```
+
+### Framework-bypassed messages — do NOT add to your predicate
+
+The framework unconditionally bypasses **every** gate for these system
+messages — see [`MessageService.cs`](../../../MeshWeaver.Messaging.Hub/MessageService.cs)
+(the `delivery.Message is ShutdownRequest or …` short-circuit before gate
+evaluation):
+
+| Message | Why bypassed |
+|---|---|
+| `ShutdownRequest`, `DisposeRequest` | Deferring breaks disposal. |
+| `DeliveryFailure` | Routing layer's reply for an undeliverable request; deferring strands the sender's `hub.Observe(...)` waiting on a response that's already in the deferred buffer. |
+| `InitializeHubRequest` | Posted during construction to mark `BuildupActions` complete and open the framework `InitializeGateName`. If a user-defined gate queues this, BuildupActions never finish → the user gate (which opens on initialization emission) never opens → hub deadlocks. |
+| `HeartBeatEvent` | Orleans grain keep-alive; deferring causes premature deactivation. |
+
+Predicate authors should NOT add these to their `WithInitializationGate(...)`
+predicate — the framework handles them. Adding them is harmless but redundant
+and clutters the gate definition.
+
+Repro for the `InitializeHubRequest` case: prod thread hubs whose
+`SubscribeRequest` timed out at 30 s while `InitializeHubRequest` sat queued
+behind `MeshNodeInitGateName`. Fixed by adding `InitializeHubRequest` to the
+framework-level bypass; no per-gate change needed.
 
 ---
 
