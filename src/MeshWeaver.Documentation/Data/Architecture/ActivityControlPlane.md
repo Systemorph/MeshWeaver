@@ -112,6 +112,74 @@ log to the optional `ILogger` argument (or to the
 `MeshWeaver.ActivityControlPlane` category resolved from the hub's
 service provider) so a broken control plane doesn't disappear silently.
 
+## Generalising: `WatchSubmission` for arbitrary "needs work" triggers
+
+`WatchControlPlane` is the right helper when the trigger is a single status field
+(`RequestedStatus`). Many job-orchestration cases need a more general predicate
+— e.g. a thread hub dispatches a new agent round whenever it has unprocessed
+user messages and isn't already executing. Same shape, broader trigger:
+
+```csharp
+hub.WatchSubmission(
+    fingerprint:   n => (t.IsExecuting, t.Messages.Count, t.IngestedMessageIds.Count, t.PendingUserMessages.Count),
+    needsDispatch: n => !t.IsExecuting && t.PendingUserMessages.Count > 0,
+    dispatch:      n => CreateUserCells(hub, n)
+                          .Concat(CreateResponseCell(hub, n))
+                          .SelectMany(_ => CommitRound(hub, n))
+                          .SelectMany(_ => DispatchToExec(hub, n)));
+```
+
+Lives next to `WatchControlPlane` in `MeshWeaver.Mesh.Contract`
+(`ActivityControlPlaneExtensions.cs`). Internally:
+
+```csharp
+hub.GetWorkspace().GetMeshNodeStream()
+    .DistinctUntilChanged(fingerprint)
+    .Where(needsDispatch)
+    .SelectMany(node => dispatch(node).Catch(...))
+    .Subscribe(_ => { }, ex => logger?.LogError(...));
+```
+
+### What this replaces
+
+If you find yourself writing **any** of these in a watcher:
+
+- An `Interlocked.CompareExchange` "dispatching" flag held across a reentrant
+  emission (`our own write re-emits and we mustn't re-fire`).
+- `Throttle(50ms)` to coalesce rapid patches into one round.
+- `AsyncLocal` / `CircuitContext` / hub-as-user fallbacks because the watcher
+  fires on a Throttle scheduler hop.
+- Manual ordering of "create satellite cell then update the parent's collection"
+  inside `Subscribe` callbacks.
+
+— **none of that is needed**. `DistinctUntilChanged` on a fingerprint replaces
+the dispatching flag (the same state can't fire twice). The chain runs in the
+hub's natural scheduler so AsyncLocal flows. Multi-step orchestration is an
+`IObservable<Unit>` chain (`Concat` / `Zip` / `SelectMany`), no mutable flags.
+
+Ship the round-orchestration steps as small `IObservable<Unit>` builders
+(`CreateUserCells`, `CommitRound`, `DispatchToExec`). Each step is one
+`Hub.Observe(..., target)` or `workspace.UpdateMeshNode(...)` followed by
+`.Select(_ => Unit.Default)`.
+
+## Anti-patterns to remove on sight
+
+A. **Imperative Subject + flag + Throttle watcher.** Symptoms: a `_ = 0`
+   `dispatching` field; manual `Interlocked.CompareExchange`; a
+   `.Throttle(TimeSpan.FromMilliseconds(50))` op; identity-fallback bookkeeping
+   reading both AsyncLocal and circuit. **Replace with `WatchSubmission`.**
+B. **Verb-shaped per-operation request types** (`StartXRequest`, `RetryXRequest`,
+   `CancelXRequest`) for things that already have content. **Replace with a
+   property patch + `WatchControlPlane`.**
+C. **Synchronization that lives in the caller** (the click handler creates the
+   satellite cell, updates the parent collection, posts to `_Exec`). **Move to
+   the owning hub's `WatchSubmission` so every chat / job / pipeline variant
+   reuses the same orchestration.**
+D. **`async Task` init hooks** on hubs whose body subscribes to streams.
+   `WithInitialization` has a sync `Action<IMessageHub>` overload — Subscribe
+   registers the callback synchronously, the observable does the work later.
+   The async overload's `await` adds a deadlock surface for nothing.
+
 ## Reporting status back to the UI
 
 Status flows the other direction the same way: through the same content the user is patching. The owning hub writes `Status` (and `Messages`, and any other observable progress fields) on the activity's content, and every UI / agent / monitor subscribed to the node's `MeshNodeReference` stream gets the snapshot pushed within milliseconds.
