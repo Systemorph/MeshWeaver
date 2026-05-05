@@ -20,14 +20,14 @@ public class ActivityLogBundler : IDisposable
 {
     private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(300);
 
-    private readonly Func<ActivityLog, Task> _onFlush;
+    private readonly Action<ActivityLog> _onFlush;
     private readonly string _hubPath;
     private readonly ILogger<ActivityLogBundler>? _logger;
 
     private readonly ConcurrentDictionary<BundleKey, ActiveBundle> _activeBundles = new();
     private bool _disposed;
 
-    public ActivityLogBundler(IMessageHub hub, Func<ActivityLog, Task> onFlush, ILogger<ActivityLogBundler>? logger = null)
+    public ActivityLogBundler(IMessageHub hub, Action<ActivityLog> onFlush, ILogger<ActivityLogBundler>? logger = null)
     {
         _onFlush = onFlush;
         _hubPath = hub.Address.ToString();
@@ -90,17 +90,12 @@ public class ActivityLogBundler : IDisposable
 
         var log = bundle.ToActivityLog() with { HubPath = _hubPath };
 
-        // Fire-and-forget: avoid blocking the timer/threadpool thread.
-        // Blocking here with .GetAwaiter().GetResult() can cause stack overflow
-        // or thread pool starvation when _onFlush posts messages back into the hub.
-        _ = FlushBundleAsync(log);
-    }
-
-    private async Task FlushBundleAsync(ActivityLog log)
-    {
+        // Sync invocation — onFlush is responsible for its own reactive composition
+        // (Subscribe-based, no await). Wrapping in try/catch so a buggy callback
+        // never crashes the timer thread.
         try
         {
-            await _onFlush(log);
+            _onFlush(log);
         }
         catch (Exception ex)
         {
