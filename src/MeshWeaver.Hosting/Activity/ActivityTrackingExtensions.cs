@@ -35,7 +35,7 @@ public static class ActivityTrackingExtensions
                 // Use IMeshStorage directly — NOT IMeshNodePersistence which routes through
                 // handlers and would trigger activity tracking again (infinite loop).
                 var persistence = sp.GetRequiredService<IMeshStorage>();
-                return new ActivityLogBundler(hub, async log =>
+                return new ActivityLogBundler(hub, log =>
                 {
                     // Skip activity tracking for satellite node hubs.
                     // Satellite paths contain /_X/ segments (e.g., /_Thread/, /_Comment/, /_Access/).
@@ -43,27 +43,35 @@ public static class ActivityTrackingExtensions
                     if (log.HubPath != null && IsSatellitePath(log.HubPath))
                         return;
 
-                    // Also check MainNode != Path for non-satellite-path nodes.
-                    // GetNode returns IObservable; bridge once at this off-hub bundler.
-                    var hubNode = log.HubPath != null
-                        ? await persistence.GetNode(log.HubPath).FirstAsync().ToTask()
-                        : null;
-                    if (hubNode != null && hubNode.MainNode != hubNode.Path)
-                        return;
+                    var lf = hub.ServiceProvider.GetService<ILoggerFactory>();
+                    var pathLogger = lf?.CreateLogger("ActivityLogBundler");
 
-                    var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
-                    {
-                        NodeType = ActivityNodeType.NodeType,
-                        Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
-                        MainNode = log.HubPath!,
-                        State = MeshNodeState.Active,
-                        Content = log
-                    };
-                    persistence.SaveNode(node).Subscribe(
-                        _ => { },
-                        ex => hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger("ActivityLogBundler")
-                            ?.LogWarning(ex, "Failed to persist activity log for {Path}", node.Path));
+                    // Reactive composition end-to-end — no await, no .ToTask. Bridge to the
+                    // observable hubNode read via SelectMany, then SaveNode chained after.
+                    // The callback is sync so onFlush can drop the deferred Subscribe; any
+                    // hub-touching work happens off the bundler's timer thread.
+                    var hubNodeObs = log.HubPath != null
+                        ? persistence.GetNode(log.HubPath).Take(1)
+                        : Observable.Return<MeshNode?>(null);
+
+                    hubNodeObs
+                        .SelectMany(hubNode =>
+                        {
+                            if (hubNode != null && hubNode.MainNode != hubNode.Path)
+                                return Observable.Empty<MeshNode>();
+                            var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
+                            {
+                                NodeType = ActivityNodeType.NodeType,
+                                Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
+                                MainNode = log.HubPath!,
+                                State = MeshNodeState.Active,
+                                Content = log
+                            };
+                            return persistence.SaveNode(node);
+                        })
+                        .Subscribe(
+                            _ => { },
+                            ex => pathLogger?.LogWarning(ex, "Failed to persist activity log for hub {Path}", log.HubPath));
                 });
             });
             return services;
