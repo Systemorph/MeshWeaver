@@ -42,8 +42,14 @@ public static class JsonSynchronizationStream
     /// <summary>
     /// Subscribes to the mesh change feed (resolved via reflection to avoid a
     /// Data → Mesh.Contract → Layout → Data project cycle) and invokes
-    /// <paramref name="onOwnerChanged"/> when an event's Path equals the owner's
-    /// address string. Returns null if no change-feed service is registered.
+    /// <paramref name="onOwnerChanged"/> when a Created or Deleted event's Path
+    /// equals the owner's bare path. Updated events are deliberately ignored —
+    /// they already flow to subscribers as DataChangedEvent through the normal
+    /// reactive pipeline; resubscribing on every Update would send a fresh
+    /// SubscribeRequest per write whose 30 s response wait can starve the very
+    /// updates it's meant to recover. Created/Deleted are recycle/recreate
+    /// signals — those still warrant a forced resubscribe.
+    /// Returns null if no change-feed service is registered.
     /// </summary>
     private static IDisposable? TrySubscribeOwnerPathChangeFeed(
         IServiceProvider serviceProvider, ILogger logger, string ownerPath, Action onOwnerChanged)
@@ -62,13 +68,14 @@ public static class JsonSynchronizationStream
                 throwOnError: false);
             if (eventType is null) return null;
             var pathProp = eventType.GetProperty("Path");
-            if (pathProp is null) return null;
+            var kindProp = eventType.GetProperty("Kind");
+            if (pathProp is null || kindProp is null) return null;
 
             var helper = typeof(JsonSynchronizationStream).GetMethod(
                 nameof(SubscribeOwnerPathChangeFeedHelper),
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
                 .MakeGenericMethod(eventType);
-            return (IDisposable?)helper.Invoke(null, [feed, pathProp, ownerPath, onOwnerChanged]);
+            return (IDisposable?)helper.Invoke(null, [feed, pathProp, kindProp, ownerPath, onOwnerChanged]);
         }
         catch (Exception ex)
         {
@@ -80,13 +87,24 @@ public static class JsonSynchronizationStream
     }
 
     private static IDisposable? SubscribeOwnerPathChangeFeedHelper<TEvent>(
-        object feed, System.Reflection.PropertyInfo pathProperty, string ownerPath, Action onOwnerChanged)
+        object feed, System.Reflection.PropertyInfo pathProperty, System.Reflection.PropertyInfo kindProperty,
+        string ownerPath, Action onOwnerChanged)
         where TEvent : class
     {
         Action<TEvent> handler = evt =>
         {
             try
             {
+                // Only fire on Created (kind=0) or Deleted (kind=2). Updated (kind=1)
+                // already propagates as DataChangedEvent on the live subscription —
+                // resubscribing on every Update generates per-write SubscribeRequest
+                // round-trips whose 30 s response wait competes with the very updates
+                // they're meant to recover.
+                var kindObj = kindProperty.GetValue(evt);
+                if (kindObj is null) return;
+                var kindInt = (int)kindObj;
+                if (kindInt != 0 && kindInt != 2) return;
+
                 if (pathProperty.GetValue(evt) is string p
                     && string.Equals(p, ownerPath, StringComparison.OrdinalIgnoreCase))
                     onOwnerChanged();
@@ -318,11 +336,12 @@ public static class JsonSynchronizationStream
                 });
             reduced.RegisterForDisposal(sub);
 
-            // Resubscribe when the mesh change feed reports a change on the owner's
-            // path. This is the sole recycled-grain detector now that heartbeats are
-            // fire-and-forget; MeshChangeFeed fires on every create/update/delete from
-            // the persistence layer.
-            var ownerPath = owner.ToString();
+            // Resubscribe when the mesh change feed reports a Created/Deleted event
+            // on the owner's path. This is the sole recycled-grain detector now that
+            // heartbeats are fire-and-forget. Compare against Address.Path (segments
+            // only) — ToString() can include a "~host" suffix for hosted addresses
+            // which never matches MeshChangeEvent.Path (the bare node.Path).
+            var ownerPath = owner.Path;
             var changeFeedSub = TrySubscribeOwnerPathChangeFeed(
                 hub.ServiceProvider, logger, ownerPath,
                 () => Resubscribe("change feed event"));
