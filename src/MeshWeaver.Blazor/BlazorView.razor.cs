@@ -229,6 +229,13 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected virtual void BindData()
     {
+        // ViewModel is declared `required` but Blazor's parameter pipeline can
+        // still feed null through transient binding races — most reliably during
+        // thread-launch / chat-side-panel re-render where the upstream Stream is
+        // being torn down and a new ViewModel hasn't landed yet. Without this
+        // guard the user sees a NullReferenceException at the .Id access below.
+        if (ViewModel is null) return;
+
         DataBind(ViewModel.Id, x => x.Id);
         DataBind(ViewModel.Class, x => x.Class);
         DataBind(ViewModel.Style, x => x.Style);
