@@ -122,10 +122,38 @@ public static class CommentsExtensions
             // Create comment/reply node first, then update parent. Chain via SelectMany
             // so the response is only posted after the parent update commits — fire-and-forget
             // would silently drop the parent mutation if the workspace update raced GC.
+            //
+            // Skip the parent update entirely when there is nothing to write — page-level
+            // comments on a markdown doc (no text selection, parent isn't a Comment) leave
+            // the parent untouched, and Update(...)'s "first emission past baseline" wait
+            // hangs forever when no version bump occurs.
             meshService.CreateNode(commentNode)
                 .SelectMany(_ =>
                 {
                     logger?.LogInformation("[CreateComment] Node created: {Id} on {Path}", markerId, nodePath);
+
+                    if (!hasTextSelection)
+                    {
+                        var ownNode = workspace.GetMeshNodeStream()
+                            .Take(1)
+                            .Timeout(TimeSpan.FromSeconds(5))
+                            .Catch<MeshNode, Exception>(_ => Observable.Return((MeshNode)null!));
+                        return ownNode.SelectMany(node =>
+                        {
+                            // Reply on a Comment parent — add reply id to Replies list.
+                            if (node?.Content is Comment parent)
+                                return workspace.GetMeshNodeStream().Update(n => n with
+                                {
+                                    Content = ((Comment)n.Content!) with
+                                    {
+                                        Replies = ((Comment)n.Content!).Replies.Add(markerId)
+                                    }
+                                });
+                            // Page-level on non-Comment parent (markdown doc) — no parent
+                            // update needed, complete immediately.
+                            return Observable.Return(node ?? commentNode);
+                        });
+                    }
 
                     // Update parent node via workspace stream
                     return workspace.GetMeshNodeStream().Update(node =>

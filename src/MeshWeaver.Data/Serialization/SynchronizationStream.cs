@@ -450,6 +450,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     OnError(new DeliveryFailureException(failure));
                     return delivery.Processed();
                 }
+            ).WithHandler<StreamErrorEvent>((_, delivery) =>
+                {
+                    var evt = delivery.Message;
+                    logger.LogWarning("Stream {StreamId} received StreamErrorEvent: {Message}", StreamId, evt.Message);
+                    OnError(new InvalidOperationException(evt.Message));
+                    return delivery.Processed();
+                }
             ).WithHandler<UnsubscribeRequest>((hub, delivery) =>
             {
                 hub.Dispose();

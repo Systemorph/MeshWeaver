@@ -74,13 +74,30 @@ internal static class NodeTypeContractHandler
                 // production hosts pin a specific historical release while authors
                 // keep iterating in the dev loop. See
                 // NodeTypeDefinition.RequestedReleasePath.
+                //
+                // Release nodes are satellites (IsSatelliteType=true) — there is no
+                // per-node hub, so cross-hub routing via hub.GetMeshNode(...) returns
+                // null fast (DeliveryFailure NotFound). The release IS in
+                // persistence, owned by this NodeType hub's partition, so go to
+                // IStorageService directly. Sanctioned because the Release nodes
+                // satellite has no live hub to read from.
                 if (!string.IsNullOrEmpty(def.RequestedReleasePath))
                 {
                     var requestedReleasePath = def.RequestedReleasePath!;
                     logger?.LogDebug(
                         "GetCompilationPathRequest at {HubPath}: resolving pinned release {ReleasePath}.",
                         hubPath, requestedReleasePath);
-                    return hub.GetMeshNode(requestedReleasePath, TimeSpan.FromSeconds(15))
+                    var storage = hub.ServiceProvider.GetService<IStorageService>();
+                    if (storage is null)
+                    {
+                        logger?.LogWarning(
+                            "GetCompilationPathRequest at {HubPath}: no IStorageService — cannot resolve pinned release {ReleasePath}.",
+                            hubPath, requestedReleasePath);
+                        return Observable.Return<GetCompilationPathResponse?>(Fail(
+                            null,
+                            $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
+                    }
+                    return storage.GetNode(requestedReleasePath, hub.JsonSerializerOptions)
                         .SelectMany(releaseNode =>
                         {
                             if (releaseNode?.Content is NodeTypeRelease release
@@ -95,8 +112,10 @@ internal static class NodeTypeContractHandler
                                     .Select(result => BuildResponse(hubPath, pinnedNode, result));
                             }
                             logger?.LogWarning(
-                                "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} could not be resolved.",
-                                hubPath, requestedReleasePath);
+                                "GetCompilationPathRequest at {HubPath}: pinned release {ReleasePath} could not be resolved (releaseNode={ReleaseNode}, asmPath={AsmPath}).",
+                                hubPath, requestedReleasePath,
+                                releaseNode == null ? "null" : releaseNode.Content?.GetType().Name ?? "no-content",
+                                (releaseNode?.Content as NodeTypeRelease)?.AssemblyPath ?? "<none>");
                             return Observable.Return<GetCompilationPathResponse?>(Fail(
                                 null,
                                 $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
