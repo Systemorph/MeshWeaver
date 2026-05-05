@@ -67,6 +67,22 @@ var embeddingEndpoint = builder.AddParameter("embedding-endpoint", value: "", se
 var embeddingModel = builder.AddParameter("embedding-model", value: "", secret: false);
 var googleClientId = builder.AddParameter("google-client-id", value: "", secret: false);
 
+// LLM endpoints — sourced from secrets/env, never hardcoded. The Anthropic
+// endpoint serves Claude on Azure Foundry (path /anthropic/); the Foundry
+// endpoint serves OpenAI/Mistral/etc. via the multi-model /models path.
+// Model names are configured per-tier below — also via parameters, never
+// inlined here. Configure with `dotnet user-secrets set "Parameters:anthropic-endpoint" "https://..."`
+// in dev, or via GitHub Actions / ACA env in deploy.
+var anthropicEndpoint = builder.AddParameter("anthropic-endpoint", value: "", secret: false);
+var azureFoundryEndpoint = builder.AddParameter("azure-foundry-endpoint", value: "", secret: false);
+
+// Model-tier mappings: agents declare ModelTier ("heavy" / "standard" /
+// "light") and the factory resolves it to a concrete model name via these
+// parameters. Hidden from source so the deployment owns the model identity.
+var modelTierHeavy = builder.AddParameter("model-tier-heavy", value: "", secret: false);
+var modelTierStandard = builder.AddParameter("model-tier-standard", value: "", secret: false);
+var modelTierLight = builder.AddParameter("model-tier-light", value: "", secret: false);
+
 // Optional secrets/params: ACA rejects secrets with empty values; ConfigureCustomDomain
 // rejects empty hostnames. Read actual config values to guard optional registrations.
 var embeddingKeyValue = builder.Configuration["Parameters:embedding-key"] ?? "";
@@ -170,30 +186,22 @@ var portal = builder
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
     .WithEnvironment("Embedding__Model", embeddingModel)
-    // LLM: Anthropic (Azure Foundry Claude)
-    .WithEnvironment("Anthropic__Endpoint", "https://s-meshweaver.services.ai.azure.com/anthropic/")
+    // LLM: Anthropic (Azure Foundry Claude). Endpoint + model identities all
+    // come from parameters — no URLs and no model names hardcoded here.
+    // Agents declare PreferredModel in their MeshNode; ModelTier resolves via
+    // the parameters below.
+    .WithEnvironment("Anthropic__Endpoint", anthropicEndpoint)
     .WithEnvironment("Anthropic__ApiKey", azureFoundryKey)
-    .WithEnvironment("Anthropic__Models__0", "claude-sonnet-4-6")
-    .WithEnvironment("Anthropic__Models__1", "claude-opus-4-7")
-    .WithEnvironment("Anthropic__Models__2", "claude-haiku-4-5")
     .WithEnvironment("Anthropic__Order", "1")
-    // Model tiers: map agent tiers to concrete models
-    .WithEnvironment("ModelTier__Heavy", "claude-opus-4-7")
-    .WithEnvironment("ModelTier__Standard", "claude-sonnet-4-6")
-    .WithEnvironment("ModelTier__Light", "claude-haiku-4-5")
-    // LLM: Azure OpenAI
-    .WithEnvironment("AzureOpenAIS__Endpoint", "https://s-meshweaver.cognitiveservices.azure.com")
-    .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
-    .WithEnvironment("AzureOpenAIS__Models__0", "gpt-5-mini")
-    .WithEnvironment("AzureOpenAIS__Models__1", "gpt-5.4")
-    .WithEnvironment("AzureOpenAIS__Order", "2")
-    // LLM: Azure AI Foundry (multi-model inference endpoint)
-    .WithEnvironment("AzureAIS__Endpoint", "https://fy-meshweaver3-dev-swc-001.services.ai.azure.com/models")
+    // Model tier → concrete model mapping. Sourced from parameters so the
+    // deployment owns the model identity.
+    .WithEnvironment("ModelTier__Heavy", modelTierHeavy)
+    .WithEnvironment("ModelTier__Standard", modelTierStandard)
+    .WithEnvironment("ModelTier__Light", modelTierLight)
+    // LLM: Azure AI Foundry (multi-model inference endpoint — covers OpenAI,
+    // Mistral, DeepSeek, etc. through one endpoint).
+    .WithEnvironment("AzureAIS__Endpoint", azureFoundryEndpoint)
     .WithEnvironment("AzureAIS__ApiKey", azureFoundryKey)
-    .WithEnvironment("AzureAIS__Models__0", "gpt-5.4")
-    .WithEnvironment("AzureAIS__Models__1", "gpt-5.3-codex")
-    .WithEnvironment("AzureAIS__Models__2", "Mistral-Large-3")
-    .WithEnvironment("AzureAIS__Models__3", "DeepSeek-V3.2")
     .WithEnvironment("AzureAIS__Order", "0")
     // Authentication
     .WithEnvironment("Authentication__EnableDevLogin", mode != "prod" ? "true" : "false")
@@ -216,6 +224,12 @@ var portal = builder
         // Each replica: 2 vCPU / 4Gi (50% of Consumption tier max 4 vCPU / 8Gi).
         app.Template.Scale.MinReplicas = 2;
         app.Template.Scale.MaxReplicas = 6;
+        // Orleans needs time to drain grain activations to the surviving silo
+        // before the container is killed.  Default ACA grace period is 30 s —
+        // far too short for a clean Orleans handoff.  Set to 120 s so the
+        // .NET host's 90 s ShutdownTimeout (set in Memex.Portal.Distributed)
+        // completes before SIGKILL arrives.
+        app.Template.TerminationGracePeriodSeconds = 120;
     });
 
 // Optional secrets: only add as env vars when configured (ACA rejects empty secrets)
