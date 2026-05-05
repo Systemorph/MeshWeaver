@@ -163,6 +163,13 @@ internal interface ICompilationCacheService
     string GetReleaseFolderPath(NodeTypeRelease release);
 
     /// <summary>
+    /// Gets or creates an AssemblyLoadContext keyed by the exact DLL path.
+    /// Used for release-per-compile: each unique compiled DLL lives in its own
+    /// ALC so V1 and V2 assemblies coexist without overwriting each other.
+    /// </summary>
+    NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath);
+
+    /// <summary>
     /// Registers NuGet probing directories for a node. The node's AssemblyLoadContext
     /// consults these directories during Resolving events so transitive dependencies
     /// of resolved NuGet packages can be loaded at runtime.
@@ -672,6 +679,21 @@ internal class CompilationCacheService(
 
         var context = GetOrCreateLoadContext(nodeName);
         return context.LoadNodeAssembly();
+    }
+
+    /// <inheritdoc />
+    public NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        return _loadContexts.GetOrAdd(dllPath, path =>
+        {
+            logger.LogDebug("Creating new path-keyed AssemblyLoadContext for {NodeName} at {DllPath}", nodeName, path);
+            var ctx = new NodeAssemblyLoadContext(nodeName, path, logger);
+            if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
+                ctx.SetProbingDirectories(dirs);
+            return ctx;
+        });
     }
 
     /// <inheritdoc />

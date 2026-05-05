@@ -229,14 +229,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = def! with { RequestedReleasePath = v1Release }
         });
 
-        // Wait for the pin write to propagate via the mesh-level query before
-        // creating the instance — otherwise the per-instance hub's
-        // GetCompilationPathRequest can read a stale def with no pin set.
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{pinTypePath}"))
-            .SelectMany(c => c.Items)
-            .Where(n => n.Content is NodeTypeDefinition d && d.RequestedReleasePath == v1Release)
+        // Wait for the pin write to propagate before creating the instance —
+        // otherwise the per-instance hub's GetCompilationPathRequest can read
+        // a stale def with no pin set. Live remote stream (path is known) —
+        // not ObserveQuery, which is index-lagged.
+        var reader = GetClient(c => c.AddData());
+        await reader.GetWorkspace().GetMeshNodeStream(pinTypePath)
+            .Where(n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == v1Release)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
             .ToTask(ct);
@@ -263,10 +262,8 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             Content = def! with { RequestedReleasePath = null }
         });
-        await meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{pinTypePath}"))
-            .SelectMany(c => c.Items)
-            .Where(n => n.Content is NodeTypeDefinition d && d.RequestedReleasePath == null)
+        await reader.GetWorkspace().GetMeshNodeStream(pinTypePath)
+            .Where(n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
             .ToTask(ct);
@@ -287,7 +284,6 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
     private async Task<CreateReleaseResponse> SendCreateReleaseAsync(
         string nodeTypePath, bool force, CancellationToken ct)
     {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var reader = GetClient(c => c.AddData());
         var response = await reader
             .Observe(new CreateReleaseRequest(Force: force), o => o.WithTarget(new Address(nodeTypePath)))
@@ -296,12 +292,14 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             .FirstAsync()
             .ToTask(ct);
         // Wait for compile to complete (status = Ok or Error) before returning.
+        // Live remote stream (GetMeshNodeStream(path)) — NOT ObserveQuery, which
+        // is index-lagged and can miss the post-compile tick (per the CQRS
+        // feedback note + Doc/Architecture/CqrsAndContentAccess.md). Path is
+        // known here, so the live stream is the right primitive.
         if (!response.AlreadyUpToDate && response.Success)
         {
-            await meshService
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodeTypePath}"))
-                .SelectMany(c => c.Items)
-                .Where(n => n.Content is NodeTypeDefinition def
+            await reader.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+                .Where(n => n?.Content is NodeTypeDefinition def
                     && (def.CompilationStatus == CompilationStatus.Ok
                         || def.CompilationStatus == CompilationStatus.Error))
                 .Take(1)
@@ -339,32 +337,42 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         return (control as HtmlControl)?.Data?.ToString() ?? string.Empty;
     }
 
+    /// <summary>
+    /// Waits for a fresh <c>_Release</c> MeshNode whose path differs from any in
+    /// <paramref name="knownReleases"/>. Reads <see cref="NodeTypeDefinition.LatestReleasePath"/>
+    /// off the live <see cref="GetMeshNodeStream"/> — atomic with the post-compile
+    /// status flip, so by the time CompilationStatus settles to Ok the new path
+    /// is already on the NodeType. Avoids the lagged <c>ObserveQuery</c> namespace
+    /// scan over <c>_Release/*</c>.
+    /// </summary>
     private async Task<string> WaitForNewReleaseAsync(
         string nodeTypePath, HashSet<string> knownReleases, CancellationToken ct)
     {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var releaseNamespace = $"{nodeTypePath}/_Release";
-        var release = await meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"namespace:{releaseNamespace} nodeType:Release"))
-            .Select(change =>
-            {
-                foreach (var n in change.Items)
-                    if (!string.IsNullOrEmpty(n.Path) && !knownReleases.Contains(n.Path))
-                        return n;
-                return null;
-            })
-            .Where(n => n is not null)
+        var reader = GetClient(c => c.AddData());
+        var node = await reader.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+            .Where(n => n?.Content is NodeTypeDefinition def
+                && !string.IsNullOrEmpty(def.LatestReleasePath)
+                && !knownReleases.Contains(def.LatestReleasePath!))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(50))
             .ToTask(ct);
-        return release!.Path!;
+        return ((NodeTypeDefinition)node.Content!).LatestReleasePath!;
     }
 
+    /// <summary>
+    /// Live, path-known read of a single MeshNode. Replaces the lagged
+    /// <c>NodeFactory.QueryAsync($"path:{path}")</c> pattern: queries are
+    /// eventually consistent and routinely miss the just-written value (per
+    /// CqrsAndContentAccess.md). Path is known here, so the live remote stream
+    /// is the right primitive.
+    /// </summary>
     private async Task<MeshNode?> FindNodeAsync(string path, CancellationToken ct)
     {
-        await foreach (var n in NodeFactory.QueryAsync<MeshNode>($"path:{path}", ct: ct).WithCancellation(ct))
-            return n;
-        return null;
+        var reader = GetClient(c => c.AddData());
+        return await reader.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
     }
 }

@@ -15,6 +15,10 @@ using Orleans.Configuration;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.Services.AddServerSideBlazor().AddCircuitOptions(o => o.DetailedErrors = true);
+// Give Orleans time to drain grain activations during a rolling update.
+// ACA termination grace period is set to 120 s in Memex.AppHost; this
+// keeps the .NET host alive for 90 s (leaves 30 s headroom before SIGKILL).
+builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(90));
 
 // Log levels controlled via appsettings.Development.json
 

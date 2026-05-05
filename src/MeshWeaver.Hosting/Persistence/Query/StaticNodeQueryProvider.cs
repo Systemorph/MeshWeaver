@@ -180,26 +180,54 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
-        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        // Static nodes are purely in-memory (no I/O) and never change.
+        // Collect synchronously and return a completed Observable.Return — no async, no scheduler.
+        var parsedQuery = _parser.Parse(request.Query);
+        var items = CollectStaticResults<T>(parsedQuery, request.Context);
+        return Observable.Return(new QueryResultChange<T>
         {
-            var items = new List<T>();
-            await foreach (var item in QueryAsync(request, options, ct))
-            {
-                if (item is T typed)
-                    items.Add(typed);
-            }
-
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Initial,
-                Items = items,
-                Query = _parser.Parse(request.Query),
-                Version = 0,
-                Timestamp = DateTimeOffset.UtcNow
-            });
-            observer.OnCompleted();
-            return System.Reactive.Disposables.Disposable.Empty;
+            ChangeType = QueryChangeType.Initial,
+            Items = items,
+            Query = parsedQuery,
+            Version = 0,
+            Timestamp = DateTimeOffset.UtcNow
         });
+    }
+
+    private List<T> CollectStaticResults<T>(ParsedQuery parsed, string? requestContext)
+    {
+        var context = requestContext ?? parsed.Context;
+        var items = new List<T>();
+
+        var nodeTypeFilter = GetNodeTypeFilterValue(parsed.Filter);
+        if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))
+            return items;
+
+        if (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path))
+        {
+            foreach (var node in _providerNodes)
+            {
+                if (!string.IsNullOrEmpty(parsed.Path) && !MatchesPath(node, parsed)) continue;
+                if (!_evaluator.Matches(node, parsed)) continue;
+                if (IsExcludedByContext(node, context)) continue;
+                if (parsed.IsMain == true && node.MainNode != node.Path) continue;
+                if (node is T typed) items.Add(typed);
+            }
+        }
+
+        var isSearch = string.Equals(context, "search", StringComparison.OrdinalIgnoreCase);
+        if (!isSearch && (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path)))
+        {
+            foreach (var node in _configNodes)
+            {
+                if (!MatchesPath(node, parsed)) continue;
+                if (!_evaluator.Matches(node, parsed)) continue;
+                if (IsExcludedByContext(node, context)) continue;
+                if (parsed.IsMain == true && node.MainNode != node.Path) continue;
+                if (node is T typed) items.Add(typed);
+            }
+        }
+        return items;
     }
 
     public Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)

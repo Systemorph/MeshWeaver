@@ -417,13 +417,14 @@ public static class SettingsLayoutArea
         // Description + Generate button on its own row, matching the icon layout below.
         stack = stack.WithView(Controls.Stack
             .WithStyle("gap: 8px;")
-            .WithView(new TextAreaControl(new JsonPointerReference("Description"))
+            .WithView(Controls.Html("<label style=\"font-weight: 500; font-size: 0.85rem;\">Description</label>"))
+            .WithView(new MarkdownEditorControl
             {
-                Label = "Description",
+                Value = new JsonPointerReference("Description"),
+                Height = "300px",
                 Placeholder = "Long-form description. Seeds AI Name/Id/Icon generation and appears in detail views.",
-                Immediate = true,
                 DataContext = dataPointer
-            }.WithRows(3))
+            })
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(8)

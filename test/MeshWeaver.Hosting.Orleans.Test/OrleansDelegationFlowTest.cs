@@ -260,7 +260,7 @@ public class DelegationSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigurePortalMesh()
             .AddRowLevelSecurity()
             .AddMeshNodes(
-                new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
+                new MeshNode("TestUser") { Name = "TestUser", NodeType = "User" })
             .AddMeshNodes(TestUserAdminAccess())
             .ConfigureServices(services =>
                 services.AddSingleton<IChatClientFactory, DelegationToolFakeChatClientFactory>())
@@ -282,12 +282,12 @@ public class DelegationSiloConfigurator : ISiloConfigurator, IHostConfigurator
         };
         return
         [
-            new("TestUser_Access", "User/_Access")
+            new("TestUser_Access", "TestUser/_Access")
             {
                 NodeType = "AccessAssignment",
                 Name = "TestUser Access",
                 Content = assignment,
-                MainNode = "User",
+                MainNode = "TestUser",
             }
         ];
     }

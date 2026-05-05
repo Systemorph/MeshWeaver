@@ -386,10 +386,10 @@ public class Workspace : IWorkspace
     }
 
     void IWorkspace.SubscribeToClient(
-        SubscribeRequest request
+        IMessageDelivery<SubscribeRequest> delivery
     )
     {
-        var referenceType = request.Reference.GetType();
+        var referenceType = delivery.Message.Reference.GetType();
         var genericWorkspaceType = referenceType;
         while (!genericWorkspaceType!.IsGenericType || genericWorkspaceType.GetGenericTypeDefinition() != typeof(WorkspaceReference<>))
         {
@@ -399,7 +399,7 @@ public class Workspace : IWorkspace
         var reducedType = genericWorkspaceType.GetGenericArguments().First();
         SubscribeToClientMethod
             .MakeGenericMethod(reducedType, referenceType)
-            .Invoke(this, [request]);
+            .Invoke(this, [delivery]);
     }
 
 
@@ -408,10 +408,10 @@ public class Workspace : IWorkspace
             x.SubscribeToClient<object, WorkspaceReference<object>>(null!)
         );
 
-    private void SubscribeToClient<TReduced, TReference>(SubscribeRequest request)
+    private void SubscribeToClient<TReduced, TReference>(IMessageDelivery<SubscribeRequest> delivery)
         where TReference : WorkspaceReference<TReduced>
     {
-        this.CreateSynchronizationStream<TReduced, TReference>(request);
+        this.CreateSynchronizationStream<TReduced, TReference>(delivery);
     }
 
 

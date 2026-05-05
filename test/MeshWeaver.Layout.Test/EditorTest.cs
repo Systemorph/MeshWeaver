@@ -215,139 +215,66 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     private async Task ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
         where TControl : ListControlBase<TControl>
     {
-        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Control type: {typeof(TControl).Name}");
-        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Control.Data type: {control.Data.GetType().Name}");
-        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Expected data: {benchmark.Data}");
-        
         control.Data.Should().BeOfType<JsonPointerReference>().Subject.Pointer.Should().Be(benchmark.Data);
-        Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Data validation passed");
 
         var options = control.Options as IReadOnlyCollection<Option>;
-        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Options type: {control.Options.GetType().Name}");
 
         if (control.Options is JsonPointerReference pointer)
         {
-            Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Options is pointer: {pointer.Pointer}");
             if (benchmark.OptionPointer != null)
                 pointer.Pointer.Should().Be(benchmark.OptionPointer);
             else
                 pointer.Pointer.Should().StartWith("/data/");
-                
+
             if (benchmark.Options is not null)
             {
-                Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Waiting for options from stream...");
-                try
-                {
-                    options = await stream.Reduce(pointer)!
-                        .Select(p =>
-                        {
-                            Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Got stream value: {p.Value}");
-                            var valueString = p.Value.ToString();
-                            if (string.IsNullOrWhiteSpace(valueString))
-                            {
-                                Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Got empty stream value, returning null");
-                                return null;
-                            }
-                            return JsonNode.Parse(valueString)
-                                .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions);
-                        })
-                        .Where(x => x is not null)
-                        .Timeout(10.Seconds())
-                        .FirstAsync();
-                    Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Got options from stream: {options?.Count} items");
-                }
-                catch (Exception ex)
-                {
-                    Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Failed to get options from stream: {ex.Message}");
-                    throw;
-                }
+                options = await stream.Reduce(pointer)!
+                    .Select(p =>
+                    {
+                        var valueString = p.Value.ToString();
+                        if (string.IsNullOrWhiteSpace(valueString))
+                            return null;
+                        return JsonNode.Parse(valueString)
+                            .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions);
+                    })
+                    .Where(x => x is not null)
+                    .Timeout(10.Seconds())
+                    .FirstAsync();
             }
         }
 
         if (benchmark.Options is null)
-        {
-            Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Expecting null options");
             options.Should().BeNull();
-        }
         else
-        {
-            Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Expecting {benchmark.Options.Length} options");
             options.Should().BeEquivalentTo(benchmark.Options);
-        }
-        
-        Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Validation completed successfully");
     }
 
     [Fact]
     public async Task TestEditorWithListFormProperties()
     {
-        Output.WriteLine("🔧 DEBUG: Starting TestEditorWithListFormProperties");
-        
-        try
-        {
-            var client = GetClient();
-            Output.WriteLine("🔧 DEBUG: Got client");
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+        var stream = workspace
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            new LayoutAreaReference(nameof(EditorWithListFormProperties)));
 
-            var workspace = client.GetWorkspace();
-            Output.WriteLine("🔧 DEBUG: Got workspace");
-            
-            var stream = workspace
-                .GetRemoteStream<JsonElement, LayoutAreaReference>(
-                CreateHostAddress(),
-                new LayoutAreaReference(nameof(EditorWithListFormProperties)));
-            Output.WriteLine("🔧 DEBUG: Got stream");
+        var control = await stream
+            .GetControlStream(nameof(EditorWithListFormProperties))
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is not null);
 
-            Output.WriteLine("🔧 DEBUG: Waiting for control stream...");
-            var control = await stream
-                .GetControlStream(nameof(EditorWithListFormProperties))
-                .Timeout(10.Seconds())
-                .FirstAsync(x => x is not null);
-            Output.WriteLine($"🔧 DEBUG: Got control: {control?.GetType().Name}");
+        var editor = control.Should().BeOfType<EditorControl>().Subject;
 
-            var editor = control.Should().BeOfType<EditorControl>().Subject;
-            Output.WriteLine($"🔧 DEBUG: Editor has {editor.Areas.Count} areas");
+        var controls = await Task.WhenAll(
+            editor.Areas.Select(async a =>
+                await stream.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds())
+                    .FirstAsync(x => x is not null))
+        );
 
-            Output.WriteLine("🔧 DEBUG: Starting to get controls for areas...");
-            var controls = await Task.WhenAll(
-                editor.Areas.Select(async a =>
-                {
-                    Output.WriteLine($"🔧 DEBUG: Getting control for area: {a.Area}");
-                    var areaControl = await stream.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds())
-                        .FirstAsync(x => x is not null);
-                    Output.WriteLine($"🔧 DEBUG: Got area control: {areaControl?.GetType().Name}");
-                    return areaControl;
-                })
-            );
-            Output.WriteLine($"🔧 DEBUG: Got {controls.Length} controls");
-
-            controls.Should().HaveCount(ListPropertyBenchmarks.Length);
-            Output.WriteLine("🔧 DEBUG: Starting validation...");
-            
-            for (int i = 0; i < controls.Length; i++)
-            {
-                var c = controls[i];
-                var b = ListPropertyBenchmarks[i];
-                Output.WriteLine($"🔧 DEBUG: Validating control {i}: {c?.GetType().Name}");
-                
-                try
-                {
-                    await ValidateListBenchmark(stream, (dynamic)c!, (dynamic)b);
-                    Output.WriteLine($"🔧 DEBUG: Validation {i} completed");
-                }
-                catch (Exception ex)
-                {
-                    Output.WriteLine($"🔧 DEBUG: Validation {i} failed: {ex.Message}");
-                    throw;
-                }
-            }
-            
-            Output.WriteLine("🔧 DEBUG: TestEditorWithListFormProperties completed successfully");
-        }
-        catch (Exception ex)
-        {
-            Output.WriteLine($"🔧 DEBUG: TestEditorWithListFormProperties failed with exception: {ex}");
-            throw;
-        }
+        controls.Should().HaveCount(ListPropertyBenchmarks.Length);
+        for (int i = 0; i < controls.Length; i++)
+            await ValidateListBenchmark(stream, (dynamic)controls[i]!, (dynamic)ListPropertyBenchmarks[i]);
     }
 
 

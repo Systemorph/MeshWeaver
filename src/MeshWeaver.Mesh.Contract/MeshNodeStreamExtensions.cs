@@ -71,9 +71,11 @@ public static class MeshNodeStreamExtensions
     /// <summary>
     /// Updates the OWN MeshNode of <paramref name="workspace"/> by applying
     /// <paramref name="update"/> through the data source's MeshNode partition stream
-    /// — the data source persister flushes to storage, subscribers receive the update
-    /// via the workspace synchronization protocol, no <see cref="Services.IMeshStorage"/>
-    /// calls (persistence belongs in <c>MeshDataSource</c> initialization only).
+    /// and emits the post-update <see cref="MeshNode"/> on the
+    /// <see cref="MeshNodeReference"/> reducer's first emission past the pre-update
+    /// snapshot. The returned observable completes after a single emission — chain
+    /// <c>UpdateNodeResponse.Ok</c> / persistence flushes off it via
+    /// <c>SelectMany</c> / <c>Subscribe</c> instead of racing the partition write.
     ///
     /// <para>
     /// <b>Own-hub only.</b> To update a MeshNode at a remote address, post a
@@ -87,91 +89,81 @@ public static class MeshNodeStreamExtensions
     /// works even when no per-node hub has been separately activated.
     /// </para>
     /// </summary>
-    /// <summary>
-    /// Updates a MeshNode through the canonical write path:
-    /// (a) the patch arrives in the sync stream — own (this hub) writes go through
-    /// the data source's primary EntityStore stream; remote writes go through the
-    /// remote MeshNodeReference stream's <c>.Update</c> which sends a
-    /// synchronization message to the owning hub. (b) On the owning hub, the patch
-    /// is validated via <c>WorkspaceOperations.Change</c> /
-    /// <c>HandleDataChangeRequest</c>'s <c>RunChangeValidators</c>. (c) The
-    /// validated patch is applied to the owning MeshDataSource. (d) The owning
-    /// hub broadcasts the change to all subscribers through the synchronization
-    /// protocol.
-    /// <para>
-    /// Read-modify-write: <paramref name="update"/> is invoked atop the latest
-    /// node from the owning source so concurrent callers don't lose updates.
-    /// </para>
-    /// </summary>
-    public static void UpdateMeshNode(this IWorkspace workspace,
+    public static IObservable<MeshNode> UpdateMeshNode(this IWorkspace workspace,
         Func<MeshNode, MeshNode> update,
         string? nodePath = null)
-    {
-        var hubPath = workspace.Hub.Address.Path;
-        if (!string.IsNullOrEmpty(nodePath)
-            && !string.Equals(nodePath, hubPath, StringComparison.Ordinal))
+        => Observable.Create<MeshNode>(observer =>
         {
-            // Cross-address: the synchronization protocol carries the patch to the
-            // owning hub. The owning hub's data layer applies validation + writes.
-            var remote = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(nodePath), new MeshNodeReference());
-            remote.Update(current =>
+            var refStream = workspace.GetStream(new MeshNodeReference())
+                ?? throw new InvalidOperationException(
+                    "MeshNode stream is not available — the workspace has no MeshNodeReference reducer.");
+
+            // Local: write to the data source's MeshNode partition stream — same stream the
+            // workspace reduces from, so updates propagate to all subscribers (and to persistence
+            // via the data source's persister).
+            var dataSource = workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
+            if (dataSource == null)
+                throw new InvalidOperationException("No data source registered for MeshNode");
+            var dsStream = dataSource.GetStreamForPartition(null)
+                ?? throw new InvalidOperationException("No stream for MeshNode partition");
+
+            // Capture the pre-update version on the reducer, then wait for the first emission
+            // past it to surface as the IObservable<MeshNode> result. Subscribe BEFORE applying
+            // the partition write so we never miss the post-update tick.
+            long? baseline = null;
+            var sub = refStream.Subscribe(change =>
             {
-                if (current is null) return null;
-                var updated = update(current);
-                return new ChangeItem<MeshNode>(
-                    updated, remote.StreamId, remote.StreamId,
-                    Data.ChangeType.Patch, remote.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }]);
-            }, ex =>
+                if (baseline is null)
+                {
+                    baseline = change.Version;
+                    return;
+                }
+                if (change.Version <= baseline.Value) return;
+                if (change.Value is { } node)
+                {
+                    observer.OnNext(node);
+                    observer.OnCompleted();
+                }
+            }, observer.OnError);
+
+            try
             {
-                workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode")
-                    ?.LogError(ex, "[UPDATE-MESHNODE-REMOTE-FAIL] hub={HubAddress} target={NodePath}",
-                        workspace.Hub.Address, nodePath);
-            });
-            return;
-        }
+                dsStream.Update(state =>
+                {
+                    var store = state ?? new EntityStore();
+                    var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
+                    if (collection is null)
+                        throw new InvalidOperationException(
+                            $"MeshNode collection not found. Available: [{string.Join(", ", store.Collections.Keys)}]");
 
-        // Own: write directly to the data source's primary EntityStore stream.
-        // dsStream.Update reads the current EntityStore, applies the update via
-        // ApplyChanges, persists via MeshNodeTypeSource's debounced flush, and
-        // broadcasts through the synchronization protocol.
-        var dataSource = workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
-        if (dataSource == null)
-            throw new InvalidOperationException("No data source registered for MeshNode");
-        var dsStream = dataSource.GetStreamForPartition(null)
-            ?? throw new InvalidOperationException("No stream for MeshNode partition");
+                    var nodeId = nodePath?.Split('/').Last();
+                    var current = (nodeId is null
+                        ? collection.Instances.Values.FirstOrDefault()
+                        : collection.Instances.GetValueOrDefault(nodeId)) as MeshNode;
+                    if (current == null)
+                        throw new InvalidOperationException(
+                            $"MeshNode '{nodePath}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
 
-        dsStream.Update(state =>
-        {
-            var store = state ?? new EntityStore();
-            var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
-            if (collection is null)
-                throw new InvalidOperationException(
-                    $"MeshNode collection not found. Available: [{string.Join(", ", store.Collections.Keys)}]");
+                    var updated = update(current);
+                    var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
+                    return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
+                        [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],
+                        dsStream.StreamId));
+                }, ex =>
+                {
+                    var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode");
+                    logger?.LogError(ex, "UpdateMeshNode failed for {NodePath}", nodePath);
+                    observer.OnError(ex);
+                });
+            }
+            catch (Exception ex)
+            {
+                observer.OnError(ex);
+            }
 
-            var nodeId = nodePath?.Split('/').Last();
-            var current = (nodeId is null
-                ? collection.Instances.Values.FirstOrDefault()
-                : collection.Instances.GetValueOrDefault(nodeId)) as MeshNode;
-            if (current == null)
-                throw new InvalidOperationException(
-                    $"MeshNode '{nodePath}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
-
-            var updated = update(current);
-            var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
-            return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
-                [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],
-                dsStream.StreamId));
-        }, ex =>
-        {
-            workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("MeshWeaver.Mesh.UpdateMeshNode")
-                ?.LogError(ex, "[UPDATE-MESHNODE-FAIL] hub={HubAddress} nodePath={NodePath} — propagating",
-                    workspace.Hub.Address, nodePath);
+            return sub;
         });
-    }
 
     /// <summary>
     /// One-shot read of the <see cref="MeshNode"/> at <paramref name="path"/> via

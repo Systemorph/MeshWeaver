@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Runtime.Loader;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -122,12 +123,32 @@ internal class MonolithRoutingService(
                         $"No hub configuration for node '{enriched.Path}' (NodeType: {enriched.NodeType}). " +
                         "Ensure the node type is registered via AddGraph() or has a HubConfiguration set.");
 
-                var createdHub = Mesh.GetHostedHub(address, enriched.HubConfiguration!);
-                logger.LogDebug("[ROUTE-CREATE] GetHostedHub returned {HubAddr} for {Address}",
-                    createdHub?.Address.ToString() ?? "(null)", address);
+                // Enter the ALC for the dynamic assembly so that type resolution during
+                // hub activation (DI setup + HubConfiguration lambda) picks up types from
+                // the correct per-release ALC rather than defaulting to the app domain.
+                IDisposable? alcScope = null;
+                if (!string.IsNullOrEmpty(enriched.AssemblyLocation)
+                    && !enriched.AssemblyLocation.StartsWith("memory://", StringComparison.Ordinal))
+                {
+                    var alc = AssemblyLoadContext.All.FirstOrDefault(a =>
+                        a.Assemblies.Any(asm =>
+                            string.Equals(asm.Location, enriched.AssemblyLocation, StringComparison.OrdinalIgnoreCase)));
+                    alcScope = alc?.EnterContextualReflection();
+                }
 
-                createdHub?.RegisterForDisposal((_, _) => UnregisterStreamAsync(createdHub.Address));
-                return createdHub;
+                try
+                {
+                    var createdHub = Mesh.GetHostedHub(address, enriched.HubConfiguration!);
+                    logger.LogDebug("[ROUTE-CREATE] GetHostedHub returned {HubAddr} for {Address}",
+                        createdHub?.Address.ToString() ?? "(null)", address);
+
+                    createdHub?.RegisterForDisposal((_, _) => UnregisterStreamAsync(createdHub.Address));
+                    return createdHub;
+                }
+                finally
+                {
+                    alcScope?.Dispose();
+                }
             });
     }
 }

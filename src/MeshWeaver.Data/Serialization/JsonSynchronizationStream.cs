@@ -199,77 +199,53 @@ public static class JsonSynchronizationStream
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var identity = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        var subscribeDelivery = reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference) { Identity = identity },
-            o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner));
-
-        // Register callback on parent hub to catch DeliveryFailure responses
-        // (e.g., from AccessControlPipeline rejecting the SubscribeRequest).
-        // The response routes through the parent hub first; without a callback here,
-        // the parent drops it (no matching callback), and the stream hangs forever.
+        // Post from `hub` (outer hub), NOT `reduced.Hub` (inner sync hub).
+        // When the outer hub is the mesh hub, HierarchicalRouting skips sender-wrapping
+        // (parentHub.Address.Type == MeshType check), so posting from the inner hub
+        // would leave a bare `sync/{id}` subscriber. The owner hub then finds its OWN
+        // local inner hub at that address and delivers DataChangedEvent locally instead of
+        // routing it back. Posting from `hub` makes hub.Address the Subscriber, so
+        // RouteStreamMessage on the outer hub correctly routes to the inner sync hub.
         //
-        // 🚨 SubscribeRequest has NO success response — the synchronization protocol
-        // pushes data back via SetCurrentRequest/PatchDataChangeRequest into the
-        // caller's sync stream, not as a `ResponseFor` reply. So `hub.Observe`
-        // would wait the full framework timeout (30 s) on every successful subscribe,
-        // leaving a "pending callback" that the test base's leaked-callback guard
-        // flags at dispose. The fix is to register the subscription's IDisposable
-        // for disposal alongside the stream's other teardown (UnsubscribeRequest);
-        // when the stream is disposed (test ends, subscriber unsubscribes, etc.),
-        // we release the callback explicitly instead of letting it expire on its
-        // own timeout.
-        if (subscribeDelivery != null)
+        // Use hub.Observe(object, opts) — the register-before-post overload — to avoid
+        // the race where the owner responds (first DataChangedEvent with ResponseFor) before
+        // hub.Observe(delivery) registers the subject in responseSubjects. The owner side
+        // sends the first DataChangedEvent as ResponseFor(subscribeDelivery), which causes
+        // HandleCallbacks to fire and close the responseSubjects entry cleanly. Subsequent
+        // DataChangedEvents flow through RouteStreamMessage as normal.
+        var observeSubscription = hub.Observe(
+                new SubscribeRequest(reduced.StreamId, reference) { Identity = identity },
+                o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
+            .Subscribe(
+                _ =>
+                {
+                    // The owner sends the first DataChangedEvent as the response; it is already
+                    // forwarded to the inner sync hub by RouteStreamMessage before HandleCallbacks
+                    // fires here. Nothing to do except acknowledge.
+                    logger.LogDebug("SubscribeRequest for stream {StreamId} acknowledged by owner",
+                        reduced.StreamId);
+                },
+                ex =>
+                {
+                    if (ex is DeliveryFailureException dfe)
+                    {
+                        logger.LogWarning("SubscribeRequest for stream {StreamId} failed: {Message}",
+                            reduced.StreamId, dfe.Message);
+                        reduced.OnError(dfe);
+                    }
+                    else if (ex is not TimeoutException)
+                    {
+                        logger.LogWarning(ex, "SubscribeRequest for stream {StreamId} failed",
+                            reduced.StreamId);
+                        reduced.OnError(ex);
+                    }
+                });
+        reduced.RegisterForDisposal(observeSubscription);
+        hub.RegisterForDisposal((_, _) =>
         {
-            var observeSubscription = hub.Observe(subscribeDelivery)
-                .Subscribe(
-                    delivery =>
-                    {
-                        // Non-failure responses: forward to stream hub
-                        reduced.Hub.DeliverMessage(delivery);
-                    },
-                    ex =>
-                    {
-                        if (ex is DeliveryFailureException dfe)
-                        {
-                            logger.LogWarning("SubscribeRequest for stream {StreamId} failed: {Message}",
-                                reduced.StreamId, dfe.Message);
-                            reduced.OnError(dfe);
-                        }
-                        else if (ex is TimeoutException)
-                        {
-                            // Expected on success: the framework Observe timed out
-                            // because the owning hub never sends a ResponseFor reply
-                            // for SubscribeRequest. Treat as transient (no propagation
-                            // to subscribers) — the sync stream is fed by the
-                            // bidirectional SetCurrentRequest flow already.
-                            logger.LogDebug("SubscribeRequest Observe timed out for {StreamId} — expected on success",
-                                reduced.StreamId);
-                        }
-                        else
-                        {
-                            logger.LogWarning(ex, "SubscribeRequest for stream {StreamId} failed",
-                                reduced.StreamId);
-                            reduced.OnError(ex);
-                        }
-                    });
-            // Register on BOTH the child stream hub AND the parent hub.
-            //
-            // Child-hub registration (existing): when the stream is explicitly
-            // disposed (e.g. workspace cache eviction), the stream's inner hub
-            // tears down and cleans up the subscription.
-            //
-            // Parent-hub registration (new): when the parent hub enters its
-            // Quiescing phase, `asyncDisposeActions` run BEFORE the 0.5s
-            // quiescing poll. Without this the parent's `responseSubjects` entry
-            // for the SubscribeRequest outlives the poll window, causing the
-            // test-base leak guard to fail. Double-calling Dispose() is safe
-            // (WrapWithCancelOnDispose uses a lock+Remove guard; Rx is idempotent).
-            reduced.RegisterForDisposal(observeSubscription);
-            hub.RegisterForDisposal((_, _) =>
-            {
-                observeSubscription.Dispose();
-                return Task.CompletedTask;
-            });
-        }
+            observeSubscription.Dispose();
+            return Task.CompletedTask;
+        });
 
         reduced.RegisterForDisposal(
             reduced.Hub.Register<UnsubscribeRequest>(
@@ -313,37 +289,29 @@ public static class JsonSynchronizationStream
 
                 var resubIdentity = accessService?.Context?.ObjectId
                                      ?? accessService?.CircuitContext?.ObjectId;
-                var resub = hub.Post(
-                    new SubscribeRequest(reduced.StreamId, reference) { Identity = resubIdentity },
-                    o => impersonateAsHub
-                        ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
-                        : o.WithTarget(owner));
-
-                if (resub != null)
-                {
-                    hub.Observe(resub)
-                        .Subscribe(
-                            rd =>
-                            {
-                                // New Initial snapshot from the re-activated owner —
-                                // forward to the stream hub so cached state is replaced.
-                                reduced.Hub.DeliverMessage(rd);
-                                Interlocked.Exchange(ref resubscribing, 0);
-                            },
-                            ex =>
-                            {
-                                logger.LogWarning(ex,
-                                    "Stream {StreamId}: resubscribe failed. Stopping heartbeat.",
-                                    reduced.StreamId);
-                                sub?.Dispose();
-                                cts.Cancel();
-                                Interlocked.Exchange(ref resubscribing, 0);
-                            });
-                }
-                else
-                {
-                    Interlocked.Exchange(ref resubscribing, 0);
-                }
+                // Use register-before-post overload to avoid the race where the owner
+                // responds before the subject is registered in responseSubjects.
+                hub.Observe(
+                        new SubscribeRequest(reduced.StreamId, reference) { Identity = resubIdentity },
+                        o => impersonateAsHub
+                            ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
+                            : o.WithTarget(owner))
+                    .Subscribe(
+                        _ =>
+                        {
+                            // Owner's first DataChangedEvent is already routed to the
+                            // inner hub by RouteStreamMessage; just clear the flag.
+                            Interlocked.Exchange(ref resubscribing, 0);
+                        },
+                        ex =>
+                        {
+                            logger.LogWarning(ex,
+                                "Stream {StreamId}: resubscribe failed. Stopping heartbeat.",
+                                reduced.StreamId);
+                            sub?.Dispose();
+                            cts.Cancel();
+                            Interlocked.Exchange(ref resubscribing, 0);
+                        });
             }
 
             var heartbeatInterval = hub.ServiceProvider
@@ -382,12 +350,13 @@ public static class JsonSynchronizationStream
 
     internal static ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
         this IWorkspace workspace,
-        SubscribeRequest request
+        IMessageDelivery<SubscribeRequest> delivery
 )
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;
         var logger = GetLogger(hub.ServiceProvider);
+        var request = delivery.Message with { Subscriber = delivery.Sender };
 
         var fromWorkspace = workspace
             .ReduceManager
@@ -403,25 +372,19 @@ public static class JsonSynchronizationStream
             );
 
 
-        // Use single synchronized subscription for both initial data and ongoing changes
-        var isFirst = true;
+        // Use single synchronized subscription for both initial data and ongoing changes.
+        // SubscribeAck is sent by HandleSubscribeRequest to close the hub.Observe(subscribeRequest)
+        // pending callback immediately — DataChangedEvents always use WithTarget so they
+        // flow via RouteStreamMessage to the inner sync hub regardless of callback state.
         reduced.RegisterForDisposal(
             reduced
-                .ToDataChanged<TReduced, DataChangedEvent>(c => isFirst || !reduced.ClientId.Equals(c.ChangedBy))
+                .ToDataChanged<TReduced, DataChangedEvent>(c => !reduced.ClientId.Equals(c.ChangedBy))
                 .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
                 .Subscribe(e =>
                 {
-                    if (isFirst)
-                    {
-                        isFirst = false;
-                        logger.LogDebug("Owner {owner} sending initial data to subscriber {subscriber}", reduced.Owner, request.Subscriber);
-                    }
-                    else
-                    {
-                        logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
-                    }
+                    logger.LogDebug("Owner {owner} sending data to subscriber {subscriber}", reduced.Owner, request.Subscriber);
                     hub.Post(e, o => o.WithTarget(request.Subscriber));
                 },
                 ex =>

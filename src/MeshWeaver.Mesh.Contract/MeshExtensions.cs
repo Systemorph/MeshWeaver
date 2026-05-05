@@ -59,6 +59,13 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(GetCompilationPathRequest), nameof(GetCompilationPathRequest));
         config.TypeRegistry.WithType(typeof(GetCompilationPathResponse), nameof(GetCompilationPathResponse));
 
+        // Explicit compile trigger + test runner. Posted from layout area buttons and tests
+        // to the owning NodeType hub, which checks IsUpToDate and flips CompilationStatus.
+        config.TypeRegistry.WithType(typeof(CreateReleaseRequest), nameof(CreateReleaseRequest));
+        config.TypeRegistry.WithType(typeof(CreateReleaseResponse), nameof(CreateReleaseResponse));
+        config.TypeRegistry.WithType(typeof(RunTestsRequest), nameof(RunTestsRequest));
+        config.TypeRegistry.WithType(typeof(RunTestsResponse), nameof(RunTestsResponse));
+
         // Import/Delete types
         config.TypeRegistry.WithType(typeof(ImportNodesRequest), nameof(ImportNodesRequest));
         config.TypeRegistry.WithType(typeof(ImportNodesResponse), nameof(ImportNodesResponse));
