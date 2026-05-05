@@ -867,7 +867,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // (27 / 34 QUIESCE_TIMEOUTs measured on Hosting.Monolith.Test). Cap
             // their drain budget tight — the rest of the suite runs ~50 s faster.
             .WithQuiesceTimeout(TestQuiesceTimeout)
-            .WithInitialization((h, _) => routingService.RegisterStreamAsync(h));
+            .WithInitialization(h => { _ = routingService.RegisterStreamAsync(h); });
     }
 
     /// <summary>

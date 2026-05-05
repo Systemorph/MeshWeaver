@@ -53,12 +53,11 @@ public static class ThreadExecution
     /// Installs the continuous server-side watcher that ingests queued user messages
     /// into new rounds and dispatches agent execution. See <see cref="ThreadSubmission"/>.
     /// </summary>
-    private static Task InstallSubmissionWatcher(IMessageHub hub, CancellationToken ct)
+    private static void InstallSubmissionWatcher(IMessageHub hub)
     {
         var sub = ThreadSubmission.InstallServerWatcher(hub);
         // Dispose with the hub lifetime.
         hub.RegisterForDisposal(sub);
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -91,7 +90,7 @@ public static class ThreadExecution
     ///      caller didn't pass <c>createdBy</c> to <c>BuildThreadNode</c> and the
     ///      thread content's <c>CreatedBy</c> is null.
     /// </summary>
-    private static Task SetThreadHubIdentity(IMessageHub hub, CancellationToken ct)
+    private static void SetThreadHubIdentity(IMessageHub hub)
     {
         // One-shot read of the OWN thread node via GetDataRequest (posted to self) —
         // true request/response, no SubscribeRequest+immediate-unsubscribe.
@@ -106,7 +105,6 @@ public static class ThreadExecution
             var accessService = hub.ServiceProvider.GetService<AccessService>();
             accessService?.SetContext(new AccessContext { ObjectId = createdBy, Name = createdBy });
         });
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -115,7 +113,7 @@ public static class ThreadExecution
     /// and mark all ActiveProgress entries as completed. Fully non-blocking — no await.
     /// Each child thread's own hub recovery handles its own cancellation recursively.
     /// </summary>
-    private static Task RecoverStaleExecutingThread(IMessageHub hub, CancellationToken ct)
+    private static void RecoverStaleExecutingThread(IMessageHub hub)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var workspace = hub.GetWorkspace();
@@ -184,8 +182,6 @@ public static class ThreadExecution
 
             logger?.LogInformation("[ThreadExec] Recovery: cleared stale execution on {ThreadPath}", threadPath);
         });
-
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -205,7 +201,7 @@ public static class ThreadExecution
     /// Creates message cells and starts execution on hub startup.
     /// HandleSubmitMessage handles all client-initiated execution directly.
     /// </summary>
-    private static Task WatchForExecution(IMessageHub hub, CancellationToken ct)
+    private static void WatchForExecution(IMessageHub hub)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var threadPath = hub.Address.Path;
@@ -218,7 +214,7 @@ public static class ThreadExecution
         // HandleSubmitMessage handles runtime execution after startup.
         IObservable<MeshNode> ownNode;
         try { ownNode = hub.GetWorkspace().GetMeshNodeStream(); }
-        catch { return Task.CompletedTask; }
+        catch { return; }
 
         // Take the FIRST emission whose Content is typed as MeshThread (post-
         // ResolveJsonElementContent). Previously we used `.Take(1)` directly on
@@ -321,8 +317,6 @@ public static class ThreadExecution
             }
         });
         hub.RegisterForDisposal(sub);
-
-        return Task.CompletedTask;
     }
 
     /// <summary>

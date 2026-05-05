@@ -89,10 +89,9 @@ public static class DataExtensions
         return config
             .WithInitialization(h => h.GetWorkspace())
             // Initialize workspace and open gate after hub is fully constructed (handlers registered)
-            .WithInitialization((h, _) =>
+            .WithInitialization(h =>
             {
                 ((Workspace)h.GetWorkspace()).OpenInitializationGate();
-                return Task.CompletedTask;
             })
             .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
             .WithServices(sc =>
@@ -147,6 +146,7 @@ public static class DataExtensions
                 typeof(DataChangeRequest),
                 typeof(DataChangeResponse),
                 typeof(SubscribeRequest),
+                typeof(SubscribeAck),
                 typeof(UnsubscribeRequest),
                 typeof(GetDomainTypesRequest),
                 typeof(DomainTypesResponse),
@@ -668,7 +668,12 @@ public static class DataExtensions
                 }
 
                 // Identity flows through message-level AccessContext (stamped by PostPipeline).
-                hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
+                hub.GetWorkspace().SubscribeToClient(request);
+                // Send SubscribeAck immediately to close the hub.Observe(subscribeRequest)
+                // pending callback on the subscriber side. Without this, the callback stays
+                // in responseSubjects until the 30-s RequestTimeout fires (DataChangedEvents
+                // are intercepted by RouteStreamMessage before HandleCallbacks can close it).
+                hub.Post(new SubscribeAck(), o => o.ResponseFor(request));
                 logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
                     request.Sender, hub.Address);
             });
