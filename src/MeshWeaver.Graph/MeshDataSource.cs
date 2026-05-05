@@ -645,16 +645,18 @@ public static class MeshDataSourceExtensions
                         newReleasePath = TryCreateReleaseNode(
                             hub, hubPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
 
-                        try
-                        {
-                            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-                            nodeTypeService?.InvalidateCache(hubPath);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger?.LogWarning(ex,
-                                "CompileWatcher: failed to flush NodeTypeService cache for {HubPath}", hubPath);
-                        }
+                        // Don't InvalidateCache here. Each compile produces a NEW
+                        // timestamp-keyed AssemblyLoadContext under
+                        // {cacheDir}/{nodeName}_{ticks_hex}/, so V1 and V2 coexist
+                        // happily — instance1 keeps its V1 ALC, instance2 loads
+                        // the fresh V2 ALC by AssemblyLocation. Calling
+                        // cacheService.InvalidateCache(nodeName) here unloads
+                        // every ALC matching the node name (including the V2 ALC
+                        // we just produced), which causes the next consumer to
+                        // race the AssemblyLoadContext.Unload window and fall
+                        // back to the previous release. NodeTypeContractHandler
+                        // resolves AssemblyLocation directly off the post-compile
+                        // MeshNode, so there's no NodeTypeService cache to flush.
                     }
 
                     workspace.UpdateMeshNode(curr =>

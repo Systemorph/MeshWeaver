@@ -318,7 +318,14 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             .FirstOrDefaultAsync().AsTask())
             .SelectMany(node =>
             {
-                var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
+                // Path doesn't resolve to a node → nothing to delete; return false.
+                // Calling nodeFactory.DeleteNode on a nonexistent path throws
+                // InvalidOperationException("Node not found: …") in MeshService.cs.
+                // The contract here is the same as RevokeToken: false for absent.
+                if (node is null)
+                    return Observable.Return(false);
+
+                var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
                 var hashPrefix = apiToken?.TokenHash is { Length: >= 12 } h ? h[..12] : null;
 
                 if (!string.IsNullOrEmpty(hashPrefix))
