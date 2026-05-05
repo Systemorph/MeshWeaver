@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -266,7 +267,11 @@ internal class InMemoryMeshQueryCore(
         JsonSerializerOptions options,
         bool useSecurityFilter)
     {
-        return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
+        // Use the synchronous Observable.Create overload so no TaskScheduler is
+        // captured at subscribe-time. Observable.Create(async ...) captures the
+        // caller's scheduler; when that caller is an Orleans grain handler the
+        // continuation deadlocks against the grain's single-threaded scheduler.
+        return Observable.Create<QueryResultChange<T>>(observer =>
         {
             var parsedQuery = Parser.Parse(request.Query);
             var effectivePath = parsedQuery.Path;
@@ -279,105 +284,115 @@ internal class InMemoryMeshQueryCore(
             }
             var normalizedBasePath = NormalizePath(effectivePath);
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            var disposables = new CompositeDisposable();
 
-            IAsyncEnumerable<object> QueryStream(CancellationToken token) =>
+            IAsyncEnumerable<object> QueryStream(CancellationToken ct) =>
                 useSecurityFilter
-                    ? GetSecuredQueryStream(request, options, token)
-                    : QueryCoreAsync(request, options, token);
+                    ? GetSecuredQueryStream(request, options, ct)
+                    : QueryCoreAsync(request, options, ct);
 
-            try
-            {
-                var initialItems = new List<T>();
-                await foreach (var item in QueryStream(ct))
-                {
-                    if (item is T typed)
+            // Observable.FromAsync with Scheduler.Default defers the async DB/storage
+            // work to the ThreadPool — no custom TaskScheduler (Orleans) is ever captured.
+            // Subscription disposal cancels the in-flight query automatically.
+            IObservable<List<(string? Path, T Item)>> RunQuery()
+                => Observable.FromAsync(ct => CollectFromStreamAsync<T>(QueryStream(ct), ct), Scheduler.Default);
+
+            disposables.Add(
+                RunQuery().Subscribe(
+                    initialResults =>
                     {
-                        initialItems.Add(typed);
-                        var p = GetItemPath(item);
-                        if (!string.IsNullOrEmpty(p))
-                            currentItems[p] = typed;
-                    }
-                }
-                observer.OnNext(new QueryResultChange<T>
-                {
-                    ChangeType = QueryChangeType.Initial,
-                    Items = initialItems,
-                    Query = parsedQuery,
-                    Version = Interlocked.Increment(ref _version),
-                    Timestamp = DateTimeOffset.UtcNow,
-                });
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-                return Disposable.Empty;
-            }
+                        // Race guard: RunQuery runs on Scheduler.Default; test teardown
+                        // (or any subscriber dispose) can fire `disposables.Dispose()`
+                        // before the async query completes. A subsequent
+                        // `disposables.Add(new Subject<...>())` on a disposed
+                        // CompositeDisposable instantly disposes the Subject, and the
+                        // `.Subscribe(changeBuffer)` line below then throws
+                        // ObjectDisposedException — surfaces as catastrophic test-host
+                        // crash. Bail out cleanly when the subscription is already gone.
+                        if (disposables.IsDisposed)
+                            return;
 
-            if (ChangeNotifier == null)
-            {
-                observer.OnCompleted();
-                return Disposable.Empty;
-            }
+                        var initialItems = new List<T>();
+                        foreach (var (path, item) in initialResults)
+                        {
+                            initialItems.Add(item);
+                            if (!string.IsNullOrEmpty(path))
+                                currentItems[path] = item;
+                        }
 
-            var changeBuffer = new Subject<DataChangeNotification>();
-            var subscription = new CompositeDisposable();
+                        // Wire up change subscriptions BEFORE emitting Initial so that
+                        // any node mutation triggered by a subscriber reacting to Initial
+                        // is guaranteed to be captured by the changeBuffer.
+                        //
+                        // The IsDisposed guard above is necessary but not sufficient —
+                        // disposal can still fire between the guard and the Subscribe
+                        // calls below. Wrap the whole setup in try/catch so a lost race
+                        // tears down cleanly instead of throwing into Rx's error path
+                        // (which surfaces as a catastrophic test-host crash via
+                        // Stubs.b__2_1's rethrow).
+                        if (ChangeNotifier != null)
+                        {
+                            try
+                            {
+                                var changeBuffer = new Subject<DataChangeNotification>();
+                                disposables.Add(changeBuffer);
+                                disposables.Add(
+                                    ChangeNotifier
+                                        .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
+                                        .Subscribe(changeBuffer));
+                                disposables.Add(
+                                    changeBuffer
+                                        .Buffer(DefaultDebounceInterval)
+                                        .Where(batch => batch.Count > 0)
+                                        .Subscribe(batch =>
+                                            disposables.Add(
+                                                RunQuery().Subscribe(
+                                                    newResults => ProcessBatch(batch, newResults, currentItems, parsedQuery, observer),
+                                                    ex => observer.OnError(ex)))));
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                // Lost the race with disposal; everything we created
+                                // either already drained through `disposables.Add` (which
+                                // disposed it on add) or never wired up. Nothing else to
+                                // do — bail out so we don't propagate a synthetic OnError.
+                                return;
+                            }
+                        }
 
-            var notifierSubscription = ChangeNotifier
-                .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
-                .Subscribe(changeBuffer);
-            subscription.Add(notifierSubscription);
+                        observer.OnNext(new QueryResultChange<T>
+                        {
+                            ChangeType = QueryChangeType.Initial,
+                            Items = initialItems,
+                            Query = parsedQuery,
+                            Version = Interlocked.Increment(ref _version),
+                            Timestamp = DateTimeOffset.UtcNow,
+                        });
 
-            var debounceSubscription = changeBuffer
-                .Buffer(DefaultDebounceInterval)
-                .Where(batch => batch.Count > 0)
-                .Subscribe(async batch =>
-                {
-                    try
-                    {
-                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct, useSecurityFilter);
-                    }
-                    catch (Exception ex)
-                    {
-                        observer.OnError(ex);
-                    }
-                });
-            subscription.Add(debounceSubscription);
-            subscription.Add(changeBuffer);
-            return subscription;
+                        if (ChangeNotifier == null)
+                            observer.OnCompleted();
+                    },
+                    ex => observer.OnError(ex)));
+
+            return disposables;
         });
     }
 
-    private async Task ProcessChangeBatchAsync<T>(
+    private void ProcessBatch<T>(
         IList<DataChangeNotification> batch,
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        ParsedQuery parsedQuery,
+        List<(string? Path, T Item)> newResults,
         Dictionary<string, T> currentItems,
-        IObserver<QueryResultChange<T>> observer,
-        CancellationToken ct,
-        bool useSecurityFilter)
+        ParsedQuery parsedQuery,
+        IObserver<QueryResultChange<T>> observer)
     {
-        var addedItems = new List<T>();
-        var updatedItems = new List<T>();
-        var removedItems = new List<T>();
+        var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, item) in newResults)
+            if (!string.IsNullOrEmpty(path))
+                newItems[path] = item;
 
         var changesByPath = batch
             .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
-
-        var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
-        var queryStream = useSecurityFilter
-            ? GetSecuredQueryStream(request, options, ct)
-            : QueryCoreAsync(request, options, ct);
-        await foreach (var item in queryStream)
-        {
-            if (item is T typed)
-            {
-                var p = GetItemPath(item);
-                if (!string.IsNullOrEmpty(p))
-                    newItems[p] = typed;
-            }
-        }
 
         foreach (var (path, change) in changesByPath)
         {
@@ -389,6 +404,10 @@ internal class InMemoryMeshQueryCore(
                     newItems[path] = directMatch;
             }
         }
+
+        var addedItems = new List<T>();
+        var updatedItems = new List<T>();
+        var removedItems = new List<T>();
 
         foreach (var (path, item) in newItems)
         {
@@ -435,5 +454,20 @@ internal class InMemoryMeshQueryCore(
         if (a is MeshNode na && b is MeshNode nb)
             return na.Version == nb.Version && na.Name == nb.Name && Equals(na.Content, nb.Content);
         return EqualityComparer<T>.Default.Equals(a, b);
+    }
+
+    /// <summary>
+    /// Collects items from an async stream into a list. Called exclusively via
+    /// <see cref="Observable.FromAsync{T}(Func{CancellationToken,Task{T}},IScheduler)"/>
+    /// with <see cref="Scheduler.Default"/> so the <c>await</c> always runs on the
+    /// ThreadPool — no hub/Orleans scheduler is ever captured.
+    /// </summary>
+    private static async Task<List<(string? Path, T Item)>> CollectFromStreamAsync<T>(
+        IAsyncEnumerable<object> stream, CancellationToken ct)
+    {
+        var results = new List<(string?, T)>();
+        await foreach (var item in stream.WithCancellation(ct))
+            if (item is T typed) results.Add((GetItemPath(item), typed));
+        return results;
     }
 }
