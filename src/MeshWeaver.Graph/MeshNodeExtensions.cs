@@ -76,22 +76,20 @@ public static class MeshNodeExtensions
 
     /// <summary>
     /// Updates a MeshNode's content with a typed update function.
-    /// Own-hub typed-content update wrapper. Reads the current MeshNode's
-    /// <typeparamref name="TContent"/>, applies <paramref name="update"/>, and writes
-    /// through the workspace's local MeshNode partition stream. For remote MeshNode
-    /// updates, callers should post a <see cref="DataChangeRequest"/> to the owning
-    /// hub's address — see <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// Path-aware typed-content update wrapper that delegates to
+    /// <see cref="MeshNodeStreamHandle.Update"/>. Returns
+    /// <see cref="IObservable{MeshNode}"/>; <b>callers MUST Subscribe</b> — the cold
+    /// observable's side effect only runs on Subscribe. See
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
-    public static void UpdateMeshNode<TContent>(this IWorkspace workspace,
+    public static IObservable<MeshNode> UpdateMeshNode<TContent>(this IWorkspace workspace,
         string nodePath, Func<MeshNode, TContent, MeshNode> update)
         where TContent : class
-    {
-        workspace.UpdateMeshNode(node =>
+        => workspace.GetMeshNodeStream(nodePath).Update(node =>
         {
             var content = node.Content as TContent;
             return content != null ? update(node, content) : node;
-        }, nodePath: nodePath);
-    }
+        });
 
     /// <summary>
     /// Gets the parent path for this node.

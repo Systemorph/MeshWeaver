@@ -75,23 +75,16 @@ internal sealed class NodeTypeStreamCache : INodeTypeStreamCache
         try
         {
             logger.LogInformation(
-                "First touch of NodeType {Path} with no release — flipping CompilationStatus = Pending",
+                "First touch of NodeType {Path} with no release — sending CreateReleaseRequest",
                 path);
-            // Update via the workspace stream — same path the GUI Create-Release
-            // button uses. Targets the per-NodeType hub at `path`; the hub's
-            // CompileWatcher reacts.
-            meshHub.GetWorkspace().UpdateMeshNode(curr =>
-                curr.Content is Graph.Configuration.NodeTypeDefinition d
-                    ? curr with
-                    {
-                        Content = d with
-                        {
-                            CompilationStatus = CompilationStatus.Pending,
-                            LastCompileStartedAt = DateTimeOffset.UtcNow
-                        }
-                    }
-                    : curr,
-                path);
+            // Post CreateReleaseRequest to the per-NodeType hub. HandleCreateRelease
+            // runs the compile machinery (StartCompile) and writes back Ok +
+            // AssemblyLocation. Replaces the CompilationStatus = Pending flip that
+            // relied on InstallCompileWatcher (removed in 86b34707d when compile
+            // became explicit-only). meshHub.Post is fire-and-forget — the response
+            // arrives later but the only thing this code path cares about is that
+            // the request reaches the per-NodeType hub.
+            meshHub.Post(new CreateReleaseRequest(), o => o.WithTarget(new Address(path)));
         }
         catch (Exception ex)
         {
