@@ -59,8 +59,12 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
             }
         });
 
-        // 2. Click Create Release: flip CompilationStatus = Pending with
-        //    ReleaseNotes set. Same shape as the GUI button.
+        // 2. Click Create Release: write the release notes onto the NodeType
+        //    (so HandleCreateRelease can read them and seed the Release node),
+        //    then post CreateReleaseRequest to the NodeType hub. Replaces the
+        //    older CompilationStatus = Pending flip that depended on
+        //    InstallCompileWatcher (removed in 86b34707d when compile became
+        //    explicit-request only).
         var releaseNotes = "First release of Sample. **Bold** + _italic_ + a list:\n- one\n- two";
         var nodeTypeNode = await meshService
             .QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{NodeTypePath}"))
@@ -71,11 +75,13 @@ public class NodeTypeReleaseTest(ITestOutputHelper output) : MonolithMeshTestBas
         {
             Content = (nodeTypeNode!.Content as NodeTypeDefinition)! with
             {
-                ReleaseNotes = releaseNotes,
-                CompilationStatus = CompilationStatus.Pending,
-                LastCompileStartedAt = DateTimeOffset.UtcNow
+                ReleaseNotes = releaseNotes
             }
         });
+
+        await Mesh.Observe(new CreateReleaseRequest(),
+                o => o.WithTarget(new Address(NodeTypePath)))
+            .FirstAsync().ToTask(ct);
 
         // 3. Subscribe to the Release subtree via the catalog change-feed and
         //    wait for the first Release node to appear. ObserveQuery re-emits

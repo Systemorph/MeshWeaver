@@ -332,22 +332,15 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
         await collB.Where(arr => arr.Any(n => n.Path == typePath))
             .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
 
-        // Drive the slow path: silo A flips CompilationStatus to Pending. The
-        // per-NodeType hub's compile watcher picks it up, runs Roslyn, and
-        // writes back Ok + AssemblyLocation. The standard NodeFactory.UpdateNode
-        // is the canonical write path — same one production uses.
-        var typeNodeOnA = (await collA
-            .Where(arr => arr.Any(n => n.Path == typePath))
-            .FirstAsync().ToTask(ct))
-            .First(n => n.Path == typePath);
-        var def = typeNodeOnA.Content as NodeTypeDefinition;
-        await NodeFactory.UpdateNode(typeNodeOnA with
-        {
-            Content = (def ?? new NodeTypeDefinition()) with
-            {
-                CompilationStatus = CompilationStatus.Pending
-            }
-        }).FirstAsync().ToTask(ct);
+        // Drive the explicit-compile path: post CreateReleaseRequest to the
+        // NodeType hub. HandleCreateRelease runs the same compile machinery and
+        // writes back Ok + AssemblyLocation through workspace.UpdateMeshNode.
+        // (Replaces the previous CompilationStatus=Pending flip — that relied
+        // on InstallCompileWatcher, which was removed in commit 86b34707d when
+        // compile became explicit-only.)
+        await Mesh.Observe(new CreateReleaseRequest(),
+                o => o.WithTarget(new Address(typePath)))
+            .FirstAsync().ToTask(ct);
 
         // Silo B observes the terminal state — the watcher's compile result
         // (Ok + AssemblyLocation) reaches it through the upstream ObserveQuery
