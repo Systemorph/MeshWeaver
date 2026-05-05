@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -198,7 +199,12 @@ public static class CodeNodeType
                             try
                             {
                                 var workspace = hub.GetWorkspace();
-                                workspace.UpdateMeshNode(curr =>
+                                var stampLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                                    ?.CreateLogger("MeshWeaver.Graph.CodeNodeType");
+                                // .Subscribe is mandatory: Update is Observable.Create —
+                                // the partition write only runs on Subscribe. Discarding
+                                // the observable silently drops the stamp.
+                                workspace.GetMeshNodeStream().Update(curr =>
                                     curr.Content is CodeConfiguration cfg
                                         ? curr with
                                         {
@@ -209,7 +215,12 @@ public static class CodeNodeType
                                                 LastActivityPath = activityPath
                                             }
                                         }
-                                        : curr);
+                                        : curr)
+                                    .Subscribe(
+                                        _ => { },
+                                        ex => stampLogger?.LogWarning(ex,
+                                            "CodeNodeType: stamp UpdateMeshNode failed for {Hub}",
+                                            hub.Address));
                             }
                             catch
                             {
