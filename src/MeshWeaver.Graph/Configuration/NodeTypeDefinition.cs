@@ -217,6 +217,22 @@ public record NodeTypeDefinition
     public string? LatestReleasePath { get; init; }
 
     /// <summary>
+    /// Optional pin to a specific historical <c>Release</c> MeshNode at
+    /// <c>{nodeTypePath}/_Release/{version}</c>. When set, every per-instance hub of
+    /// this NodeType activates against that release's <c>AssemblyPath</c> instead of
+    /// whichever assembly the latest compile produced. When <c>null</c> (the default),
+    /// activations resolve to the most recent compile (<see cref="LatestReleasePath"/>)
+    /// — i.e. "always serve latest".
+    ///
+    /// <para>Use this for production pinning, A/B rollout, or to roll back to a
+    /// previous release without retracting the more-recent one. Authoring a fresh
+    /// release with <c>CreateReleaseRequest</c> updates <see cref="LatestReleasePath"/>
+    /// but does <em>not</em> change <see cref="RequestedReleasePath"/> — instances
+    /// stay on the pinned release until this field is cleared or repointed.</para>
+    /// </summary>
+    public string? RequestedReleasePath { get; init; }
+
+    /// <summary>
     /// Free-form release notes captured next to the "Create Release" button on
     /// the Configuration view. Auto-saved through the same form-debounce path
     /// every other editable field uses (no manual read-on-click). Surfaced on

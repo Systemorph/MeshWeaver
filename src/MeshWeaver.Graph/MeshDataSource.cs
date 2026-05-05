@@ -2,12 +2,13 @@
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading;
 using Json.Patch;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
+using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
-
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -154,15 +155,10 @@ public static class MeshDataSourceExtensions
                     });
             })
             .WithServices(services => services.AddSingleton<OwnNodeCache>())
+            // InitializeHubRequest, HeartBeatEvent, ShutdownRequest, DisposeRequest,
+            // and DeliveryFailure are bypassed by the framework — see MessageService.cs.
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
             .WithInitialization(SubscribeToOwnDeletion)
-            // Compile watcher — when this hub's own MeshNode is a NodeTypeDefinition
-            // and CompilationStatus flips to Pending (via stream.Update from any
-            // caller's NodeTypeService), run Roslyn and write back the result. The
-            // synchronization protocol broadcasts the post-compile state to every
-            // silo's remote-stream cache, so callers across the cluster pick up
-            // AssemblyLocation without a request/response round-trip.
-            .WithInitialization(InstallCompileWatcher)
             .WithNodeOperationHandlers()
             // Per-node-hub contract for resolving (assembly + HubConfiguration) of the
             // NodeType this hub is responsible for. Kept as a fallback for hubs / callers
@@ -170,6 +166,8 @@ public static class MeshDataSourceExtensions
             // NodeTypeService.ResolveViaStream replaces this for the common case. Cheap
             // on non-NodeType nodes — they fall through to Success=false.
             .WithHandler<GetCompilationPathRequest>(NodeTypeContractHandler.Handle)
+            .WithHandler<CreateReleaseRequest>(HandleCreateRelease)
+            .WithHandler<RunTestsRequest>(HandleRunTests)
             // Post-load INodeValidator-Read hook for MeshNodeReference reads.
             .AddDeliveryPipeline(AddReadValidatorPipeline)
             .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
@@ -324,197 +322,6 @@ public static class MeshDataSourceExtensions
     /// path in <see cref="NodeTypeService"/> remains responsible for the initial flip
     /// to Pending.</para>
     /// </summary>
-    private static void InstallCompileWatcher(IMessageHub hub)
-    {
-        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-        if (compilationService is null)
-            return;
-
-        IWorkspace workspace;
-        try { workspace = hub.GetWorkspace(); }
-        catch { return; }
-
-        var hubPath = hub.Address.Path;
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
-
-        IObservable<MeshNode?> ownStream;
-        try { ownStream = workspace.GetMeshNodeStream(); }
-        catch
-        {
-            // No MeshNodeReference reducer on this workspace — nothing to watch.
-            return;
-        }
-
-        var sub = ownStream
-            .Where(n => n?.Content is NodeTypeDefinition d
-                && d.CompilationStatus == CompilationStatus.Pending)
-            .Throttle(TimeSpan.FromMilliseconds(50))
-            .SelectMany(node =>
-            {
-                logger?.LogDebug("CompileWatcher: Pending observed for {HubPath}, marking Compiling and starting Roslyn",
-                    hubPath);
-
-                // Flip Pending → Compiling so subsequent Pending emissions don't
-                // double-fire; record the start time for diagnostics.
-                workspace.UpdateMeshNode(curr =>
-                    curr.Content is NodeTypeDefinition def
-                        ? curr with
-                        {
-                            Content = def with
-                            {
-                                CompilationStatus = CompilationStatus.Compiling,
-                                LastCompileStartedAt = DateTimeOffset.UtcNow
-                            }
-                        }
-                        : curr);
-
-                // Capture the source node — its NodeTypeDefinition.ReleaseNotes
-                // are the markdown the user wrote BEFORE clicking Create
-                // Release. We need them to seed the new Release MeshNode's
-                // Notes field; reading from a fresh GetMeshNodeStream after
-                // the compile races the Status=Compiling write the watcher
-                // already performed (which clears nothing but emits a new
-                // snapshot the synchronous Subscribe doesn't wait for).
-                var pendingNode = node!;
-                return compilationService.CompileAndGetConfigurations(node!)
-                    .Take(1)
-                    .Select(result => new CompileOutcome(result, null, pendingNode))
-                    .Catch<CompileOutcome, Exception>(ex =>
-                        Observable.Return(new CompileOutcome(null, ex, pendingNode)));
-            })
-            .Subscribe(
-                outcome =>
-                {
-                    // Compute the activity-log path. The compilation service writes
-                    // ActivityLog with HubPath = node.Path and Id = short guid; the
-                    // bundler persists it at {HubPath}/_activity/{Id}. Surface that
-                    // path on the NodeType so the layout area can link straight to
-                    // the executed-source-queries / Roslyn-output trace.
-                    var activityPath = outcome.Result?.Log is { } compileLog
-                        ? $"{hubPath}/_activity/{compileLog.Id}"
-                        : null;
-
-                    // On success, write a Release MeshNode at
-                    //   {nodeTypePath}/_Release/{version}
-                    // capturing the assembly path + the markdown release notes
-                    // the author wrote on NodeTypeDefinition.ReleaseNotes (via
-                    // form auto-save). The NodeType's LatestReleasePath gets
-                    // updated to point at this release. On failure we don't
-                    // create a Release — the previous succeeded release stays
-                    // active. Failed compiles still surface via
-                    // LastCompilationActivityPath + CompilationError + the
-                    // _activity log entry. Per
-                    // Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md.
-                    string? newReleasePath = null;
-                    if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
-                    {
-                        newReleasePath = TryCreateReleaseNode(
-                            hub, hubPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
-
-                        // Flush the in-memory NodeTypeService caches for THIS
-                        // NodeType so the next per-node hub activation picks
-                        // up the freshly-released V2 assembly instead of the
-                        // V1 lambda that GetAssemblyPathAsync's
-                        // _compilationTasks.GetOrAdd cached. Without this,
-                        // instances re-activated after a Create Release click
-                        // keep loading the previous release's ALC. Behind
-                        // INodeTypeService so the NodeType-service-internal
-                        // dicts are dropped without exposing them.
-                        try
-                        {
-                            var nodeTypeService = hub.ServiceProvider
-                                .GetService<INodeTypeService>();
-                            nodeTypeService?.InvalidateCache(hubPath);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger?.LogWarning(ex,
-                                "CompileWatcher: failed to flush NodeTypeService cache after release for {HubPath}",
-                                hubPath);
-                        }
-                    }
-
-                    workspace.UpdateMeshNode(curr =>
-                    {
-                        if (curr.Content is not NodeTypeDefinition def)
-                            return curr;
-
-                        if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
-                        {
-                            logger?.LogDebug("CompileWatcher: success for {HubPath} → {Assembly}",
-                                hubPath, outcome.Result!.AssemblyLocation);
-                            return curr with
-                            {
-                                Content = def with
-                                {
-                                    CompilationStatus = CompilationStatus.Ok,
-                                    CompilationError = null,
-                                    LastCompileSucceededAt = DateTimeOffset.UtcNow,
-                                    LastCompiledVersion = curr.Version,
-                                    LastCompilationActivityPath = activityPath,
-                                    // Pin the active release pointer to the freshly-created
-                                    // Release MeshNode so consumers (NodeTypeService,
-                                    // per-node hub activation, layout areas) can read the
-                                    // active artefact straight off the NodeType without a
-                                    // catalog query. Falls back to the previous value when
-                                    // release creation didn't happen (cold start, no
-                                    // mesh service available — best-effort).
-                                    LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
-                                    // Clear release notes so the form is blank for the
-                                    // next release; the notes are now captured on the
-                                    // Release MeshNode itself (immutable history).
-                                    ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
-                                    // Persist the per-source snapshot the compile actually
-                                    // consumed. Future recompile-needed checks read this back
-                                    // and compare against the live source-node versions —
-                                    // the answer survives portal restart, silo move, and
-                                    // change-feed gaps. Empty dict if discovery returned
-                                    // nothing (e.g., NodeType with no Sources).
-                                    CompiledSources = outcome.Result.CompiledSources
-                                        ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty
-                                },
-                                AssemblyLocation = outcome.Result.AssemblyLocation
-                            };
-                        }
-
-                        var errorSummary = outcome.Error?.Message
-                            ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
-                                ? string.Join("; ", errs.Select(m => m.Message))
-                                : "Compilation produced no assembly");
-                        logger?.LogDebug("CompileWatcher: failure for {HubPath}: {Error}",
-                            hubPath, errorSummary);
-                        return curr with
-                        {
-                            Content = def with
-                            {
-                                CompilationStatus = CompilationStatus.Error,
-                                CompilationError = errorSummary,
-                                LastCompilationActivityPath = activityPath,
-                                // LatestReleasePath stays put — failed compile leaves
-                                // the previous succeeded release active. Same for
-                                // ReleaseNotes: keep them so the user can fix the
-                                // source and click Create Release again.
-                                // Clear the snapshot — an error-state NodeType has nothing
-                                // valid to compare against; force the next attempt to
-                                // re-discover sources rather than spuriously short-circuit
-                                // because the previous (now-stale) snapshot still matches.
-                                CompiledSources = null
-                            }
-                        };
-                    });
-                },
-                ex => logger?.LogWarning(ex,
-                    "CompileWatcher: subscription faulted for {HubPath}", hubPath));
-
-        hub.RegisterForDisposal(sub);
-    }
-
-    /// <summary>Local record carrying the outcome of a single compile attempt.
-    /// <see cref="PendingNode"/> is the NodeType MeshNode at the moment Pending
-    /// was observed — used by <see cref="TryCreateReleaseNode"/> to source the
-    /// markdown <c>ReleaseNotes</c> the author wrote before clicking Create
-    /// Release.</summary>
     private sealed record CompileOutcome(
         NodeCompilationResult? Result,
         Exception? Error,
@@ -714,6 +521,297 @@ public static class MeshDataSourceExtensions
         // Return Processed; if our reactive chain doesn't post a response (non-NodeType,
         // missing config, error), the default handler chain still runs and handles it.
         return request;
+    }
+
+    private static IMessageDelivery HandleCreateRelease(
+        IMessageHub hub, IMessageDelivery<CreateReleaseRequest> request)
+    {
+        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+        if (compilationService is null)
+        {
+            hub.Post(new CreateReleaseResponse(false, Error: "No compilation service"),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        var workspace = hub.GetWorkspace();
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        var force = request.Message.Force;
+
+        // Serialize against any in-progress compile on this NodeType: when a
+        // request arrives while CompilationStatus = Compiling, hold it until the
+        // pending compile settles to Ok/Error, then re-evaluate. Two concurrent
+        // CreateReleaseRequests would otherwise both start their own Roslyn
+        // compile, race the assembly cache, and one would lose its
+        // workspace.UpdateMeshNode write to the other's. Same primitive applied
+        // to NodeTypeContractHandler so any GetCompilationPathRequest arriving
+        // mid-compile waits for the post-compile state instead of returning the
+        // previous release's HubConfiguration.
+        workspace.GetMeshNodeStream()
+            .AwaitCompilationSettled()
+            .Take(1)
+            .Subscribe(ownNode =>
+            {
+                var def = ownNode?.Content as NodeTypeDefinition;
+                if (def is null)
+                {
+                    hub.Post(new CreateReleaseResponse(false, Error: "Hub is not a NodeType"),
+                        o => o.ResponseFor(request));
+                    return;
+                }
+
+                if (!force && meshService is not null)
+                {
+                    meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                            $"namespace:{hub.Address.Path}/Source nodeType:Code"))
+                        .Take(1)
+                        .Subscribe(sources =>
+                        {
+                            if (IsSourcesUpToDate(def, sources.Items))
+                            {
+                                hub.Post(new CreateReleaseResponse(true, AlreadyUpToDate: true),
+                                    o => o.ResponseFor(request));
+                                return;
+                            }
+                            StartCompile(workspace, hub, compilationService, ownNode!, request);
+                        });
+                }
+                else
+                {
+                    StartCompile(workspace, hub, compilationService, ownNode!, request);
+                }
+            });
+
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Holds a NodeType MeshNode stream until <see cref="NodeTypeDefinition.CompilationStatus"/>
+    /// is anything other than <see cref="CompilationStatus.Compiling"/> — i.e. the next
+    /// emission past a settle (Ok / Error / Unknown) is what passes through. Lets
+    /// handlers that depend on the post-compile state (compiled assembly path, sources
+    /// snapshot, latest release) wait for the in-progress compile to finish instead of
+    /// reading the pre-compile snapshot and returning the previous release's HubConfiguration.
+    /// Non-NodeType nodes pass through unchanged so this is safe to chain on any MeshNode
+    /// stream — only NodeTypeDefinition contents trigger the wait.
+    /// </summary>
+    public static IObservable<MeshNode> AwaitCompilationSettled(this IObservable<MeshNode> source)
+        => source.Where(node => node?.Content is not NodeTypeDefinition def
+            || def.CompilationStatus != CompilationStatus.Compiling);
+
+    private static void StartCompile(
+        IWorkspace workspace,
+        IMessageHub hub,
+        IMeshNodeCompilationService compilationService,
+        MeshNode pendingNode,
+        IMessageDelivery<CreateReleaseRequest> request)
+    {
+        var hubPath = hub.Address.Path;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
+
+        workspace.UpdateMeshNode(curr =>
+            curr.Content is NodeTypeDefinition def
+                ? curr with
+                {
+                    Content = def with
+                    {
+                        CompilationStatus = CompilationStatus.Compiling,
+                        LastCompileStartedAt = DateTimeOffset.UtcNow
+                    }
+                }
+                : curr)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex, "Compile: failed to flip status to Compiling for {HubPath}", hubPath));
+
+        hub.Post(new CreateReleaseResponse(true), o => o.ResponseFor(request));
+
+        var sub = compilationService.CompileAndGetConfigurations(pendingNode)
+            .Take(1)
+            .Select(result => new CompileOutcome(result, null, pendingNode))
+            .Catch<CompileOutcome, Exception>(ex =>
+                Observable.Return(new CompileOutcome(null, ex, pendingNode)))
+            .Subscribe(
+                outcome =>
+                {
+                    var activityPath = outcome.Result?.Log is { } compileLog
+                        ? $"{hubPath}/_activity/{compileLog.Id}"
+                        : null;
+
+                    string? newReleasePath = null;
+                    if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
+                    {
+                        newReleasePath = TryCreateReleaseNode(
+                            hub, hubPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
+
+                        try
+                        {
+                            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+                            nodeTypeService?.InvalidateCache(hubPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger?.LogWarning(ex,
+                                "CompileWatcher: failed to flush NodeTypeService cache for {HubPath}", hubPath);
+                        }
+                    }
+
+                    workspace.UpdateMeshNode(curr =>
+                    {
+                        if (curr.Content is not NodeTypeDefinition def)
+                            return curr;
+
+                        if (outcome.Error is null && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation))
+                        {
+                            logger?.LogDebug("Compile success for {HubPath} → {Assembly}",
+                                hubPath, outcome.Result!.AssemblyLocation);
+                            return curr with
+                            {
+                                Content = def with
+                                {
+                                    CompilationStatus = CompilationStatus.Ok,
+                                    CompilationError = null,
+                                    LastCompileSucceededAt = DateTimeOffset.UtcNow,
+                                    LastCompiledVersion = curr.Version,
+                                    LastCompilationActivityPath = activityPath,
+                                    LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
+                                    ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
+                                    CompiledSources = outcome.Result.CompiledSources
+                                        ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty
+                                },
+                                AssemblyLocation = outcome.Result.AssemblyLocation
+                            };
+                        }
+
+                        var errorSummary = outcome.Error?.Message
+                            ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
+                                ? string.Join("; ", errs.Select(m => m.Message))
+                                : "Compilation produced no assembly");
+                        logger?.LogDebug("Compile failure for {HubPath}: {Error}", hubPath, errorSummary);
+                        return curr with
+                        {
+                            Content = def with
+                            {
+                                CompilationStatus = CompilationStatus.Error,
+                                CompilationError = errorSummary,
+                                LastCompilationActivityPath = activityPath,
+                                CompiledSources = null
+                            }
+                        };
+                    })
+                    .Subscribe(
+                        _ => { },
+                        ex => logger?.LogWarning(ex,
+                            "Compile: failed to write post-compile status for {HubPath}", hubPath));
+                },
+                ex => logger?.LogWarning(ex, "Compile faulted for {HubPath}", hubPath));
+
+        hub.RegisterForDisposal(sub);
+    }
+
+    internal static bool IsSourcesUpToDate(NodeTypeDefinition? def, IReadOnlyList<MeshNode> currentSources)
+    {
+        if (def is null || def.CompiledSources is null || string.IsNullOrEmpty(def.LatestReleasePath))
+            return false;
+        var compiled = def.CompiledSources;
+        var currentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in currentSources)
+        {
+            if (string.IsNullOrEmpty(source.Path)) continue;
+            currentPaths.Add(source.Path);
+            // LastModified.UtcTicks (not Version) — must match the snapshot field
+            // captured by DiscoverSourceVersionSnapshot. Version is bumped only by
+            // the local hub's MeshNodeTypeSource and may not surface through the
+            // mesh-level synced query that this handler reads.
+            if (!compiled.TryGetValue(source.Path, out var v) || v != source.LastModified.UtcTicks)
+                return false;
+        }
+        foreach (var p in compiled.Keys)
+            if (!currentPaths.Contains(p)) return false;
+        return true;
+    }
+
+    private static IMessageDelivery HandleRunTests(
+        IMessageHub hub, IMessageDelivery<RunTestsRequest> request)
+    {
+        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (compilationService is null || meshService is null)
+        {
+            hub.Post(new RunTestsResponse([], Error: "No compilation or mesh service"),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        var hubPath = hub.Address.Path;
+        var partitionRoot = hub.Address.Segments.Length > 0 ? hub.Address.Segments[0] : hubPath;
+
+        meshService.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{hubPath}/Test nodeType:Code"))
+            .Take(1)
+            .Subscribe(queryResult =>
+            {
+                var testNodes = queryResult.Items
+                    .Where(n => n.Content is CodeConfiguration cc && !string.IsNullOrEmpty(cc.Code))
+                    .ToList();
+
+                if (testNodes.Count == 0)
+                {
+                    hub.Post(new RunTestsResponse([]), o => o.ResponseFor(request));
+                    return;
+                }
+
+                var activityPaths = new System.Collections.Concurrent.ConcurrentBag<string>();
+                var remaining = testNodes.Count;
+
+                foreach (var testNode in testNodes)
+                {
+                    var code = (CodeConfiguration)testNode.Content!;
+                    var submissionId = Guid.NewGuid().ToString("N");
+                    var activityNamespace = $"{partitionRoot}/_Activity";
+                    var activityPath = $"{activityNamespace}/{submissionId}";
+
+                    var activityNode = new MeshNode(submissionId, activityNamespace)
+                    {
+                        Name = $"Test {testNode.Name ?? testNode.Path}",
+                        NodeType = ActivityNodeType.NodeType,
+                        MainNode = partitionRoot,
+                        State = MeshNodeState.Active,
+                        Content = new ActivityLog("TestExecution")
+                        {
+                            Id = submissionId,
+                            HubPath = testNode.Path,
+                            Status = ActivityStatus.Running
+                        }
+                    };
+
+                    meshService.CreateNode(activityNode)
+                        .Subscribe(
+                            _ =>
+                            {
+                                hub.Post(
+                                    new SubmitCodeRequest(code.Code ?? string.Empty)
+                                    {
+                                        Id = submissionId,
+                                        ActivityLogPath = activityPath
+                                    },
+                                    o => o.WithTarget(new Address(activityPath)));
+                                activityPaths.Add(activityPath);
+                                if (Interlocked.Decrement(ref remaining) == 0)
+                                    hub.Post(new RunTestsResponse([.. activityPaths]),
+                                        o => o.ResponseFor(request));
+                            },
+                            _ =>
+                            {
+                                if (Interlocked.Decrement(ref remaining) == 0)
+                                    hub.Post(new RunTestsResponse([.. activityPaths]),
+                                        o => o.ResponseFor(request));
+                            });
+                }
+            });
+
+        return request.Processed();
     }
 
     /// <summary>
