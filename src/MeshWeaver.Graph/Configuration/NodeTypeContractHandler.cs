@@ -103,10 +103,23 @@ internal static class NodeTypeContractHandler
                         });
                 }
 
-                // Short-circuit: if the NodeType already has a compiled assembly
-                // (set by the compile watcher on the previous successful compile),
-                // just load configs from that ALC — no Roslyn round-trip needed.
-                if (!string.IsNullOrEmpty(node.AssemblyLocation)
+                // Short-circuit: if a real release has been published, load from
+                // its assembly. Gating on LatestReleasePath (not just
+                // AssemblyLocation) is essential — for a freshly-created dynamic
+                // NodeType, NodeTypeService.EnrichWithNodeType propagates the
+                // STATIC "NodeType" type's framework DLL (MeshWeaver.Graph.dll)
+                // onto the fresh node's AssemblyLocation via its fast-path
+                // ApplyEntry. Short-circuiting on that path opens
+                // MeshWeaver.Graph.dll, finds no MeshNodeProvider for this hub's
+                // path, and silently returns Success=true with no configs — the
+                // bug behind CompileFailsWhenSourceCodeIsInvalid + the rest of
+                // the compile cluster reporting "Success expected false but is
+                // true". A populated LatestReleasePath means StartCompile (or
+                // the initial publish) actually emitted an assembly for this
+                // NodeType; only then is AssemblyLocation a real release DLL.
+                var hasPublishedRelease = !string.IsNullOrEmpty(def.LatestReleasePath);
+                if (hasPublishedRelease
+                    && !string.IsNullOrEmpty(node.AssemblyLocation)
                     && (node.AssemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
                         || File.Exists(node.AssemblyLocation)))
                 {
