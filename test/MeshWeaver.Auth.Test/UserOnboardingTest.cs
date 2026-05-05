@@ -12,6 +12,11 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+// UserNodeType.WithPortalCreate restricts User-node creation to portal/* identities.
+// Tests below set AccessContext.ObjectId = the new userId so RlsNodeValidator's
+// own-scope bypass (nodePath == userId) lets the create through — the same shape
+// production hits during onboarding when the user already owns their partition.
+
 namespace MeshWeaver.Auth.Test;
 
 /// <summary>
@@ -46,11 +51,24 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
+    /// <summary>
+    /// Switch the test circuit's identity to <paramref name="userId"/> so
+    /// RlsNodeValidator's own-scope bypass (nodePath == userId / nodePath
+    /// startsWith userId + "/") lets the User-node create through. Production
+    /// onboarding hits the same own-scope shape — the user is already authenticated
+    /// against their own partition when their User node is being persisted.
+    /// </summary>
+    private void ImpersonateAsUser(string userId)
+        => Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+
     [Fact(Timeout = 15000)]
     public async Task CreateUserNode_GrantsSelfAdminRole_OnOwnPartition()
     {
         // Use a unique userId to avoid interference with other tests or seeded data.
         const string userId = "onboard-test-user-a";
+
+        ImpersonateAsUser(userId);
 
         // Act: create a User node — this triggers UserScopeGrantHandler which
         // fire-and-forget creates the self-assignment at {userId}/_Access/{userId}_Access.
@@ -82,6 +100,8 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
         const string userId = "onboard-test-user-b";
         const string otherUserId = "some-other-user";
 
+        ImpersonateAsUser(userId);
+
         var userNode = new MeshNode(userId)
         {
             NodeType = UserNodeType.NodeType,
@@ -106,6 +126,8 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateUserNode_SelfAssignmentNodeExists()
     {
         const string userId = "onboard-test-user-c";
+
+        ImpersonateAsUser(userId);
 
         var userNode = new MeshNode(userId)
         {
