@@ -1,7 +1,8 @@
 ---
+NodeType: Markdown
 Name: "Executing Scripts via MCP"
 Abstract: "Run an executable Code node's C# through the kernel from any MCP client — how to mark a node IsExecutable, call ExecuteScript, and stream the run's ActivityLog for live progress."
-Icon: "Play"
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#2e7d32'/><path d='M9 7l9 5-9 5z' fill='white'/></svg>"
 Thumbnail: "images/agenticai.svg"
 Authors:
   - "Roland Buergi"

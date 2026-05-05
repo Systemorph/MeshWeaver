@@ -1,7 +1,8 @@
 ---
+NodeType: Markdown
 Name: "CQRS — Queries, Reads, Writes, Operations"
 Abstract: "Query only for finding sets of elements. For a specific node's content use GetDataRequest for a one-shot, GetRemoteStream for a live subscription. Writes go through PatchDataChangeRequest. Operations like 'run this script' are named request types handled on the owning node's hub — the implementation (e.g. the kernel) stays private."
-Icon: "Split"
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#c62828'/><path d='M12 5v5M9 8l3-3 3 3' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/><path d='M5 19l4-4M19 19l-4-4' stroke='white' stroke-width='2' stroke-linecap='round'/><circle cx='6' cy='18' r='1.5' fill='white'/><circle cx='18' cy='18' r='1.5' fill='white'/><circle cx='12' cy='12' r='1.5' fill='white'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
   - "Roland Buergi"
@@ -19,7 +20,7 @@ Tags:
 |---|---|
 | **Bind a UI control to a node's content** | Declare a path-bound control (e.g. `new MeshNodeThumbnailControl { NodePath = path }`) or `JsonPointerReference`. The Blazor view subscribes via `GetRemoteStream<MeshNode, MeshNodeReference>` — **layout-area code never loads the node**. See [Data Binding](xref:GUI/DataBinding). |
 | **Find a set of nodes** (existence, listing, search) | `mesh.ObserveQuery<T>(request)` — or `QueryAsync` for `IAsyncEnumerable` |
-| **Read a known node's content (one-shot)** | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr))` + `hub.RegisterCallback` |
+| **Read a known node's content (one-shot)** | `hub.Post(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(addr))` + `hub.Observe` |
 | **Subscribe to a node's live updates** | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, new MeshNodeReference())` |
 | **Write to a node** | `hub.Post(new PatchDataChangeRequest(...), o => o.WithTarget(addr))` (or `DataChangeRequest` for full updates) |
 | **Perform an operation on a node** | Named request type handled on the owning hub — e.g. `ExecuteScriptRequest`, `MoveNodeRequest`, `ImportRequest` |
@@ -43,7 +44,7 @@ content → merge → write), auditing ("did my change take?"), or any decision 
 source of truth. No staleness. It also activates the hub if it was cold; you don't have
 to pre-subscribe.
 
-## One-shot reads (`GetDataRequest` + `RegisterCallback`)
+## One-shot reads (`GetDataRequest` + `Observe`)
 
 The canonical pattern for "give me this node's current MeshNode":
 
@@ -52,7 +53,7 @@ var delivery = hub.Post(
     new GetDataRequest(new MeshNodeReference()),
     o => o.WithTarget(new Address(path)));
 
-hub.RegisterCallback(delivery, (d, _) =>
+hub.Observe(delivery, (d, _) =>
 {
     if (d is IMessageDelivery<GetDataResponse> response
         && response.Message.Data is MeshNode node)
@@ -180,7 +181,7 @@ var delivery = hub.Post(
     new ExecuteScriptRequest(),
     o => o.WithTarget(new Address(codeNodePath)));
 
-hub.RegisterCallback(delivery, (d, _) =>
+hub.Observe(delivery, (d, _) =>
 {
     if (d is IMessageDelivery<ExecuteScriptResponse> resp && resp.Message.Success)
     {
@@ -239,7 +240,7 @@ return request.Processed();   // handler returns immediately
 | Inside a handler | OK? |
 |---|---|
 | `hub.Post(...)` — fire a message | ✅ sync |
-| `hub.RegisterCallback(delivery, callback)` — register; callback fires later | ✅ sync |
+| `hub.Observe(delivery, callback)` — register; callback fires later | ✅ sync |
 | `workspace.UpdateMeshNode(fn)` — apply an update | ✅ sync |
 | `hub.GetWorkspace().GetStream(ref)?.Select(...).Where(...).Take(1).Subscribe(...)` — reactive read | ✅ |
 | `hub.GetWorkspace().GetStream(ref)?.Current?.Value` — snapshot read | ❌ null on cold workspaces |
@@ -252,11 +253,11 @@ return request.Processed();   // handler returns immediately
 |---|---|
 | List nodes under X | `ObserveQuery` |
 | Does node X exist? | `ObserveQuery` + check `Items.Count` |
-| Give me node X's MeshNode (once) | `hub.Post(GetDataRequest(new MeshNodeReference()), WithTarget(X))` + `RegisterCallback` |
+| Give me node X's MeshNode (once) | `hub.Post(GetDataRequest(new MeshNodeReference()), WithTarget(X))` + `Observe` |
 | Keep me updated on node X's MeshNode | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` |
 | Patch node X | `hub.Post(PatchDataChangeRequest(...), WithTarget(X))` |
 | Replace node X wholesale | `hub.Post(DataChangeRequest{...}.WithUpdates(fullNode), WithTarget(X))` |
-| Run the script on Code node X | `hub.Post(ExecuteScriptRequest(), WithTarget(X))` + `RegisterCallback<ExecuteScriptResponse>` |
+| Run the script on Code node X | `hub.Post(ExecuteScriptRequest(), WithTarget(X))` + `Observe<ExecuteScriptResponse>` |
 | Wait until the run finishes | `workspace.GetRemoteStream` on X's output area until a terminal condition |
 | Move/Copy node X | `hub.Post(MoveNodeRequest(...), WithTarget(X))` — same pattern, different request type |
 | Stream content into node X during execution (AI streaming, long-running output) | Open `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` once at start, push every delta via `.Update(node => node with { Content = ... })`, dispose at end. See [Thread Execution Streaming](xref:Architecture/ThreadExecutionStreaming) for the canonical writer + renderer pair. |
@@ -285,7 +286,7 @@ hub.Post(new SubmitCodeRequest(...), o => o.WithTarget(kernelAddress));
 // ✅ One-shot content read — authoritative.
 var delivery = hub.Post(new GetDataRequest(new MeshNodeReference()),
     o => o.WithTarget(new Address(path)));
-hub.RegisterCallback(delivery, (d, _) => { /* ... */ return Task.FromResult(d); });
+hub.Observe(delivery, (d, _) => { /* ... */ return Task.FromResult(d); });
 
 // ✅ Live updates.
 workspace.GetRemoteStream<MeshNode, MeshNodeReference>(

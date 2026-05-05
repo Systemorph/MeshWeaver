@@ -1,7 +1,8 @@
 ---
+NodeType: Markdown
 Name: "Specifying Software"
 Abstract: "Writing specification is still quite complex, and good tooling is difficult to find. In many cases, mockups are created but without any real functionality. We believe that specification must be written iteratively and as closely as possible to the implementation."
-Icon: "Video"
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#283593'/><rect x='6' y='5' width='12' height='14' rx='1' fill='white'/><path d='M11 10l4 2-4 2z' fill='#283593'/></svg>"
 VideoUrl: "https://www.youtube.com/embed/CtpgzjClS5c?si=jqOftd0uSGqbjFvS"
 VideoDuration: "00:12:16"
 VideoTitle: "Mastering Software Specifications"

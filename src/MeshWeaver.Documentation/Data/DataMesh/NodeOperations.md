@@ -112,7 +112,6 @@ if (response.Message.Success)
 
 ```markdown
 ---
-NodeType: "ACME/Article"
 Name: "Getting Started"
 Category: "Documentation"
 Authors:
@@ -126,7 +125,7 @@ Tags:
 Your markdown content here...
 ```
 
-Only non-default values appear in the YAML front matter. If the node type is "Markdown" and the name matches the ID, the YAML block may be omitted entirely.
+`NodeType` defaults to `Markdown` and may be omitted. Only non-default values appear in the YAML front matter. If the name matches the ID and there's no other metadata, the YAML block may be omitted entirely.
 
 ## Code (.cs)
 

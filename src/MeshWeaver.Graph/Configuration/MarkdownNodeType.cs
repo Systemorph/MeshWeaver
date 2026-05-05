@@ -1,5 +1,6 @@
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -8,6 +9,16 @@ namespace MeshWeaver.Graph.Configuration;
 /// Provides configuration for Markdown node types in the graph.
 /// Markdown nodes are document nodes with collaborative editing support,
 /// read/edit views, comments, attachments, and notebook visualization.
+/// <para>
+/// The MeshNode's <c>Content</c> is a <see cref="MarkdownContent"/> record
+/// carrying the parsed markdown plus per-document metadata (Authors, Tags,
+/// Thumbnail, Abstract) lifted off the YAML front-matter by
+/// <c>MarkdownFileParser</c>. Registering <see cref="MarkdownContent"/> as
+/// the data source's content type ensures it round-trips through the
+/// per-node hub's type registry (without it, the JSON polymorphic resolver
+/// downgrades the metadata to <c>JsonElement</c> and the rendering layer
+/// fails to surface Authors / Tags).
+/// </para>
 /// </summary>
 public static class MarkdownNodeType
 {
@@ -37,7 +48,7 @@ public static class MarkdownNodeType
         AssemblyLocation = typeof(MarkdownNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMarkdownViews()
-            .AddMeshDataSource()
+            .AddMeshDataSource(s => s.WithContentType<MarkdownContent>())
             .AddContentCollections()
             .AddComments()
             .AddTracking()

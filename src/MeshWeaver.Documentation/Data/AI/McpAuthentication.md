@@ -1,7 +1,8 @@
 ---
+NodeType: Markdown
 Name: "MCP Authentication"
 Abstract: "How to generate API tokens and configure MCP clients like Claude Code to securely access the MeshWeaver MCP endpoint with bearer token authentication."
-Icon: "Key"
+Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#f57f17'/><circle cx='9' cy='12' r='3.5' fill='none' stroke='white' stroke-width='2'/><path d='M12.5 12h7M17 12v3M19.5 12v2' stroke='white' stroke-width='2' stroke-linecap='round'/></svg>"
 Thumbnail: "images/agenticai.svg"
 Authors:
   - "Roland Buergi"
