@@ -305,10 +305,12 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
             await _storageAdapter.WriteAsync(savedNode, options, ct);
         }
 
-        // Notify change
+        // Notify change. Stamp the row's Version so a downstream LISTEN/NOTIFY
+        // echo (PG-backed adapters re-publish via pg_notify) carrying the same
+        // path+version can be deduped by subscribers.
         _changeNotifier?.NotifyChange(isNew
-            ? DataChangeNotification.Created(normalizedPath, savedNode)
-            : DataChangeNotification.Updated(normalizedPath, savedNode));
+            ? DataChangeNotification.Created(normalizedPath, savedNode, savedNode.Version)
+            : DataChangeNotification.Updated(normalizedPath, savedNode, savedNode.Version));
 
         return savedNode;
     }

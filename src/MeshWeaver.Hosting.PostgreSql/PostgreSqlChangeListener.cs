@@ -113,6 +113,14 @@ public class PostgreSqlChangeListener : IAsyncDisposable
             var path = payload.GetProperty("path").GetString() ?? "";
             var op = payload.GetProperty("op").GetString() ?? "";
 
+            // Version field added in trigger v2 — older trigger payloads emit -1.
+            // Subscribers use this to dedupe local-write echoes: the writer already
+            // published the change in-process; when the LISTEN/NOTIFY echo arrives
+            // with the same path+version, drop it.
+            var version = payload.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.Number
+                ? v.GetInt64()
+                : -1L;
+
             var kind = op switch
             {
                 "INSERT" => DataChangeKind.Created,
@@ -121,7 +129,8 @@ public class PostgreSqlChangeListener : IAsyncDisposable
                 _ => DataChangeKind.Updated
             };
 
-            _changeNotifier.NotifyChange(new DataChangeNotification(path, kind, null, DateTimeOffset.UtcNow));
+            _changeNotifier.NotifyChange(
+                new DataChangeNotification(path, kind, null, DateTimeOffset.UtcNow) { Version = version });
         }
         catch (Exception ex)
         {

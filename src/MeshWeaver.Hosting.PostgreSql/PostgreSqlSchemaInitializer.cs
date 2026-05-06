@@ -863,16 +863,30 @@ public static class PostgreSqlSchemaInitializer
             DROP TRIGGER IF EXISTS group_members_changed ON group_members;
             DROP FUNCTION IF EXISTS trg_access_control_changed();
 
-            -- Notify function for change notifications
+            -- Notify function for change notifications.
+            -- Payload carries the row's version + last_modified so subscribers can
+            -- dedupe local-write echoes (the writer already published the change to
+            -- in-process subscribers; the LISTEN/NOTIFY echo back to the same process
+            -- would otherwise re-emit it). DELETE has no NEW row, so version=-1 and
+            -- last_modified is omitted — subscribers treat these as authoritative deletes.
             CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     PERFORM pg_notify('mesh_node_changes',
-                        json_build_object('path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END, 'op', 'DELETE')::text);
+                        json_build_object(
+                            'path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END,
+                            'op', 'DELETE',
+                            'version', -1
+                        )::text);
                     RETURN OLD;
                 ELSE
                     PERFORM pg_notify('mesh_node_changes',
-                        json_build_object('path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END, 'op', TG_OP)::text);
+                        json_build_object(
+                            'path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END,
+                            'op', TG_OP,
+                            'version', NEW.version,
+                            'last_modified', NEW.last_modified
+                        )::text);
                     RETURN NEW;
                 END IF;
             END;
@@ -1436,16 +1450,30 @@ public static class PostgreSqlSchemaInitializer
             DROP TRIGGER IF EXISTS group_members_changed ON group_members;
             DROP FUNCTION IF EXISTS trg_access_control_changed();
 
-            -- Notify function for change notifications
+            -- Notify function for change notifications.
+            -- Payload carries the row's version + last_modified so subscribers can
+            -- dedupe local-write echoes (the writer already published the change to
+            -- in-process subscribers; the LISTEN/NOTIFY echo back to the same process
+            -- would otherwise re-emit it). DELETE has no NEW row, so version=-1 and
+            -- last_modified is omitted — subscribers treat these as authoritative deletes.
             CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     PERFORM pg_notify('mesh_node_changes',
-                        json_build_object('path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END, 'op', 'DELETE')::text);
+                        json_build_object(
+                            'path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END,
+                            'op', 'DELETE',
+                            'version', -1
+                        )::text);
                     RETURN OLD;
                 ELSE
                     PERFORM pg_notify('mesh_node_changes',
-                        json_build_object('path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END, 'op', TG_OP)::text);
+                        json_build_object(
+                            'path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END,
+                            'op', TG_OP,
+                            'version', NEW.version,
+                            'last_modified', NEW.last_modified
+                        )::text);
                     RETURN NEW;
                 END IF;
             END;
@@ -1554,16 +1582,30 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_mn_node_type ON mesh_nodes (node_type);
             CREATE INDEX IF NOT EXISTS idx_mn_content ON mesh_nodes USING gin (content jsonb_path_ops);
 
-            -- Notify function for change notifications
+            -- Notify function for change notifications.
+            -- Payload carries the row's version + last_modified so subscribers can
+            -- dedupe local-write echoes (the writer already published the change to
+            -- in-process subscribers; the LISTEN/NOTIFY echo back to the same process
+            -- would otherwise re-emit it). DELETE has no NEW row, so version=-1 and
+            -- last_modified is omitted — subscribers treat these as authoritative deletes.
             CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     PERFORM pg_notify('mesh_node_changes',
-                        json_build_object('path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END, 'op', 'DELETE')::text);
+                        json_build_object(
+                            'path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END,
+                            'op', 'DELETE',
+                            'version', -1
+                        )::text);
                     RETURN OLD;
                 ELSE
                     PERFORM pg_notify('mesh_node_changes',
-                        json_build_object('path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END, 'op', TG_OP)::text);
+                        json_build_object(
+                            'path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END,
+                            'op', TG_OP,
+                            'version', NEW.version,
+                            'last_modified', NEW.last_modified
+                        )::text);
                     RETURN NEW;
                 END IF;
             END;
