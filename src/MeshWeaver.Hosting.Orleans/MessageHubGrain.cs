@@ -130,15 +130,31 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
     /// <summary>
     /// Composes the per-emission "enrich with HubConfiguration" step as an
-    /// observable so the activation chain stays purely reactive. For static
-    /// nodes the emitted node already carries HubConfiguration; for dynamic
-    /// NodeType instances we delegate to <see cref="IMeshNodeHubFactory.ResolveHubConfiguration"/>,
-    /// which itself reads off a cached stream — no synchronous Task bridges.
+    /// observable so the activation chain stays purely reactive.
+    /// <para>
+    /// 🚨 ALWAYS delegates to <see cref="IMeshNodeHubFactory.ResolveHubConfiguration"/>
+    /// — even for static nodes that already carry HubConfiguration. The factory
+    /// composes the node's own config WITH <c>DefaultNodeHubConfiguration</c>
+    /// so cross-cutting concerns registered via
+    /// <see cref="MeshBuilder.ConfigureDefaultNodeHub"/> (AI types, default
+    /// layout areas, threads layout, API tokens settings tab, heartbeat,
+    /// content collections, …) reach EVERY per-node hub.
+    /// </para>
+    /// <para>
+    /// Previously this method short-circuited when <c>node.HubConfiguration is
+    /// not null</c>, which meant every static node with an inline
+    /// HubConfiguration (UserNodeType, CodeNodeType, ReleaseNodeType, …)
+    /// silently bypassed the central <c>ConfigureDefaultNodeHub</c> overlay.
+    /// Symptom: chat-from-user-page hung forever because
+    /// <c>AppendUserMessageResponse</c> arrived at the user hub as RawJson —
+    /// the AI types from <c>AddAI()</c>'s <c>ConfigureDefaultNodeHub</c> never
+    /// reached the user hub's TypeRegistry. Same root cause for any other
+    /// "default-node-hub" cross-cutting concern that "doesn't seem to apply"
+    /// to a built-in NodeType.
+    /// </para>
     /// </summary>
     private IObservable<MeshNode> ResolveHubConfigurationObservable(MeshNode node)
     {
-        if (node.HubConfiguration is not null)
-            return Observable.Return(node);
         var hubFactory = meshHub.ServiceProvider.GetService<IMeshNodeHubFactory>();
         return hubFactory is null
             ? Observable.Return(node)
