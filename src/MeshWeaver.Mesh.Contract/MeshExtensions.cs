@@ -698,9 +698,18 @@ public static class MeshExtensions
 
     /// <summary>
     /// Phase 1 — fetch root + (recursive) descendants via <see cref="IMeshStorage"/>.
-    /// IAsyncEnumerable is the native shape of storage iteration; we bridge to an
-    /// observable at the boundary with <c>Observable.FromAsync</c>. Returns bottom-up
-    /// order (deepest first) so bulk delete processes children before parents.
+    /// <para>
+    /// 🚨 Pure IObservable composition — NO <c>Observable.FromAsync(async ct =&gt; { await … })</c>
+    /// wrapper. The previous shape held the textbook deadlock from
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>: the <c>await persistence.GetNode(…).FirstAsync().ToTask(ct)</c>
+    /// captured <c>TaskScheduler.Current</c> (the hub action block when the caller
+    /// is <c>HandleDeleteNodeRequest</c>) and the continuation tried to resume on
+    /// the same hub it was blocking — instant 30 s timeout on every Delete.
+    /// </para>
+    /// <para>The <see cref="IAsyncEnumerable{T}"/> iteration for descendants stays —
+    /// bridged via <see cref="MeshWeaver.Reactive.ObservableTopNExtensions.ToObservableSequence{T}(IAsyncEnumerable{T})"/>
+    /// which runs the enumeration on <c>Scheduler.Default</c>, never capturing the
+    /// caller's sync context.</para>
     /// </summary>
     private static IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> ToDelete, bool HasUnlistedChildren)>
         CollectNodesForDelete(
@@ -710,38 +719,41 @@ public static class MeshExtensions
             TimeSpan timeout,
             ILogger logger)
     {
-        return Observable.FromAsync<(MeshNode? Root, IReadOnlyList<MeshNode> ToDelete, bool HasUnlistedChildren)>(async ct =>
-        {
-            // GetNode is IObservable; bridge once at the edge — the surrounding
-            // FromAsync already exists for the IAsyncEnumerable iteration below.
-            var root = await persistence.GetNode(path).FirstAsync().ToTask(ct);
-            if (root == null)
-                return (null, Array.Empty<MeshNode>(), false);
-
-            if (!recursive)
+        return persistence.GetNode(path)
+            .SelectMany(root =>
             {
-                bool anyChildren = false;
-                await foreach (var _ in persistence.GetChildrenAsync(path).WithCancellation(ct))
+                if (root == null)
+                    return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(), false));
+
+                if (!recursive)
                 {
-                    anyChildren = true;
-                    break;
+                    // Snapshot collection observable — Take(1) gets the current child
+                    // set; .Count > 0 is the existence answer. No await, no IAsyncEnumerable
+                    // bridge inside the chain.
+                    return persistence.GetChildren(path)
+                        .Take(1)
+                        .Select(children =>
+                            ((MeshNode?)root, (IReadOnlyList<MeshNode>)new[] { root }, children.Count > 0));
                 }
-                return (root, new[] { root }, anyChildren);
-            }
 
-            var descendants = new List<MeshNode>();
-            await foreach (var d in persistence.GetAllDescendantsAsync(path).WithCancellation(ct))
-                descendants.Add(d);
-
-            var all = descendants.Append(root)
-                .OrderByDescending(n => n.Path.Count(c => c == '/'))
-                .ThenByDescending(n => n.Path, StringComparer.Ordinal)
-                .ToImmutableList();
-
-            logger.LogDebug("[DeleteNode] collected path={Path} total={Count}", path, all.Count);
-            return (root, (IReadOnlyList<MeshNode>)all, false);
-        })
-        .Timeout(timeout);
+                // GetAllDescendantsAsync is still IAsyncEnumerable. Bridge via
+                // ToObservableSequence — its internal Channel + Task.Run runs on
+                // TaskScheduler.Default so the await inside the iterator never
+                // captures the hub's scheduler.
+                return MeshWeaver.Reactive.ObservableTopNExtensions
+                    .ToObservableSequence(persistence.GetAllDescendantsAsync(path))
+                    .ToList()
+                    .Select(descendants =>
+                    {
+                        var all = descendants.Append(root)
+                            .OrderByDescending(n => n.Path.Count(c => c == '/'))
+                            .ThenByDescending(n => n.Path, StringComparer.Ordinal)
+                            .ToImmutableList();
+                        logger.LogDebug("[DeleteNode] collected path={Path} total={Count}", path, all.Count);
+                        return ((MeshNode?)root, (IReadOnlyList<MeshNode>)all, false);
+                    });
+            })
+            .Timeout(timeout);
     }
 
     /// <summary>

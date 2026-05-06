@@ -193,7 +193,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// Deleting a matching node removes it from the synced collection —
     /// the path-set drops the path and Switch tears down the per-path stream.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 30000)]
     public async Task Delete_RemovesFromCollection()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -208,20 +208,15 @@ public class SyncedQueryTest(ITestOutputHelper output)
         var keepPath = $"{SubjectsNamespace}/keep";
         var dropPath = $"{SubjectsNamespace}/drop";
 
-        // Per-stage timeouts intentionally lower than the test-level timeout so
-        // a hang surfaces as a stage-specific Timeout exception rather than the
-        // generic "test timed out". Bumped from 15s → 25s (fired intermittently
-        // under full-suite load even in-memory, where the SyncedQuery change
-        // feed can lag a few hundred ms behind CreateNode's response).
         await collection
             .Where(arr => arr.Any(n => n.Path == keepPath) && arr.Any(n => n.Path == dropPath))
-            .FirstAsync().Timeout(25.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
 
         await NodeFactory.DeleteNode(dropPath).FirstAsync().ToTask(ct);
 
         var afterDelete = await collection
             .Where(arr => arr.All(n => n.Path != dropPath))
-            .FirstAsync().Timeout(25.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
         afterDelete.Should().Contain(n => n.Path == keepPath,
             "the survivor must still be in the collection");
     }
@@ -236,7 +231,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// rejects NodeType changes ("Cannot change NodeType from X to Y") so we
     /// switched to a mutable property the validator allows.</para>
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 30000)]
     public async Task PropertyChange_NoLongerMatchesQuery_RemovesFromCollection()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -250,13 +245,9 @@ public class SyncedQueryTest(ITestOutputHelper output)
         await NodeFactory.CreateNode(seedNode).FirstAsync().ToTask(ct);
 
         var path = seedNode.Path;
-        // Per-stage timeouts intentionally lower than the test-level timeout so a
-        // hang surfaces stage-specifically rather than the generic test timeout.
-        // Bumped from 15s → 25s — same SyncedQuery propagation lag as
-        // Delete_RemovesFromCollection above.
         var afterCreate = await collection
             .Where(arr => arr.Any(n => n.Path == path))
-            .FirstAsync().Timeout(25.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
         var current = afterCreate.Single(n => n.Path == path);
 
         // Flip State to Deleted — the synced query (state:Active) should no longer match.
@@ -265,7 +256,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
 
         await collection
             .Where(arr => arr.All(n => n.Path != path))
-            .FirstAsync().Timeout(25.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(15.Seconds()).ToTask(ct);
     }
 
     /// <summary>
