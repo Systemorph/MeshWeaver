@@ -7,7 +7,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 /// <param name="Filter">The parsed query AST (null if no filter conditions)</param>
 /// <param name="TextSearch">Full-text search value (bare text in query)</param>
-/// <param name="Path">Base path from path: qualifier (supports wildcards)</param>
+/// <param name="Path">Base path from path: qualifier (supports wildcards). Single-value form.</param>
 /// <param name="Scope">Path scope from scope: qualifier</param>
 /// <param name="OrderBy">Ordering clause from sort: qualifier</param>
 /// <param name="Limit">Result limit from limit: qualifier</param>
@@ -15,6 +15,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="Select">Property names to project results onto (from select: qualifier)</param>
 /// <param name="Context">Context for visibility filtering (from context: qualifier)</param>
 /// <param name="IsMain">When true, filters to main nodes only (MainNode is null or equals Path)</param>
+/// <param name="Paths">Multi-value path filter from <c>path:a|b|c</c> alternation. When set, backends should push down <c>WHERE path IN (...)</c>. <see cref="Path"/> is also set to the first value for back-compat with consumers that don't know about multi-path.</param>
 public record ParsedQuery(
     QueryNode? Filter,
     string? TextSearch,
@@ -25,7 +26,8 @@ public record ParsedQuery(
     QuerySource Source = QuerySource.Default,
     IReadOnlyList<string>? Select = null,
     string? Context = null,
-    bool? IsMain = null
+    bool? IsMain = null,
+    IReadOnlyList<string>? Paths = null
 )
 {
     /// <summary>

@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
@@ -15,14 +14,20 @@ namespace MeshWeaver.Hosting
         protected readonly ITypeRegistry TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         protected readonly IMessageHub Mesh = hub;
         protected readonly IMeshCatalog MeshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        public Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
-        {
-            if (delivery.Target == null)
-                return Task.FromResult(delivery);
 
-            // Fire-and-forget routing to avoid deadlocks
-            RouteInMesh(delivery, cancellationToken);
-            return Task.FromResult(delivery.Forwarded(delivery.Target));
+        public IObservable<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
+        {
+            return Observable.Defer(() =>
+            {
+                if (delivery.Target == null)
+                    return Observable.Return(delivery);
+
+                // Fire-and-forget background routing — emit Forwarded immediately
+                // so the caller's hub action block isn't held waiting for the
+                // actual mesh dispatch (which can hop hubs / silos / persistence).
+                RouteInMesh(delivery);
+                return Observable.Return(delivery.Forwarded(delivery.Target));
+            });
         }
 
 
@@ -30,62 +35,50 @@ namespace MeshWeaver.Hosting
 
 
 
-        private async void RouteInMesh(
-            IMessageDelivery delivery,
-            CancellationToken cancellationToken
-            )
+        private void RouteInMesh(IMessageDelivery delivery)
         {
             // Don't route during shutdown - recipients are likely also disposing
             if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                 return;
 
-            try
+            var address = GetHostAddress(delivery.Target!);
+
+            // if we have created the hub ==> route through us.
+            var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
+            if (hostedHub is not null)
             {
-                var address = GetHostAddress(delivery.Target!);
-
-                // if we have created the hub ==> route through us.
-                var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
-                if (hostedHub is not null)
-                {
-                    hostedHub.DeliverMessage(delivery);
-                    return;
-                }
-
-                var hostAddress = GetHostAddress(address);
-                await RouteMessageAsync(delivery, hostAddress, cancellationToken);
+                hostedHub.DeliverMessage(delivery);
+                return;
             }
-            catch (Exception e)
-            {
-                // Guard: don't post DeliveryFailure for DeliveryFailure messages or during shutdown
-                if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+
+            var hostAddress = GetHostAddress(address);
+            RouteMessage(delivery, hostAddress).Subscribe(
+                _ => { },
+                ex =>
                 {
+                    if (delivery.Message is DeliveryFailure || Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                        return;
                     Mesh.Post(new DeliveryFailure(delivery)
                     {
-                        Message = e.Message,
-                        ExceptionType = e.GetType().Name,
-                        StackTrace = e.StackTrace!
+                        Message = ex.Message,
+                        ExceptionType = ex.GetType().Name,
+                        StackTrace = ex.StackTrace!
                     },
                         o => o.ResponseFor(delivery));
-                }
-            }
+                });
         }
 
-        private Task<IMessageDelivery> RouteMessageAsync(
+        private IObservable<IMessageDelivery> RouteMessage(
             IMessageDelivery delivery,
-            Address address,
-            CancellationToken cancellationToken
+            Address address
         )
         {
             var originalAddress = address;
             var entryLogger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
             entryLogger?.LogDebug("[ROUTE] enter {MessageType} → {Address}", delivery.Message.GetType().Name, address);
 
-            // 100% reactive composition. Single .ToTask bridge at the framework
-            // boundary; inside, ResolvePath → GetNodeForRouting → RouteImpl
-            // compose via SelectMany. An inner await would capture the calling
-            // sync-context (the hub action block) and deadlock when any leg
-            // posts a message routed back through this same service. Per
-            // Doc/Architecture/AsynchronousCalls.md.
+            // 100% reactive composition. ResolvePath → GetNodeForRouting → RouteImpl
+            // compose via SelectMany. Per Doc/Architecture/AsynchronousCalls.md.
             return MeshCatalog.ResolvePath(address.ToString())
                 .SelectMany(resolution =>
                 {
@@ -113,14 +106,6 @@ namespace MeshWeaver.Hosting
                     //
                     // The right response is NotFound. Period.
                     // ============================================================================
-                    // Two NotFound shapes that both mean "don't activate a hub for this":
-                    //   • resolution == null            — path matched nothing at all in the catalog.
-                    //   • resolution.Remainder is non-empty — path matched only an ancestor.
-                    // Without the null branch, a delivery to a nonexistent address fell through
-                    // to RouteImpl on the original address — which in Orleans activates an empty
-                    // grain that hangs 30s waiting for HubConfiguration; in monolith, RouteImpl's
-                    // CreateHub would fail loudly but only after the same fall-through. Both
-                    // shapes deserve fail-fast NotFound.
                     if (resolution == null || !string.IsNullOrEmpty(resolution.Remainder))
                         return Observable.Return(PostNotFound(delivery, originalAddress, resolution));
 
@@ -139,9 +124,7 @@ namespace MeshWeaver.Hosting
                                 resolution?.Prefix, node != null, node?.NodeType, node?.HubConfiguration != null);
                             return RouteImpl(delivery, node, resolved);
                         });
-                })
-                .FirstAsync()
-                .ToTask(cancellationToken);
+                });
         }
 
         private IMessageDelivery PostNotFound(IMessageDelivery delivery, Address originalAddress, AddressResolution? resolution)
@@ -172,9 +155,8 @@ namespace MeshWeaver.Hosting
         /// <summary>
         /// Reactive subclass hook. Returns an <see cref="IObservable{T}"/> that
         /// emits the delivery's terminal state (Forwarded / Failed). 100%
-        /// reactive — no <c>await</c>, no inner <c>.ToTask()</c>; the caller
-        /// bridges to <see cref="Task"/> once at the framework boundary
-        /// (<see cref="RouteMessageAsync"/>). Per Doc/Architecture/AsynchronousCalls.md.
+        /// reactive — no <c>await</c>, no inner <c>.ToTask()</c>.
+        /// Per Doc/Architecture/AsynchronousCalls.md.
         /// </summary>
         protected abstract IObservable<IMessageDelivery> RouteImpl(IMessageDelivery delivery,
             MeshNode? node,

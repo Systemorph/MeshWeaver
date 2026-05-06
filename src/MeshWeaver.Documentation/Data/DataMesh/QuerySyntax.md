@@ -43,11 +43,31 @@ price:>=100       # Greater than or equal
 price:<=50        # Less than or equal
 ```
 
-## List Values (OR)
+## List Values (OR) — `(A OR B OR C)` and `A|B|C`
+
+Two equivalent forms — `(A OR B OR C)` (verbose, explicit) and `A|B|C` (concise, grep-style):
+
 ```
 status:(Active OR Pending OR Draft)
+status:Active|Pending|Draft
+
 nodeType:(Organization OR Project)
+nodeType:Organization|Project
+
+# Negation works with both forms
+-status:(Deleted OR Archived)
+-nodeType:Spam|Trash
 ```
+
+The `|` form is modelled on `grep -E`'s alternation operator. Both forms parse to the same `In` / `NotIn` query AST and push down to backends as `WHERE col IN (...)` — a single indexed lookup, not N separate queries.
+
+**Multi-value `path:` is special** — when the parser sees `path:a|b|c`, it populates a multi-value path filter that backends can push down as `WHERE path IN (...)` in one round-trip. The canonical use is the routing layer's "longest matching prefix" lookup:
+
+```
+path:foo/bar/baz|foo/bar|foo sort:length(path)-desc limit:1
+```
+
+→ one Postgres query, indexed `IN (...)` lookup, server-side sort by path length, single row back.
 
 ## Empty Values
 ```
@@ -88,10 +108,30 @@ namespace:Systemorph           # Immediate children of Systemorph
 ## sort
 Specifies sort order:
 ```
-sort:name          # Sort by name ascending
-sort:name-desc     # Sort by name descending
-sort:lastModified-desc  # Most recently modified first
+sort:name              # Sort by name ascending
+sort:name-desc         # Sort by name descending
+sort:lastModified-desc # Most recently modified first
 ```
+
+### SQL-function selectors
+
+Sort selectors accept SQL-style function calls — useful when you need to order by a derived value rather than a raw column:
+
+```
+sort:length(path)-desc   # Longest path first
+sort:lower(name)         # Case-insensitive name ascending
+sort:upper(nodeType)     # Case-insensitive nodeType ascending
+```
+
+Allowed functions: `length`, `lower`, `upper` (allow-listed; arbitrary SQL is **not** accepted).
+
+The function-call form composes with the rest of the query — e.g. routing-layer "longest matching prefix" lookup:
+
+```
+path:foo/bar/baz|foo/bar|foo sort:length(path)-desc limit:1
+```
+
+→ one Postgres query, single row back, the deepest matching path.
 
 ## limit
 Limits the number of results:

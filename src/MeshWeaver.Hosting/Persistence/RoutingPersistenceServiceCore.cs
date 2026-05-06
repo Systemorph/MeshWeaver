@@ -338,25 +338,26 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     #region Node Operations
 
-    public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => GetNodeAsyncCore(path, options, ct));
+    public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options) =>
+        // Pure IObservable composition end-to-end — no inner await, no
+        // .FirstAsync().ToTask() bridge. The init step is wrapped in
+        // Observable.FromAsync on Scheduler.Default so the caller's
+        // synchronization context is never captured (no deadlock surface
+        // for hub-action-block callers). Per Doc/Architecture/AsynchronousCalls.md.
+        Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+            .SelectMany(_ =>
+            {
+                var partitionKey = ResolvePartitionKey(path);
+                if (partitionKey == null || !_stores.TryGetValue(partitionKey, out var store))
+                    return Observable.Return<MeshNode?>(null);
+                return store.GetNode(path, options);
+            });
 
     /// <summary>
     /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>.
     /// </summary>
-    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
-        => GetNodeAsyncCore(path, options, ct);
-
-    private async Task<MeshNode?> GetNodeAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
-    {
-        await EnsureInitializedAsync(ct);
-
-        var partitionKey = ResolvePartitionKey(path);
-        if (partitionKey == null || !_stores.TryGetValue(partitionKey, out var store))
-            return null;
-
-        return await store.GetNode(path, options).FirstAsync().ToTask(ct);
-    }
+    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default) =>
+        GetNode(path, options).FirstAsync().ToTask(ct);
 
     public async IAsyncEnumerable<MeshNode> GetChildrenAsync(
         string? parentPath,

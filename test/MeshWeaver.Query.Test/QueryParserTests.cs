@@ -110,6 +110,119 @@ public class QueryParserTests
         comparison.Condition.Values.Should().BeEquivalentTo(["Electronics", "Computers", "Gadgets"]);
     }
 
+    // ─── Grep-style `|` alternation (`grep -E`'s alternation operator) ───
+    // Equivalent to `(A OR B OR C)` but more concise. Pushed down by backends as IN(...).
+
+    [Fact]
+    public void Parse_PipeAlternation_ProducesInOperator()
+    {
+        var result = _parser.Parse("nodeType:Story|Task|Bug");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Operator.Should().Be(QueryOperator.In);
+        comparison.Condition.Values.Should().BeEquivalentTo(["Story", "Task", "Bug"]);
+    }
+
+    [Fact]
+    public void Parse_PipeAlternation_NegatedProducesNotInOperator()
+    {
+        var result = _parser.Parse("-nodeType:Spam|Trash");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Selector.Should().Be("nodeType");
+        comparison.Condition.Operator.Should().Be(QueryOperator.NotIn);
+        comparison.Condition.Values.Should().BeEquivalentTo(["Spam", "Trash"]);
+    }
+
+    [Fact]
+    public void Parse_PipeAlternation_SingleValueAfterSplitStaysEqual()
+    {
+        // "foo|" with trailing pipe but only one non-empty value should remain Equal
+        // (RemoveEmptyEntries collapses to one part → no In conversion).
+        var result = _parser.Parse("nodeType:foo|");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Operator.Should().Be(QueryOperator.Equal);
+        comparison.Condition.Value.Should().Be("foo|");
+    }
+
+    [Fact]
+    public void Parse_PipeAlternation_DoesNotApplyToWildcard()
+    {
+        // `*` already implies Like — the | inside a Like pattern stays literal,
+        // it does NOT split into alternation. Avoids accidental over-conversion.
+        var result = _parser.Parse("name:*foo|bar*");
+
+        result.Filter.Should().BeOfType<QueryComparison>();
+        var comparison = (QueryComparison)result.Filter!;
+        comparison.Condition.Operator.Should().Be(QueryOperator.Like);
+        comparison.Condition.Value.Should().Be("*foo|bar*");
+    }
+
+    [Fact]
+    public void Parse_PipeAlternation_OnPathQualifier_PopulatesPathsList()
+    {
+        // path:a|b|c is the routing-layer use case — produces multi-value Paths
+        // for backends to push down as `WHERE path IN (...)`. The single Path
+        // field stays populated with the first value for back-compat with
+        // consumers that don't yet read Paths.
+        var result = _parser.Parse("path:foo/bar/baz|foo/bar|foo");
+
+        result.Paths.Should().BeEquivalentTo(["foo/bar/baz", "foo/bar", "foo"]);
+        result.Path.Should().Be("foo/bar/baz");
+    }
+
+    [Fact]
+    public void Parse_SinglePath_LeavesPathsNull()
+    {
+        var result = _parser.Parse("path:foo/bar");
+
+        result.Path.Should().Be("foo/bar");
+        result.Paths.Should().BeNull();
+    }
+
+    // ─── SQL-function selectors in sort: ───
+    // `sort:length(path)-desc` — function-call syntax in the sort selector lets
+    // backends emit `ORDER BY length(n.path) DESC` without hardcoding sort
+    // aliases. Routing-layer "longest-matching-prefix" lookups rely on this.
+
+    [Fact]
+    public void Parse_SortLengthFunction_ParsesAsSortSelector()
+    {
+        var result = _parser.Parse("sort:length(path)-desc");
+
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("length(path)");
+        result.OrderBy.Descending.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Parse_SortLowerFunction_AscendingDefault()
+    {
+        var result = _parser.Parse("sort:lower(name)");
+
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("lower(name)");
+        result.OrderBy.Descending.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Parse_PathQualifier_AcceptsFunctionCallInSort_AlongsidePathFilter()
+    {
+        // Routing-layer canonical form: path filter with alternation + sort + limit.
+        var result = _parser.Parse("path:a/b/c|a/b|a sort:length(path)-desc limit:1");
+
+        result.Paths.Should().BeEquivalentTo(["a/b/c", "a/b", "a"]);
+        result.OrderBy.Should().NotBeNull();
+        result.OrderBy!.Property.Should().Be("length(path)");
+        result.OrderBy.Descending.Should().BeTrue();
+        result.Limit.Should().Be(1);
+    }
+
     [Fact]
     public void Parse_OutOperator_ParsesList()
     {

@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Reactive.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
@@ -184,14 +185,19 @@ public record MeshBuilder
         IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;
 
         ConfigureHub(conf => conf.WithRoutes(routes =>
-                routes.WithHandler((delivery, ct) =>
+                // Observable-shaped handler — no Task<T>, no .FirstAsync().ToTask()
+                // at the call site. The framework bridges once at the rule-chain
+                // edge inside RouteConfiguration.WithHandler. Per
+                // Doc/Architecture/AsynchronousCalls.md.
+                routes.WithHandler(delivery =>
                 {
                     // Compare without Host since Host tracks routing path
                     var targetWithoutHost = delivery.Target is not null ? delivery.Target with { Host = null } : null;
                     if (delivery.State != MessageDeliveryState.Submitted || targetWithoutHost == null || targetWithoutHost.Equals(Address))
-                        return Task.FromResult(delivery);
+                        return Observable.Return(delivery);
 
-                    return routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessageAsync(delivery.Package(), ct);
+                    return routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>()
+                        .DeliverMessage(delivery.Package());
                 }))
             .Set(meshConfig)
         );
