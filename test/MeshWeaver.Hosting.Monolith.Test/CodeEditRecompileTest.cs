@@ -268,7 +268,11 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             Content = def! with { RequestedReleasePath = null }
         });
-        await reader.GetWorkspace().GetMeshNodeStream(pinTypePath)
+        // Fresh reader — the first wait's reader has a cached remote stream
+        // whose ReplaySubject(1) still holds the pin=V1 emission. A fresh
+        // SubscribeRequest gives us the post-update Initial snapshot directly.
+        var unpinReader = GetClient(c => c.AddData());
+        await unpinReader.GetWorkspace().GetMeshNodeStream(pinTypePath)
             .Where(n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
