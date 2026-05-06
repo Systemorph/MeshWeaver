@@ -541,7 +541,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
     /// Expected failure: The fresh instance will still have "Original Title"
     /// because the edit is not properly persisted to the underlying store.
     /// </summary>
-    [Fact(Skip = "Demonstrates known limitation: auto-save from layout data section to workspace store is not wired up")]
+    [Fact(Skip = "Legacy data-source auto-save pattern (UpdatePointer + DataChangeRequest debounced subscription) is timing-dependent and flaky — auto-save subscription doesn't always fire within the 500ms wait when other tests run in parallel. Canonical write pattern is now via MeshNode (see CLAUDE.md auto-save section + AsynchronousCalls.md). Keep as a regression marker until the legacy data-source path is removed or fixed.")]
     public async Task EditAndPersist_StringProperty_ShouldPersistToDataStore()
     {
         var client = GetClient();
@@ -601,7 +601,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
     /// <summary>
     /// THIS TEST SHOULD FAIL - demonstrates that DateTime? edits are not persisted.
     /// </summary>
-    [Fact(Skip = "Demonstrates known limitation: auto-save from layout data section to workspace store is not wired up")]
+    [Fact(Skip = "Legacy data-source auto-save (UpdatePointer + DataChangeRequest) does not emit on nullable DateTime field updates — auto-save subscription never fires for /dueDate changes (no 'Auto-save: Detected change' log line). Canonical write pattern is now via MeshNode (see CLAUDE.md auto-save section + AsynchronousCalls.md). Keep as a regression marker until the legacy data-source path is removed or fixed.")]
     public async Task EditAndPersist_NullableDateTime_ShouldPersistToDataStore()
     {
         var client = GetClient();
@@ -661,7 +661,7 @@ public class EditPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
     /// calls host.UpdateData() when entity changes. If this happens before or
     /// during editing, local changes get overwritten.
     /// </summary>
-    [Fact(Skip = "Demonstrates known limitation: workspace stream re-emission overwrites local layout data")]
+    [Fact(Skip = "Synthetic race-condition test — simulates a workspace emit DURING the 100ms debounce window using UpdatePointer with the original value. Debounce semantics are 'take latest after quiet period', so the test's expected outcome (local edit survives) contradicts the debounce contract. Distinguishing local edits from re-emits requires tagging emissions at source, not assertion-level reasoning. Keep as a design contract until the workspace-driven auto-save pattern is replaced (canonical pattern is now MeshNode-based — see CLAUDE.md).")]
     public async Task WorkspaceStreamEmit_ShouldNotOverwriteLocalEdits()
     {
         var client = GetClient();

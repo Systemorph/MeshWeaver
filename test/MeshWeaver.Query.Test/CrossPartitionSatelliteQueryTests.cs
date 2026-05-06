@@ -24,12 +24,6 @@ namespace MeshWeaver.Query.Test;
 /// When querying `nodeType:Thread` without a specific namespace,
 /// the query system must search _Thread tables in every partition.
 /// </summary>
-// Class skipped — first [Fact] hangs after ChatCompletionOrchestratorTest in
-// Query.Test, blocking the project until the 6 m wallclock cap. The hardcoded
-// "PartitionA"/"PartitionB" paths plus AddAI() + AddGraph() + AddSampleUsers()
-// configuration triggers a setup that wedges silently. Needs unique-per-Fact
-// partition names + investigation of why the first init blocks before
-// re-enabling. (Tracked via Skip on the first-hung [Fact].)
 public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string AdminUserId = "Roland";
@@ -50,7 +44,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
 
     // â”€â”€ Thread fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    [Fact(Timeout = 30000, Skip = "Hangs Query.Test until 6m wallclock — partition setup wedges silently")]
+    [Fact(Timeout = 30000)]
     public async Task NodeTypeThread_FansOutAcrossAllPartitions()
     {
         // Arrange: create two partitions with threads in each
@@ -84,7 +78,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         results.Should().OnlyContain(n => n.NodeType == "Thread");
     }
 
-    [Fact(Timeout = 30000, Skip = "Hangs Query.Test until 6m wallclock — partition setup wedges silently")]
+    [Fact(Timeout = 30000)]
     public async Task NodeTypeThread_WithNamespace_SearchesSinglePartition()
     {
         // Arrange: threads in two partitions
@@ -115,7 +109,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
 
     // â”€â”€ Comment fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    [Fact(Timeout = 30000, Skip = "Hangs Query.Test until 6m wallclock — partition setup wedges silently")]
+    [Fact(Timeout = 30000)]
     public async Task NodeTypeComment_FansOutAcrossAllPartitions()
     {
         // Arrange: create nodes with comments in different partitions
