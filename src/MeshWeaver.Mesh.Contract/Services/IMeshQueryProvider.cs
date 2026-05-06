@@ -13,6 +13,18 @@ namespace MeshWeaver.Mesh.Services;
 public interface IMeshQueryProvider
 {
     /// <summary>
+    /// Stable identifier for this provider, used by the aggregator to
+    /// deduplicate registrations. Plain
+    /// <c>services.AddSingleton&lt;IMeshQueryProvider&gt;(factory)</c>
+    /// can register the same provider twice when multiple persistence
+    /// extensions are composed (StaticNodeQueryProvider was registered from
+    /// both <c>AddPersistence</c> and <c>AddCoreAndWrapperServices</c>).
+    /// The aggregator distincts by this Name so the same logical provider
+    /// runs exactly once per query.
+    /// </summary>
+    string Name => GetType().FullName ?? GetType().Name;
+
+    /// <summary>
     /// Query nodes and partition objects with full-text search, filtering, and scoping.
     /// Uses GitHub-style query syntax (e.g., "nodeType:Story status:Open laptop").
     /// </summary>

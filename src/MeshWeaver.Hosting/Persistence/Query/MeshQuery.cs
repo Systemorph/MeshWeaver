@@ -19,10 +19,26 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// Identity is resolved from AccessService.Context. Use accessService.ImpersonateAsHub(hub)
 /// to temporarily switch identity for hub-level operations.
 /// </summary>
-public class MeshQuery(
-    IEnumerable<IMeshQueryProvider> providers,
-    IMessageHub hub)
+public class MeshQuery
 {
+    private readonly IReadOnlyList<IMeshQueryProvider> providers;
+    private readonly IMessageHub hub;
+
+    public MeshQuery(IEnumerable<IMeshQueryProvider> providers, IMessageHub hub)
+    {
+        // Distinct by Name — multiple AddSingleton<IMeshQueryProvider>(factory)
+        // calls for the same provider class register duplicates that
+        // TryAddEnumerable can't dedupe (factories have null ImplementationType).
+        // Names default to the provider's type FullName, so the duplicate
+        // StaticNodeQueryProvider registrations from AddPersistence vs
+        // AddCoreAndWrapperServices fold into one execution per query.
+        this.providers = providers
+            .GroupBy(p => p.Name, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .ToList();
+        this.hub = hub;
+    }
+
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
     public async IAsyncEnumerable<object> QueryAsync(
