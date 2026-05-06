@@ -46,6 +46,7 @@ public partial class MarkdownFileParser : IFileFormatParser
             try
             {
                 frontMatter = YamlDeserializer.Deserialize<MarkdownFrontMatter>(rawYaml);
+                frontMatter?.NormalizeAliases();
             }
             catch
             {
@@ -357,9 +358,8 @@ public partial class MarkdownFileParser : IFileFormatParser
     /// YAML front matter model for markdown files. Mirrors the canonical MeshNode
     /// properties (Name, Category, Icon, State, NodeType) plus the markdown-specific
     /// metadata captured on <see cref="MarkdownContent"/> (Authors, Tags, Thumbnail,
-    /// Abstract). The legacy <c>Title</c> / <c>Published</c> / <c>"Doc/Article"</c>
-    /// NodeType frontmatter has been retired — Markdown is the default NodeType when
-    /// the field is omitted.
+    /// Abstract). Accepts the legacy aliases <c>Title</c> (→ Name) and
+    /// <c>Description</c> (→ Abstract) for files written before the field rename.
     /// </summary>
     private class MarkdownFrontMatter
     {
@@ -375,5 +375,20 @@ public partial class MarkdownFileParser : IFileFormatParser
         public List<string>? Tags { get; set; }
         public string? Thumbnail { get; set; }
         public string? Abstract { get; set; }
+
+        // Legacy aliases. YamlDotNet doesn't follow C# property hierarchy, so we
+        // expose them as plain settable properties and fold them in below
+        // (NormalizeAliases) once deserialization completes. Pre-rename files
+        // (Title / Description) keep working without a one-shot migration script.
+        public string? Title { get; set; }
+        public string? Description { get; set; }
+
+        public void NormalizeAliases()
+        {
+            if (string.IsNullOrEmpty(Name) && !string.IsNullOrEmpty(Title))
+                Name = Title;
+            if (string.IsNullOrEmpty(Abstract) && !string.IsNullOrEmpty(Description))
+                Abstract = Description;
+        }
     }
 }
