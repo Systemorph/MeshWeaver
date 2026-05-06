@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -55,7 +54,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
             NodeType = "AccessAssignment",
             Content = assignment
         };
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(node, JsonOptions);
         return node;
     }
 

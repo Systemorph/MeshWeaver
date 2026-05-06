@@ -86,24 +86,6 @@ Full reference: [Deployment.md](src/MeshWeaver.Documentation/Data/Architecture/D
 
 **Stay in root** (`C:\dev\MeshWeaver`). Avoid chained commands (`&&`, `||`), `for` loops, and `cd` — they all require user confirmation.
 
-## 🚨 Searching: Targeted, Not Broad
-
-**Never grep across the whole repo or large directory trees.** Wide greps are slow and can grind the user's machine to a halt.
-
-Workflow when triaging a test/class name:
-1. From the failure log you already have the **fully qualified type name** (e.g. `MeshWeaver.PathResolution.Test.HierarchicalBrowsingTests`).
-2. Map it to ONE test file: namespace ⇒ folder under `test/`. The class becomes the `.cs` file (`test/MeshWeaver.PathResolution.Test/HierarchicalBrowsingTests.cs`).
-3. The production project is the same name minus `.Test` under `src/` (`src/MeshWeaver.PathResolution/`).
-4. Scope every grep to those **two** folders. Never search the whole `src/` or whole repo.
-
-Prefer in this order:
-1. **Read** the file directly when you already know the path.
-2. **Glob** with a tight pattern (`test/MeshWeaver.PathResolution.Test/HierarchicalBrowsingTests.cs`).
-3. **Grep with `path:`** scoped to one project and a precise `pattern:`.
-4. Only escalate to broader searches when 1–3 actually fail to find the symbol.
-
-If you need to search the whole codebase, **delegate to the Explore agent** rather than running a wide grep yourself — Explore is built to handle that and won't block the foreground.
-
 ## Development Commands
 
 ```bash

@@ -40,7 +40,7 @@ public class MoveNodeRecursiveTest
         foreach (var p in new[] { "src/a", "src/a/b", "src/a/b/c", "src/a/b/c/d" })
             await adapter.WriteAsync(MeshNode.FromPath(p) with { Name = p }, JsonOptions);
 
-        await service.MoveNode("src/a", "dst/a", JsonOptions).FirstAsync().ToTask();
+        await service.MoveNodeAsync("src/a", "dst/a", JsonOptions);
 
         foreach (var oldPath in new[] { "src/a", "src/a/b", "src/a/b/c", "src/a/b/c/d" })
             (await adapter.ReadAsync(oldPath, JsonOptions)).Should().BeNull($"{oldPath} should be gone");
@@ -66,7 +66,7 @@ public class MoveNodeRecursiveTest
         })
             await adapter.WriteAsync(MeshNode.FromPath(p) with { Name = p }, JsonOptions);
 
-        await service.MoveNode("src/dav", "dst/dav", JsonOptions).FirstAsync().ToTask();
+        await service.MoveNodeAsync("src/dav", "dst/dav", JsonOptions);
 
         (await adapter.ReadAsync("dst/dav/venue/estrel", JsonOptions)).Should().NotBeNull();
         (await adapter.ReadAsync("dst/dav/hotel/mercure", JsonOptions)).Should().NotBeNull();
@@ -91,7 +91,7 @@ public class MoveNodeRecursiveTest
 
         adapter.Reset();
         var sw = Stopwatch.StartNew();
-        await service.MoveNode("src/root", "dst/root", JsonOptions).FirstAsync().ToTask();
+        await service.MoveNodeAsync("src/root", "dst/root", JsonOptions);
         sw.Stop();
 
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3),
@@ -112,7 +112,7 @@ public class MoveNodeRecursiveTest
         var service = new FileSystemPersistenceService(adapter);
 
         var sw = Stopwatch.StartNew();
-        var act = async () => await service.MoveNode("does/not/exist", "dst/x", JsonOptions).FirstAsync().ToTask();
+        var act = async () => await service.MoveNodeAsync("does/not/exist", "dst/x", JsonOptions);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Source node not found*");
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1), "should reject before doing real work");
     }
@@ -127,7 +127,7 @@ public class MoveNodeRecursiveTest
         await adapter.WriteAsync(MeshNode.FromPath("dst/x") with { Name = "Dst" }, JsonOptions);
 
         var sw = Stopwatch.StartNew();
-        var act = async () => await service.MoveNode("src/x", "dst/x", JsonOptions).FirstAsync().ToTask();
+        var act = async () => await service.MoveNodeAsync("src/x", "dst/x", JsonOptions);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Target path already exists*");
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1), "collision check is pre-flight");
     }
@@ -146,7 +146,7 @@ public class MoveNodeRecursiveTest
         adapter.Seed(MeshNode.FromPath("src/root/bad") with { Name = "Bad" });
 
         var sw = Stopwatch.StartNew();
-        var act = async () => await service.MoveNode("src/root", "dst/root", JsonOptions).FirstAsync().ToTask();
+        var act = async () => await service.MoveNodeAsync("src/root", "dst/root", JsonOptions);
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*bad*", "the simulated write failure must propagate");
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3),
@@ -167,7 +167,7 @@ public class MoveNodeRecursiveTest
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         var sw = Stopwatch.StartNew();
-        var act = async () => await service.MoveNode("src/root", "dst/root", JsonOptions).FirstAsync().ToTask(cts.Token);
+        var act = async () => await service.MoveNodeAsync("src/root", "dst/root", JsonOptions, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3),

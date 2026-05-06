@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
@@ -842,10 +841,10 @@ public static class MeshExtensions
             foreach (var node in nodesBottomUp)
             {
                 logger.LogDebug("[DeleteNode] storage.DeleteNode {Path}", node.Path);
-                await storage.DeleteNode(node.Path, recursive: false).FirstAsync().ToTask(linked.Token);
+                await storage.DeleteNodeAsync(node.Path, recursive: false, linked.Token);
             }
             return System.Reactive.Unit.Default;
-        }, Scheduler.Default);
+        });
     }
 
     /// <summary>

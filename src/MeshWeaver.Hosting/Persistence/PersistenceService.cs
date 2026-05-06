@@ -1,4 +1,3 @@
-using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -43,13 +42,14 @@ internal class PersistenceService(
         => core.GetAllDescendantsAsync(parentPath, Options);
 
     public IObservable<MeshNode> SaveNode(MeshNode node)
-        => core.SaveNode(node, Options);
+        => Observable.FromAsync(ct => core.SaveNodeAsync(node, Options, ct));
 
     public IObservable<string> DeleteNode(string path, bool recursive = false)
-        => core.DeleteNode(path, recursive);
+        => Observable.FromAsync(ct => core.DeleteNodeAsync(path, recursive, ct))
+            .Select(_ => path);
 
     public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath)
-        => core.MoveNode(sourcePath, targetPath, Options);
+        => Observable.FromAsync(ct => core.MoveNodeAsync(sourcePath, targetPath, Options, ct));
 
     public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query)
         => core.SearchAsync(parentPath, query, Options);
@@ -70,10 +70,11 @@ internal class PersistenceService(
         => core.GetCommentsAsync(nodePath, Options);
 
     public IObservable<Comment> AddComment(Comment comment)
-        => core.AddComment(comment, Options);
+        => Observable.FromAsync(ct => core.AddCommentAsync(comment, Options, ct));
 
     public IObservable<string> DeleteComment(string commentId)
-        => core.DeleteComment(commentId);
+        => Observable.FromAsync(ct => core.DeleteCommentAsync(commentId, ct))
+            .Select(_ => commentId);
 
     public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
         => core.GetCommentAsync(commentId, ct);
@@ -86,10 +87,12 @@ internal class PersistenceService(
         => core.GetPartitionObjectsAsync(nodePath, subPath, Options);
 
     public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects)
-        => core.SavePartitionObjects(nodePath, subPath, objects, Options);
+        => Observable.FromAsync(ct => core.SavePartitionObjectsAsync(nodePath, subPath, objects, Options, ct))
+            .Select(_ => objects);
 
     public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => core.DeletePartitionObjects(nodePath, subPath);
+        => Observable.FromAsync(ct => core.DeletePartitionObjectsAsync(nodePath, subPath, ct))
+            .Select(_ => subPath ?? nodePath);
 
     public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => core.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);

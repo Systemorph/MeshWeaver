@@ -1,8 +1,6 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -66,7 +64,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         };
 
         // Act
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(node, JsonOptions);
 
         // Assert - verify file was created
         var filePath = Path.Combine(_testDirectory, "graph", "org1.json");
@@ -83,9 +81,9 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Create_HierarchicalNodes_CreatesDirectoryStructure()
     {
         // Arrange & Act
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions);
 
         // Assert - verify directory structure
         Directory.Exists(Path.Combine(_testDirectory, "graph")).Should().BeTrue();
@@ -109,7 +107,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         };
 
         // Act
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(node, JsonOptions);
 
         // Assert
         var savedNode = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
@@ -125,7 +123,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Read_ExistingNode_ReturnsNode()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
 
         // Act
         var node = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
@@ -149,9 +147,9 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Read_GetChildren_ReturnsDirectChildrenOnly()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
 
         // Act
         var children = await _persistence.GetChildrenAsync("graph", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -166,10 +164,10 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Read_GetDescendants_ReturnsAllDescendants()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions);
 
         // Act
         var descendants = await _persistence.GetDescendantsAsync("graph/org1", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -184,7 +182,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Read_Exists_ReturnsCorrectResult()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
 
         // Assert
         (await _persistence.ExistsAsync("graph/org1")).Should().BeTrue();
@@ -195,9 +193,9 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Read_Search_FindsMatchingNodes()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/acme") with { Name = "Acme Corporation" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/contoso") with { Name = "Contoso Software" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/fabrikam") with { Name = "Fabrikam Inc" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/acme") with { Name = "Acme Corporation" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/contoso") with { Name = "Contoso Software" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/fabrikam") with { Name = "Fabrikam Inc" }, JsonOptions);
 
         // Act
         var results = await _persistence.SearchAsync(null, "software", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -215,10 +213,10 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Update_ExistingNode_UpdatesFile()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Original Name" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Original Name" }, JsonOptions);
 
         // Act
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Updated Name" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Updated Name" }, JsonOptions);
 
         // Assert
         var node = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
@@ -231,11 +229,11 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     {
         // Arrange
         var originalContent = new TestOrganization { Id = "org1", Name = "Original", Website = "https://original.com" };
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = originalContent }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = originalContent }, JsonOptions);
 
         // Act
         var updatedContent = new TestOrganization { Id = "org1", Name = "Updated", Website = "https://updated.com" };
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = updatedContent }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1", Content = updatedContent }, JsonOptions);
 
         // Assert
         var node = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
@@ -247,8 +245,8 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Update_NodeOrder_AffectsSortOrder()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "First", Order = 20 }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org2") with { Name = "Second", Order = 10 }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "First", Order = 20 }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Second", Order = 10 }, JsonOptions);
 
         // Act
         var children = await _persistence.GetChildrenAsync("graph", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -267,12 +265,12 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Delete_SingleNode_RemovesFromFileSystem()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
         var filePath = Path.Combine(_testDirectory, "graph", "org1.json");
         File.Exists(filePath).Should().BeTrue();
 
         // Act
-        await _persistence.DeleteNode("graph/org1").FirstAsync().ToTask();
+        await _persistence.DeleteNodeAsync("graph/org1");
 
         // Assert
         File.Exists(filePath).Should().BeFalse();
@@ -284,11 +282,11 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Delete_NonRecursive_LeavesChildren()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
 
         // Act
-        await _persistence.DeleteNode("graph/org1", recursive: false).FirstAsync().ToTask();
+        await _persistence.DeleteNodeAsync("graph/org1", recursive: false);
 
         // Assert
         (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().BeNull();
@@ -299,13 +297,13 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Delete_Recursive_RemovesAllDescendants()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions).FirstAsync().ToTask();
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Org 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1") with { Name = "Project 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Org 2" }, JsonOptions);
 
         // Act
-        await _persistence.DeleteNode("graph/org1", recursive: true).FirstAsync().ToTask();
+        await _persistence.DeleteNodeAsync("graph/org1", recursive: true);
 
         // Assert
         (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().BeNull();
@@ -318,11 +316,11 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task Delete_CleansUpEmptyDirectories()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/project1/story1") with { Name = "Story 1" }, JsonOptions);
         Directory.Exists(Path.Combine(_testDirectory, "graph", "org1", "project1")).Should().BeTrue();
 
         // Act
-        await _persistence.DeleteNode("graph/org1/project1/story1").FirstAsync().ToTask();
+        await _persistence.DeleteNodeAsync("graph/org1/project1/story1");
 
         // Assert - empty directories should be cleaned up
         // Note: This depends on implementation - the adapter should clean up empty dirs
@@ -466,7 +464,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task PathNormalization_CaseInsensitive()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("Graph/ORG1") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("Graph/ORG1") with { Name = "Org 1" }, JsonOptions);
 
         // Act & Assert - should find regardless of case
         (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().NotBeNull();
@@ -478,7 +476,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     public async Task PathNormalization_TrimsSlashes()
     {
         // Arrange
-        await _persistence.SaveNode(MeshNode.FromPath("/graph/org1/") with { Name = "Org 1" }, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("/graph/org1/") with { Name = "Org 1" }, JsonOptions);
 
         // Act & Assert
         (await _persistence.GetNodeAsync("graph/org1", JsonOptions)).Should().NotBeNull();
@@ -512,7 +510,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         };
 
         // Act
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(node, JsonOptions);
         var loaded = await _persistence.GetNodeAsync("graph/org1", JsonOptions);
 
         // Assert
@@ -528,7 +526,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         var node = MeshNode.FromPath(deepPath) with { Name = "Deep Node" };
 
         // Act
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(node, JsonOptions);
         var loaded = await _persistence.GetNodeAsync(deepPath, JsonOptions);
 
         // Assert

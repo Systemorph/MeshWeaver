@@ -169,7 +169,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // Concat preserves ordering, mirroring the sequential foreach semantics
         // of the original async/await implementation.
         var saveOps = saves.Select(node =>
-            _persistenceCore.SaveNode(node, options)
+            Observable.FromAsync(ct => _persistenceCore.SaveNodeAsync(node, options, ct))
                 .Select(_ =>
                 {
                     _logger?.LogDebug("MeshNodeTypeSource: Saved {Path} (version={Version})", node.Path, node.Version);
@@ -183,7 +183,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 }));
 
         var deleteOps = deletes.Select(path =>
-            _persistenceCore.DeleteNode(path, false)
+            Observable.FromAsync(ct => _persistenceCore.DeleteNodeAsync(path, false, ct))
                 .Select(_ =>
                 {
                     _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", path);

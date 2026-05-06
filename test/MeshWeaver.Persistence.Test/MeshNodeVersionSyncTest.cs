@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -83,8 +81,8 @@ public record Story
                 Description = "A user story"
             }
         };
-        persistence.SaveNode(storyNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
-        persistence.SavePartitionObjects("type/story", null, [storyCodeConfig], SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(storyNode, SetupJsonOptions).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create Graph type
         var graphCodeConfig = new CodeConfiguration
@@ -110,8 +108,8 @@ public record Graph
                 Description = "The graph root"
             }
         };
-        persistence.SaveNode(graphTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
-        persistence.SavePartitionObjects("type/graph", null, [graphCodeConfig], SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(graphTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
+        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -131,7 +129,7 @@ public record Graph
             NodeType = "type/graph",
             Version = 0
         };
-        persistence.SaveNode(graphNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SaveNodeAsync(graphNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         return builder
             .UseMonolithMesh()

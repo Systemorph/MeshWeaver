@@ -85,7 +85,7 @@ public class FileSystemDeletePropagationTest : IDisposable
             Name = "Test Node 1",
             NodeType = "TestType"
         };
-        await _persistence.SaveNode(node, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(node, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify the file was created
         var filePath = Path.Combine(_testDirectory, "test", "node1.json");
@@ -135,9 +135,9 @@ public class FileSystemDeletePropagationTest : IDisposable
     public async Task ExternalFileDeletion_ShouldPropagateToGetChildren()
     {
         // Arrange - Create multiple nodes
-        await _persistence.SaveNode(MeshNode.FromPath("parent/child1") with { Name = "Child 1" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _persistence.SaveNode(MeshNode.FromPath("parent/child2") with { Name = "Child 2" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _persistence.SaveNode(MeshNode.FromPath("parent/child3") with { Name = "Child 3" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child1") with { Name = "Child 1" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child2") with { Name = "Child 2" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child3") with { Name = "Child 3" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify all children exist
         var childrenBefore = await _persistence.GetChildrenAsync("parent", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -184,7 +184,7 @@ public class FileSystemDeletePropagationTest : IDisposable
             Name = "FS Cache Test Node",
             NodeType = "TestType"
         };
-        await fileSystemPersistence.SaveNode(node, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await fileSystemPersistence.SaveNodeAsync(node, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify the file was created and is accessible (which also warms the cache)
         var filePath = Path.Combine(_testDirectory, "fscache", "node1.json");
@@ -264,8 +264,8 @@ public class FileSystemDeletePropagationTest : IDisposable
     public async Task ExternalDirectoryDeletion_ShouldPropagateForAllNodes()
     {
         // Arrange - Create a hierarchy
-        await _persistence.SaveNode(MeshNode.FromPath("group/item1") with { Name = "Item 1" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _persistence.SaveNode(MeshNode.FromPath("group/item2") with { Name = "Item 2" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("group/item1") with { Name = "Item 1" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("group/item2") with { Name = "Item 2" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify nodes exist
         var item1 = await _persistence.GetNodeAsync("group/item1", _jsonOptions, TestContext.Current.CancellationToken);
@@ -309,14 +309,14 @@ public class FileSystemDeletePropagationTest : IDisposable
             Name = "Node to Delete",
             NodeType = "TestType"
         };
-        await _persistence.SaveNode(node, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(node, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify it exists
         var nodeBeforeDelete = await _persistence.GetNodeAsync("delete-test/node1", _jsonOptions, TestContext.Current.CancellationToken);
         nodeBeforeDelete.Should().NotBeNull();
 
         // Act - Delete via API
-        await _persistence.DeleteNode("delete-test/node1").FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _persistence.DeleteNodeAsync("delete-test/node1", ct: TestContext.Current.CancellationToken);
 
         // Assert - Node should be gone
         var nodeAfterDelete = await _persistence.GetNodeAsync("delete-test/node1", _jsonOptions, TestContext.Current.CancellationToken);
