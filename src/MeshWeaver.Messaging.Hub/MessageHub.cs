@@ -360,12 +360,21 @@ public sealed class MessageHub : IMessageHub
     }
 
 
+    /// <summary>
+    /// Threshold above which per-message dispatch latency is reported at
+    /// <see cref="LogLevel.Information"/> so it surfaces in App Insights without
+    /// LogLevel.Trace flooding. Tuned so chat / layout / routing hops only log
+    /// when something is genuinely slow.
+    /// </summary>
+    private static readonly long SlowDispatchTicks = (long)(TimeSpan.TicksPerMillisecond * 500);
+
     async Task<IMessageDelivery> IMessageHub.HandleMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
     {
         ++Version;
+        var dispatchStartTicks = Stopwatch.GetTimestamp();
 
         // Trace is off in steady-state runs (incl. all CI/test profiles); the
         // IsEnabled gate skips both the message-template formatter AND the
@@ -402,6 +411,21 @@ public sealed class MessageHub : IMessageHub
         if (traceEnabled)
             logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
                 messageTypeName, Address, delivery.Id, result.State);
+
+        // Threshold-based slow-dispatch surfacing — only logs when a single
+        // per-message dispatch exceeds SlowDispatchTicks (500 ms). Resolves
+        // GetType().Name lazily so the fast path stays free. Goes through
+        // LogInformation so it lands in App Insights without enabling trace
+        // logging in prod.
+        var elapsedTicks = Stopwatch.GetTimestamp() - dispatchStartTicks;
+        if (elapsedTicks > SlowDispatchTicks)
+        {
+            var elapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+            logger.LogInformation(
+                "MESSAGE_FLOW: SLOW_DISPATCH | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Elapsed: {ElapsedMs:F0}ms | Sender: {Sender} | Target: {Target}",
+                messageTypeName ?? delivery.Message.GetType().Name,
+                Address, delivery.Id, elapsedMs, delivery.Sender, delivery.Target);
+        }
         return result;
     }
 

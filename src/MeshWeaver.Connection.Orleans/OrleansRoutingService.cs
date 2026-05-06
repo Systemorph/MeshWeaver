@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -73,6 +74,14 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     }
 
     /// <summary>
+    /// Threshold above which a cross-grain Orleans dispatch is reported at
+    /// <see cref="LogLevel.Information"/> so it shows up in App Insights without
+    /// having to enable trace logging in prod. Tuned for "user perceives lag"
+    /// — sub-second hops stay quiet.
+    /// </summary>
+    private static readonly long SlowDispatchTicks = (long)(TimeSpan.TicksPerMillisecond * 500);
+
+    /// <summary>
     /// Dispatches via the Orleans routing grain. The grain runs on the silo,
     /// where the mesh catalog has the seeded nodes; path resolution + per-node
     /// grain routing happen there. Retries with exponential backoff on
@@ -82,6 +91,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     {
         var addressPath = address.ToString();
         var msgType = delivery.Message.GetType().Name;
+        var dispatchStartTicks = Stopwatch.GetTimestamp();
         var accessContext = delivery.AccessContext;
         if (accessContext != null)
         {
@@ -128,6 +138,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 {
                     logger.LogDebug("Orleans: delivered {MessageType} to {Address}, result={State}",
                         msgType, address, result.State);
+                }
+
+                // Threshold-based slow-dispatch surfacing — only emits at
+                // LogInformation when the cross-grain hop is genuinely slow.
+                var elapsedTicks = Stopwatch.GetTimestamp() - dispatchStartTicks;
+                if (elapsedTicks > SlowDispatchTicks)
+                {
+                    var elapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+                    logger.LogInformation(
+                        "Orleans: SLOW_DISPATCH | {MessageType} | Address: {Address} | Elapsed: {ElapsedMs:F0}ms | State: {State} | Sender: {Sender}",
+                        msgType, address, elapsedMs, result.State, delivery.Sender);
                 }
             });
     }
