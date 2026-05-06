@@ -271,11 +271,24 @@ public class MeshQuery(
 
         return Observable.Create<QueryResultChange<T>>(observer =>
         {
+            // Initial-merge dedupes by MeshNode.Path (mirroring QueryAsync's
+            // ConcurrentDictionary<string, byte> dedup) so duplicate registrations
+            // of the same provider — or two providers that both happen to surface
+            // a static node — don't surface as duplicate rows in the GUI.
+            // For non-MeshNode T, fall back to reference identity.
             var initialItems = new List<T>();
+            var initialPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var initialIdentities = new HashSet<T>();
             var initialCount = 0;
             var initialTarget = observables.Count;
             ParsedQuery? lastQuery = null;
             var gate = new object();
+
+            // Live-stream dedup: track Path → ChangeType so a Removed for a path
+            // we never Added is dropped, and an Added for a path that's already
+            // in the live set is dropped (same provider re-emitted, or overlapping
+            // providers both saw the change).
+            var liveItems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             var subscriptions = new List<IDisposable>();
 
@@ -289,19 +302,38 @@ public class MeshQuery(
                         {
                             lock (gate)
                             {
-                                initialItems.AddRange(change.Items);
+                                foreach (var item in change.Items)
+                                {
+                                    if (item is MeshNode node)
+                                    {
+                                        if (!string.IsNullOrEmpty(node.Path)
+                                            && !initialPaths.Add(node.Path))
+                                            continue;
+                                        initialItems.Add(item);
+                                    }
+                                    else if (initialIdentities.Add(item))
+                                    {
+                                        initialItems.Add(item);
+                                    }
+                                }
                                 lastQuery ??= change.Query;
                                 initialCount++;
 
                                 if (initialCount == initialTarget)
                                 {
+                                    foreach (var path in initialPaths)
+                                        liveItems.Add(path);
                                     observer.OnNext(change with { Items = initialItems.ToList() });
                                 }
                             }
                         }
                         else
                         {
-                            observer.OnNext(change);
+                            lock (gate)
+                            {
+                                if (TryFilterDuplicateLiveChange(change, liveItems, out var filtered))
+                                    observer.OnNext(filtered);
+                            }
                         }
                     },
                     ex => observer.OnError(ex));
@@ -311,6 +343,51 @@ public class MeshQuery(
 
             return new System.Reactive.Disposables.CompositeDisposable(subscriptions);
         });
+    }
+
+    /// <summary>
+    /// Strips items from a non-Initial change that are duplicates against the
+    /// live dedup set (overlapping provider emitted the same change again, or
+    /// a Removed arrived for a path we never Added). Returns false when the
+    /// change has no usable items left, so the caller can drop the emission.
+    /// </summary>
+    private static bool TryFilterDuplicateLiveChange<T>(
+        QueryResultChange<T> change,
+        HashSet<string> liveItems,
+        out QueryResultChange<T> filtered)
+    {
+        var kept = new List<T>(change.Items.Count);
+        foreach (var item in change.Items)
+        {
+            if (item is not MeshNode node || string.IsNullOrEmpty(node.Path))
+            {
+                kept.Add(item);
+                continue;
+            }
+            switch (change.ChangeType)
+            {
+                case QueryChangeType.Added or QueryChangeType.Updated:
+                    if (liveItems.Add(node.Path))
+                        kept.Add(item);
+                    else if (change.ChangeType == QueryChangeType.Updated)
+                        kept.Add(item); // updates flow through even if path already known
+                    break;
+                case QueryChangeType.Removed:
+                    if (liveItems.Remove(node.Path))
+                        kept.Add(item);
+                    break;
+                default:
+                    kept.Add(item);
+                    break;
+            }
+        }
+        if (kept.Count == 0)
+        {
+            filtered = change;
+            return false;
+        }
+        filtered = change with { Items = kept };
+        return true;
     }
 
     public async Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
