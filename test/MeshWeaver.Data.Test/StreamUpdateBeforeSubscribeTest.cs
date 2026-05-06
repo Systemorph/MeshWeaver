@@ -22,7 +22,7 @@ namespace MeshWeaver.Data.Test;
 /// in <c>MessageService.OpenGate</c> doesn't re-flush queued items), the transform
 /// never fires and the caller's edit silently disappears.
 ///
-/// <para>The fix: <see cref="MeshWeaver.Data.UpdateStreamRequest"/> is on the
+/// <para>The fix: <c>SynchronizationStream&lt;TStream&gt;.UpdateStreamRequest</c> is on the
 /// SynchronizationGate's let-through predicate. The handler reads <c>Current</c>
 /// at process time — if null (raced before SubscribeResponse), the transform
 /// receives null and returns null (no-op); once Current populates, the transform

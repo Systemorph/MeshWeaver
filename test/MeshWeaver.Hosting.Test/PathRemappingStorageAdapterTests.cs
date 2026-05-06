@@ -35,7 +35,7 @@ public class PathRemappingStorageAdapterTests
         await adapter.WriteAsync(new MeshNode("KernelTour", "rbuergi/Story")
         {
             Name = "tour", NodeType = "Markdown", State = MeshNodeState.Active,
-        }, JsonOptions);
+        }, JsonOptions, TestContext.Current.CancellationToken);
 
         inner.Writes.Should().ContainSingle();
         var written = inner.Writes[0];
@@ -60,7 +60,7 @@ public class PathRemappingStorageAdapterTests
             NodeType = "Code",
             MainNode = "rbuergi/McpSmokeTest",
             State = MeshNodeState.Active,
-        }, JsonOptions);
+        }, JsonOptions, TestContext.Current.CancellationToken);
 
         var written = inner.Writes[0];
         written.MainNode.Should().Be("Systemorph/McpSmokeTest",
@@ -82,7 +82,7 @@ public class PathRemappingStorageAdapterTests
             NodeType = "Activity",
             MainNode = "rbuergi/McpSmokeTest",  // different from Path
             State = MeshNodeState.Active,
-        }, JsonOptions);
+        }, JsonOptions, TestContext.Current.CancellationToken);
 
         var written = inner.Writes[0];
         written.Path.Should().Be("Systemorph/_Activity/act-1");
@@ -96,7 +96,7 @@ public class PathRemappingStorageAdapterTests
         var inner = new RecordingStorageAdapter();
         var adapter = new PathRemappingStorageAdapter(inner, "rbuergi", "Systemorph");
 
-        await adapter.ReadAsync("rbuergi/Story/KernelTour", JsonOptions);
+        await adapter.ReadAsync("rbuergi/Story/KernelTour", JsonOptions, TestContext.Current.CancellationToken);
 
         inner.Reads.Should().ContainSingle().Which.Should().Be("Systemorph/Story/KernelTour");
     }
@@ -107,7 +107,7 @@ public class PathRemappingStorageAdapterTests
         var inner = new RecordingStorageAdapter();
         var adapter = new PathRemappingStorageAdapter(inner, "rbuergi", "Systemorph");
 
-        await adapter.DeleteAsync("rbuergi/Story/KernelTour");
+        await adapter.DeleteAsync("rbuergi/Story/KernelTour", TestContext.Current.CancellationToken);
 
         inner.Deletes.Should().ContainSingle().Which.Should().Be("Systemorph/Story/KernelTour");
     }
@@ -118,21 +118,21 @@ public class PathRemappingStorageAdapterTests
         var inner = new RecordingStorageAdapter();
         var adapter = new PathRemappingStorageAdapter(inner, "rbuergi", "Systemorph");
 
-        await adapter.ListChildPathsAsync("rbuergi/Story");
+        await adapter.ListChildPathsAsync("rbuergi/Story", TestContext.Current.CancellationToken);
 
         inner.ListedParents.Should().ContainSingle().Which.Should().Be("Systemorph/Story");
     }
 
     [Fact]
-    public void Remap_passes_through_paths_outside_the_source_prefix()
+    public async Task Remap_passes_through_paths_outside_the_source_prefix()
     {
         var inner = new RecordingStorageAdapter();
         var adapter = new PathRemappingStorageAdapter(inner, "rbuergi", "Systemorph");
 
         // ReadAsync on something outside the source prefix lands at the same
         // path on the inner — the remapper only relabels its scoped subtree.
-        var task = adapter.ReadAsync("Doc/Architecture/GrantingAccess", JsonOptions);
-        task.Wait();
+        await adapter.ReadAsync("Doc/Architecture/GrantingAccess", JsonOptions, TestContext.Current.CancellationToken);
+
         inner.Reads.Should().ContainSingle().Which.Should().Be("Doc/Architecture/GrantingAccess");
     }
 
@@ -144,7 +144,7 @@ public class PathRemappingStorageAdapterTests
 
         // Reading the root of the source ("rbuergi") should turn into reading
         // the root of the target ("Systemorph") — no double prefix.
-        await adapter.ReadAsync("rbuergi", JsonOptions);
+        await adapter.ReadAsync("rbuergi", JsonOptions, TestContext.Current.CancellationToken);
 
         inner.Reads.Should().ContainSingle().Which.Should().Be("Systemorph");
     }

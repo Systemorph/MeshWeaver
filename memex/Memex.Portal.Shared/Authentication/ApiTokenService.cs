@@ -266,9 +266,10 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         // Update LastUsedAt via remote stream (fire-and-forget, non-critical).
         if (tokenNode != null)
         {
-            hub.GetWorkspace().UpdateMeshNode(
-                node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = DateTimeOffset.UtcNow } },
-                tokenNode.Path);
+            hub.GetWorkspace()
+                .GetMeshNodeStream(tokenNode.Path)
+                .Update(node => node with { Content = (node.Content as ApiToken ?? apiToken) with { LastUsedAt = DateTimeOffset.UtcNow } })
+                .Subscribe(_ => { }, _ => { });
         }
 
         return apiToken;

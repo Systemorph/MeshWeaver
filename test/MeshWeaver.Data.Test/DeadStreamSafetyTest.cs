@@ -22,9 +22,9 @@ namespace MeshWeaver.Data.Test;
 /// <list type="bullet">
 /// <item><description>Constructor on a disposing parent: don't throw — log
 /// Debug, mark <c>isDisposed = true</c>, complete the Store, leave Hub null.</description></item>
-/// <item><description><see cref="ISynchronizationStream{T}.OnNext"/>,
-/// <see cref="ISynchronizationStream{T}.Update"/> (both overloads),
-/// <see cref="ISynchronizationStream{T}.RegisterForDisposal"/>,
+/// <item><description><see cref="SynchronizationStream{TStream}.OnNext"/>,
+/// both <c>ISynchronizationStream&lt;TStream&gt;.Update</c> overloads,
+/// <see cref="ISynchronizationStream.RegisterForDisposal"/>,
 /// <c>DeliverMessage</c>: guard against <c>isDisposed</c> / Hub-null,
 /// log Debug + bail (or in OnNext's case forward the failure to subscribers
 /// via Store.OnError).</description></item>
