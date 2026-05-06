@@ -782,7 +782,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     /// can't activate because Roslyn rejects its <c>HubConfiguration</c>) must
     /// fall back to a catalog read and wrap the response with a
     /// <c>compilationError</c> field. The Observe call no longer leaks when
-    /// the per-node hub is dead because <see cref="MeshOperations.GetWithBrokenNodeTypeFallback"/>
+    /// the per-node hub is dead because <c>MeshOperations.GetWithBrokenNodeTypeFallback</c>
     /// kicks in after the 10s GetDataRequest timeout.
     /// </summary>
     [Fact(Timeout = 60000)]

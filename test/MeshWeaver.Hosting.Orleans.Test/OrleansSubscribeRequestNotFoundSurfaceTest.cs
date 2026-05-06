@@ -77,7 +77,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(SharedOrleansFixture fix
             ex => { captured = ex; done.Set(); },
             () => done.Set());
 
-        var fired = done.Wait(TimeSpan.FromSeconds(20));
+        var fired = done.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         fired.Should().BeTrue(
             "the stream must surface OnError (not spin) when the target address routes to NotFound. " +
@@ -128,7 +128,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(SharedOrleansFixture fix
             ex => { error = ex; done.Set(); },
             () => done.Set());
 
-        var fired = done.Wait(TimeSpan.FromSeconds(20));
+        var fired = done.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         error.Should().BeNull($"expected data from {address}/Overview, got error: {error?.Message}");
         fired.Should().BeTrue(
