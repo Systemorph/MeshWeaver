@@ -161,18 +161,26 @@ public static class ThreadLayoutAreas
             if (!string.IsNullOrEmpty(vm.InitialContext))
             {
                 var displayName = System.Web.HttpUtility.HtmlEncode(vm.InitialContextDisplayName ?? vm.InitialContext);
+                // Inline-flex stays for the icon + label alignment;
+                // the wrapping `display: block` + `margin-bottom` gives the
+                // breadcrumb its own row with whitespace before the icon/title
+                // row below — without it the two visually crowd into ~2px gap.
                 host.UpdateData("contextLink",
+                    $"<div style=\"display: block; margin-bottom: 16px;\">" +
                     $"<a href=\"/{vm.InitialContext}\" style=\"font-size: 0.85rem; color: var(--accent-fill-rest); " +
                     $"text-decoration: none; display: inline-flex; align-items: center; gap: 4px;\">" +
-                    $"<span style=\"font-size: 12px;\">&larr;</span> {displayName}</a>");
+                    $"<span style=\"font-size: 12px;\">&larr;</span> {displayName}</a>" +
+                    $"</div>");
             }
         }));
 
-        // Header: chat icon + context link + h1 title (hidden in side panel via CSS)
+        // Header: chat icon + context link + h1 title (hidden in side panel via CSS).
+        // Outer stack uses a 12 px vertical gap so the breadcrumb (above) and the
+        // icon/title row (below) don't crowd each other.
         var header = Controls.Stack
             .WithClass("thread-full-header")
             .WithWidth("100%")
-            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
+            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); gap: 12px;")
             .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
