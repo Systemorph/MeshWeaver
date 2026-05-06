@@ -715,7 +715,32 @@ public static class MeshDataSourceExtensions
                         };
                     })
                     .Subscribe(
-                        _ => { },
+                        saved =>
+                        {
+                            // Publish the post-compile MeshNode update onto the
+                            // mesh change feed. NodeTypeService subscribes to the
+                            // feed and invalidates its `_hubConfigurations` cache
+                            // for the NodeType path on Updated events; without
+                            // this Publish, instances created AFTER the compile
+                            // would still resolve through the cached pre-compile
+                            // HubConfiguration (root cause of CodeEdit_*
+                            // RecompilesOnSourceChange / NodeType_RequestedRelease
+                            // Path_PinsToHistoricalRelease — V2 release was never
+                            // visible to a freshly-created instance because the
+                            // workspace.Update path doesn't fan-out to the change
+                            // feed the way HandleUpdateNodeRequest does).
+                            try
+                            {
+                                hub.ServiceProvider.GetService<IMeshChangeFeed>()
+                                    ?.Publish(MeshChangeEvent.Updated(saved));
+                            }
+                            catch (Exception publishEx)
+                            {
+                                logger?.LogWarning(publishEx,
+                                    "Compile: failed to publish post-compile change-feed event for {HubPath}",
+                                    hubPath);
+                            }
+                        },
                         ex => logger?.LogWarning(ex,
                             "Compile: failed to write post-compile status for {HubPath}", hubPath));
                 },
