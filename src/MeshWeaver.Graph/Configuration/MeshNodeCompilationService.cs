@@ -238,7 +238,8 @@ internal class MeshNodeCompilationService(
     /// uses so the response surfaced through <c>GetCompilationPathResponse.Log</c>
     /// reflects what actually happened (no double-compile to gather diagnostics).
     /// </summary>
-    private IObservable<(string? Path, ActivityLog Log)> GetAssemblyLocationWithLog(MeshNode node)
+    private IObservable<(string? Path, ActivityLog Log)> GetAssemblyLocationWithLog(
+        MeshNode node, IReadOnlyList<MeshNode>? sourcesOverride = null)
     {
         var log = new ActivityLog(ActivityCategory.Compilation)
         {
@@ -277,7 +278,7 @@ internal class MeshNodeCompilationService(
             // Source-aware cache check: discover the LastModified of every source
             // Code node + the NodeType itself. The cache is valid only if the
             // compiled DLL is newer than the most recent source change.
-            DiscoverSourceMaxLastModified(ntDef, selfPath)
+            DiscoverSourceMaxLastModified(ntDef, selfPath, sourcesOverride)
                 .SelectMany(maxSourceLastModified =>
                 {
                     var effectiveLastModified = node.LastModified > maxSourceLastModified
@@ -297,7 +298,7 @@ internal class MeshNodeCompilationService(
                                 .Finish((int)hub.Version, ActivityStatus.Succeeded)));
                     }
 
-                    return CompileCore(node, ntDef, selfPath, log);
+                    return CompileCore(node, ntDef, selfPath, log, sourcesOverride);
                 }));
     }
 
@@ -344,8 +345,9 @@ internal class MeshNodeCompilationService(
     /// no sources.
     /// </summary>
     private IObservable<DateTimeOffset> DiscoverSourceMaxLastModified(
-        NodeTypeDefinition? ntDef, string selfPath) =>
-        GetSourceCollection(ntDef, selfPath)
+        NodeTypeDefinition? ntDef, string selfPath,
+        IReadOnlyList<MeshNode>? sourcesOverride = null) =>
+        ResolveSources(ntDef, selfPath, sourcesOverride)
             .Take(1)
             .Select(nodes => nodes.Aggregate(
                 DateTimeOffset.MinValue,
@@ -368,14 +370,30 @@ internal class MeshNodeCompilationService(
     /// </para>
     /// </summary>
     public IObservable<ImmutableDictionary<string, long>> DiscoverSourceVersionSnapshot(
-        NodeTypeDefinition? ntDef, string selfPath) =>
-        GetSourceCollection(ntDef, selfPath)
+        NodeTypeDefinition? ntDef, string selfPath,
+        IReadOnlyList<MeshNode>? sourcesOverride = null) =>
+        ResolveSources(ntDef, selfPath, sourcesOverride)
             .Take(1)
             .Select(nodes => nodes
                 .Where(n => !string.IsNullOrEmpty(n.Path))
                 .Aggregate(
                     ImmutableDictionary<string, long>.Empty,
                     (acc, n) => acc.SetItem(n.Path, n.LastModified.UtcTicks)));
+
+    /// <summary>
+    /// Resolves the source set for a compile run. When the caller hands in a
+    /// <paramref name="sourcesOverride"/> (the freshly-observed set from
+    /// <c>HandleCreateRelease</c>'s uncached <c>IMeshService.ObserveQuery</c>),
+    /// use that — it's the authoritative post-update snapshot the trigger
+    /// already evaluated. Otherwise fall back to the cached SyncedQuery.
+    /// </summary>
+    private IObservable<IEnumerable<MeshNode>> ResolveSources(
+        NodeTypeDefinition? ntDef, string selfPath, IReadOnlyList<MeshNode>? sourcesOverride)
+    {
+        if (sourcesOverride is not null)
+            return Observable.Return<IEnumerable<MeshNode>>(sourcesOverride);
+        return GetSourceCollection(ntDef, selfPath);
+    }
 
     /// <summary>
     /// IObservable end-to-end. Source discovery rides the cached SyncedQuery
@@ -386,7 +404,8 @@ internal class MeshNodeCompilationService(
     /// patterns documented in <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
     private IObservable<(string? Path, ActivityLog Log)> CompileCore(
-        MeshNode node, NodeTypeDefinition? ntDef, string selfPath, ActivityLog log)
+        MeshNode node, NodeTypeDefinition? ntDef, string selfPath, ActivityLog log,
+        IReadOnlyList<MeshNode>? sourcesOverride = null)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         var executedQueries = CodeQueryResolver
@@ -395,11 +414,15 @@ internal class MeshNodeCompilationService(
             .ToList();
         var matchedCodePaths = new List<string>();
 
-        // Source discovery: pull the live (replayed-and-cached) collection from
-        // the workspace SyncedQuery registry. First call registers + subscribes
-        // upstream once; subsequent compiles for the same NodeType hit the
-        // Replay(1).RefCount() cache and skip the Initial re-fetch.
-        var discoverCodeFiles = GetSourceCollection(ntDef, selfPath)
+        // Source discovery: prefer the caller-supplied freshly-observed sources
+        // (HandleCreateRelease's uncached IMeshService.ObserveQuery snapshot —
+        // authoritative for the just-modified Code node), falling back to the
+        // workspace SyncedQuery registry's Replay(1) cache when no override is
+        // supplied. Without the override, the .Take(1) on the cached observable
+        // could pick up the pre-update Initial emission and the V2 compile would
+        // silently consume V1 source — that was the V1↔V2 mismatch root cause in
+        // CodeEditRecompileTest.
+        var discoverCodeFiles = ResolveSources(ntDef, selfPath, sourcesOverride)
             .Take(1)
             .Select(matches =>
             {
@@ -557,8 +580,10 @@ internal class MeshNodeCompilationService(
     }
 
     /// <inheritdoc />
-    public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(MeshNode node)
-        => GetAssemblyLocationWithLog(node).SelectMany(t =>
+    public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(
+        MeshNode node,
+        IReadOnlyList<MeshNode>? sourcesOverride = null)
+        => GetAssemblyLocationWithLog(node, sourcesOverride).SelectMany(t =>
         {
             var (assemblyLocation, log) = t;
             if (string.IsNullOrEmpty(assemblyLocation))
@@ -570,7 +595,7 @@ internal class MeshNodeCompilationService(
             // stays reactive (no Task bridges, no .Result deadlocks).
             var ntDef = node.Content as NodeTypeDefinition;
             var selfPath = ntDef != null ? node.Path : node.NodeType ?? node.Path;
-            return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "")
+            return DiscoverSourceVersionSnapshot(ntDef, selfPath ?? "", sourcesOverride)
                 .Select(snapshot => CompileResultFromAssembly(node, assemblyLocation, log, snapshot));
         });
 

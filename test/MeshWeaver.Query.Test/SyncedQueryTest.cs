@@ -403,4 +403,78 @@ public class SyncedQueryTest(ITestOutputHelper output)
         paths.Should().Contain(nodeB.Path,
             "the multi-query SyncedQuery must surface results from every upstream query");
     }
+
+    /// <summary>
+    /// Regression for the post-update freshness contract that the compile
+    /// pipeline depends on. Reproduces the original
+    /// <c>CodeEditRecompileTest.NodeType_RequestedReleasePath_PinsToHistoricalRelease</c>
+    /// failure in isolation:
+    ///
+    /// <list type="number">
+    ///   <item>Create a Markdown subject — first <c>.Take(1)</c> on the
+    ///         <see cref="SyncedQueryMeshNodes"/> returns its initial Name.</item>
+    ///   <item><c>UpdateNode</c> the subject's Name (await — UpdateNodeRequest's
+    ///         response only fires after persistence flush).</item>
+    ///   <item>A FRESH <c>.Take(1)</c> subscription (no <c>Replay(1).RefCount()</c>
+    ///         keep-alive carrying the cached pre-update emission) MUST observe
+    ///         the post-update Name.</item>
+    /// </list>
+    ///
+    /// <para>
+    /// The bug: the compile pipeline's <c>workspace.GetQuery(id, queries)</c>
+    /// re-fetch ran a <c>.Take(1)</c> after the source update and got the
+    /// pre-update snapshot — the upstream <see cref="IMeshQueryCore.ObserveQuery"/>
+    /// hadn't emitted the post-update <c>Updated</c> event by the time the
+    /// gated Scan fired its first downstream emission. Net effect: V2 compile
+    /// silently consumed V1 source, produced an assembly that looked like V1,
+    /// and every fresh instance hub bound to the wrong code.
+    /// </para>
+    ///
+    /// <para>
+    /// The robust pattern (per CLAUDE.md "stream.Where(...).Take(1)"):
+    /// callers that need post-update freshness MUST <c>.Where</c> on a property
+    /// that carries the update (Name here, LastModified for compile sources)
+    /// and only <c>.Take(1)</c> after the predicate matches. This test asserts
+    /// that contract resolves within a bounded timeout — a regression that
+    /// caused the snapshot to never converge would surface as a test timeout.
+    /// </para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task UpdatePropagation_FreshTake1_AfterAwaitedUpdate_SeesNewValue()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var observable = CreateQuery("$update-fresh-take1");
+
+        var seedNode = MakeSubject("freshness", "BeforeUpdate");
+        await NodeFactory.CreateNode(seedNode).FirstAsync().ToTask(ct);
+        var path = seedNode.Path;
+
+        // Phase 1: prime the cache + capture the initial Name. .Where ensures we
+        // wait for the just-created subject to surface even if the upstream
+        // index lags the create.
+        var beforeUpdate = await observable
+            .Where(arr => arr.Any(n => n.Path == path))
+            .Take(1)
+            .Timeout(15.Seconds())
+            .ToTask(ct);
+        var current = beforeUpdate.Single(n => n.Path == path);
+        current.Name.Should().Be("BeforeUpdate", "phase 1 sanity check");
+
+        // Phase 2: update + await persistence flush.
+        await NodeFactory.UpdateNode(current with { Name = "AfterUpdate" })
+            .FirstAsync().ToTask(ct);
+
+        // Phase 3: fresh subscription with .Where(...).Take(1) — the canonical
+        // "wait for the post-update emission" pattern. A regression that
+        // caused the synced collection to never emit the post-update value
+        // would surface here as a 15s timeout. Asserts the freshness contract
+        // the compile pipeline relies on.
+        var afterUpdate = await observable
+            .Where(arr => arr.Any(n => n.Path == path && n.Name == "AfterUpdate"))
+            .Take(1)
+            .Timeout(15.Seconds())
+            .ToTask(ct);
+        afterUpdate.Single(n => n.Path == path).Name.Should().Be("AfterUpdate",
+            "a fresh subscription with .Where(...).Take(1) must converge to the post-update value");
+    }
 }
