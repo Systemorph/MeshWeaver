@@ -21,6 +21,7 @@ using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown.Export.Configuration;
@@ -393,7 +394,30 @@ public static class MemexConfiguration
                 .AddUserProfileViews() // Register UserProfilePageView
             )
             .AddBlazor(layoutClient => layoutClient
-                .WithPortalConfiguration(c => c)
+                // 🚨 The portal hub is the per-user sub-hub that hosts the
+                // Blazor circuit's chat input, autocomplete, navigation
+                // tracking, etc. Without these registrations:
+                //   • Chat: AppendUserMessageResponse arrives as RawJson and the
+                //     original Observe() hangs forever ("Allocating agent…"
+                //     spinner). Need AI types in the portal's TypeRegistry.
+                //   • Activity tracking: TrackActivityRequest emits
+                //     "No handler found for delivery TrackActivityRequest in
+                //     portal/<userId>" on every login + navigation. Need the
+                //     graph-types handler chain (which includes
+                //     HandleTrackActivity) registered on the portal.
+                //   • Data layer: layout areas hosted in the portal (e.g. chat
+                //     view) hold remote streams that depend on workspace +
+                //     EntityStore serialisation; .AddData() wires that.
+                //
+                // Lives here in MemexConfiguration (not in MeshWeaver.Blazor's
+                // PortalApplication.DefaultPortalConfig) so the base portal
+                // library doesn't take a hard dependency on MeshWeaver.AI /
+                // MeshWeaver.Graph.
+                .WithPortalConfiguration(c =>
+                {
+                    c.TypeRegistry.AddAITypes();
+                    return c.AddData().WithGraphTypes();
+                })
             );
     }
 
