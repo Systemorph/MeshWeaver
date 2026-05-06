@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.Reactive;
+using System.Reactive.Concurrency;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
@@ -125,7 +127,10 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         }
     }
 
-    public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options) =>
+        Observable.FromAsync(ct => SaveNodeAsyncImpl(node, options, ct), Scheduler.Default);
+
+    private async Task<MeshNode> SaveNodeAsyncImpl(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
         var key = NormalizePath(node.Path);
         var isNew = !_cache.TryGetValue(key, out MeshNode? _) && !await _storageAdapter.ExistsAsync(node.Path, ct);
@@ -181,7 +186,11 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         return savedNode;
     }
 
-    public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
+    public IObservable<string> DeleteNode(string path, bool recursive = false) =>
+        Observable.FromAsync(ct => DeleteNodeAsyncImpl(path, recursive, ct), Scheduler.Default)
+            .Select(_ => path);
+
+    private async Task DeleteNodeAsyncImpl(string path, bool recursive, CancellationToken ct)
     {
         var key = NormalizePath(path);
 
@@ -200,7 +209,10 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(key, deletedNode));
     }
 
-    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options) =>
+        Observable.FromAsync(ct => MoveNodeAsyncImpl(sourcePath, targetPath, options, ct), Scheduler.Default);
+
+    private async Task<MeshNode> MoveNodeAsyncImpl(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct)
     {
         var sourceNode = await _storageAdapter.ReadAsync(sourcePath, options, ct)
             ?? throw new InvalidOperationException($"Source node not found: {sourcePath}");
@@ -309,11 +321,15 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         }
     }
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-        => _storageAdapter.ExistsAsync(path, ct);
+    public IObservable<bool> Exists(string path)
+        => Observable.FromAsync(ct => _storageAdapter.ExistsAsync(path, ct), Scheduler.Default);
 
-    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
-        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options) =>
+        Observable.FromAsync(ct => FindBestPrefixMatchAsyncImpl(fullPath, options, ct), Scheduler.Default);
+
+    private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsyncImpl(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(fullPath);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -348,7 +364,10 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         }
     }
 
-    public async Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options) =>
+        Observable.FromAsync(ct => AddCommentAsyncImpl(comment, options, ct), Scheduler.Default);
+
+    private async Task<Comment> AddCommentAsyncImpl(Comment comment, JsonSerializerOptions options, CancellationToken ct)
     {
         var savedComment = comment with
         {
@@ -368,19 +387,13 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         return savedComment;
     }
 
-    public async Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
-    {
-        // Find and remove the comment from all nodes - this is inefficient but works
-        // In a real implementation, we'd track comment -> node mapping
-        await Task.CompletedTask;
-    }
+    public IObservable<string> DeleteComment(string commentId) =>
+        // No-op stub on the file-system adapter; real implementations would delete the
+        // comment file. Cold observable so callers can compose without bridging.
+        Observable.Return(commentId);
 
-    public async Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
-    {
-        // Would need to search - not efficient without index
-        await Task.CompletedTask;
-        return null;
-    }
+    public IObservable<Comment?> GetComment(string commentId)
+        => Observable.Return<Comment?>(null);
 
     #endregion
 
@@ -389,14 +402,22 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
     public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
         => _storageAdapter.GetPartitionObjectsAsync(nodePath, subPath, options);
 
-    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
-        => _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
+    public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options) =>
+        Observable.FromAsync(
+                ct => _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct),
+                Scheduler.Default)
+            .Select(_ => objects);
 
-    public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-        => _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+    public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null) =>
+        Observable.FromAsync(
+                ct => _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct),
+                Scheduler.Default)
+            .Select(_ => subPath ?? nodePath);
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-        => _storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => Observable.FromAsync(
+            ct => _storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct),
+            Scheduler.Default);
 
     #endregion
 

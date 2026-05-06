@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -451,60 +452,73 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield return desc;
     }
 
-    public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options)
     {
         var segment = ResolvePartitionKey(node.Path)
             ?? PathPartition.GetFirstSegment(node.Path)
             ?? throw new ArgumentException($"Cannot save node: no partition found for path '{node.Path}'");
 
-        var store = await GetOrCreateStoreAsync(segment, ct);
-        var result = await store.SaveNodeAsync(node, options, ct);
-
-        // When a Partition node is saved, initialize the schema for the new partition
-        if (node.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace))
-            await EnsurePartitionSchemaAsync(def, ct);
-
-        return result;
+        return GetOrCreateStore(segment)
+            .SelectMany(store => store.SaveNode(node, options))
+            .SelectMany(saved =>
+                node.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace)
+                    ? EnsurePartitionSchema(def).Select(_ => saved)
+                    : Observable.Return(saved));
     }
 
     /// <summary>
-    /// Ensures the schema/tables exist for a partition definition.
-    /// Called when a Partition node is created (e.g., organization creation).
+    /// IObservable wrapper around <see cref="GetOrCreateStoreAsync"/>. Subscribers
+    /// compose with <c>SelectMany</c> instead of bridging to Task — keeps the
+    /// caller's reactive chain hot through the partition-resolution leg.
     /// </summary>
-    private async Task EnsurePartitionSchemaAsync(PartitionDefinition def, CancellationToken ct)
-    {
-        // Initialize schema and satellite tables (idempotent)
-        await _factory.InitializeDefaultPartitionsAsync([def], ct);
+    private IObservable<IStorageService> GetOrCreateStore(string firstSegment) =>
+        Observable.Defer(() =>
+            _stores.TryGetValue(firstSegment, out var existing)
+                ? Observable.Return(existing)
+                : Observable.FromAsync(ct => GetOrCreateStoreAsync(firstSegment, ct), Scheduler.Default));
 
-        // Provision the store for routing if not already present
-        if (!_stores.ContainsKey(def.Namespace))
-        {
-            var partition = await _factory.CreateStoreAsync(def.Namespace, ct);
-            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
-            if (_stores.TryAdd(def.Namespace, core))
-            {
-                var queryProvider = partition.QueryProvider
-                    ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
-                _queryProviders[def.Namespace] = queryProvider;
-                if (partition.VersionQuery != null)
-                    _versionQueries[def.Namespace] = partition.VersionQuery;
-            }
-        }
+    /// <summary>
+    /// Ensures the schema/tables exist for a partition definition. Returns
+    /// IObservable so the caller composes via SelectMany; the only Task→Observable
+    /// bridge is the leaf <see cref="IPartitionedStoreFactory"/> calls scheduled
+    /// on TaskPool.
+    /// </summary>
+    private IObservable<Unit> EnsurePartitionSchema(PartitionDefinition def) =>
+        Observable.Defer<Unit>(() =>
+            Observable.FromAsync(
+                ct => _factory.InitializeDefaultPartitionsAsync([def], ct),
+                Scheduler.Default)
+            .SelectMany(_ => _stores.ContainsKey(def.Namespace)
+                ? Observable.Return(Unit.Default)
+                : Observable.FromAsync(ct => _factory.CreateStoreAsync(def.Namespace, ct), Scheduler.Default)
+                    .Select(partition =>
+                    {
+                        var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+                        if (_stores.TryAdd(def.Namespace, core))
+                        {
+                            var queryProvider = partition.QueryProvider
+                                ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                            _queryProviders[def.Namespace] = queryProvider;
+                            if (partition.VersionQuery != null)
+                                _versionQueries[def.Namespace] = partition.VersionQuery;
+                        }
+                        return Unit.Default;
+                    })));
 
-    }
-
-    public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
+    public IObservable<string> DeleteNode(string path, bool recursive = false)
     {
         var segment = PathPartition.GetFirstSegment(path);
-        if (segment == null) return;
+        if (segment == null)
+            return Observable.Return(path);
 
         var store = TryGetStore(path);
-        if (store == null) return;
+        if (store == null)
+            return Observable.Return(path);
 
-        await store.DeleteNodeAsync(path, recursive, ct);
+        return store.DeleteNode(path, recursive);
     }
 
-    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options)
     {
         var sourceSegment = ResolvePartitionKey(sourcePath)
             ?? PathPartition.GetFirstSegment(sourcePath)
@@ -515,34 +529,66 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
         if (string.Equals(sourceSegment, targetSegment, StringComparison.OrdinalIgnoreCase))
         {
-            // Same partition: delegate directly
-            var store = await GetOrCreateStoreAsync(sourceSegment, ct);
-            return await store.MoveNodeAsync(sourcePath, targetPath, options, ct);
+            // Same partition: delegate directly.
+            return GetOrCreateStore(sourceSegment)
+                .SelectMany(store => store.MoveNode(sourcePath, targetPath, options));
         }
 
-        // Cross-partition move: move root node + all descendants
-        var sourceStore = await GetOrCreateStoreAsync(sourceSegment, ct);
-        var targetStore = await GetOrCreateStoreAsync(targetSegment, ct);
+        // Cross-partition move: move root node + all descendants. Compose via SelectMany;
+        // the only Task→Observable bridge is the leaf IAsyncEnumerable enumeration over
+        // descendants, scheduled on TaskPool via Observable.Create.
+        return GetOrCreateStore(sourceSegment)
+            .SelectMany(sourceStore => GetOrCreateStore(targetSegment)
+                .SelectMany(targetStore => sourceStore.GetNode(sourcePath, options)
+                    .SelectMany(sourceNode => sourceNode is null
+                        ? Observable.Throw<MeshNode>(
+                            new InvalidOperationException($"Source node not found: {sourcePath}"))
+                        : MoveCrossPartitionImpl(
+                            sourcePath, targetPath, options,
+                            sourceStore, targetStore, targetSegment, sourceNode))));
+    }
 
-        var sourceNode = await sourceStore.GetNode(sourcePath, options).FirstAsync().ToTask(ct)
-            ?? throw new InvalidOperationException($"Source node not found: {sourcePath}");
+    private IObservable<MeshNode> MoveCrossPartitionImpl(
+        string sourcePath, string targetPath, JsonSerializerOptions options,
+        IStorageService sourceStore, IStorageService targetStore, string targetSegment,
+        MeshNode sourceNode)
+    {
+        // Existence check on target — composed via the IObservable surface.
+        return targetStore.Exists(targetPath)
+            .SelectMany(targetExists => targetExists
+                ? Observable.Throw<MeshNode>(
+                    new InvalidOperationException($"Target path already exists: {targetPath}"))
+                : Observable.FromAsync(
+                        async ct =>
+                        {
+                            // Collect descendants — single async leaf into a list, no
+                            // hub round-trips, runs on TaskPool.
+                            var descendants = new List<MeshNode>();
+                            await foreach (var desc in sourceStore.GetDescendantsAsync(sourcePath, options).WithCancellation(ct))
+                                descendants.Add(desc);
+                            return descendants;
+                        }, Scheduler.Default)
+                    .SelectMany(descendants => MoveDescendantsAndRoot(
+                        sourcePath, targetPath, options,
+                        sourceStore, targetStore, targetSegment,
+                        sourceNode, descendants)));
+    }
 
-        if (await targetStore.ExistsAsync(targetPath, ct))
-            throw new InvalidOperationException($"Target path already exists: {targetPath}");
-
-        // Collect all descendants from source
-        var descendants = new List<MeshNode>();
-        await foreach (var desc in sourceStore.GetDescendantsAsync(sourcePath, options))
-            descendants.Add(desc);
-
-        // Move descendants first
-        foreach (var descendant in descendants)
+    private IObservable<MeshNode> MoveDescendantsAndRoot(
+        string sourcePath, string targetPath, JsonSerializerOptions options,
+        IStorageService sourceStore, IStorageService targetStore, string targetSegment,
+        MeshNode sourceNode, List<MeshNode> descendants)
+    {
+        // Save each descendant in sequence (preserves prior semantics).
+        // Concat ensures sequential subscription; each store.SaveNode is a cold
+        // IObservable that doesn't fire until subscribed.
+        var descSaves = descendants.Select(descendant =>
         {
             var newDescPath = targetPath + descendant.Path[sourcePath.Length..];
             var descTargetSeg = ResolvePartitionKey(newDescPath) ?? PathPartition.GetFirstSegment(newDescPath);
-            var descStore = descTargetSeg != null && !string.Equals(descTargetSeg, targetSegment, StringComparison.OrdinalIgnoreCase)
-                ? await GetOrCreateStoreAsync(descTargetSeg, ct)
-                : targetStore;
+            var descStoreObs = descTargetSeg != null && !string.Equals(descTargetSeg, targetSegment, StringComparison.OrdinalIgnoreCase)
+                ? GetOrCreateStore(descTargetSeg)
+                : Observable.Return(targetStore);
 
             var movedDesc = MeshNode.FromPath(newDescPath) with
             {
@@ -556,10 +602,9 @@ internal class RoutingPersistenceServiceCore : IStorageService
                 GlobalServiceConfigurations = descendant.GlobalServiceConfigurations
             };
 
-            await descStore.SaveNodeAsync(movedDesc, options, ct);
-        }
+            return descStoreObs.SelectMany(s => s.SaveNode(movedDesc, options));
+        });
 
-        // Move root node
         var movedNode = MeshNode.FromPath(targetPath) with
         {
             Name = sourceNode.Name,
@@ -572,12 +617,14 @@ internal class RoutingPersistenceServiceCore : IStorageService
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
 
-        await targetStore.SaveNodeAsync(movedNode, options, ct);
-
-        // Delete source tree (recursive)
-        await sourceStore.DeleteNodeAsync(sourcePath, recursive: true, ct);
-
-        return movedNode;
+        // Run all descendant saves, then the root save, then the source delete.
+        return (descSaves.Any()
+                ? descSaves.Aggregate((a, b) => a.IgnoreElements().Concat(b))
+                : Observable.Empty<MeshNode>())
+            .IgnoreElements()
+            .Concat(targetStore.SaveNode(movedNode, options))
+            .SelectMany(saved => sourceStore.DeleteNode(sourcePath, recursive: true)
+                .Select(_ => saved));
     }
 
     public async IAsyncEnumerable<MeshNode> SearchAsync(
@@ -605,26 +652,28 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield return node;
     }
 
-    public async Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-    {
-        await EnsureInitializedAsync(ct);
-        var store = TryGetStore(path);
-        if (store == null) return false;
-        return await store.ExistsAsync(path, ct);
-    }
+    public IObservable<bool> Exists(string path) =>
+        Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+            .SelectMany(_ =>
+            {
+                var store = TryGetStore(path);
+                return store == null
+                    ? Observable.Return(false)
+                    : store.Exists(path);
+            });
 
-    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
-        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var segment = PathPartition.GetFirstSegment(fullPath);
-        if (segment == null) return (null, 0);
-
-        await EnsureInitializedAsync(ct);
-        var store = TryGetStore(fullPath);
-        if (store == null) return (null, 0);
-
-        return await store.FindBestPrefixMatchAsync(fullPath, options, ct);
-    }
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options) =>
+        PathPartition.GetFirstSegment(fullPath) is null
+            ? Observable.Return<(MeshNode?, int)>((null, 0))
+            : Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+                .SelectMany(_ =>
+                {
+                    var store = TryGetStore(fullPath);
+                    return store == null
+                        ? Observable.Return<(MeshNode?, int)>((null, 0))
+                        : store.FindBestPrefixMatch(fullPath, options);
+                });
 
     #endregion
 
@@ -644,34 +693,35 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield return comment;
     }
 
-    public async Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var store = TryGetStore(comment.PrimaryNodePath)
-            ?? throw new ArgumentException($"No partition found for comment path '{comment.PrimaryNodePath}'");
-
-        return await store.AddCommentAsync(comment, options, ct);
-    }
-
-    public async Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
-    {
-        // Fan out to all partitions since we don't know which one has the comment
-        foreach (var store in _stores.Values)
+    public IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options) =>
+        Observable.Defer(() =>
         {
-            await store.DeleteCommentAsync(commentId, ct);
-        }
-    }
+            var store = TryGetStore(comment.PrimaryNodePath)
+                ?? throw new ArgumentException($"No partition found for comment path '{comment.PrimaryNodePath}'");
+            return store.AddComment(comment, options);
+        });
 
-    public async Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
-    {
-        // Fan out to all partitions
-        foreach (var store in _stores.Values)
-        {
-            var comment = await store.GetCommentAsync(commentId, ct);
-            if (comment != null)
-                return comment;
-        }
-        return null;
-    }
+    public IObservable<string> DeleteComment(string commentId) =>
+        // Fan out to all partitions since we don't know which one has the comment.
+        // Concat sequentially subscribes to each — none of them touch a hub.
+        Observable.Defer(() =>
+            _stores.Values
+                .Select(store => store.DeleteComment(commentId))
+                .Aggregate(
+                    Observable.Empty<string>().AsObservable(),
+                    (acc, next) => acc.IgnoreElements().Concat(next))
+                .DefaultIfEmpty(commentId));
+
+    public IObservable<Comment?> GetComment(string commentId) =>
+        // Fan out to all partitions sequentially; emit the first non-null match.
+        // Concat preserves cold/sequential semantics — no Task bridges between hops.
+        _stores.Values
+            .Select(store => store.GetComment(commentId))
+            .Aggregate(
+                (IObservable<Comment?>)Observable.Return<Comment?>(null),
+                (acc, next) => acc.SelectMany(found => found != null
+                    ? Observable.Return(found)
+                    : next));
 
     #endregion
 
@@ -686,26 +736,29 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield return obj;
     }
 
-    public async Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var store = TryGetStore(nodePath)
-            ?? throw new ArgumentException($"No partition found for path '{nodePath}'");
+    public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options) =>
+        Observable.Defer(() =>
+        {
+            var store = TryGetStore(nodePath)
+                ?? throw new ArgumentException($"No partition found for path '{nodePath}'");
+            return store.SavePartitionObjects(nodePath, subPath, objects, options);
+        });
 
-        await store.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
-    }
+    public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null) =>
+        Observable.Defer(() =>
+        {
+            var store = TryGetStore(nodePath);
+            return store == null
+                ? Observable.Return(subPath ?? nodePath)
+                : store.DeletePartitionObjects(nodePath, subPath);
+        });
 
-    public async Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
     {
         var store = TryGetStore(nodePath);
-        if (store == null) return;
-        await store.DeletePartitionObjectsAsync(nodePath, subPath, ct);
-    }
-
-    public async Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-    {
-        var store = TryGetStore(nodePath);
-        if (store == null) return null;
-        return await store.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
+        return store == null
+            ? Observable.Return<DateTimeOffset?>(null)
+            : store.GetPartitionMaxTimestamp(nodePath, subPath);
     }
 
     #endregion

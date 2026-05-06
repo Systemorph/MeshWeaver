@@ -207,8 +207,8 @@ internal sealed class MeshCatalog(
     {
         var fullPath = string.Join("/", segments);
 
-        // Step 1: prefix-match query at the DB layer. ⬇ FromAsync only here, at the leaf.
-        return Observable.FromAsync(() => Persistence.FindBestPrefixMatchAsync(fullPath))
+        // Step 1: prefix-match query at the DB layer. IObservable end-to-end.
+        return Persistence.FindBestPrefixMatch(fullPath)
             .SelectMany(prefix =>
             {
                 if (prefix.Item1 != null)

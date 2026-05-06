@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
@@ -305,8 +307,7 @@ public static class MeshExtensions
                         }
                         else if (persistence != null)
                         {
-                            typeExistsObs = Observable.FromAsync(token =>
-                                persistence.ExistsAsync(node.NodeType, token));
+                            typeExistsObs = persistence.Exists(node.NodeType);
                         }
                         else
                         {
@@ -834,17 +835,21 @@ public static class MeshExtensions
         if (nodesBottomUp.Count == 0)
             return Observable.Return(System.Reactive.Unit.Default);
 
-        return Observable.FromAsync(async ct =>
-        {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            linked.CancelAfter(timeout);
-            foreach (var node in nodesBottomUp)
+        // Sequential bottom-up delete via IObservable composition. Each storage.DeleteNode
+        // is a cold IObservable; Concat sequentially subscribes them. Timeout caps total
+        // duration. No await, no FirstAsync().ToTask() bridge.
+        return nodesBottomUp
+            .Select(node =>
             {
                 logger.LogDebug("[DeleteNode] storage.DeleteNode {Path}", node.Path);
-                await storage.DeleteNodeAsync(node.Path, recursive: false, linked.Token);
-            }
-            return System.Reactive.Unit.Default;
-        });
+                return storage.DeleteNode(node.Path, recursive: false).IgnoreElements().Cast<Unit>();
+            })
+            .Aggregate(
+                Observable.Empty<Unit>().AsObservable(),
+                (acc, next) => acc.Concat(next))
+            .Concat(Observable.Return(Unit.Default))
+            .Take(1)
+            .Timeout(timeout);
     }
 
     /// <summary>

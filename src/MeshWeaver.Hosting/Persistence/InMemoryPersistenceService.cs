@@ -1,4 +1,6 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
@@ -283,160 +285,179 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         _nodes.TryAdd(normalizedPath, node);
     }
 
-    public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var normalizedPath = NormalizePath(node.Path);
-        var isNew = !_nodes.ContainsKey(normalizedPath);
-
-        // Set LastModified to UtcNow if not specified (for in-memory case without file system)
-        var savedNode = node with
+    public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options) =>
+        Observable.Defer(() =>
         {
-            LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
-        };
+            var normalizedPath = NormalizePath(node.Path);
+            var isNew = !_nodes.ContainsKey(normalizedPath);
 
-        _nodes[normalizedPath] = savedNode;
+            var savedNode = node with
+            {
+                LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
+            };
 
-        if (_storageAdapter != null)
+            _nodes[normalizedPath] = savedNode;
+
+            // The only Task→IObservable bridge: the underlying IStorageAdapter
+            // (Npgsql/blob/file) is Task-based. Scheduler.Default ensures the
+            // wrapped Task starts on TaskPool — never on a hub/grain scheduler.
+            var writeAdapter = _storageAdapter is null
+                ? Observable.Return(savedNode)
+                : Observable.FromAsync(
+                        ct => _storageAdapter.WriteAsync(savedNode, options, ct),
+                        Scheduler.Default)
+                    .Select(_ => savedNode);
+
+            return writeAdapter.Do(_ =>
+                _changeNotifier?.NotifyChange(isNew
+                    ? DataChangeNotification.Created(normalizedPath, savedNode)
+                    : DataChangeNotification.Updated(normalizedPath, savedNode)));
+        });
+
+    public IObservable<string> DeleteNode(string path, bool recursive = false) =>
+        Observable.Defer(() =>
         {
-            await _storageAdapter.WriteAsync(savedNode, options, ct);
-        }
+            var normalizedPath = NormalizePath(path);
+            var keys = recursive
+                ? _nodes.Keys
+                    .Where(k => k.Equals(normalizedPath, StringComparison.OrdinalIgnoreCase)
+                                || k.StartsWith(normalizedPath + "/", StringComparison.OrdinalIgnoreCase))
+                    .ToList()
+                : new List<string> { normalizedPath };
 
-        // Notify change
-        _changeNotifier?.NotifyChange(isNew
-            ? DataChangeNotification.Created(normalizedPath, savedNode)
-            : DataChangeNotification.Updated(normalizedPath, savedNode));
+            // Remove each key in turn — synchronous dict ops, then a single
+            // Task→IObservable bridge per key for the storage-adapter delete.
+            // Aggregate via IgnoreElements().Concat so the chain stays cold and
+            // sequential without bridging back to Task between hops.
+            var deleteOps = keys.Select(key =>
+                Observable.Defer(() =>
+                {
+                    _nodes.TryRemove(key, out var removedNode);
 
-        return savedNode;
-    }
+                    var adapterDelete = _storageAdapter is null
+                        ? Observable.Return(System.Reactive.Unit.Default)
+                        : Observable.FromAsync(
+                            ct => _storageAdapter.DeleteAsync(key, ct),
+                            Scheduler.Default);
 
-    public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
-    {
-        var normalizedPath = NormalizePath(path);
+                    return adapterDelete.Do(_ =>
+                        _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(key, removedNode)));
+                }));
 
-        if (recursive)
+            return deleteOps
+                .Aggregate(
+                    Observable.Return(System.Reactive.Unit.Default),
+                    (acc, next) => acc.IgnoreElements().Concat(next))
+                .Select(_ => path);
+        });
+
+    public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options) =>
+        Observable.Defer(() =>
         {
-            var toDelete = _nodes.Keys
-                .Where(k => k.Equals(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
-                            k.StartsWith(normalizedPath + "/", StringComparison.OrdinalIgnoreCase))
+            var normalizedSource = NormalizePath(sourcePath);
+            var normalizedTarget = NormalizePath(targetPath);
+
+            if (!_nodes.TryGetValue(normalizedSource, out var sourceNode))
+                return Observable.Throw<MeshNode>(
+                    new InvalidOperationException($"Source node not found: {sourcePath}"));
+
+            if (_nodes.ContainsKey(normalizedTarget))
+                return Observable.Throw<MeshNode>(
+                    new InvalidOperationException($"Target path already exists: {targetPath}"));
+
+            var descendantKeys = _nodes.Keys
+                .Where(k => k.StartsWith(normalizedSource + "/", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            foreach (var key in toDelete)
+            // Build moved-node projections — pure data transforms, no I/O yet.
+            var movedRoot = MeshNode.FromPath(targetPath) with
             {
-                _nodes.TryRemove(key, out var removedNode);
-                if (_storageAdapter != null)
+                Name = sourceNode.Name,
+                NodeType = sourceNode.NodeType,
+                Icon = sourceNode.Icon,
+                Order = sourceNode.Order,
+                Content = sourceNode.Content,
+                AssemblyLocation = sourceNode.AssemblyLocation,
+                HubConfiguration = sourceNode.HubConfiguration,
+                GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
+            };
+
+            var movedDescendants = descendantKeys
+                .Select(descPath =>
                 {
-                    await _storageAdapter.DeleteAsync(key, ct);
-                }
-                // Notify deletion
-                _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(key, removedNode));
-            }
-        }
-        else
-        {
-            _nodes.TryRemove(normalizedPath, out var removedNode);
-            if (_storageAdapter != null)
-            {
-                await _storageAdapter.DeleteAsync(normalizedPath, ct);
-            }
-            // Notify deletion
-            _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(normalizedPath, removedNode));
-        }
-    }
-
-    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var normalizedSource = NormalizePath(sourcePath);
-        var normalizedTarget = NormalizePath(targetPath);
-
-        // Validate source exists
-        if (!_nodes.TryGetValue(normalizedSource, out var sourceNode))
-            throw new InvalidOperationException($"Source node not found: {sourcePath}");
-
-        // Validate target doesn't exist
-        if (_nodes.ContainsKey(normalizedTarget))
-            throw new InvalidOperationException($"Target path already exists: {targetPath}");
-
-        // Get all descendants
-        var descendants = _nodes.Keys
-            .Where(k => k.StartsWith(normalizedSource + "/", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        // Move the main node - need to create new MeshNode to ensure Prefix is updated
-        var movedNode = MeshNode.FromPath(targetPath) with
-        {
-            Name = sourceNode.Name,
-            NodeType = sourceNode.NodeType,
-            Icon = sourceNode.Icon,
-            Order = sourceNode.Order,
-            Content = sourceNode.Content,
-            AssemblyLocation = sourceNode.AssemblyLocation,
-            HubConfiguration = sourceNode.HubConfiguration,
-            GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
-        };
-        await SaveNodeAsync(movedNode, options, ct);
-
-        // Move descendants with updated paths
-        foreach (var descendantPath in descendants)
-        {
-            if (_nodes.TryGetValue(descendantPath, out var descendantNode))
-            {
-                // Calculate new path by replacing the source prefix with target
-                var relativePath = descendantPath.Substring(normalizedSource.Length);
-                var newPath = normalizedTarget + relativePath;
-
-                // Create new MeshNode to ensure Prefix is updated
-                var movedDescendant = MeshNode.FromPath(newPath) with
-                {
-                    Name = descendantNode.Name,
-                    NodeType = descendantNode.NodeType,
-                    Icon = descendantNode.Icon,
-                    Order = descendantNode.Order,
-                    Content = descendantNode.Content,
-                    AssemblyLocation = descendantNode.AssemblyLocation,
-                    HubConfiguration = descendantNode.HubConfiguration,
-                    GlobalServiceConfigurations = descendantNode.GlobalServiceConfigurations
-                };
-                await SaveNodeAsync(movedDescendant, options, ct);
-            }
-        }
-
-        // Migrate comments - update NodePath for all comments on moved nodes
-        var allOldPaths = new[] { normalizedSource }.Concat(descendants).ToList();
-        foreach (var oldPath in allOldPaths)
-        {
-            var newPath = oldPath == normalizedSource
-                ? normalizedTarget
-                : normalizedTarget + oldPath.Substring(normalizedSource.Length);
-
-            var commentsToMigrate = _comments.Values
-                .Where(c => NormalizePath(c.PrimaryNodePath ?? "").Equals(oldPath, StringComparison.OrdinalIgnoreCase))
+                    if (!_nodes.TryGetValue(descPath, out var descNode))
+                        return ((string Old, MeshNode Moved)?)null;
+                    var newPath = normalizedTarget + descPath[normalizedSource.Length..];
+                    var moved = MeshNode.FromPath(newPath) with
+                    {
+                        Name = descNode.Name,
+                        NodeType = descNode.NodeType,
+                        Icon = descNode.Icon,
+                        Order = descNode.Order,
+                        Content = descNode.Content,
+                        AssemblyLocation = descNode.AssemblyLocation,
+                        HubConfiguration = descNode.HubConfiguration,
+                        GlobalServiceConfigurations = descNode.GlobalServiceConfigurations
+                    };
+                    return ((string Old, MeshNode Moved)?)(descPath, moved);
+                })
+                .Where(t => t.HasValue)
+                .Select(t => t!.Value)
                 .ToList();
 
-            foreach (var comment in commentsToMigrate)
-            {
-                var migratedComment = comment with { PrimaryNodePath = newPath };
-                _comments[comment.Id] = migratedComment;
-            }
-        }
+            // Compose the move pipeline: save root → save descendants → migrate
+            // comments → delete sources. Each step is a cold IObservable; Concat
+            // sequentializes without bridging to Task.
+            var saveDescendantOps = movedDescendants
+                .Select(m => SaveNode(m.Moved, options).IgnoreElements().Cast<Unit>());
 
-        // Delete originals (the main node and all descendants)
-        _nodes.TryRemove(normalizedSource, out _);
-        if (_storageAdapter != null)
-        {
-            await _storageAdapter.DeleteAsync(normalizedSource, ct);
-        }
+            var saveRoot = SaveNode(movedRoot, options);
 
-        foreach (var descendantPath in descendants)
-        {
-            _nodes.TryRemove(descendantPath, out _);
-            if (_storageAdapter != null)
-            {
-                await _storageAdapter.DeleteAsync(descendantPath, ct);
-            }
-        }
+            var descendantsObs = saveDescendantOps.Aggregate(
+                (IObservable<Unit>)Observable.Return(Unit.Default),
+                (acc, next) => acc.IgnoreElements().Concat(next));
 
-        return movedNode;
-    }
+            return saveRoot
+                .SelectMany(saved => descendantsObs.Select(_ => saved))
+                .Do(_ =>
+                {
+                    // Migrate comments — pure dict ops, synchronous.
+                    var allOldPaths = new[] { normalizedSource }.Concat(descendantKeys);
+                    foreach (var oldPath in allOldPaths)
+                    {
+                        var newPath = oldPath == normalizedSource
+                            ? normalizedTarget
+                            : normalizedTarget + oldPath[normalizedSource.Length..];
+
+                        var commentsToMigrate = _comments.Values
+                            .Where(c => NormalizePath(c.PrimaryNodePath ?? "").Equals(oldPath, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+
+                        foreach (var comment in commentsToMigrate)
+                            _comments[comment.Id] = comment with { PrimaryNodePath = newPath };
+                    }
+                })
+                .SelectMany(saved =>
+                {
+                    // Delete originals — bridge per-key at the IStorageAdapter leaf.
+                    var oldPaths = new[] { normalizedSource }.Concat(descendantKeys).ToList();
+                    var deleteOps = oldPaths.Select(oldPath => Observable.Defer<Unit>(() =>
+                    {
+                        _nodes.TryRemove(oldPath, out _);
+                        return _storageAdapter is null
+                            ? Observable.Return(Unit.Default)
+                            : Observable.FromAsync(
+                                ct => _storageAdapter.DeleteAsync(oldPath, ct),
+                                Scheduler.Default);
+                    }));
+
+                    return deleteOps
+                        .Aggregate(
+                            Observable.Return(Unit.Default),
+                            (acc, next) => acc.IgnoreElements().Concat(next))
+                        .Select(_ => saved);
+                });
+        });
 
     public async IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
     {
@@ -474,21 +495,23 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         await Task.CompletedTask; // Keep async signature
     }
 
-    public async Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-    {
-        var normalizedPath = NormalizePath(path);
-        if (_nodes.ContainsKey(normalizedPath))
-            return true;
+    public IObservable<bool> Exists(string path) =>
+        Observable.Defer(() =>
+        {
+            var normalizedPath = NormalizePath(path);
+            if (_nodes.ContainsKey(normalizedPath))
+                return Observable.Return(true);
+            return _storageAdapter is null
+                ? Observable.Return(false)
+                : Observable.FromAsync(ct => _storageAdapter.ExistsAsync(path, ct), Scheduler.Default);
+        });
 
-        // Fall through to storage adapter on cache miss
-        if (_storageAdapter != null)
-            return await _storageAdapter.ExistsAsync(path, ct);
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options) =>
+        Observable.FromAsync(ct => FindBestPrefixMatchAsyncImpl(fullPath, options, ct), Scheduler.Default);
 
-        return false;
-    }
-
-    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
-        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsyncImpl(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(fullPath);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -572,29 +595,31 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         await Task.CompletedTask; // Keep async signature
     }
 
-    public Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var savedComment = comment with
+    public IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options) =>
+        Observable.Defer(() =>
         {
-            Id = string.IsNullOrEmpty(comment.Id) ? Guid.NewGuid().ToString() : comment.Id,
-            CreatedAt = comment.CreatedAt == default ? DateTimeOffset.UtcNow : comment.CreatedAt
-        };
+            var savedComment = comment with
+            {
+                Id = string.IsNullOrEmpty(comment.Id) ? Guid.NewGuid().ToString() : comment.Id,
+                CreatedAt = comment.CreatedAt == default ? DateTimeOffset.UtcNow : comment.CreatedAt
+            };
+            _comments[savedComment.Id] = savedComment;
+            return Observable.Return(savedComment);
+        });
 
-        _comments[savedComment.Id] = savedComment;
-        return Task.FromResult(savedComment);
-    }
+    public IObservable<string> DeleteComment(string commentId) =>
+        Observable.Defer(() =>
+        {
+            _comments.TryRemove(commentId, out _);
+            return Observable.Return(commentId);
+        });
 
-    public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
-    {
-        _comments.TryRemove(commentId, out _);
-        return Task.CompletedTask;
-    }
-
-    public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
-    {
-        _comments.TryGetValue(commentId, out var comment);
-        return Task.FromResult(comment);
-    }
+    public IObservable<Comment?> GetComment(string commentId) =>
+        Observable.Defer(() =>
+        {
+            _comments.TryGetValue(commentId, out var comment);
+            return Observable.Return(comment);
+        });
 
     #endregion
 
@@ -643,78 +668,70 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         }
     }
 
-    public async Task SavePartitionObjectsAsync(
+    public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
-        JsonSerializerOptions options,
-        CancellationToken ct = default)
-    {
-        var key = GetPartitionKey(nodePath, subPath);
-        var hadExisting = _partitionData.ContainsKey(key);
-
-        // Update in-memory cache
-        _partitionData[key] = objects.ToList();
-
-        // Persist to storage adapter if available
-        if (_storageAdapter != null)
+        JsonSerializerOptions options) =>
+        Observable.Defer(() =>
         {
-            await _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
-        }
+            var key = GetPartitionKey(nodePath, subPath);
+            var hadExisting = _partitionData.ContainsKey(key);
 
-        // Notify change for each object in the partition
-        if (_changeNotifier != null)
-        {
-            foreach (var obj in objects)
-            {
-                var notification = hadExisting
-                    ? DataChangeNotification.Updated(key, obj)
-                    : DataChangeNotification.Created(key, obj);
-                _changeNotifier.NotifyChange(notification);
-            }
-        }
-    }
+            _partitionData[key] = objects.ToList();
 
-    public async Task DeletePartitionObjectsAsync(
+            var adapterWrite = _storageAdapter is null
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : Observable.FromAsync(
+                    ct => _storageAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct),
+                    Scheduler.Default);
+
+            return adapterWrite
+                .Do(_ =>
+                {
+                    if (_changeNotifier != null)
+                    {
+                        foreach (var obj in objects)
+                            _changeNotifier.NotifyChange(hadExisting
+                                ? DataChangeNotification.Updated(key, obj)
+                                : DataChangeNotification.Created(key, obj));
+                    }
+                })
+                .Select(_ => objects);
+        });
+
+    public IObservable<string> DeletePartitionObjects(
         string nodePath,
-        string? subPath = null,
-        CancellationToken ct = default)
-    {
-        var key = GetPartitionKey(nodePath, subPath);
-
-        // Get existing objects for notification before removal
-        _partitionData.TryRemove(key, out var removedObjects);
-
-        // Delete from storage adapter if available
-        if (_storageAdapter != null)
+        string? subPath = null) =>
+        Observable.Defer<string>(() =>
         {
-            await _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
-        }
+            var key = GetPartitionKey(nodePath, subPath);
+            _partitionData.TryRemove(key, out var removedObjects);
 
-        // Notify deletion
-        if (_changeNotifier != null && removedObjects != null)
-        {
-            foreach (var obj in removedObjects)
-            {
-                _changeNotifier.NotifyChange(DataChangeNotification.Deleted(key, obj));
-            }
-        }
-    }
+            var adapterDelete = _storageAdapter is null
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : Observable.FromAsync(
+                    ct => _storageAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct),
+                    Scheduler.Default);
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
+            return adapterDelete
+                .Do(_ =>
+                {
+                    if (_changeNotifier != null && removedObjects != null)
+                        foreach (var obj in removedObjects)
+                            _changeNotifier.NotifyChange(DataChangeNotification.Deleted(key, obj));
+                })
+                .Select(_ => subPath ?? nodePath);
+        });
+
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(
         string nodePath,
-        string? subPath = null,
-        CancellationToken ct = default)
-    {
-        // Delegate to storage adapter if available
-        if (_storageAdapter != null)
-        {
-            return _storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
-        }
-
-        // For pure in-memory storage without adapter, return UtcNow as we can't track file timestamps
-        return Task.FromResult<DateTimeOffset?>(DateTimeOffset.UtcNow);
-    }
+        string? subPath = null) =>
+        _storageAdapter is null
+            ? Observable.Return<DateTimeOffset?>(DateTimeOffset.UtcNow)
+            : Observable.FromAsync(
+                ct => _storageAdapter.GetPartitionMaxTimestampAsync(nodePath, subPath, ct),
+                Scheduler.Default);
 
     #endregion
 }

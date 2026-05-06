@@ -106,22 +106,16 @@ internal interface IMeshStorage
     IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query);
 
     /// <summary>
-    /// Checks if a node exists at the given path.
+    /// Checks if a node exists at the given path. Cold IObservable — Subscribe
+    /// triggers the read.
     /// </summary>
-    /// <param name="path">The node path</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>True if the node exists</returns>
-    Task<bool> ExistsAsync(string path, CancellationToken ct = default);
+    IObservable<bool> Exists(string path);
 
     /// <summary>
     /// Finds the node whose path is the longest prefix of the given full path.
-    /// Uses a single query instead of iterating through ancestor paths.
+    /// Cold IObservable — Subscribe triggers the read.
     /// </summary>
-    /// <param name="fullPath">The full path to find the best prefix match for</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The matching node and number of matched segments, or (null, 0) if not found</returns>
-    Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
-        string fullPath, CancellationToken ct = default);
+    IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(string fullPath);
 
     /// <summary>
     /// Initializes the persistence service.
@@ -153,12 +147,10 @@ internal interface IMeshStorage
     IObservable<string> DeleteComment(string commentId);
 
     /// <summary>
-    /// Gets a single comment by ID.
+    /// Gets a single comment by ID. Cold IObservable — Subscribe triggers the
+    /// read. Emits null if not found.
     /// </summary>
-    /// <param name="commentId">The comment ID</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The comment or null if not found</returns>
-    Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default);
+    IObservable<Comment?> GetComment(string commentId);
 
     #endregion
 
@@ -192,14 +184,10 @@ internal interface IMeshStorage
     IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null);
 
     /// <summary>
-    /// Gets the newest modification timestamp across all objects in a partition (or sub-path).
-    /// Used for cache invalidation.
+    /// Gets the newest modification timestamp across all objects in a partition
+    /// (or sub-path). Cold IObservable — Subscribe triggers the read.
     /// </summary>
-    /// <param name="nodePath">The node path</param>
-    /// <param name="subPath">Optional sub-path within partition</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The newest modification timestamp, or null if no objects exist</returns>
-    Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+    IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null);
 
     #endregion
 

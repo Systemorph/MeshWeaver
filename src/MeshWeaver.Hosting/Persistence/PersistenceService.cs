@@ -42,24 +42,22 @@ internal class PersistenceService(
         => core.GetAllDescendantsAsync(parentPath, Options);
 
     public IObservable<MeshNode> SaveNode(MeshNode node)
-        => Observable.FromAsync(ct => core.SaveNodeAsync(node, Options, ct));
+        => core.SaveNode(node, Options);
 
     public IObservable<string> DeleteNode(string path, bool recursive = false)
-        => Observable.FromAsync(ct => core.DeleteNodeAsync(path, recursive, ct))
-            .Select(_ => path);
+        => core.DeleteNode(path, recursive);
 
     public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath)
-        => Observable.FromAsync(ct => core.MoveNodeAsync(sourcePath, targetPath, Options, ct));
+        => core.MoveNode(sourcePath, targetPath, Options);
 
     public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query)
         => core.SearchAsync(parentPath, query, Options);
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-        => core.ExistsAsync(path, ct);
+    public IObservable<bool> Exists(string path)
+        => core.Exists(path);
 
-    public Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
-        string fullPath, CancellationToken ct = default)
-        => core.FindBestPrefixMatchAsync(fullPath, Options, ct);
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(string fullPath)
+        => core.FindBestPrefixMatch(fullPath, Options);
 
     public Task InitializeAsync(CancellationToken ct = default)
         => core.InitializeAsync(ct);
@@ -70,14 +68,13 @@ internal class PersistenceService(
         => core.GetCommentsAsync(nodePath, Options);
 
     public IObservable<Comment> AddComment(Comment comment)
-        => Observable.FromAsync(ct => core.AddCommentAsync(comment, Options, ct));
+        => core.AddComment(comment, Options);
 
     public IObservable<string> DeleteComment(string commentId)
-        => Observable.FromAsync(ct => core.DeleteCommentAsync(commentId, ct))
-            .Select(_ => commentId);
+        => core.DeleteComment(commentId);
 
-    public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
-        => core.GetCommentAsync(commentId, ct);
+    public IObservable<Comment?> GetComment(string commentId)
+        => core.GetComment(commentId);
 
     #endregion
 
@@ -87,15 +84,13 @@ internal class PersistenceService(
         => core.GetPartitionObjectsAsync(nodePath, subPath, Options);
 
     public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects)
-        => Observable.FromAsync(ct => core.SavePartitionObjectsAsync(nodePath, subPath, objects, Options, ct))
-            .Select(_ => objects);
+        => core.SavePartitionObjects(nodePath, subPath, objects, Options);
 
     public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.FromAsync(ct => core.DeletePartitionObjectsAsync(nodePath, subPath, ct))
-            .Select(_ => subPath ?? nodePath);
+        => core.DeletePartitionObjects(nodePath, subPath);
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-        => core.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => core.GetPartitionMaxTimestamp(nodePath, subPath);
 
     #endregion
 
