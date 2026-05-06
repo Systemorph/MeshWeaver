@@ -888,9 +888,23 @@ public class AgentChatClient : IAgentChat
             ? "nodeType:Agent"
             : $"nodeType:Agent namespace:{contextPath} scope:selfAndAncestors";
 
-        // Two ObserveQuery streams — merge agent nodes from context hierarchy + Agent namespace
-        var contextAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q1));
-        var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent"));
+        // 🚨 Both streams MUST emit at least one value or CombineLatest hangs and chat
+        // never escapes "Allocating agent…". Seed each with an empty Initial-snapshot
+        // (StartWith) so even a stalled / mis-routed ObserveQuery doesn't gate the
+        // whole chat flow on agent discovery — if no agents exist the chat continues
+        // and SelectAgentAsync will fall back to its NullAgent path. Also Timeout
+        // each individual stream so a pathologically slow query is bounded.
+        var emptyInitial = new QueryResultChange<MeshNode>
+        {
+            ChangeType = QueryChangeType.Initial,
+            Items = Array.Empty<MeshNode>()
+        };
+        var contextAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q1))
+            .Timeout(TimeSpan.FromSeconds(10), Observable.Empty<QueryResultChange<MeshNode>>())
+            .StartWith(emptyInitial);
+        var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent"))
+            .Timeout(TimeSpan.FromSeconds(10), Observable.Empty<QueryResultChange<MeshNode>>())
+            .StartWith(emptyInitial);
 
         // CombineLatest: re-emit whenever either query updates (agent added/changed)
         return contextAgents.CombineLatest(globalAgents, (ctx, global) =>
