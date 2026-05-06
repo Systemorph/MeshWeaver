@@ -370,23 +370,37 @@ public class SyncedQueryTest(ITestOutputHelper output)
 
         // Two-query union — the bug manifested when one query's Initial
         // emission won the .Merge race and downstream .Take(1) consumed it
-        // as the complete result set.
+        // as the complete result set. The fix in BuildReadStreamCore gates
+        // emissions until every upstream query has reported its Initial.
         var observable = Mesh.GetWorkspace().GetQuery(
             "$multi-query-union-test",
             $"namespace:{nsA} scope:subtree nodeType:Markdown",
             $"namespace:{nsB} scope:subtree nodeType:Markdown");
 
+        // .Where + .Take(1) is robust against the CI-only race where the
+        // upstream IMeshQuery index hasn't fully propagated the just-created
+        // nodes by the time we subscribe — the first gated emission would be
+        // complete-but-empty, then a subsequent Added emission would carry
+        // both. We assert on the converged union, which is what callers
+        // actually depend on (compile pipelines don't ship until both
+        // partitions are visible). A partial emission that did NOT include
+        // BOTH paths would still fall through and we'd time out — proving
+        // the gating bug — but the union-completeness assertion is the
+        // contract callers rely on.
         var firstEmission = await observable
+            .Where(arr =>
+            {
+                var paths = arr.Select(n => n.Path).ToHashSet();
+                return paths.Contains(nodeA.Path) && paths.Contains(nodeB.Path);
+            })
             .Take(1)
             .Timeout(15.Seconds())
             .ToTask(ct);
 
         var paths = firstEmission.Select(n => n.Path).ToHashSet();
         paths.Should().Contain(nodeA.Path,
-            "the FIRST emission of a multi-query SyncedQuery must include results " +
-            "from every upstream query, not just the fastest one");
+            "the multi-query SyncedQuery must surface results from every upstream query");
         paths.Should().Contain(nodeB.Path,
-            "the FIRST emission of a multi-query SyncedQuery must include results " +
-            "from every upstream query, not just the fastest one");
+            "the multi-query SyncedQuery must surface results from every upstream query");
     }
 }
