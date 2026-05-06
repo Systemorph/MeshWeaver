@@ -128,7 +128,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         // The emission should contain the LayoutAreaControl pointing to the response message
     }
 
-    [Fact(Skip = "Timing-dependent: completion transition through layout area stream is slow")]
+    [Fact(Skip = "Layout-area observation chain doesn't propagate the executing→idle MeshNode transition within 10 s. Same threadStream.Update pattern works in ToolCallsVisibilityTest when read via threadStream directly — only the LayoutAreaReference→StreamingView→GetMeshNodeStream chain is slow. Needs investigation of whether StreamingView's GetMeshNodeStream subscribes to the same reducer the Update writes to.")]
     public async Task StreamingArea_WhenExecutionCompletes_ReturnsNull()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

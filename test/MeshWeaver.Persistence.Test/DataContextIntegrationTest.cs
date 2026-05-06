@@ -278,18 +278,24 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         content.Points.Should().Be(21);
     }
 
-    [Fact(Timeout = 10000, Skip = "NRE on CI Linux: catalog QueryAsync('path:graph/story1') returns a node whose .Content is not the seeded TestStory (CQRS lag — pre-seed in ConfigureMesh hasn't propagated to the index by query time). Pre-existing flake.")]
+    [Fact(Timeout = 10000)]
     public async Task Persistence_CanUpdateNodeWithContent()
     {
         // This test verifies that nodes with Content can be updated directly via persistence.
         // Note: CreateNodeAsync rejects existing nodes ("Node already exists"),
         // and UpdateNodeRequest requires DataChangeRequest handlers which are not
         // registered on the mesh hub in this minimal test setup.
+        //
+        // Both reads and the write go through the InMemoryPersistenceService directly,
+        // bypassing the catalog index — this avoids the CQRS lag that made the
+        // QueryAsync-based version flaky on CI.
 
-        // Static node read — no write before, catalog read is correct (no CQRS lag).
-        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+
+        var initialNode = await _persistence!.GetNodeAsync("graph/story1", SetupJsonOptions, ct);
         initialNode.Should().NotBeNull();
         var initialContent = initialNode!.Content as TestStory;
+        initialContent.Should().NotBeNull();
         initialContent!.Points.Should().Be(5);
 
         // Act - update node directly via persistence (SaveNodeAsync is create-or-update)
@@ -303,11 +309,9 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 13
             }
         };
-        await _persistence!.SaveNode(updatedNode, SetupJsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _persistence.SaveNode(updatedNode, SetupJsonOptions).FirstAsync().ToTask(ct);
 
-        // Static node read — write went through persistence directly (bypassing per-node hub),
-        // so the catalog query is the authoritative read here.
-        var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var persistedNode = await _persistence.GetNodeAsync("graph/story1", SetupJsonOptions, ct);
         persistedNode.Should().NotBeNull();
         var content = persistedNode!.Content as TestStory;
         content.Should().NotBeNull();
