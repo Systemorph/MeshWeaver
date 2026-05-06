@@ -1312,10 +1312,27 @@ public static class MeshExtensions
                         }
 
                         // Preserve creation stamps, refresh modification stamps.
+                        // Also preserve every [JsonIgnore] field on MeshNode — they
+                        // round-trip as null over the sync wire (workspace remote
+                        // reads / writes serialise to JSON), so an UpdateNode whose
+                        // input came from a FindNodeAsync (or any remote read) would
+                        // otherwise wipe the live transient state. AssemblyLocation
+                        // is the load-bearing case: a compile sets it on the OWN
+                        // hub via workspace.GetMeshNodeStream().Update(...), and a
+                        // subsequent metadata-only UpdateNode (e.g. setting
+                        // RequestedReleasePath) was clobbering it back to null —
+                        // every fresh instance hub then fell through to the
+                        // recompile path with the previous release's static
+                        // AssemblyLocation, surfacing as the V1↔V2 mismatch in
+                        // CodeEditRecompileTest.NodeType_RequestedReleasePath_*.
                         var nodeToSave = updatedNode with
                         {
                             State = updatedNode.State != default ? updatedNode.State : existingNode.State,
                             HubConfiguration = existingNode.HubConfiguration,
+                            AssemblyLocation = updatedNode.AssemblyLocation ?? existingNode.AssemblyLocation,
+                            GlobalServiceConfigurations = updatedNode.GlobalServiceConfigurations is { Count: > 0 } gsc
+                                ? gsc
+                                : existingNode.GlobalServiceConfigurations,
                             CreatedDate = existingNode.CreatedDate != default ? existingNode.CreatedDate : updatedNode.CreatedDate,
                             CreatedBy = existingNode.CreatedBy ?? updatedNode.CreatedBy,
                             LastModified = DateTimeOffset.UtcNow,

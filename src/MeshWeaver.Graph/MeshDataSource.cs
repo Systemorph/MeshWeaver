@@ -585,7 +585,11 @@ public static class MeshDataSourceExtensions
                                     o => o.ResponseFor(request));
                                 return;
                             }
-                            StartCompile(workspace, hub, compilationService, ownNode!, request);
+                            // Hand the freshly-observed sources straight to the compile —
+                            // the cached SyncedQuery the compile would otherwise re-fetch
+                            // can lag the just-modified Code node and cause V2 to compile
+                            // V1 source (CodeEditRecompileTest root cause).
+                            StartCompile(workspace, hub, compilationService, ownNode!, request, sources.Items);
                         });
                 }
                 else
@@ -616,7 +620,8 @@ public static class MeshDataSourceExtensions
         IMessageHub hub,
         IMeshNodeCompilationService compilationService,
         MeshNode pendingNode,
-        IMessageDelivery<CreateReleaseRequest> request)
+        IMessageDelivery<CreateReleaseRequest> request,
+        IReadOnlyList<MeshNode>? sourcesOverride = null)
     {
         var hubPath = hub.Address.Path;
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
@@ -639,7 +644,7 @@ public static class MeshDataSourceExtensions
 
         hub.Post(new CreateReleaseResponse(true), o => o.ResponseFor(request));
 
-        var sub = compilationService.CompileAndGetConfigurations(pendingNode)
+        var sub = compilationService.CompileAndGetConfigurations(pendingNode, sourcesOverride)
             .Take(1)
             .Select(result => new CompileOutcome(result, null, pendingNode))
             .Catch<CompileOutcome, Exception>(ex =>

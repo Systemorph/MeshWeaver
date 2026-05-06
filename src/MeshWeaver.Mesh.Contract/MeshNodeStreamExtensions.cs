@@ -161,7 +161,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 }
             }, observer.OnError);
 
-            var nodeId = _path?.Split('/').Last();
+            // Resolve the target Path: an explicit _path wins, otherwise default to the
+            // workspace's own hub path. The InstanceCollection holds the OWN MeshNode
+            // alongside any satellite nodes the data source has loaded (e.g. NodeType
+            // hubs accumulate _Release/* satellites after each compile). Looking up by
+            // terminal-segment Id alone is non-deterministic when multiple instances
+            // share the same Id; match on the full Path so the OWN node is always
+            // resolved correctly. When neither path is available, fall back to
+            // FirstOrDefault — only legacy single-instance shapes hit this branch.
+            var targetPath = _path ?? _workspace.Hub.Address.Path;
 
             try
             {
@@ -173,12 +181,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         throw new InvalidOperationException(
                             $"MeshNode collection not found. Available: [{string.Join(", ", store.Collections.Keys)}]");
 
-                    var current = (nodeId is null
-                        ? collection.Instances.Values.FirstOrDefault()
-                        : collection.Instances.GetValueOrDefault(nodeId)) as MeshNode;
+                    var current = string.IsNullOrEmpty(targetPath)
+                        ? collection.Instances.Values.OfType<MeshNode>().FirstOrDefault()
+                        : collection.Instances.Values.OfType<MeshNode>()
+                            .FirstOrDefault(n => string.Equals(n.Path, targetPath, StringComparison.OrdinalIgnoreCase));
                     if (current == null)
                         throw new InvalidOperationException(
-                            $"MeshNode '{_path}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
+                            $"MeshNode '{targetPath ?? "<own>"}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
 
                     var updated = update(current);
                     var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));

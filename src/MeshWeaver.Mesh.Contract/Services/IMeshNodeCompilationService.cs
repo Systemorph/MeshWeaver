@@ -44,8 +44,24 @@ public interface IMeshNodeCompilationService
     /// <summary>
     /// Reactive: emits the full compilation result (assembly + extracted NodeType
     /// configurations) for the node.
+    /// <para>
+    /// Optional <paramref name="sourcesOverride"/> lets the caller hand the freshly-
+    /// observed source set in instead of letting the compiler re-fetch via the cached
+    /// <c>workspace.GetQuery</c> SyncedQuery. The latter's first emission can be
+    /// stale on the just-modified Code node — the upstream <c>ObserveQuery</c> has
+    /// emitted the post-update event but the SyncedQuery's downstream gate only
+    /// fires once every query has reported, with whatever cached value sits in the
+    /// Replay(1) buffer. <c>HandleCreateRelease</c> already runs an uncached
+    /// <c>IMeshService.ObserveQuery</c> to evaluate <c>IsSourcesUpToDate</c>, so the
+    /// sources it has seen by the time it kicks off the compile are the ones the
+    /// compile must consume — passing them through closes the staleness window
+    /// between trigger and compile-side fetch (root cause of the V2-compile-bytes-
+    /// are-V1 outcome in <c>CodeEditRecompileTest</c>).
+    /// </para>
     /// </summary>
-    IObservable<NodeCompilationResult?> CompileAndGetConfigurations(MeshNode node);
+    IObservable<NodeCompilationResult?> CompileAndGetConfigurations(
+        MeshNode node,
+        IReadOnlyList<MeshNode>? sourcesOverride = null);
 
     /// <summary>
     /// Loads NodeType configurations from an already-compiled assembly without
