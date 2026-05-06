@@ -61,8 +61,8 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
             new Address("client", "comment-test"),
             config => config.AddLayoutClient());
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         return client;
     }
 

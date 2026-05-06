@@ -33,7 +33,7 @@ public class CosmosOrleansMeshTests(ITestOutputHelper output) : CosmosOrleansTes
     [Fact(Timeout = 60000)]
     public async Task PingPongWithCosmosPersistence()
     {
-        var client = await GetClientAsync();
+        var client = GetClient();
         var response = await client
             .Observe(new PingRequest(), o => o.WithTarget(CosmosTestMeshNodeAttribute.Address)).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         response.Should().NotBeNull();
@@ -136,11 +136,11 @@ public abstract class CosmosOrleansTestBase(ITestOutputHelper output) : TestBase
         await Cluster.DeployAsync();
     }
 
-    protected async Task<IMessageHub> GetClientAsync(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
+    protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(CreateClientAddress(), config ?? ConfigureClient);
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         return client;
     }
 

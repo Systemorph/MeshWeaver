@@ -106,8 +106,8 @@ public abstract class OrleansTestBase<TSiloConfigurator>(ITestOutputHelper outpu
             Name = userId,
             Email = $"{userId}@meshweaver.io"
         });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         return client;
     }
 }

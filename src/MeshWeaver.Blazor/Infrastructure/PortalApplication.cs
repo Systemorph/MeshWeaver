@@ -41,18 +41,8 @@ public class PortalApplication : IDisposable
         //   "The JSON payload for polymorphic interface or abstract type 'UiControl' must
         //    specify a type discriminator."
         config.TypeRegistry.AddMarkdownExportTypes();
-        return config.WithInitialization(hub => routingService.RegisterStreamAsync(hub)
-                .ContinueWith(t =>
-                {
-                    if (t.IsCompletedSuccessfully && t.Result is { } registry)
-                        hub.RegisterForDisposal(registry);
-                    else if (t.IsFaulted)
-                        hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger("MeshWeaver.Routing.PortalApplication")
-                            ?.LogWarning(t.Exception,
-                                "RegisterStreamAsync failed for {Address} — portal replies may not route back",
-                                hub.Address);
-                }, TaskContinuationOptions.ExecuteSynchronously))
+        return config.WithInitialization(hub =>
+                hub.RegisterForDisposal(routingService.RegisterStream(hub)))
             // Route kernel addresses to local hosted hubs — never delegate to grains.
             .WithRoutes(routes => routes.RouteAddressToHostedHub(
                 AddressExtensions.KernelType,

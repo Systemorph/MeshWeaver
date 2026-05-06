@@ -26,7 +26,7 @@ namespace MeshWeaver.Hosting
         }
 
 
-        public abstract Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback);
+        public abstract IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback);
 
 
 

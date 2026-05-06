@@ -83,8 +83,8 @@ public class OrganizationCompilationTest(ITestOutputHelper output) : TestBase(ou
             new Address("client", "orgtest"),
             config => config);
 
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
 
         // Act: send a PingRequest to an Organization instance node
         // This triggers MessageHubGrain activation, which calls EnsureNodeAssemblyAsync

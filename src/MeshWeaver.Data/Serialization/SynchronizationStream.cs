@@ -505,7 +505,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 }
                 return request.Processed();
             })
-            .WithInitialization(InitializeAsync)
+            .WithInitialization(hub => Observable.FromAsync(ct => InitializeAsync(hub, ct)).Select(_ => System.Reactive.Unit.Default))
             .WithInitializationGate(SynchronizationGate, d =>
                 // Init-time pass-through: messages that contribute to Current
                 // being populated (initial frame from owner, error responses).

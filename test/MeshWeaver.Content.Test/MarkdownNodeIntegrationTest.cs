@@ -520,7 +520,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -676,7 +676,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -710,7 +710,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -744,7 +744,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -778,7 +778,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 

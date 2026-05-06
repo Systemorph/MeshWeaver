@@ -84,8 +84,8 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             Name = "Test User",
             Email = "testuser@meshweaver.io"
         });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         return client;
     }
 

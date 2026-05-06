@@ -50,10 +50,9 @@ public class InitializationGateBypassTest(ITestOutputHelper output) : HubTestBas
             .WithInitializationGate("test-never-opens", _ => false)
             // BuildupAction runs only after InitializeHubRequest is processed.
             // If InitializeHubRequest were queued behind the gates, this never fires.
-            .WithInitialization((_, _) =>
+            .WithInitialization(_ =>
             {
                 _buildupRan.TrySetResult();
-                return Task.CompletedTask;
             });
 
     [Fact]

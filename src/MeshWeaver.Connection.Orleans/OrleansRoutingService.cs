@@ -185,20 +185,33 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
     }
 
-    public async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
+    public IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
 
-        // Also subscribe to Orleans memory stream so cross-process messages arrive
+        // Subscribe to the Orleans memory stream in the background. The returned
+        // disposable holds the subscription Task; DisposeAsync awaits it so we
+        // can call UnsubscribeAsync on the resolved handle. A tiny window exists
+        // between Register returning and SubscribeAsync completing during which
+        // cross-process messages on the stream are buffered by Orleans (memory
+        // streams replay-on-subscribe), so no messages are lost.
         var stream = GetStreamProvider(StreamProviders.Memory)
             .GetStream<IMessageDelivery>(address.ToString());
-        var subscription = await stream.SubscribeAsync((v, _) =>
+        var subscriptionTask = stream.SubscribeAsync((v, _) =>
             callback.Invoke(v, CancellationToken.None));
 
         return new AnonymousAsyncDisposable(async () =>
         {
             streams.TryRemove(address, out _);
-            await subscription.UnsubscribeAsync();
+            try
+            {
+                var subscription = await subscriptionTask;
+                await subscription.UnsubscribeAsync();
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address);
+            }
         });
     }
 

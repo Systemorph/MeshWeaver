@@ -102,8 +102,8 @@ public class SharedOrleansFixture : IAsyncLifetime
         var subscriptions = new List<IAsyncDisposable>(2);
 
         // Register on BOTH client and silo routing services so responses can route back
-        var clientSub = await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        var clientSub = Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         subscriptions.Add(clientSub);
 
         // Register on the SILO's routing service so responses route back to client.
@@ -117,7 +117,7 @@ public class SharedOrleansFixture : IAsyncLifetime
             ?? siloHost?.Services.GetService<IMessageHub>()?.ServiceProvider.GetService<IRoutingService>();
         if (siloRouting != null)
         {
-            var siloSub = await siloRouting.RegisterStreamAsync(client.Address,
+            var siloSub = siloRouting.RegisterStream(client.Address,
                 (d, _) => Task.FromResult(client.DeliverMessage(d)));
             subscriptions.Add(siloSub);
         }
