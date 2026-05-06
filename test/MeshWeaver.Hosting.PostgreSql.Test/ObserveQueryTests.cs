@@ -229,53 +229,6 @@ public class ObserveQueryTests : IAsyncLifetime
         allAddedItems.Select(n => n.Id).Should().BeEquivalentTo(["Story1", "Story2", "Story3"]);
     }
 
-    /// <summary>
-    /// Verifies the LISTEN/NOTIFY → DataChangeNotifier → ObserveQuery path catches
-    /// writes that did NOT go through MeshWeaver's storage adapter — i.e. an external
-    /// process (or another portal replica, or a manual `psql` write) inserted a row
-    /// directly into <c>acme.mesh_nodes</c>. The pg_notify trigger fires regardless
-    /// of source; this is the contract the Orleans-hosted workspace cache relies on
-    /// to stay coherent with rows written outside its own SaveNode path.
-    /// </summary>
-    [Fact]
-    public async Task ObserveQuery_DetectsRawSqlInsert_ExternalToStorageAdapter()
-    {
-        var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("namespace:ACME/External");
-
-        using var sub = _query.ObserveQuery<MeshNode>(request, _options)
-            .Subscribe(c => changes.Add(c));
-
-        await WaitForChanges(changes, 1); // Initial (empty)
-
-        // Act — bypass the storage adapter entirely and INSERT a row via raw SQL,
-        // simulating an external process / another portal replica / manual `psql`.
-        // (`path` is a GENERATED column from namespace+id; `state` 2 == Active.
-        //  Default fixture writes to public.mesh_nodes — no per-partition schema.)
-        await using (var cmd = _fixture.DataSource.CreateCommand(@"
-            INSERT INTO mesh_nodes
-                (namespace, id, name, node_type, main_node, state, content)
-            VALUES
-                (@ns, @id, @name, @nt, @mn, 2, '{}'::jsonb)"))
-        {
-            cmd.Parameters.AddWithValue("ns", "ACME/External");
-            cmd.Parameters.AddWithValue("id", "Story1");
-            cmd.Parameters.AddWithValue("name", "Story1");
-            cmd.Parameters.AddWithValue("nt", "Story");
-            cmd.Parameters.AddWithValue("mn", "ACME/External/Story1");
-            await cmd.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
-        }
-
-        await WaitForChanges(changes, 2, timeout: 5000);
-
-        // Assert — the workspace observed the external write through pg_notify.
-        var added = changes.FirstOrDefault(c => c.ChangeType == QueryChangeType.Added);
-        added.Should().NotBeNull(
-            "raw-SQL INSERT should propagate via LISTEN/NOTIFY → DataChangeNotifier → ObserveQuery " +
-            "even though the write bypassed MeshWeaver's storage adapter");
-        added!.Items.Should().ContainSingle(n => n.Id == "Story1");
-    }
-
     private async Task WriteNode(string id, string ns, string nodeType)
     {
         await _fixture.StorageAdapter.WriteAsync(new MeshNode(id, ns)

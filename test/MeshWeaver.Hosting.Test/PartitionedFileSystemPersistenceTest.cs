@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -78,8 +78,8 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         var acmeNode = MeshNode.FromPath("ACME") with { Name = "ACME Corp", NodeType = "Organization" };
         var contosoNode = MeshNode.FromPath("Contoso") with { Name = "Contoso Ltd", NodeType = "Organization" };
 
-        await _router.SaveNode(acmeNode, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(contosoNode, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(acmeNode, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(contosoNode, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert - Both nodes are accessible
         var acmeResult = await _router.GetNodeAsync("ACME", _jsonOptions, TestContext.Current.CancellationToken);
@@ -100,7 +100,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
             Name = "Insurance Article",
             NodeType = "Article"
         };
-        await _router.SaveNode(node, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(node, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert
         var result = await _router.GetNodeAsync("ACME/Article", _jsonOptions, TestContext.Current.CancellationToken);
@@ -116,7 +116,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task SaveNode_EmptyPath_ThrowsArgumentException()
     {
         var node = new MeshNode("", null) { Name = "Invalid" };
-        var act = () => _router.SaveNode(node, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var act = () => _router.SaveNodeAsync(node, _jsonOptions, TestContext.Current.CancellationToken);
         await act.Should().ThrowAsync<ArgumentException>();
     }
 
@@ -128,9 +128,9 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task GetChildren_RootLevel_ReturnsFromAllPartitions()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Fabrikam") with { Name = "Fabrikam" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Fabrikam") with { Name = "Fabrikam" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - root-level children
         var children = await _router.GetChildrenAsync(null, _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -144,10 +144,10 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task GetChildren_WithPath_RoutesToSinglePartition()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/Banking") with { Name = "Banking" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Banking") with { Name = "Banking" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - children of ACME only
         var children = await _router.GetChildrenAsync("ACME", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -161,8 +161,8 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     [Fact]
     public async Task GetChildren_EmptyString_ReturnsFromAllPartitions()
     {
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         var children = await _router.GetChildrenAsync("", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2);
@@ -176,10 +176,10 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task GetDescendants_RootLevel_FansOutToAllPartitions()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act
         var descendants = await _router.GetDescendantsAsync(null, _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -193,10 +193,10 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task GetDescendants_WithPath_RoutesToPartition()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/Article") with { Name = "Article" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Article") with { Name = "Article" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - descendants of ACME only
         var descendants = await _router.GetDescendantsAsync("ACME", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -214,9 +214,9 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Search_NoPath_SearchesAllPartitions()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv One" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/SubDiv") with { Name = "SubDiv Two" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/Banking") with { Name = "Banking Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv One" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/SubDiv") with { Name = "SubDiv Two" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Banking") with { Name = "Banking Division" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - search all partitions
         var results = await _router.SearchAsync(null, "SubDiv", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -230,8 +230,8 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Search_WithPath_RoutesToPartition()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv One" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/SubDiv") with { Name = "SubDiv Two" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv One" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/SubDiv") with { Name = "SubDiv Two" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - search ACME partition only
         var results = await _router.SearchAsync("ACME", "SubDiv", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -249,7 +249,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task AutoProvision_NewSegmentOnSave_CreatesPartition()
     {
         // Act - Save to a new partition
-        await _router.SaveNode(MeshNode.FromPath("NewOrg") with { Name = "New Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("NewOrg") with { Name = "New Organization" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert - Partition directory should be created
         var partitionDir = Path.Combine(_testDirectory, "NewOrg");
@@ -299,11 +299,11 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Delete_InOnePartition_DoesNotAffectOther()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME/ToDelete") with { Name = "To Delete" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/ToKeep") with { Name = "To Keep" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/ToDelete") with { Name = "To Delete" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/ToKeep") with { Name = "To Keep" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act
-        await _router.DeleteNode("ACME/ToDelete").FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.DeleteNodeAsync("ACME/ToDelete", ct: TestContext.Current.CancellationToken);
 
         // Assert
         var deleted = await _router.GetNodeAsync("ACME/ToDelete", _jsonOptions, TestContext.Current.CancellationToken);
@@ -318,7 +318,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Delete_NonexistentPartition_DoesNotThrow()
     {
         // Act & Assert - Should not throw
-        await _router.DeleteNode("NonExistent/SomePath").FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.DeleteNodeAsync("NonExistent/SomePath", ct: TestContext.Current.CancellationToken);
     }
 
     #endregion
@@ -329,14 +329,14 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Move_WithinSamePartition_Works()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME/OldName") with
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/OldName") with
         {
             Name = "Original Name",
             NodeType = "Department"
-        }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act
-        var moved = await _router.MoveNode("ACME/OldName", "ACME/NewName", _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var moved = await _router.MoveNodeAsync("ACME/OldName", "ACME/NewName", _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert
         moved.Path.Should().Be("ACME/NewName");
@@ -353,14 +353,14 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Move_AcrossPartitions_CopiesAndDeletes()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME/Department") with
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Department") with
         {
             Name = "Sales Department",
             NodeType = "Department"
-        }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - Move from ACME to Contoso
-        var moved = await _router.MoveNode("ACME/Department", "Contoso/Department", _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        var moved = await _router.MoveNodeAsync("ACME/Department", "Contoso/Department", _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert
         moved.Path.Should().Be("Contoso/Department");
@@ -381,7 +381,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     [Fact]
     public async Task Exists_ReturnsTrue_WhenNodeExistsInPartition()
     {
-        await _router.SaveNode(MeshNode.FromPath("ACME/Test") with { Name = "Test" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Test") with { Name = "Test" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         var exists = await _router.ExistsAsync("ACME/Test", TestContext.Current.CancellationToken);
         exists.Should().BeTrue();
@@ -402,10 +402,10 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Query_NoNamespace_FansOutToAll()
     {
         // Arrange - Save nodes in different partitions
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv", NodeType = "Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv", NodeType = "Division" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - Query for all Organizations (no path constraint, subtree scope includes root)
         var request = MeshQueryRequest.FromQuery("nodeType:Organization scope:subtree");
@@ -420,10 +420,10 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Query_WithNamespace_RoutesToPartition()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv", NodeType = "Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv", NodeType = "Division" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - Query within ACME namespace only
         var request = MeshQueryRequest.FromQuery("nodeType:Division path:ACME scope:descendants");
@@ -442,12 +442,12 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task PartitionObjects_RoutedByNodePath()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "Insurance" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "Insurance" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         var objects = new List<object> { new { Id = "obj1", Type = "LayoutArea" } };
 
         // Act
-        await _router.SavePartitionObjects("ACME", "layoutAreas", objects, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SavePartitionObjectsAsync("ACME", "layoutAreas", objects, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Assert
         var retrieved = await _router.GetPartitionObjectsAsync("ACME", "layoutAreas", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -462,8 +462,8 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task GetChildrenSecure_RootLevel_FansOutToAllPartitions()
     {
         // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Act - secure root-level children (now returns IObservable<MeshNode>)
         var children = await _router.GetChildrenSecure(null, "user1", _jsonOptions)

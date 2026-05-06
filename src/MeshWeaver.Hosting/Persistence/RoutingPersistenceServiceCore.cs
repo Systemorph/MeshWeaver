@@ -338,7 +338,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
     #region Node Operations
 
     public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => GetNodeAsyncCore(path, options, ct), Scheduler.Default);
+        => Observable.FromAsync(ct => GetNodeAsyncCore(path, options, ct));
 
     /// <summary>
     /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>.
@@ -451,17 +451,14 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield return desc;
     }
 
-    public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options) =>
-        Observable.FromAsync(ct => SaveNodeAsyncCore(node, options, ct), Scheduler.Default);
-
-    private async Task<MeshNode> SaveNodeAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
+    public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var segment = ResolvePartitionKey(node.Path)
             ?? PathPartition.GetFirstSegment(node.Path)
             ?? throw new ArgumentException($"Cannot save node: no partition found for path '{node.Path}'");
 
         var store = await GetOrCreateStoreAsync(segment, ct);
-        var result = await store.SaveNode(node, options).FirstAsync().ToTask(ct);
+        var result = await store.SaveNodeAsync(node, options, ct);
 
         // When a Partition node is saved, initialize the schema for the new partition
         if (node.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace))
@@ -496,11 +493,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     }
 
-    public IObservable<string> DeleteNode(string path, bool recursive = false) =>
-        Observable.FromAsync(ct => DeleteNodeAsyncCore(path, recursive, ct), Scheduler.Default)
-            .Select(_ => path);
-
-    private async Task DeleteNodeAsyncCore(string path, bool recursive, CancellationToken ct)
+    public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
     {
         var segment = PathPartition.GetFirstSegment(path);
         if (segment == null) return;
@@ -508,13 +501,10 @@ internal class RoutingPersistenceServiceCore : IStorageService
         var store = TryGetStore(path);
         if (store == null) return;
 
-        await store.DeleteNode(path, recursive).FirstAsync().ToTask(ct);
+        await store.DeleteNodeAsync(path, recursive, ct);
     }
 
-    public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options) =>
-        Observable.FromAsync(ct => MoveNodeAsyncCore(sourcePath, targetPath, options, ct), Scheduler.Default);
-
-    private async Task<MeshNode> MoveNodeAsyncCore(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct)
+    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var sourceSegment = ResolvePartitionKey(sourcePath)
             ?? PathPartition.GetFirstSegment(sourcePath)
@@ -527,7 +517,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         {
             // Same partition: delegate directly
             var store = await GetOrCreateStoreAsync(sourceSegment, ct);
-            return await store.MoveNode(sourcePath, targetPath, options).FirstAsync().ToTask(ct);
+            return await store.MoveNodeAsync(sourcePath, targetPath, options, ct);
         }
 
         // Cross-partition move: move root node + all descendants
@@ -566,7 +556,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
                 GlobalServiceConfigurations = descendant.GlobalServiceConfigurations
             };
 
-            await descStore.SaveNode(movedDesc, options).FirstAsync().ToTask(ct);
+            await descStore.SaveNodeAsync(movedDesc, options, ct);
         }
 
         // Move root node
@@ -582,10 +572,10 @@ internal class RoutingPersistenceServiceCore : IStorageService
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
 
-        await targetStore.SaveNode(movedNode, options).FirstAsync().ToTask(ct);
+        await targetStore.SaveNodeAsync(movedNode, options, ct);
 
         // Delete source tree (recursive)
-        await sourceStore.DeleteNode(sourcePath, recursive: true).FirstAsync().ToTask(ct);
+        await sourceStore.DeleteNodeAsync(sourcePath, recursive: true, ct);
 
         return movedNode;
     }
@@ -654,27 +644,20 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield return comment;
     }
 
-    public IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options) =>
-        Observable.FromAsync(ct => AddCommentAsyncCore(comment, options, ct), Scheduler.Default);
-
-    private async Task<Comment> AddCommentAsyncCore(Comment comment, JsonSerializerOptions options, CancellationToken ct)
+    public async Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var store = TryGetStore(comment.PrimaryNodePath)
             ?? throw new ArgumentException($"No partition found for comment path '{comment.PrimaryNodePath}'");
 
-        return await store.AddComment(comment, options).FirstAsync().ToTask(ct);
+        return await store.AddCommentAsync(comment, options, ct);
     }
 
-    public IObservable<string> DeleteComment(string commentId) =>
-        Observable.FromAsync(ct => DeleteCommentAsyncCore(commentId, ct), Scheduler.Default)
-            .Select(_ => commentId);
-
-    private async Task DeleteCommentAsyncCore(string commentId, CancellationToken ct)
+    public async Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
     {
         // Fan out to all partitions since we don't know which one has the comment
         foreach (var store in _stores.Values)
         {
-            await store.DeleteComment(commentId).FirstAsync().ToTask(ct);
+            await store.DeleteCommentAsync(commentId, ct);
         }
     }
 
@@ -703,27 +686,19 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield return obj;
     }
 
-    public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options) =>
-        Observable.FromAsync(ct => SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct), Scheduler.Default)
-            .Select(_ => objects);
-
-    private async Task SavePartitionObjectsAsyncCore(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct)
+    public async Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var store = TryGetStore(nodePath)
             ?? throw new ArgumentException($"No partition found for path '{nodePath}'");
 
-        await store.SavePartitionObjects(nodePath, subPath, objects, options).FirstAsync().ToTask(ct);
+        await store.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
     }
 
-    public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null) =>
-        Observable.FromAsync(ct => DeletePartitionObjectsAsyncCore(nodePath, subPath, ct), Scheduler.Default)
-            .Select(_ => subPath ?? nodePath);
-
-    private async Task DeletePartitionObjectsAsyncCore(string nodePath, string? subPath, CancellationToken ct)
+    public async Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
     {
         var store = TryGetStore(nodePath);
         if (store == null) return;
-        await store.DeletePartitionObjects(nodePath, subPath).FirstAsync().ToTask(ct);
+        await store.DeletePartitionObjectsAsync(nodePath, subPath, ct);
     }
 
     public async Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
@@ -738,7 +713,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
     #region Secure Operations
 
     public IObservable<MeshNode?> GetNodeSecure(string path, string? userId, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+        => Observable.FromAsync(ct => EnsureInitializedAsync(ct))
             .SelectMany(_ =>
             {
                 var store = TryGetStore(path);
@@ -751,7 +726,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string? parentPath,
         string? userId,
         JsonSerializerOptions options)
-        => Observable.FromAsync(() => EnsureInitializedAsync(), Scheduler.Default)
+        => Observable.FromAsync(() => EnsureInitializedAsync())
             .SelectMany(_ =>
             {
                 var segment = PathPartition.GetFirstSegment(parentPath);
@@ -776,7 +751,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string? parentPath,
         string? userId,
         JsonSerializerOptions options)
-        => Observable.FromAsync(() => EnsureInitializedAsync(), Scheduler.Default)
+        => Observable.FromAsync(() => EnsureInitializedAsync())
             .SelectMany(_ =>
             {
                 var segment = PathPartition.GetFirstSegment(parentPath);

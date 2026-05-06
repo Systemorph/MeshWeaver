@@ -111,7 +111,7 @@ read is stale; the merge loses concurrent writes; the full-node replace overwrit
 anything you didn't explicitly read. Let the owning hub apply the patch on its
 authoritative state.
 
-For full-node updates use `GetMeshNodeStream(<path>).Update(<lambda>)`.
+For full-node updates use `DataChangeRequest.WithUpdates(fullNode)`.
 
 ## Operations — named request types per intent
 

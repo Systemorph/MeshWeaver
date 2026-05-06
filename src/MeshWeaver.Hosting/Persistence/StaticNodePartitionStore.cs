@@ -57,18 +57,18 @@ internal sealed class StaticNodePartitionStore : IStorageService
     public IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath, JsonSerializerOptions options)
         => EnumerateDescendants(parentPath, includeSatellites: true).ToAsyncEnumerable();
 
-    public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options)
-        => Observable.Throw<MeshNode>(new System.NotSupportedException(
+    public Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+        => throw new System.NotSupportedException(
             $"StaticNodePartitionStore is read-only; cannot save '{node.Path}'. " +
-            "Static partitions hold IStaticNodeProvider seed data only."));
+            "Static partitions hold IStaticNodeProvider seed data only.");
 
-    public IObservable<string> DeleteNode(string path, bool recursive = false)
-        => Observable.Throw<string>(new System.NotSupportedException(
-            $"StaticNodePartitionStore is read-only; cannot delete '{path}'."));
+    public Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
+        => throw new System.NotSupportedException(
+            $"StaticNodePartitionStore is read-only; cannot delete '{path}'.");
 
-    public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options)
-        => Observable.Throw<MeshNode>(new System.NotSupportedException(
-            $"StaticNodePartitionStore is read-only; cannot move '{sourcePath}'."));
+    public Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
+        => throw new System.NotSupportedException(
+            $"StaticNodePartitionStore is read-only; cannot move '{sourcePath}'.");
 
     public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
         => EnumerateDescendants(parentPath, includeSatellites: true)
@@ -84,11 +84,11 @@ internal sealed class StaticNodePartitionStore : IStorageService
     public IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options)
         => System.Linq.AsyncEnumerable.Empty<Comment>();
 
-    public IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options)
-        => Observable.Throw<Comment>(new System.NotSupportedException("StaticNodePartitionStore is read-only."));
+    public Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
+        => throw new System.NotSupportedException("StaticNodePartitionStore is read-only.");
 
-    public IObservable<string> DeleteComment(string commentId)
-        => Observable.Throw<string>(new System.NotSupportedException("StaticNodePartitionStore is read-only."));
+    public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
+        => throw new System.NotSupportedException("StaticNodePartitionStore is read-only.");
 
     public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
         => Task.FromResult<Comment?>(null);
@@ -96,11 +96,11 @@ internal sealed class StaticNodePartitionStore : IStorageService
     public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
         => System.Linq.AsyncEnumerable.Empty<object>();
 
-    public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => Observable.Throw<IReadOnlyCollection<object>>(new System.NotSupportedException("StaticNodePartitionStore is read-only."));
+    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
+        => throw new System.NotSupportedException("StaticNodePartitionStore is read-only.");
 
-    public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => Observable.Throw<string>(new System.NotSupportedException("StaticNodePartitionStore is read-only."));
+    public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
+        => throw new System.NotSupportedException("StaticNodePartitionStore is read-only.");
 
     public Task<System.DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => Task.FromResult<System.DateTimeOffset?>(null);

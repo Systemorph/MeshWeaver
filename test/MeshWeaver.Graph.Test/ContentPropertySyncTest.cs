@@ -2,7 +2,6 @@ using System;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -47,7 +46,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request, CancellationToken ct)
     {
         var node = request.Message.Node;
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask(ct);
+        await _persistence.SaveNodeAsync(node, JsonOptions, ct);
         hub.Post(UpdateNodeResponse.Ok(node), o => o.ResponseFor(request));
         return request.Processed();
     }
@@ -74,7 +73,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             NodeType = nodeType,
             Content = content
         };
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(node, JsonOptions);
     }
 
     [HubFact]
@@ -217,7 +216,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             NodeType = "minimal",
             Content = initialContent
         };
-        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
+        await _persistence.SaveNodeAsync(node, JsonOptions);
 
         var host = GetHostWithHandler("minimal", c => c
             .AddMeshDataSource(ds => ds.WithContentType<MinimalItem>()));

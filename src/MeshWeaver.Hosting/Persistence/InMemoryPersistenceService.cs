@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
@@ -93,7 +92,7 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
     }
 
     public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => GetNodeAsyncCore(path, options, ct), Scheduler.Default);
+        => Observable.FromAsync(ct => GetNodeAsyncCore(path, options, ct));
 
     /// <summary>
     /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>;
@@ -284,10 +283,7 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         _nodes.TryAdd(normalizedPath, node);
     }
 
-    public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options) =>
-        Observable.FromAsync(ct => SaveNodeAsyncCore(node, options, ct), Scheduler.Default);
-
-    private async Task<MeshNode> SaveNodeAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
+    public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(node.Path);
         var isNew = !_nodes.ContainsKey(normalizedPath);
@@ -313,11 +309,7 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         return savedNode;
     }
 
-    public IObservable<string> DeleteNode(string path, bool recursive = false) =>
-        Observable.FromAsync(ct => DeleteNodeAsyncCore(path, recursive, ct), Scheduler.Default)
-            .Select(_ => path);
-
-    private async Task DeleteNodeAsyncCore(string path, bool recursive, CancellationToken ct)
+    public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(path);
 
@@ -351,10 +343,7 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         }
     }
 
-    public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options) =>
-        Observable.FromAsync(ct => MoveNodeAsyncCore(sourcePath, targetPath, options, ct), Scheduler.Default);
-
-    private async Task<MeshNode> MoveNodeAsyncCore(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct)
+    public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var normalizedSource = NormalizePath(sourcePath);
         var normalizedTarget = NormalizePath(targetPath);
@@ -384,7 +373,7 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
             HubConfiguration = sourceNode.HubConfiguration,
             GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
         };
-        await SaveNodeAsyncCore(movedNode, options, ct);
+        await SaveNodeAsync(movedNode, options, ct);
 
         // Move descendants with updated paths
         foreach (var descendantPath in descendants)
@@ -407,7 +396,7 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
                     HubConfiguration = descendantNode.HubConfiguration,
                     GlobalServiceConfigurations = descendantNode.GlobalServiceConfigurations
                 };
-                await SaveNodeAsyncCore(movedDescendant, options, ct);
+                await SaveNodeAsync(movedDescendant, options, ct);
             }
         }
 
@@ -583,22 +572,23 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         await Task.CompletedTask; // Keep async signature
     }
 
-    public IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options)
+    public Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var savedComment = comment with
         {
             Id = string.IsNullOrEmpty(comment.Id) ? Guid.NewGuid().ToString() : comment.Id,
             CreatedAt = comment.CreatedAt == default ? DateTimeOffset.UtcNow : comment.CreatedAt
         };
-        // Synchronous in-memory write — defer to Scheduler.Default so callers never
-        // execute the side effect on their own scheduler.
-        return Observable.Return(savedComment, Scheduler.Default)
-            .Do(c => _comments[c.Id] = c);
+
+        _comments[savedComment.Id] = savedComment;
+        return Task.FromResult(savedComment);
     }
 
-    public IObservable<string> DeleteComment(string commentId) =>
-        Observable.Return(commentId, Scheduler.Default)
-            .Do(id => _comments.TryRemove(id, out _));
+    public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
+    {
+        _comments.TryRemove(commentId, out _);
+        return Task.CompletedTask;
+    }
 
     public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
     {
@@ -653,20 +643,12 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         }
     }
 
-    public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(
-        string nodePath,
-        string? subPath,
-        IReadOnlyCollection<object> objects,
-        JsonSerializerOptions options) =>
-        Observable.FromAsync(ct => SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct), Scheduler.Default)
-            .Select(_ => objects);
-
-    private async Task SavePartitionObjectsAsyncCore(
+    public async Task SavePartitionObjectsAsync(
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
         JsonSerializerOptions options,
-        CancellationToken ct)
+        CancellationToken ct = default)
     {
         var key = GetPartitionKey(nodePath, subPath);
         var hadExisting = _partitionData.ContainsKey(key);
@@ -693,14 +675,10 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         }
     }
 
-    public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null) =>
-        Observable.FromAsync(ct => DeletePartitionObjectsAsyncCore(nodePath, subPath, ct), Scheduler.Default)
-            .Select(_ => subPath ?? nodePath);
-
-    private async Task DeletePartitionObjectsAsyncCore(
+    public async Task DeletePartitionObjectsAsync(
         string nodePath,
-        string? subPath,
-        CancellationToken ct)
+        string? subPath = null,
+        CancellationToken ct = default)
     {
         var key = GetPartitionKey(nodePath, subPath);
 
