@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.Sockets;
-using System.Threading.Channels;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -18,9 +19,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     private readonly IServiceProvider serviceProvider;
     private readonly ILogger<OrleansRoutingService> logger;
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
-    private readonly Channel<(IMessageDelivery Delivery, Address Address)> outboundChannel;
-    private readonly CancellationTokenSource cts = new();
-    private readonly Task consumerTask;
+    private readonly CompositeDisposable inFlight = new();
+    private volatile bool disposed;
 
     public OrleansRoutingService(
         IGrainFactory grainFactory,
@@ -30,114 +30,106 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         this.grainFactory = grainFactory;
         this.serviceProvider = serviceProvider;
         this.logger = logger;
-
-        outboundChannel = Channel.CreateUnbounded<(IMessageDelivery, Address)>(
-            new UnboundedChannelOptions { SingleReader = true });
-
-        consumerTask = Task.Run(() => ConsumeOutboundAsync(cts.Token));
     }
 
-    public Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken = default)
+    public IObservable<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
-        var target = delivery.Target;
-        if (target == null)
-            return Task.FromResult(delivery);
-
-        var address = GetHostAddress(target);
-
-        // 1. Check registered local streams (portals, in-process clients)
-        if (streams.TryGetValue(address, out var callback))
-            return callback(delivery, cancellationToken);
-
-        // 2. Enqueue for background delivery via RoutingGrain
-        outboundChannel.Writer.TryWrite((delivery, address));
-        return Task.FromResult(delivery.Forwarded(address));
-    }
-
-    private async Task ConsumeOutboundAsync(CancellationToken ct)
-    {
-        try
+        return Observable.Defer(() =>
         {
-            await foreach (var (delivery, address) in outboundChannel.Reader.ReadAllAsync(ct))
+            var target = delivery.Target;
+            if (target == null)
+                return Observable.Return(delivery);
+
+            var address = GetHostAddress(target);
+
+            // 1. Check registered local streams (portals, in-process clients).
+            //    Bridge the AsyncDelivery callback (Task-shaped) into the chain
+            //    via FromAsync — single-shot, no leak.
+            if (streams.TryGetValue(address, out var callback))
+                return Observable.FromAsync(ct => callback.Invoke(delivery, ct));
+
+            // 2. Background mesh dispatch via the routing grain. Path resolution
+            //    runs INSIDE the grain (silo-side) where the catalog is visible —
+            //    on the client, MeshConfiguration.Nodes is empty. Fire-and-forget
+            //    Subscribe — errors flow into SendDeliveryFailure inside the
+            //    chain. Tracked so Dispose can tear down outstanding work.
+            if (!disposed)
             {
-                _ = DeliverViaGrainAsync(delivery, address, ct);
+                var sub = new SingleAssignmentDisposable();
+                inFlight.Add(sub);
+                sub.Disposable = DispatchObservable(delivery, address)
+                    .Catch<IMessageDelivery, Exception>(ex =>
+                    {
+                        logger.LogError(ex, "Failed to deliver to {Address}", address);
+                        SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}");
+                        return Observable.Empty<IMessageDelivery>();
+                    })
+                    .Finally(() => inFlight.Remove(sub))
+                    .Subscribe(_ => { }, ex => logger.LogError(ex, "Background dispatch faulted for {Address}", address));
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // Normal shutdown — Dispose cancels the CTS and completes the channel.
-            // Don't filter on `ct.IsCancellationRequested` because the OperationCanceledException
-            // from ChannelReader can carry an unrelated token (from its internal ValueTask),
-            // which would let it propagate as an unhandled background-task exception.
-        }
+
+            return Observable.Return(delivery.Forwarded(address));
+        });
     }
 
-    private async Task DeliverViaGrainAsync(IMessageDelivery delivery, Address address, CancellationToken ct)
+    /// <summary>
+    /// Dispatches via the Orleans routing grain. The grain runs on the silo,
+    /// where the mesh catalog has the seeded nodes; path resolution + per-node
+    /// grain routing happen there. Retries with exponential backoff on
+    /// transient failures.
+    /// </summary>
+    private IObservable<IMessageDelivery> DispatchObservable(IMessageDelivery delivery, Address address)
     {
-        const int maxRetries = 5;
-        var delay = TimeSpan.FromMilliseconds(200);
-        var maxDelay = TimeSpan.FromSeconds(30);
-
-        for (var attempt = 0; attempt <= maxRetries; attempt++)
+        var addressPath = address.ToString();
+        var msgType = delivery.Message.GetType().Name;
+        var accessContext = delivery.AccessContext;
+        if (accessContext != null)
         {
-            try
-            {
-                // Propagate user identity via Orleans RequestContext so it's
-                // available on the silo side (in grain call filters and grains).
-                // This flows automatically with the Orleans message.
-                var accessContext = delivery.AccessContext;
-                if (accessContext != null)
+            RequestContext.Set("UserId", accessContext.ObjectId);
+            RequestContext.Set("UserName", accessContext.Name);
+        }
+
+        if (accessContext == null || msgType.Contains("Submit", StringComparison.Ordinal))
+            logger.LogWarning("Orleans: delivering {MessageType} to {Address}, accessContext={AccessUser}, sender={Sender}",
+                msgType, address, accessContext?.ObjectId ?? "(null)", delivery.Sender);
+        else
+            logger.LogDebug("Orleans: delivering {MessageType} to {Address}, sender={Sender}, target={Target}",
+                msgType, address, delivery.Sender, delivery.Target);
+
+        var grain = grainFactory.GetGrain<IRoutingGrain>("default");
+
+        return Observable.FromAsync(() => grain.RouteMessage(delivery))
+            .RetryWhen(errors => errors
+                .Select((ex, i) => (Exception: ex, Attempt: i))
+                .SelectMany(t =>
                 {
-                    RequestContext.Set("UserId", accessContext.ObjectId);
-                    RequestContext.Set("UserName", accessContext.Name);
-                }
-
-                var grain = grainFactory.GetGrain<IRoutingGrain>("default");
-                var msgType = delivery.Message.GetType().Name;
-                if (accessContext == null || msgType.Contains("Submit", StringComparison.Ordinal))
-                    logger.LogWarning("Orleans: delivering {MessageType} to {Address}, accessContext={AccessUser}, sender={Sender}",
-                        msgType, address, accessContext?.ObjectId ?? "(null)", delivery.Sender);
-                else
-                    logger.LogDebug("Orleans: delivering {MessageType} to {Address}, sender={Sender}, target={Target}",
-                        msgType, address, delivery.Sender, delivery.Target);
-                var result = await grain.RouteMessage(delivery);
-
+                    if (t.Attempt >= 5 || !IsTransientFailure(t.Exception))
+                        return Observable.Throw<long>(t.Exception);
+                    var delay = TimeSpan.FromMilliseconds(Math.Min(200 * Math.Pow(2, t.Attempt), 30_000));
+                    logger.LogDebug(t.Exception, "Transient failure delivering to {Address}, attempt {Attempt}/5, retrying in {Delay}ms",
+                        address, t.Attempt + 1, delay.TotalMilliseconds);
+                    return Observable.Timer(delay);
+                }))
+            .Do(result =>
+            {
                 if (result.State == MessageDeliveryState.Failed)
                 {
                     // Grain returned a non-transient failure (e.g., node doesn't exist).
-                    // Send DeliveryFailure back to the caller — do NOT retry.
-                    // Preserve the RoutingGrain's message (e.g. "No node found at 'X'")
-                    // so the GUI's IsExpectedUserActionFailure classifier can match it
-                    // and show a friendly "Error loading area: No node found" markdown
-                    // instead of a generic spinner.
+                    // Preserve the RoutingGrain's message so the GUI's
+                    // IsExpectedUserActionFailure classifier can match it.
                     var failureMessage = result.Properties.TryGetValue("Error", out var errObj) && errObj is string errStr
                         ? errStr
                         : $"Delivery failed to {address}";
                     logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {FailureMessage}",
-                        delivery.Message.GetType().Name, address, failureMessage);
+                        msgType, address, failureMessage);
                     SendDeliveryFailure(delivery, failureMessage);
-                    return;
                 }
-
-                logger.LogDebug("Orleans: delivered {MessageType} to {Address}, result={State}",
-                    delivery.Message.GetType().Name, address, result.State);
-                return;
-            }
-            catch (Exception ex) when (attempt < maxRetries && IsTransientFailure(ex))
-            {
-                logger.LogDebug(ex, "Transient failure delivering to {Address}, attempt {Attempt}/{MaxRetries}",
-                    address, attempt + 1, maxRetries);
-                await Task.Delay(delay, ct);
-                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, maxDelay.Ticks));
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to deliver to {Address} after {Attempts} attempts",
-                    address, attempt + 1);
-                SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}");
-                return;
-            }
-        }
+                else
+                {
+                    logger.LogDebug("Orleans: delivered {MessageType} to {Address}, result={State}",
+                        msgType, address, result.State);
+                }
+            });
     }
 
     private void SendDeliveryFailure(IMessageDelivery delivery, string message)
@@ -145,19 +137,8 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         try
         {
             // Route the failure back to the sender so hub.Observe callers get an
-            // exception. The previous shape used WithTarget(sender) ONLY — without
-            // copying the RequestId from the original delivery. That meant the
-            // DeliveryFailure arrived at the sender's hub but no callback matched
-            // (Observe matches on RequestId set by ResponseFor / WithRequestIdFrom),
-            // the failure was silently dropped, and the original Observe waited the
-            // full 30 s framework timeout. With JsonSynchronizationStream's recent
-            // SubscribeRequest fix that swallows TimeoutException as "expected on
-            // success", the failure stopped surfacing to the UI entirely — every
-            // routing-NotFound (e.g. /rbuergi before onboarding) became an endless
-            // spinner instead of an "Error loading area: No node found" markdown.
-            // WithRequestIdFrom is the right shape here (NOT ResponseFor — that
-            // also tries to set Target from the request's Sender, which we already
-            // set explicitly to delivery.Sender).
+            // exception. Use WithRequestIdFrom (NOT ResponseFor — that overrides
+            // Target with the request's Sender, which we already set explicitly).
             var meshHub = serviceProvider.GetService<IMessageHub>();
             if (meshHub != null)
             {
@@ -232,11 +213,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
     public void Dispose()
     {
-        cts.Cancel();
-        outboundChannel.Writer.TryComplete();
-
-        // Wait briefly for the consumer to drain
-        consumerTask.Wait(TimeSpan.FromSeconds(5));
-        cts.Dispose();
+        disposed = true;
+        inFlight.Dispose();
     }
 }

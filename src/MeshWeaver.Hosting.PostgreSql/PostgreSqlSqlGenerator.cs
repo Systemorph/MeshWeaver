@@ -84,9 +84,30 @@ public class PostgreSqlSqlGenerator
 
     /// <summary>
     /// Maps a selector for ORDER BY (returns typed column or JSONB extraction).
+    /// <para>
+    /// Supports SQL-function call syntax — e.g. <c>length(path)</c>,
+    /// <c>lower(name)</c>. The function name is allow-listed (no arbitrary SQL
+    /// injection); the inner selector is mapped through the same column map as
+    /// bare selectors. The canonical use is the routing-layer
+    /// "longest-matching-prefix" lookup: <c>sort:length(path)-desc</c> picks
+    /// the deepest match in a single round-trip.
+    /// </para>
     /// </summary>
     private static string MapOrderBySelector(string selector)
     {
+        // Detect `func(arg)` syntax. Allow-listed functions only.
+        var openParen = selector.IndexOf('(');
+        if (openParen > 0 && selector.EndsWith(")"))
+        {
+            var funcName = selector[..openParen].Trim();
+            var argName = selector[(openParen + 1)..^1].Trim();
+            if (AllowedSqlFunctions.Contains(funcName))
+            {
+                var mappedArg = MapOrderBySelector(argName);
+                return $"{funcName.ToLowerInvariant()}({mappedArg})";
+            }
+        }
+
         if (PropertyMap.TryGetValue(selector, out var mapped))
             return mapped;
 
@@ -105,6 +126,15 @@ public class PostgreSqlSqlGenerator
 
         return $"n.content->>'{selector}'";
     }
+
+    /// <summary>
+    /// Allow-listed SQL functions usable in <c>sort:func(field)-desc</c>.
+    /// Tight allow-list — no arbitrary SQL in the sort selector.
+    /// </summary>
+    private static readonly HashSet<string> AllowedSqlFunctions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "length", "lower", "upper"
+    };
 
     public (string WhereClause, Dictionary<string, object> Parameters) GenerateWhereClause(
         ParsedQuery query, string? userId = null, IReadOnlyCollection<string>? excludedNodeTypes = null)
@@ -227,6 +257,38 @@ public class PostgreSqlSqlGenerator
             sql.Append($" LIMIT {query.Limit.Value}");
 
         return (sql.ToString(), parameters);
+    }
+
+    /// <summary>
+    /// Multi-path overload — emits <c>n.path IN (@p0, @p1, ...)</c> for the
+    /// <see cref="QueryScope.Exact"/> + multi-value <c>path:a|b|c</c> case
+    /// (canonical use: routing-layer "longest-matching-prefix" lookup with
+    /// <c>sort:pathLength-desc limit:1</c>). Other scopes / single-path values
+    /// fall through to the single-path overload.
+    /// </summary>
+    public (string Clause, Dictionary<string, object> Parameters) GenerateScopeClause(
+        IReadOnlyList<string>? paths, QueryScope scope, bool useMainNode = false)
+    {
+        if (paths == null || paths.Count <= 1)
+            return GenerateScopeClause(paths is { Count: 1 } ? paths[0] : null, scope, useMainNode);
+
+        // Only Exact scope supports multi-path push-down today. Subtree/Children/etc.
+        // would require OR-ing N LIKE clauses — caller can either emit those itself
+        // or stick to single-path for non-Exact scopes.
+        if (scope != QueryScope.Exact)
+            return GenerateScopeClause(paths[0], scope, useMainNode);
+
+        var parameters = new Dictionary<string, object>();
+        var paramNames = new List<string>(paths.Count);
+        for (var i = 0; i < paths.Count; i++)
+        {
+            var name = $"@scopePath{i}";
+            paramNames.Add(name);
+            parameters[name] = paths[i].Trim('/');
+        }
+        var column = useMainNode ? "n.main_node" : "n.path";
+        var clause = $"{column} IN ({string.Join(", ", paramNames)})";
+        return (clause, parameters);
     }
 
     public (string Clause, Dictionary<string, object> Parameters) GenerateScopeClause(

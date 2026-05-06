@@ -23,7 +23,7 @@ public partial class QueryParser
             return ParsedQuery.Empty;
 
         var tokens = Tokenize(query);
-        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain) = ExtractReservedQualifiers(tokens);
+        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths) = ExtractReservedQualifiers(tokens);
 
         // Parse the filter expression from remaining tokens
         QueryNode? filter = null;
@@ -33,7 +33,7 @@ public partial class QueryParser
             filter = ParseOr(filterTokens, ref position);
         }
 
-        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain);
+        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths);
     }
 
     /// <summary>
@@ -228,8 +228,27 @@ public partial class QueryParser
             op = isNegated ? QueryOperator.NotEqual : QueryOperator.Equal;
         }
 
-        // Parse the value
-        var value = ParseSingleValue(input, ref i);
+        // Parse the value. At the top level we allow `(` and `)` inside the value
+        // so SQL-function calls in sort selectors work — e.g. `sort:length(path)-desc`.
+        // The `(A OR B OR C)` list form is detected above (immediately-after-colon),
+        // so we never confuse a list with an embedded paren here.
+        var value = ParseSingleValue(input, ref i, stopAtParens: false);
+
+        // Grep-style `|` alternation — `field:A|B|C` is equivalent to
+        // `field:(A OR B OR C)` but more concise, modelled on `grep -E`'s
+        // alternation operator. Pushed down to `IN(...)` by query backends.
+        // Only triggers for plain Equal/NotEqual (not for >, <, >=, <=, Like).
+        if ((op == QueryOperator.Equal || op == QueryOperator.NotEqual)
+            && !value.Contains('*')
+            && value.Contains('|'))
+        {
+            var parts = value.Split('|', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length > 1)
+            {
+                op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
+                return (new QueryCondition(field, op, parts), i - start);
+            }
+        }
 
         // Check for wildcard pattern
         if (!isNegated && (op == QueryOperator.Equal || op == QueryOperator.NotEqual))
@@ -294,8 +313,16 @@ public partial class QueryParser
 
     /// <summary>
     /// Parses a single value, handling quotes.
+    /// <para>
+    /// <paramref name="stopAtParens"/> = true (default) — used inside list
+    /// expressions <c>field:(A OR B OR C)</c> where each value must end at the
+    /// closing <c>)</c>. <paramref name="stopAtParens"/> = false — used at the
+    /// top level so SQL-function syntax like <c>length(path)</c> stays inside
+    /// the value. The list form is already disambiguated by the
+    /// immediately-after-colon <c>(</c> check in <c>ParseFieldValue</c>.
+    /// </para>
     /// </summary>
-    private string ParseSingleValue(string input, ref int i)
+    private string ParseSingleValue(string input, ref int i, bool stopAtParens = true)
     {
         // Skip whitespace
         while (i < input.Length && char.IsWhiteSpace(input[i]))
@@ -318,15 +345,34 @@ public partial class QueryParser
             return value;
         }
 
-        // Unquoted value - read until whitespace or parentheses.
+        // Unquoted value - read until whitespace.
         // OR keywords are handled by ParseListValues, not here —
         // detecting OR mid-value causes false positives (e.g. "Operator" → "Operat" + OR).
+        // Paren handling: when stopAtParens=true (inside list `field:(A OR B)`),
+        // stop at any unescaped paren. When false (top-level value), we still need
+        // to stop at the structural CLOSING `)` of an enclosing group like
+        // `(a:1 b:2)` — but NOT at the closing `)` of a function call inside the
+        // value like `length(path)`. Track depth: balanced internal parens stay
+        // in the value; an unbalanced `)` exits.
         var valueStart = i;
+        var depth = 0;
         while (i < input.Length)
         {
             var c = input[i];
-            if (char.IsWhiteSpace(c) || c == ')' || c == '(')
+            if (char.IsWhiteSpace(c))
                 break;
+            if (stopAtParens && (c == ')' || c == '('))
+                break;
+            if (!stopAtParens)
+            {
+                if (c == '(')
+                    depth++;
+                else if (c == ')')
+                {
+                    if (depth == 0) break; // structural close of an enclosing group
+                    depth--;
+                }
+            }
 
             i++;
         }
@@ -338,12 +384,13 @@ public partial class QueryParser
     /// Extracts reserved qualifiers (path, namespace, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
-    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain)
+    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain, IReadOnlyList<string>? Paths)
         ExtractReservedQualifiers(List<Token> tokens)
     {
         var filterTokens = new List<Token>();
         var textSearchParts = new List<string>();
         string? path = null;
+        IReadOnlyList<string>? paths = null;
         var scope = QueryScope.Exact;
         bool explicitScope = false;
         bool namespaceUsed = false;
@@ -369,7 +416,19 @@ public partial class QueryParser
 
                 if (field.Equals("path", StringComparison.OrdinalIgnoreCase))
                 {
-                    path = value;
+                    // Multi-value `path:a|b|c` — `In`/`NotIn` carries the
+                    // alternation list. Backends use the list to push down
+                    // `WHERE path IN (...)`. Single-value form sets only Path.
+                    if (token.Condition.Operator is QueryOperator.In or QueryOperator.NotIn
+                        && token.Condition.Values.Length > 1)
+                    {
+                        paths = token.Condition.Values;
+                        path = token.Condition.Values[0];
+                    }
+                    else
+                    {
+                        path = value;
+                    }
                     continue;
                 }
 
@@ -473,7 +532,7 @@ public partial class QueryParser
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
-        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain);
+        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths);
     }
 
     /// <summary>

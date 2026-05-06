@@ -284,18 +284,19 @@ internal sealed class MeshCatalog(
         {
             var d = depth;
             var testPath = string.Join("/", segments.Take(d));
-            probes.Add(Observable.FromAsync(async () =>
-            {
-                // ⬇ FromAsync wraps the DB hit; first child existence check.
-                await using var enumerator = Persistence.GetChildrenAsync(testPath).GetAsyncEnumerator();
-                if (await enumerator.MoveNextAsync())
+            // Pure IObservable — no await, no IAsyncEnumerable bridge inside the
+            // chain. Persistence.GetChildren emits one snapshot collection;
+            // mapping to .Count > 0 yields the existence answer.
+            probes.Add(Persistence.GetChildren(testPath)
+                .Take(1)
+                .Select(children =>
                 {
+                    if (children.Count == 0)
+                        return ((MeshNode?)null, 0);
                     var ns = d > 1 ? string.Join("/", segments.Take(d - 1)) : null;
                     var virt = new MeshNode(segments[d - 1], ns) { Name = segments[d - 1] };
                     return ((MeshNode?)virt, d);
-                }
-                return ((MeshNode?)null, 0);
-            }));
+                }));
         }
         return Observable.Concat(probes)
             .Where(t => t.Item1 != null)

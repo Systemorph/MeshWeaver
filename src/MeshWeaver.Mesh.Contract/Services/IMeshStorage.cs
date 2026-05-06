@@ -27,6 +27,18 @@ internal interface IMeshStorage
     IObservable<MeshNode?> GetNode(string path);
 
     /// <summary>
+    /// Gets all child nodes at the specified parent path. Cold IObservable —
+    /// Subscribe triggers the read; emits one snapshot collection (and may emit
+    /// further snapshots if a backing implementation is live). Composes safely
+    /// from hub-handler contexts; no Task await on the calling scheduler. Per
+    /// Doc/Architecture/AsynchronousCalls.md.
+    /// </summary>
+    IObservable<IReadOnlyCollection<MeshNode>> GetChildren(string? parentPath) =>
+        ObservableTopNExtensions.ToObservableSequence(GetChildrenAsync(parentPath))
+            .ToList()
+            .Select(list => (IReadOnlyCollection<MeshNode>)list);
+
+    /// <summary>
     /// Gets all child nodes at the specified parent path.
     /// </summary>
     /// <param name="parentPath">Parent path (empty or null for root level)</param>

@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 
 namespace MeshWeaver.Messaging;
 
@@ -10,6 +12,20 @@ public record RouteConfiguration(IMessageHub Hub)
     internal readonly Dictionary<Address, HashSet<Address>> RoutedMessageAddresses = new();
 
     public RouteConfiguration WithHandler(AsyncDelivery handler) => this with { Handlers = Handlers.Add(handler) };
+
+    /// <summary>
+    /// Observable-shaped routing handler — the canonical form per
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>. The handler returns
+    /// <see cref="IObservable{T}"/> end-to-end; the framework bridges to the
+    /// rule chain's <see cref="AsyncDelivery"/> at this single edge — call sites
+    /// must NOT bridge manually with <c>.FirstAsync().ToTask()</c>.
+    /// </summary>
+    public RouteConfiguration WithHandler(Func<IMessageDelivery, IObservable<IMessageDelivery>> observableHandler) =>
+        this with
+        {
+            Handlers = Handlers.Add((delivery, ct) =>
+                observableHandler(delivery).FirstAsync().ToTask(ct))
+        };
 
     /// <summary>
     /// Routes addresses of a specific type (by type string) to a hub created by the factory.

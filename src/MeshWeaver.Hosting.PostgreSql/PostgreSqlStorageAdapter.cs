@@ -440,10 +440,14 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
             activityTable, userActivityTable, excludedNodeTypes);
-        if (!string.IsNullOrEmpty(effectivePath))
+        if (!string.IsNullOrEmpty(effectivePath) || (query.Paths is { Count: > 1 }))
         {
-            var (scopeClause, scopeParams) = generator.GenerateScopeClause(
-                effectivePath, query.Scope, useMainNode: satelliteRedirect);
+            // Multi-value `path:a|b|c` push-down → `n.path IN (...)`. Routing-layer
+            // "longest-matching-prefix" lookups go through this path. Single-path
+            // queries use the existing scope-clause generator unchanged.
+            var (scopeClause, scopeParams) = query.Paths is { Count: > 1 }
+                ? generator.GenerateScopeClause(query.Paths, query.Scope, useMainNode: satelliteRedirect)
+                : generator.GenerateScopeClause(effectivePath, query.Scope, useMainNode: satelliteRedirect);
 
             if (!string.IsNullOrEmpty(scopeClause))
             {

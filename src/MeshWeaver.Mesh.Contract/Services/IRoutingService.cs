@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Messaging;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -8,12 +8,13 @@ namespace MeshWeaver.Mesh.Services;
 public interface IRoutingService
 {
     /// <summary>
-    /// Routes the delivery in the mesh. 
+    /// Routes the delivery in the mesh. Returns an <see cref="IObservable{T}"/>
+    /// that emits the routed delivery (typically <c>Forwarded</c>) once and
+    /// completes. Errors propagate via <c>OnError</c>. Per
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c> — no <c>Task&lt;T&gt;</c>
+    /// on hub-reachable surfaces.
     /// </summary>
-    /// <param name="delivery"></param>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken = default);
+    IObservable<IMessageDelivery> DeliverMessage(IMessageDelivery delivery);
 
 
     /// <summary>

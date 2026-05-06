@@ -486,6 +486,122 @@ public class QuerySyntaxTests
 
     #endregion
 
+    #region Pipe Alternation (`field:A|B|C`) — pushed down as `IN (...)`
+
+    [Fact]
+    public async Task PipeAlternation_NodeType_ReturnsAllListedTypes()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        // Equivalent to nodeType:(Story OR Bug) — concise grep-style form.
+        var request = MeshQueryRequest.FromQuery("nodeType:Story|Bug path:ACME scope:descendants");
+
+        var results = await CollectResults(query, request);
+
+        results.Should().HaveCount(4);
+        results.Select(n => n.NodeType).Distinct()
+            .Should().BeEquivalentTo("Story", "Bug");
+    }
+
+    [Fact]
+    public async Task PipeAlternation_NegatedNodeType_ExcludesAllListedTypes()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("-nodeType:Story|Bug path:ACME scope:descendants");
+
+        var results = await CollectResults(query, request);
+
+        // Only Alice (Person) remains
+        results.Should().HaveCount(1);
+        results[0].NodeType.Should().Be("Person");
+    }
+
+    [Fact]
+    public async Task PipeAlternation_OnPath_PushesDownIN()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        // Multi-path: matches the listed paths exactly. Single Postgres roundtrip
+        // emits `WHERE path IN (...)` rather than N separate queries.
+        var request = MeshQueryRequest.FromQuery(
+            "path:ACME/Project/Story1|ACME/Project/Bug1|ACME/Project/Missing");
+
+        var results = await CollectResults(query, request);
+
+        // Story1 and Bug1 exist; Missing doesn't — IN(...) returns the existing two.
+        results.Should().HaveCount(2);
+        results.Select(n => n.Path).Should().BeEquivalentTo(
+            "ACME/Project/Story1", "ACME/Project/Bug1");
+    }
+
+    #endregion
+
+    #region SQL-function sort (`sort:length(path)-desc`)
+
+    [Fact]
+    public async Task Sort_LengthOfPath_LongestFirst()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        // Routing-layer canonical form — "longest matching path wins" in one
+        // round-trip. Pin this contract: backends MUST emit ORDER BY length(...)
+        // and respect descending direction so MeshCatalog.FindBestPersistenceMatch
+        // can rely on a single query for prefix resolution.
+        var request = MeshQueryRequest.FromQuery(
+            "path:ACME/Project|ACME|ACME/Project/Story1 sort:length(path)-desc");
+
+        var results = await CollectResults(query, request);
+
+        // All three exact paths should hit (the 'ACME' top-level node won't exist
+        // since SeedTestDataAsync seeds children only — verify ordering of the rest).
+        results.Should().NotBeEmpty();
+        // Among the existing results, longest path must come first.
+        for (var i = 1; i < results.Count; i++)
+            results[i - 1].Path.Length.Should().BeGreaterThanOrEqualTo(results[i].Path.Length,
+                "sort:length(path)-desc must order results by descending path length");
+    }
+
+    [Fact]
+    public async Task Sort_LengthOfPath_LimitOne_ReturnsLongestMatchingPrefix()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        // The single canonical form for routing-layer prefix lookup:
+        // path:a|b|c sort:length(path)-desc limit:1 → one row back, the deepest.
+        var request = new MeshQueryRequest
+        {
+            Query = "path:ACME/Project/Story1|ACME/Project|ACME sort:length(path)-desc",
+            Limit = 1
+        };
+
+        var results = await CollectResults(query, request);
+
+        results.Should().HaveCount(1);
+        results[0].Path.Should().Be("ACME/Project/Story1");
+    }
+
+    [Fact]
+    public async Task Sort_LowerOfName_CaseInsensitiveAscending()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        // Generic SQL-function selector — verifies the function-call syntax isn't
+        // hard-coded to length() and works for the other allow-listed functions.
+        var request = MeshQueryRequest.FromQuery(
+            "nodeType:Story sort:lower(name) path:ACME scope:descendants");
+
+        var results = await CollectResults(query, request);
+
+        results.Should().HaveCount(3);
+        // Sort by lowered name ascending: "claims dashboard" < "claims processing" < "user authentication"
+        results[0].Name.Should().Be("Claims Dashboard");
+        results[1].Name.Should().Be("Claims Processing");
+        results[2].Name.Should().Be("User Authentication");
+    }
+
+    #endregion
+
     private async Task<List<MeshNode>> CollectResults(PostgreSqlMeshQuery query, MeshQueryRequest request)
     {
         var results = new List<MeshNode>();
