@@ -145,14 +145,14 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     public IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath, JsonSerializerOptions options)
         => _inner.GetAllDescendantsAsync(parentPath, options);
 
-    public Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.SaveNodeAsync(node, options, ct);
+    public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options)
+        => _inner.SaveNode(node, options);
 
-    public Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
-        => _inner.DeleteNodeAsync(path, recursive, ct);
+    public IObservable<string> DeleteNode(string path, bool recursive = false)
+        => _inner.DeleteNode(path, recursive);
 
-    public Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.MoveNodeAsync(sourcePath, targetPath, options, ct);
+    public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options)
+        => _inner.MoveNode(sourcePath, targetPath, options);
 
     public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
         => _inner.SearchAsync(parentPath, query, options);
@@ -170,11 +170,11 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     public IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options)
         => _inner.GetCommentsAsync(nodePath, options);
 
-    public Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.AddCommentAsync(comment, options, ct);
+    public IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options)
+        => _inner.AddComment(comment, options);
 
-    public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
-        => _inner.DeleteCommentAsync(commentId, ct);
+    public IObservable<string> DeleteComment(string commentId)
+        => _inner.DeleteComment(commentId);
 
     public Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default)
         => _inner.GetCommentAsync(commentId, ct);
@@ -182,11 +182,11 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
         => _inner.GetPartitionObjectsAsync(nodePath, subPath, options);
 
-    public Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
+    public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => _inner.SavePartitionObjects(nodePath, subPath, objects, options);
 
-    public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-        => _inner.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+    public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => _inner.DeletePartitionObjects(nodePath, subPath);
 
     public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => _inner.GetPartitionMaxTimestampAsync(nodePath, subPath, ct);

@@ -177,11 +177,9 @@ public static class MeshNodeExtensions
                     State = MeshNodeState.Active,
                     Content = record
                 };
-                // Sanctioned leaf bridge: IStorageService.SaveNodeAsync wraps the actual
-                // disk/DB write. Observable.FromAsync at the persistence boundary is the
-                // documented exception (Doc/Architecture/AsynchronousCalls.md) — the chain
-                // above stays IObservable end-to-end and never re-enters the hub flow.
-                return Observable.FromAsync(ct => storage.SaveNodeAsync(saveNode, options, ct));
+                // IStorageService.SaveNode is now IObservable end-to-end with the leaf
+                // Task→Observable bridge inside the implementation (Scheduler.Default).
+                return storage.SaveNode(saveNode, options);
             })
             .Subscribe(
                 _ => { },

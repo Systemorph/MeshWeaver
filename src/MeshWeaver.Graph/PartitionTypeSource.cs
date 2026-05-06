@@ -86,7 +86,11 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         {
             _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: Saving object to partition {PartitionPath}",
                 typeof(T).Name, _partitionPath);
-            _ = _persistenceCore.SavePartitionObjectsAsync(_partitionPath, null, [obj], _workspace.Hub.JsonSerializerOptions);
+            _persistenceCore.SavePartitionObjects(_partitionPath, null, [obj], _workspace.Hub.JsonSerializerOptions)
+                .Subscribe(
+                    _ => { },
+                    ex => _logger?.LogWarning(ex, "PartitionTypeSource<{Type}>.UpdateImpl: SavePartitionObjects failed for {PartitionPath}",
+                        typeof(T).Name, _partitionPath));
         }
 
         // Note: Delete of partition objects is not yet supported

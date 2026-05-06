@@ -1,3 +1,4 @@
+@using System.Collections.Immutable
 @using System.Reactive.Linq
 @using System.Reactive.Threading.Tasks
 @using MeshWeaver.AI
@@ -8,6 +9,7 @@
 @using MeshWeaver.Messaging
 @using System.Text.Json
 @using MeshThread = MeshWeaver.AI.Thread
+@implements IDisposable
 @inject IMeshService MeshQuery
 @inject AccessService AccessService
 @inject IMessageHub Hub
@@ -198,10 +200,13 @@
     // Chat items with node and content for display
     private record ThreadItem(string Path, MeshNode Node, MeshThread Content);
     private IReadOnlyList<ThreadItem> Chats = [];
+    private IDisposable? _chatsSubscription;
+    // Keyed by path so Added / Updated / Removed deltas can be applied without re-fetching.
+    private ImmutableDictionary<string, MeshNode> _chatNodesByPath = ImmutableDictionary<string, MeshNode>.Empty;
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        await LoadConversations();
+        SubscribeToConversations();
     }
 
     private string GetCurrentUserId()
@@ -224,30 +229,55 @@
         return path;
     }
 
-    private async Task LoadConversations()
+    private void SubscribeToConversations()
     {
-        try
+        var userId = GetCurrentUserId();
+        var request = MeshQueryRequest.FromQuery(
+            $"nodeType:{ThreadNodeType.NodeType} createdBy:{userId}");
+
+        // Reactive: subscribe to live query result changes. New threads / edits /
+        // deletes flow in as deltas without us re-issuing a snapshot fetch.
+        _chatsSubscription = MeshQuery.ObserveQuery<MeshNode>(request)
+            .Subscribe(
+                change => InvokeAsync(() => ApplyChange(change)),
+                ex => Console.WriteLine($"Error observing conversations: {ex.Message}"));
+    }
+
+    private void ApplyChange(QueryResultChange<MeshNode> change)
+    {
+        switch (change.ChangeType)
         {
-            var userId = GetCurrentUserId();
-
-            // Query threads by node type and created by user
-            var query = $"nodeType:{ThreadNodeType.NodeType} createdBy:{userId}";
-            var threadNodes = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-
-            // Convert to ThreadItem list, filtering by scope if specified
-            var items = threadNodes
-                .OrderByDescending(n => n.LastModified)
-                .Select(n => new ThreadItem(n.Path ?? n.Id, n, n.Content as MeshThread ?? new MeshThread()))
-                .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
-                .ToList();
-
-            Chats = items;
-            StateHasChanged();
+            case QueryChangeType.Initial:
+            case QueryChangeType.Reset:
+                _chatNodesByPath = change.Items
+                    .Where(n => !string.IsNullOrEmpty(n.Path))
+                    .ToImmutableDictionary(n => n.Path!, n => n);
+                break;
+            case QueryChangeType.Added:
+            case QueryChangeType.Updated:
+                foreach (var node in change.Items)
+                    if (!string.IsNullOrEmpty(node.Path))
+                        _chatNodesByPath = _chatNodesByPath.SetItem(node.Path, node);
+                break;
+            case QueryChangeType.Removed:
+                foreach (var node in change.Items)
+                    if (!string.IsNullOrEmpty(node.Path))
+                        _chatNodesByPath = _chatNodesByPath.Remove(node.Path);
+                break;
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error loading conversations: {ex.Message}");
-        }
+
+        Chats = _chatNodesByPath.Values
+            .Select(n => new ThreadItem(n.Path!, n, n.Content as MeshThread ?? new MeshThread()))
+            .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
+            .OrderByDescending(c => c.Node.LastModified)
+            .ToList();
+
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        _chatsSubscription?.Dispose();
     }
 
     private static string? GetPathScope(string path)
@@ -338,16 +368,13 @@
 
     private async Task OnConversationDeletedAsync(string chatPath)
     {
-        // Remove from local list
-        Chats = Chats.Where(c => c.Path != chatPath).ToList();
-
-        // If this was the selected conversation, start a new one
+        // The live ObserveQuery subscription emits a Removed change automatically —
+        // no manual list mutation needed. We only handle the side effect: if this
+        // was the selected conversation, start a new one.
         if (SelectedConversationId == chatPath)
         {
             await StartNewConversation();
         }
-
-        StateHasChanged();
     }
 
     private string FormatDate(DateTime date)
@@ -369,8 +396,4 @@
         }
     }
 
-    public async Task RefreshConversations()
-    {
-        await LoadConversations();
-    }
 }

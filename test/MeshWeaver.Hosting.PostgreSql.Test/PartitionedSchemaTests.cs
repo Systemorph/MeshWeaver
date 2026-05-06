@@ -94,8 +94,8 @@ public class PartitionedSchemaTests
         var nodeA = MeshNode.FromPath("Gamma/Doc1") with { Name = "Gamma Doc" };
         var nodeB = MeshNode.FromPath("Delta/Doc1") with { Name = "Delta Doc" };
 
-        await router.SaveNodeAsync(nodeA, _options, TestContext.Current.CancellationToken);
-        await router.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
+        await router.SaveNode(nodeA, _options).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await router.SaveNode(nodeB, _options).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Read should route correctly
         var readA = await router.GetNodeAsync("Gamma/Doc1", _options, TestContext.Current.CancellationToken);
@@ -116,8 +116,8 @@ public class PartitionedSchemaTests
         var nodeA = MeshNode.FromPath("Epsilon") with { Name = "Epsilon Root" };
         var nodeB = MeshNode.FromPath("Zeta") with { Name = "Zeta Root" };
 
-        await router.SaveNodeAsync(nodeA, _options, TestContext.Current.CancellationToken);
-        await router.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
+        await router.SaveNode(nodeA, _options).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await router.SaveNode(nodeB, _options).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var children = new List<MeshNode>();
         await foreach (var child in router.GetChildrenAsync(null, _options))
@@ -169,11 +169,11 @@ public class PartitionedSchemaTests
         var nodeA = MeshNode.FromPath("Eta/Item1") with { Name = "Eta Item" };
         var nodeB = MeshNode.FromPath("Theta/Item1") with { Name = "Theta Item" };
 
-        await router.SaveNodeAsync(nodeA, _options, TestContext.Current.CancellationToken);
-        await router.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
+        await router.SaveNode(nodeA, _options).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await router.SaveNode(nodeB, _options).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Delete from Eta
-        await router.DeleteNodeAsync("Eta/Item1", ct: TestContext.Current.CancellationToken);
+        await router.DeleteNode("Eta/Item1").FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Eta item should be gone
         var readA = await router.GetNodeAsync("Eta/Item1", _options, TestContext.Current.CancellationToken);
