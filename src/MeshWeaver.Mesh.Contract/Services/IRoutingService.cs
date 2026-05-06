@@ -17,29 +17,28 @@ public interface IRoutingService
 
 
     /// <summary>
-    /// Registers addressType and id and gets a stream
+    /// Registers a stream for the given address and returns immediately.
+    /// The returned <see cref="IAsyncDisposable"/> unsubscribes on DisposeAsync —
+    /// implementations that need genuinely-async subscription work (e.g. Orleans
+    /// memory-stream <c>SubscribeAsync</c>) fire it in the background and capture
+    /// the handle for clean unsubscribe.
     /// </summary>
-    /// <param name="address">Address to be registered for streaming</param>
+    /// <param name="address">Address to be registered for streaming.</param>
     /// <param name="callback">Callback to deliver messages from the stream.</param>
     /// <returns>An async disposable which will unsubscribe when called.</returns>
-    Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback);
+    IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback);
 
     /// <summary>
-    /// Registers addressType and id and gets a stream
+    /// Registers a stream for the given address and returns immediately.
     /// </summary>
-    /// <param name="address">Address to be registered for streaming</param>
-    /// <param name="callback">Callback to deliver messages from the stream.</param>
-    /// <returns>An async disposable which will unsubscribe when called.</returns>
-    Task<IAsyncDisposable> RegisterStreamAsync(Address address, SyncDelivery callback)
-        => RegisterStreamAsync(address, (d, _) => Task.FromResult(callback(d)));
+    IAsyncDisposable RegisterStream(Address address, SyncDelivery callback)
+        => RegisterStream(address, (d, _) => Task.FromResult(callback(d)));
 
     /// <summary>
-    /// Easy access overload to register message hubs.
+    /// Easy-access overload to register a hub as a stream sink.
     /// </summary>
-    /// <param name="hub">Hub to be exposed to the web.</param>
-    /// <returns></returns>
-    Task<IAsyncDisposable> RegisterStreamAsync(IMessageHub hub)
-        => RegisterStreamAsync(hub.Address, hub.DeliverMessage);
+    IAsyncDisposable RegisterStream(IMessageHub hub)
+        => RegisterStream(hub.Address, hub.DeliverMessage);
 
     /// <summary>
     /// Stream Namespace for incoming messages

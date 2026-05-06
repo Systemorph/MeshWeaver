@@ -18,19 +18,20 @@ internal class MonolithRoutingService(
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
 
-    private Task UnregisterStreamAsync(Address address)
+    private void UnregisterStream(Address address)
     {
         streams.TryRemove(address, out _);
-        return Task.FromResult<Address>(null!);
     }
 
 
-    public override Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
+    public override IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
-        return Task.FromResult<IAsyncDisposable>(new AnonymousAsyncDisposable(() => { streams.TryRemove(address, out _);
+        return new AnonymousAsyncDisposable(() =>
+        {
+            streams.TryRemove(address, out _);
             return Task.CompletedTask;
-        }));
+        });
     }
 
 
@@ -142,7 +143,7 @@ internal class MonolithRoutingService(
                     logger.LogDebug("[ROUTE-CREATE] GetHostedHub returned {HubAddr} for {Address}",
                         createdHub?.Address.ToString() ?? "(null)", address);
 
-                    createdHub?.RegisterForDisposal((_, _) => UnregisterStreamAsync(createdHub.Address));
+                    createdHub?.RegisterForDisposal(_ => UnregisterStream(createdHub.Address));
                     return createdHub;
                 }
                 finally

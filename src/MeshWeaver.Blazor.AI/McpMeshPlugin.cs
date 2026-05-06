@@ -99,7 +99,7 @@ public class McpMeshPlugin
         var address = AddressExtensions.CreatePortalAddress("mcp-" + sessionId);
         logger.LogInformation("Materialising MCP session hub at {Address}", address);
 
-        // RegisterStreamAsync registers the session hub with the routing service
+        // RegisterStream registers the session hub with the routing service
         // so every MCP-bound response (Get / Search / Patch / ExecuteScript / …)
         // routes back to this stream. No kernel route rule — kernel work runs
         // inside the Activity MeshNode hub (per node), not here.
@@ -115,18 +115,8 @@ public class McpMeshPlugin
             address,
             sessionConfig => sessionConfig
                 .AddData()
-                .WithInitialization(hub => routingService.RegisterStreamAsync(hub)
-                    .ContinueWith(t =>
-                    {
-                        if (t.IsCompletedSuccessfully && t.Result is { } registry)
-                            hub.RegisterForDisposal(registry);
-                        else if (t.IsFaulted)
-                            hub.ServiceProvider.GetService<ILoggerFactory>()
-                                ?.CreateLogger("MeshWeaver.Routing.McpMeshPlugin")
-                                ?.LogWarning(t.Exception,
-                                    "RegisterStreamAsync failed for {Address} — replies may not route back",
-                                    hub.Address);
-                    }, TaskContinuationOptions.ExecuteSynchronously)),
+                .WithInitialization(hub =>
+                    hub.RegisterForDisposal(routingService.RegisterStream(hub))),
             HostedHubCreation.Always)
             ?? throw new InvalidOperationException(
                 $"Failed to materialise MCP session hub at {address}.");

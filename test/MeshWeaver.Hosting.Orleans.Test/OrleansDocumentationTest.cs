@@ -58,11 +58,8 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
             AddressExtensions.CreatePortalAddress(),
             config => config
                 .AddLayoutClient()
-                .WithInitialization(async (hub, _) =>
-                {
-                    var registration = await routingService.RegisterStreamAsync(hub);
-                    hub.RegisterForDisposal(registration);
-                }))!;
+                .WithInitialization(hub =>
+                    hub.RegisterForDisposal(routingService.RegisterStream(hub))))!;
 
         await Task.Delay(500);
         return portalHub;

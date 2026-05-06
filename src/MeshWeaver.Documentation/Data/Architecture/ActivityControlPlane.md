@@ -90,14 +90,13 @@ public static class JobNodeType
         // ...
         HubConfiguration = config => config
             .AddMeshDataSource(s => s.WithContentType<JobContent>())
-            .WithInitialization((hub, _) =>
+            .WithInitialization(hub =>
             {
                 hub.RegisterForDisposal(hub.WatchControlPlane(requested =>
                 {
                     if (requested == ActivityStatus.Cancelled) DoCancel(hub);
                     else if (requested == ActivityStatus.Running) DoStart(hub);
                 }));
-                return Task.CompletedTask;
             })
     };
 }

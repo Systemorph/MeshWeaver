@@ -66,11 +66,8 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
             AddressExtensions.CreatePortalAddress(),
             config => config
                 .AddLayoutClient()
-                .WithInitialization(async (hub, _) =>
-                {
-                    var registration = await routingService.RegisterStreamAsync(hub);
-                    hub.RegisterForDisposal(registration);
-                }))!;
+                .WithInitialization(hub =>
+                    hub.RegisterForDisposal(routingService.RegisterStream(hub))))!;
 
         // Wait briefly for initialization to complete
         await Task.Delay(500);

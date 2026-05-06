@@ -1,4 +1,7 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ServiceProvider;
@@ -179,7 +182,19 @@ public record MessageHubConfiguration
     {
         SyncBuildupActions = SyncBuildupActions.Add(action)
     };
-    public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
+
+    /// <summary>
+    /// Reactive init overload — caller returns an <see cref="IObservable{Unit}"/> the hub
+    /// will Subscribe to during init. The Initialize gate opens after the observable
+    /// emits its first value or completes. Wrap a Task-returning method via
+    /// <c>Observable.FromAsync(() =&gt; method())</c> for the typical "load initial data
+    /// before processing messages" shape. Hub-reachable code returns
+    /// <see cref="IObservable{T}"/>, never <see cref="Task{T}"/>.
+    /// </summary>
+    public MessageHubConfiguration WithInitialization(Func<IMessageHub, IObservable<Unit>> action) => this with
+    {
+        BuildupActions = BuildupActions.Add((hub, ct) => action(hub).DefaultIfEmpty(Unit.Default).FirstAsync().ToTask(ct))
+    };
 
     protected void CreateServiceProvider(IMessageHub? parent)
     {

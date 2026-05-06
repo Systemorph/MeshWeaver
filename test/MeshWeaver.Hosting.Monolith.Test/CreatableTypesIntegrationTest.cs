@@ -655,7 +655,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Step 4: Get a client and request the Edit layout
         Output.WriteLine($"Step 4: Getting client and requesting Edit layout");
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -720,7 +720,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Step 2: Request the default (Read) view
         Output.WriteLine($"Step 2: Requesting default (Read) layout");
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -834,7 +834,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Step 4: Request Edit view (simulates redirect)
         Output.WriteLine($"Step 4: Requesting Edit layout (simulates redirect to /{nodePath}/Edit)");
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
@@ -909,7 +909,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Step 3: Request Edit view (simulates redirect to /{nodePath}/Edit)
         Output.WriteLine("Step 3: Requesting Edit view (simulates redirect)");
         var client = GetClient(c => c
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
+            .WithInitialization(h => h.RegisterForDisposal(RoutingService.RegisterStream(h)))
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 

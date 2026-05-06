@@ -86,8 +86,8 @@ public class OrleansReentrancyTest(ITestOutputHelper output) : TestBase(output)
         {
             ObjectId = "TestUser", Name = "TestUser", Email = "testuser@meshweaver.io"
         });
-        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
-            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStream(client.Address, client.DeliverMessage);
         return client;
     }
 
