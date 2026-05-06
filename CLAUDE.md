@@ -93,7 +93,28 @@ dotnet build                                              # Build solution
 dotnet test test/MeshWeaver.Data.Test --no-restore        # Run one test project
 dotnet run --project memex/Memex.Portal.Monolith          # Dev portal (https://localhost:7122)
 dotnet run --project memex/aspire/Memex.AppHost           # Aspire (requires Docker)
+aspire run --project memex/aspire/Memex.AppHost           # Aspire via CLI (registers with `aspire mcp`)
 ```
+
+### Restarting just the Portal (no full Aspire restart)
+
+When you change code in `Memex.Portal.Distributed` or any project it references, you do NOT need to kill the whole AppHost. Three options, ordered by cost:
+
+1. **Hot reload (cheapest)** — start with `dotnet watch` instead of `dotnet run` / `aspire run`:
+   ```bash
+   dotnet watch --project memex/aspire/Memex.AppHost
+   ```
+   File save → Aspire restarts the affected resource only. Preserves the dashboard, the Postgres container, and the SignalR endpoints. Most code changes apply within seconds.
+2. **Aspire dashboard UI** — open `https://localhost:17200/` → Resources tab → click the ⋯ next to `memex-portal-distributed` → **Restart**. Runs `dotnet build` + restart in-place.
+3. **Process kill (last resort, when watch missed a change)**:
+   ```powershell
+   Get-Process Memex.Portal.Distributed -ErrorAction SilentlyContinue | Stop-Process -Force
+   ```
+   Aspire's resource watcher detects the exit and restarts the resource within ~5 s. Avoids a full `aspire run` restart (which would also rebuild every other resource and re-launch Postgres / blob-storage containers).
+
+**Don't** kill the whole `aspire` / `Memex.AppHost` process unless you changed AppHost wiring itself — full restart costs 30-60 s and loses the dashboard auth token.
+
+Full reference: [LocalDevWorkflow.md](src/MeshWeaver.Documentation/Data/Architecture/LocalDevWorkflow.md)
 
 ## 🚨 Reactive Pattern — Nothing Async Ever
 
