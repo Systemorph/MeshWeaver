@@ -81,12 +81,18 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
             typeof(T).Name, adds.Length, updates.Length, deletes.Length);
 
-        // Sync to persistence partition
+        // Sync to persistence partition. Subscribe is mandatory — SavePartitionObjects
+        // is a cold IObservable; the side effect runs only on Subscribe.
         foreach (var obj in adds.Concat(updates))
         {
             _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: Saving object to partition {PartitionPath}",
                 typeof(T).Name, _partitionPath);
-            _ = _persistenceCore.SavePartitionObjectsAsync(_partitionPath, null, [obj], _workspace.Hub.JsonSerializerOptions);
+            _persistenceCore.SavePartitionObjects(_partitionPath, null, [obj], _workspace.Hub.JsonSerializerOptions)
+                .Subscribe(
+                    _ => { },
+                    ex => _logger?.LogWarning(ex,
+                        "PartitionTypeSource<{Type}>.UpdateImpl: SavePartitionObjects failed for {PartitionPath}",
+                        typeof(T).Name, _partitionPath));
         }
 
         // Note: Delete of partition objects is not yet supported

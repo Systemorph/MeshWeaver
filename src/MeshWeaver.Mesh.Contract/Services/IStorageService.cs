@@ -57,33 +57,26 @@ internal interface IStorageService
         => GetDescendantsAsync(parentPath, options);
 
     /// <summary>
-    /// Creates or updates a node.
+    /// Creates or updates a node. Cold IObservable — Subscribe triggers the write.
+    /// Composes via SelectMany; never awaits a Task internally between layers.
+    /// The Task→IObservable bridge sits at the leaf <see cref="IStorageAdapter"/>
+    /// boundary, scheduled on TaskPool, so the write never runs on a hub scheduler.
     /// </summary>
-    /// <param name="node">The node to save</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The saved node</returns>
-    Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default);
+    IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options);
 
     /// <summary>
-    /// Deletes a node and optionally its descendants.
+    /// Deletes a node and optionally its descendants. Cold IObservable —
+    /// Subscribe triggers the delete.
     /// </summary>
-    /// <param name="path">The node path</param>
-    /// <param name="recursive">If true, also delete all descendants</param>
-    /// <param name="ct">Cancellation token</param>
-    Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default);
+    IObservable<string> DeleteNode(string path, bool recursive = false);
 
     /// <summary>
-    /// Moves a node and all its descendants to a new path.
-    /// Comments associated with moved nodes are also migrated.
+    /// Moves a node and all its descendants to a new path. Cold IObservable —
+    /// Subscribe triggers the move. Comments associated with moved nodes are
+    /// also migrated. Errors flow via OnError (e.g. source doesn't exist or
+    /// target already exists).
     /// </summary>
-    /// <param name="sourcePath">The current node path</param>
-    /// <param name="targetPath">The new node path</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The moved node at the new path</returns>
-    /// <exception cref="InvalidOperationException">If source doesn't exist or target already exists</exception>
-    Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default);
+    IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options);
 
     /// <summary>
     /// Searches nodes by query text within their Name or Content.
@@ -95,24 +88,19 @@ internal interface IStorageService
     IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options);
 
     /// <summary>
-    /// Checks if a node exists at the given path.
+    /// Checks if a node exists at the given path. Cold IObservable — Subscribe
+    /// triggers the read.
     /// </summary>
-    /// <param name="path">The node path</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>True if the node exists</returns>
-    Task<bool> ExistsAsync(string path, CancellationToken ct = default);
+    IObservable<bool> Exists(string path);
 
     /// <summary>
     /// Finds the node whose path is the longest prefix of the given full path.
-    /// Uses a single query instead of iterating through ancestor paths.
+    /// Uses a single query instead of iterating through ancestor paths. Cold
+    /// IObservable — Subscribe triggers the read. Default impl emits (null, 0).
     /// </summary>
-    /// <param name="fullPath">The full path to find the best prefix match for</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The matching node and number of matched segments, or (null, 0) if not found</returns>
-    Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
-        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
-        => Task.FromResult<(MeshNode?, int)>((null, 0));
+    IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options)
+        => System.Reactive.Linq.Observable.Return<(MeshNode?, int)>((null, 0));
 
     /// <summary>
     /// Initializes the persistence service.
@@ -131,28 +119,20 @@ internal interface IStorageService
     IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options);
 
     /// <summary>
-    /// Adds a comment to a node.
+    /// Adds a comment to a node. Cold IObservable — Subscribe triggers the write.
     /// </summary>
-    /// <param name="comment">The comment to add</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The saved comment</returns>
-    Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default);
+    IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options);
 
     /// <summary>
-    /// Deletes a comment by ID.
+    /// Deletes a comment by ID. Cold IObservable — Subscribe triggers the delete.
     /// </summary>
-    /// <param name="commentId">The comment ID to delete</param>
-    /// <param name="ct">Cancellation token</param>
-    Task DeleteCommentAsync(string commentId, CancellationToken ct = default);
+    IObservable<string> DeleteComment(string commentId);
 
     /// <summary>
-    /// Gets a single comment by ID.
+    /// Gets a single comment by ID. Cold IObservable — Subscribe triggers the
+    /// read. Emits null if not found.
     /// </summary>
-    /// <param name="commentId">The comment ID</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The comment or null if not found</returns>
-    Task<Comment?> GetCommentAsync(string commentId, CancellationToken ct = default);
+    IObservable<Comment?> GetComment(string commentId);
 
     #endregion
 
@@ -169,33 +149,24 @@ internal interface IStorageService
     IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options);
 
     /// <summary>
-    /// Saves objects to a node's partition folder.
-    /// Each object is stored as a separate JSON file with $type discriminator.
+    /// Saves objects to a node's partition folder. Cold IObservable — Subscribe
+    /// triggers the write. Each object is stored as a separate record with $type
+    /// discriminator.
     /// </summary>
-    /// <param name="nodePath">The node path</param>
-    /// <param name="subPath">Optional sub-path within partition</param>
-    /// <param name="objects">Objects to save</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="ct">Cancellation token</param>
-    Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default);
+    IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options);
 
     /// <summary>
-    /// Deletes all objects from a node's partition folder (or sub-path).
+    /// Deletes all objects from a node's partition folder (or sub-path). Cold
+    /// IObservable — Subscribe triggers the delete.
     /// </summary>
-    /// <param name="nodePath">The node path</param>
-    /// <param name="subPath">Optional sub-path within partition</param>
-    /// <param name="ct">Cancellation token</param>
-    Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+    IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null);
 
     /// <summary>
-    /// Gets the newest modification timestamp across all objects in a partition (or sub-path).
-    /// Used for cache invalidation.
+    /// Gets the newest modification timestamp across all objects in a partition
+    /// (or sub-path). Used for cache invalidation. Cold IObservable — Subscribe
+    /// triggers the read.
     /// </summary>
-    /// <param name="nodePath">The node path</param>
-    /// <param name="subPath">Optional sub-path within partition</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>The newest modification timestamp, or null if no objects exist</returns>
-    Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(string nodePath, string? subPath = null, CancellationToken ct = default);
+    IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null);
 
     #endregion
 

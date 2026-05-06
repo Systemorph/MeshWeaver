@@ -85,8 +85,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Description = "A user story or task"
             }
         };
-        persistence.SaveNodeAsync(storyTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/story", null, [storyCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
+        persistence.SaveNode(storyTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SavePartitionObjects("type/story", null, [storyCodeConfig], SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
         // Create Graph type at type/graph (NodeType = "NodeType")
         var graphCodeConfig = new CodeConfiguration
@@ -105,8 +105,8 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Description = "The graph root"
             }
         };
-        persistence.SaveNodeAsync(graphTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
-        persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig], SetupJsonOptions).GetAwaiter().GetResult();
+        persistence.SaveNode(graphTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        persistence.SavePartitionObjects("type/graph", null, [graphCodeConfig], SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -120,14 +120,14 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         SetupTestConfiguration(persistence);
 
         // Pre-seed the hierarchy with Content
-        persistence.SaveNodeAsync(MeshNode.FromPath("graph") with
+        persistence.SaveNode(MeshNode.FromPath("graph") with
         {
             Name = "Graph",
             NodeType = "type/graph"
-        }, SetupJsonOptions).GetAwaiter().GetResult();
+        }, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
         // Pre-seed story nodes WITH Content containing TestStory data
-        persistence.SaveNodeAsync(MeshNode.FromPath("graph/story1") with
+        persistence.SaveNode(MeshNode.FromPath("graph/story1") with
         {
             Name = "Story 1",
             NodeType = "type/story",
@@ -138,9 +138,9 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Description = "This is the first story",
                 Points = 5
             }
-        }, SetupJsonOptions).GetAwaiter().GetResult();
+        }, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
-        persistence.SaveNodeAsync(MeshNode.FromPath("graph/story2") with
+        persistence.SaveNode(MeshNode.FromPath("graph/story2") with
         {
             Name = "Story 2",
             NodeType = "type/story",
@@ -151,7 +151,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Description = "This is the second story",
                 Points = 8
             }
-        }, SetupJsonOptions).GetAwaiter().GetResult();
+        }, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
 
         var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");
 
@@ -303,7 +303,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 13
             }
         };
-        await _persistence!.SaveNodeAsync(updatedNode, SetupJsonOptions, TestContext.Current.CancellationToken);
+        await _persistence!.SaveNode(updatedNode, SetupJsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Static node read — write went through persistence directly (bypassing per-node hub),
         // so the catalog query is the authoritative read here.

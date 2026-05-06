@@ -1,5 +1,6 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -15,7 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for AccessAssignmentLayoutAreas — verifies that workspace.RequestChange
+/// Tests for AccessAssignmentLayoutAreas â€” verifies that workspace.RequestChange
 /// correctly updates the MeshNode stream, enabling reactive UI updates
 /// for ToggleDenied, RemoveRole, and AddRole operations.
 /// </summary>
@@ -54,7 +55,7 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
             NodeType = "AccessAssignment",
             Content = assignment
         };
-        await _persistence.SaveNodeAsync(node, JsonOptions);
+        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
         return node;
     }
 
@@ -89,13 +90,13 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;
         initial.Roles[0].Denied.Should().BeFalse("initial state should be not-denied");
 
-        // Act — toggle denied
+        // Act â€” toggle denied
         var roles = initial.Roles.ToList();
         roles[0] = roles[0] with { Denied = true };
         var updatedNode = node with { Content = initial with { Roles = roles } };
         workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
 
-        // Assert — stream should reflect the change
+        // Assert â€” stream should reflect the change
         var updatedNodes = await nodeStream!
             .Where(items =>
             {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -19,11 +19,11 @@ namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
 /// Covers the prod-observed "move takes 4 minutes on a 3-node subtree" regression:
-/// — verifies that move is genuinely recursive,
-/// — verifies that per-descendant I/O runs in parallel (not serial),
-/// — verifies that negative paths (source missing, target exists, storage throws,
+/// â€” verifies that move is genuinely recursive,
+/// â€” verifies that per-descendant I/O runs in parallel (not serial),
+/// â€” verifies that negative paths (source missing, target exists, storage throws,
 ///   cancellation) fail fast and never hang, and
-/// — verifies the Rx Timeout ceiling that the handler applies on top.
+/// â€” verifies the Rx Timeout ceiling that the handler applies on top.
 /// </summary>
 public class MoveNodeRecursiveTest
 {
@@ -40,7 +40,7 @@ public class MoveNodeRecursiveTest
         foreach (var p in new[] { "src/a", "src/a/b", "src/a/b/c", "src/a/b/c/d" })
             await adapter.WriteAsync(MeshNode.FromPath(p) with { Name = p }, JsonOptions);
 
-        await service.MoveNodeAsync("src/a", "dst/a", JsonOptions);
+        await service.MoveNode("src/a", "dst/a", JsonOptions).FirstAsync().ToTask();
 
         foreach (var oldPath in new[] { "src/a", "src/a/b", "src/a/b/c", "src/a/b/c/d" })
             (await adapter.ReadAsync(oldPath, JsonOptions)).Should().BeNull($"{oldPath} should be gone");
@@ -66,7 +66,7 @@ public class MoveNodeRecursiveTest
         })
             await adapter.WriteAsync(MeshNode.FromPath(p) with { Name = p }, JsonOptions);
 
-        await service.MoveNodeAsync("src/dav", "dst/dav", JsonOptions);
+        await service.MoveNode("src/dav", "dst/dav", JsonOptions).FirstAsync().ToTask();
 
         (await adapter.ReadAsync("dst/dav/venue/estrel", JsonOptions)).Should().NotBeNull();
         (await adapter.ReadAsync("dst/dav/hotel/mercure", JsonOptions)).Should().NotBeNull();
@@ -80,7 +80,7 @@ public class MoveNodeRecursiveTest
     [Fact(Timeout = 15000)]
     public async Task Move_LargeSubtree_RunsIOInParallel()
     {
-        // 100 ms per storage op. 20 descendants × (write + delete) = 40 ops.
+        // 100 ms per storage op. 20 descendants Ã— (write + delete) = 40 ops.
         // Serial: ~4 s. Parallel: single-wave ~100-300 ms, tree walk reads on top.
         var adapter = new TestStorageAdapter(perOpDelay: TimeSpan.FromMilliseconds(100));
         var service = new FileSystemPersistenceService(adapter);
@@ -91,11 +91,11 @@ public class MoveNodeRecursiveTest
 
         adapter.Reset();
         var sw = Stopwatch.StartNew();
-        await service.MoveNodeAsync("src/root", "dst/root", JsonOptions);
+        await service.MoveNode("src/root", "dst/root", JsonOptions).FirstAsync().ToTask();
         sw.Stop();
 
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3),
-            "20 descendants × 100 ms serial would be ~4 s; parallel I/O must finish well under 3 s");
+            "20 descendants Ã— 100 ms serial would be ~4 s; parallel I/O must finish well under 3 s");
         adapter.MaxConcurrent.Should().BeGreaterThan(1,
             "at least two descendant-I/O ops must overlap to prove parallelization");
 
@@ -112,7 +112,7 @@ public class MoveNodeRecursiveTest
         var service = new FileSystemPersistenceService(adapter);
 
         var sw = Stopwatch.StartNew();
-        var act = async () => await service.MoveNodeAsync("does/not/exist", "dst/x", JsonOptions);
+        var act = async () => await service.MoveNode("does/not/exist", "dst/x", JsonOptions).FirstAsync().ToTask();
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Source node not found*");
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1), "should reject before doing real work");
     }
@@ -127,7 +127,7 @@ public class MoveNodeRecursiveTest
         await adapter.WriteAsync(MeshNode.FromPath("dst/x") with { Name = "Dst" }, JsonOptions);
 
         var sw = Stopwatch.StartNew();
-        var act = async () => await service.MoveNodeAsync("src/x", "dst/x", JsonOptions);
+        var act = async () => await service.MoveNode("src/x", "dst/x", JsonOptions).FirstAsync().ToTask();
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Target path already exists*");
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1), "collision check is pre-flight");
     }
@@ -135,7 +135,7 @@ public class MoveNodeRecursiveTest
     [Fact(Timeout = 10000)]
     public async Task Move_StorageThrowsOnOneDescendantWrite_SurfacesErrorWithoutHanging()
     {
-        // Write to any path ending in "/bad" blows up — simulates a single-node persistence failure.
+        // Write to any path ending in "/bad" blows up â€” simulates a single-node persistence failure.
         var adapter = new TestStorageAdapter(
             perOpDelay: TimeSpan.FromMilliseconds(20),
             failOnWrite: path => path.EndsWith("/bad", StringComparison.Ordinal));
@@ -146,7 +146,7 @@ public class MoveNodeRecursiveTest
         adapter.Seed(MeshNode.FromPath("src/root/bad") with { Name = "Bad" });
 
         var sw = Stopwatch.StartNew();
-        var act = async () => await service.MoveNodeAsync("src/root", "dst/root", JsonOptions);
+        var act = async () => await service.MoveNode("src/root", "dst/root", JsonOptions).FirstAsync().ToTask();
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*bad*", "the simulated write failure must propagate");
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3),
@@ -167,7 +167,7 @@ public class MoveNodeRecursiveTest
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         var sw = Stopwatch.StartNew();
-        var act = async () => await service.MoveNodeAsync("src/root", "dst/root", JsonOptions, cts.Token);
+        var act = async () => await service.MoveNode("src/root", "dst/root", JsonOptions).FirstAsync().ToTask(cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3),
@@ -239,7 +239,7 @@ public class MoveNodeRecursiveTest
             Interlocked.Exchange(ref _concurrent, 0);
         }
 
-        /// <summary>Direct write that skips the delay/failure gate — used for test setup.</summary>
+        /// <summary>Direct write that skips the delay/failure gate â€” used for test setup.</summary>
         public void Seed(MeshNode node) => _nodes[node.Path ?? ""] = node;
 
         private async Task GateAsync(CancellationToken ct)
@@ -323,7 +323,7 @@ public class MoveNodeRecursiveTest
             => Task.FromResult<DateTimeOffset?>(null);
     }
 
-    /// <summary>Observable persistence whose MoveNode never emits — used to verify Rx Timeout.</summary>
+    /// <summary>Observable persistence whose MoveNode never emits â€” used to verify Rx Timeout.</summary>
     private sealed class HangingPersistence
     {
         public IObservable<MeshNode> MoveNode(string source, string target) => Observable.Never<MeshNode>();
