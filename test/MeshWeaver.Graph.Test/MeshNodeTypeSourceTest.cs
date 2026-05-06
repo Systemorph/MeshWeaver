@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -45,7 +46,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request, CancellationToken ct)
     {
         var node = request.Message.Node;
-        await _persistence.SaveNodeAsync(node, JsonOptions, ct);
+        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask(ct);
         hub.Post(UpdateNodeResponse.Ok(node), o => o.ResponseFor(request));
         return request.Processed();
     }
@@ -78,7 +79,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             NodeType = "test",
             Content = content
         };
-        await _persistence.SaveNodeAsync(node, JsonOptions);
+        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
 
         // Act - Start a hub for that path
         var host = GetHostWithHandler("load-test", c => c
@@ -114,7 +115,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             NodeType = "test",
             Content = content
         };
-        await _persistence.SaveNodeAsync(node, JsonOptions);
+        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
 
         var host = GetHostWithHandler("persist-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
@@ -162,7 +163,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             NodeType = "test",
             Content = content
         };
-        await _persistence.SaveNodeAsync(node, JsonOptions);
+        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
 
         var host = GetHostWithHandler("sync-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
@@ -214,7 +215,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             NodeType = "test",
             Content = content
         };
-        await _persistence.SaveNodeAsync(node, JsonOptions);
+        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
 
         var host = GetHostWithHandler("transient-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
@@ -245,7 +246,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             NodeType = "ACME/Project/Todo",
             Content = content
         };
-        await _persistence.SaveNodeAsync(node, JsonOptions);
+        await _persistence.SaveNode(node, JsonOptions).FirstAsync().ToTask();
 
         var host = GetHostWithHandler("nodetype-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
