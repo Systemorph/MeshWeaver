@@ -137,13 +137,25 @@ public static class MeshDataSourceExtensions
                                 // the watcher and any other own-MeshNodeReference subscriber
                                 // pinned to the same stream that workspace.UpdateMeshNode
                                 // writes through.
+                                //
+                                // Stamp the hub's own path on the MeshNodeReference so
+                                // ReduceToMeshNode picks the NodeType MeshNode (matching
+                                // n.Path == hub.Address.Path) rather than a sibling Release
+                                // satellite that lives in the same InstanceCollection.
+                                // Without this, FirstOrDefault was non-deterministic and
+                                // GetCompilationPathRequest occasionally returned a Release
+                                // MeshNode — fresh instance hubs ended up bound to the
+                                // wrong assembly (V1 vs V2 in the recompile tests).
                                 var ownDataSource = workspace.DataContext
                                     .GetDataSourceForType(typeof(MeshNode));
                                 var primary = ownDataSource?.GetStreamForPartition(null);
                                 var collectionStream = primary
                                     ?.Reduce<InstanceCollection>(new CollectionReference(nameof(MeshNode)));
+                                var ownPathReference = string.IsNullOrEmpty(meshRef.Path)
+                                    ? new MeshNodeReference(workspace.Hub.Address.Path)
+                                    : meshRef;
                                 return collectionStream
-                                    ?.Reduce((WorkspaceReference<MeshNode>)reference, configuration);
+                                    ?.Reduce((WorkspaceReference<MeshNode>)ownPathReference, configuration);
                             }))
                     .WithDataSource(_ => dataSource)
                     .WithDefaultDataReference(workspace =>
@@ -818,16 +830,38 @@ public static class MeshDataSourceExtensions
 
     /// <summary>
     /// Reduces InstanceCollection to MeshNode for MeshNodeReference.
-    /// Returns the hub's own MeshNode from the collection.
+    /// Returns the MeshNode whose Path matches <see cref="MeshNodeReference.Path"/>;
+    /// when no path is specified, falls back to the first MeshNode in the collection.
+    /// <para>
+    /// The path filter is critical when the InstanceCollection contains multiple
+    /// MeshNode entries — after V1+V2 compiles, the hub's data source has the
+    /// NodeType definition AND its Release satellite nodes side-by-side. Plain
+    /// <c>FirstOrDefault</c> picked whichever happened to be enumerated first,
+    /// causing GetCompilationPathRequest to return a Release MeshNode (or a
+    /// stale snapshot) and instances to bind to the wrong assembly.
+    /// </para>
     /// </summary>
     private static ChangeItem<MeshNode> ReduceToMeshNode(
         ChangeItem<InstanceCollection> current, MeshNodeReference reference, bool initial)
     {
-        var node = current.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault();
+        var instances = current.Value?.Instances.Values.OfType<MeshNode>();
+        var node = !string.IsNullOrEmpty(reference.Path)
+            ? instances?.FirstOrDefault(n =>
+                string.Equals(n.Path, reference.Path, StringComparison.OrdinalIgnoreCase))
+            : instances?.FirstOrDefault();
         if (initial || current.ChangeType != ChangeType.Patch)
             return new(node, current.StreamId, current.Version);
 
-        var change = current.Updates.FirstOrDefault();
+        // Patch path: take the EntityUpdate whose Value is the targeted MeshNode.
+        // If reference.Path is set, prefer the update whose payload matches that
+        // path so a same-frame multi-entity update doesn't emit a sibling's value
+        // here. Falls back to FirstOrDefault for the no-path case.
+        var change = !string.IsNullOrEmpty(reference.Path)
+            ? current.Updates.FirstOrDefault(u =>
+                u.Value is MeshNode m
+                && string.Equals(m.Path, reference.Path, StringComparison.OrdinalIgnoreCase))
+                ?? current.Updates.FirstOrDefault()
+            : current.Updates.FirstOrDefault();
         if (change == null)
         {
             // Patch with no matching Updates — fall back to full value instead of
