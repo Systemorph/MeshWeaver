@@ -145,8 +145,8 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         _cache.Set(key, savedNode, _cacheOptions);
 
         _changeNotifier?.NotifyChange(isNew
-            ? DataChangeNotification.Created(key, savedNode)
-            : DataChangeNotification.Updated(key, savedNode));
+            ? DataChangeNotification.Created(key, savedNode, savedNode.Version)
+            : DataChangeNotification.Updated(key, savedNode, savedNode.Version));
 
         try
         {
