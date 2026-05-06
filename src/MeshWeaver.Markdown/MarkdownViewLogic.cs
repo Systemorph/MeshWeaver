@@ -140,19 +140,62 @@ public static class MarkdownViewLogic
     }
 
     /// <summary>
-    /// Posts each submission to the given target. Caller is responsible for
-    /// ensuring the target hub (typically a per-view Activity hub) exists —
-    /// see <see cref="CreateActivityAndSubmit"/> for the production path that
-    /// materialises the Activity first. Tests use this overload directly when
-    /// the Activity is pre-created in fixture setup.
+    /// Submits each code block to the target hub <em>in order</em>, waiting for
+    /// the previous submission's <see cref="SubmitCodeResponse"/> before posting
+    /// the next. Required for blocks that share REPL state: e.g. block #1 sets
+    /// <c>var counter = 41;</c> and block #2 references <c>counter</c>; they
+    /// must reach the kernel sequentially so block #2's
+    /// <c>scriptState.ContinueWithAsync</c> sees block #1's variable.
+    /// <para>
+    /// The naive shape — <c>foreach Post</c> without waiting — relies on the
+    /// kernel's <c>executionLock</c> SemaphoreSlim to serialise execution and
+    /// hopes that the SemaphoreSlim acquires in arrival order. SemaphoreSlim
+    /// is FIFO under contention, but each <c>Hub.Observe</c> + <c>Subscribe</c>
+    /// pair runs on the calling hub's action block; the inner WaitAsync
+    /// continuations resume on the TaskPool, so the order in which the script
+    /// pipeline acquires the lock can interleave on a busy CI thread pool —
+    /// surfaced as block #2 reaching <c>CSharpScript.RunAsync</c> before
+    /// block #1 has stored <c>scriptState</c>, then failing with
+    /// <c>error CS0103: The name 'counter' does not exist in the current
+    /// context</c>.
+    /// </para>
+    /// <para>
+    /// Caller is responsible for ensuring the target hub (typically a per-view
+    /// Activity hub) exists — see <see cref="CreateActivityAndSubmit"/> for the
+    /// production path that materialises the Activity first. Tests use this
+    /// overload directly when the Activity is pre-created in fixture setup.
+    /// </para>
     /// </summary>
     public static void SubmitCode(
         IMessageHub senderHub,
         Address target,
         IReadOnlyCollection<SubmitCodeRequest> submissions)
     {
-        foreach (var submission in submissions)
-            senderHub.Post(submission, o => o.WithTarget(target));
+        if (submissions.Count == 0) return;
+
+        SubmitNext(senderHub, target, submissions.ToList(), index: 0);
+    }
+
+    private static void SubmitNext(
+        IMessageHub senderHub,
+        Address target,
+        IReadOnlyList<SubmitCodeRequest> submissions,
+        int index)
+    {
+        if (index >= submissions.Count) return;
+
+        // Observe the response for this submission, then chain the next post off
+        // its emission. The reactive chain stays cold; Subscribe is the side
+        // effect that posts. Errors on a previous submission do NOT block
+        // subsequent ones — the kernel is forgiving (compile errors render
+        // inline) and skipping later blocks would silently drop user code.
+        senderHub.Observe<SubmitCodeResponse>(
+                submissions[index],
+                o => o.WithTarget(target))
+            .Take(1)
+            .Subscribe(
+                _ => SubmitNext(senderHub, target, submissions, index + 1),
+                _ => SubmitNext(senderHub, target, submissions, index + 1));
     }
 
     /// <summary>
