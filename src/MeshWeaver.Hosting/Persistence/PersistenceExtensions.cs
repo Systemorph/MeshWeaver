@@ -355,7 +355,8 @@ public static class PersistenceExtensions
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
             new StaticNodeQueryProvider(
                 sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>()));
+                sp.GetService<MeshConfiguration>(),
+                sp.GetService<ILoggerFactory>()));
         services.AddSingleton<IMeshQueryProvider>(sp =>
             sp.GetRequiredService<StaticNodeQueryProvider>());
         services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
@@ -515,7 +516,8 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new StaticNodeQueryProvider(
                 sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>()));
+                sp.GetService<MeshConfiguration>(),
+                sp.GetService<ILoggerFactory>()));
 
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
@@ -575,7 +577,8 @@ public static class PersistenceExtensions
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
             new StaticNodeQueryProvider(
                 sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>()));
+                sp.GetService<MeshConfiguration>(),
+                sp.GetService<ILoggerFactory>()));
         services.AddSingleton<IMeshQueryProvider>(sp =>
             sp.GetRequiredService<StaticNodeQueryProvider>());
         services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
