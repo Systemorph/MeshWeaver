@@ -246,40 +246,48 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                     }),
                     MeshChangeKind.Deleted));
 
-        // Per-query Initial gating: with multi-query unions and a naive .Merge,
-        // the first .Take(1) downstream consumer (e.g. MeshNodeCompilationService.
-        // discoverCodeFiles) sees only the FASTEST query's Initial and treats it
-        // as the complete result set — partial state. Tag each upstream query
-        // with its index so the Scan can track which Initials have arrived;
-        // only emit downstream once every query has sent its Initial event.
+        // Per-query Initial gating: with multi-query unions AND multi-provider
+        // fan-out, the gate must wait for EVERY provider to send Initial for
+        // EVERY query — not just the first provider per query. Otherwise an
+        // empty Initial from a fast provider (e.g. StaticNodeQueryProvider
+        // returning [] for a `nodeType:Code` query because no Code nodes are
+        // in its static set) would race ahead of the slower provider
+        // (InMemoryMeshQueryCore returning the persisted Code files) and the
+        // first .Take(1) consumer (MeshNodeCompilationService.discoverCodeFiles)
+        // would see "no source files" — exactly the regression that broke the
+        // Hosting.Monolith.Test compile suite.
+        var providerCount = providers.Length;
         var taggedChanges = queries
             .Select((q, i) => ObserveOne(q).Select(c => (Change: c, QueryIndex: i, IsExternal: false)))
             .Merge()
             .Merge(externalChanges.Select(c => (Change: c, QueryIndex: -1, IsExternal: true)))
             .Merge(feedRemovals.Select(c => (Change: c, QueryIndex: -1, IsExternal: true)));
 
-        // Fold change deltas into a path → MeshNode dictionary AND a bitmask of
-        // which upstream queries have produced their Initial event. Suppress
-        // downstream emissions until every query has reported in — that turns
-        // the first .Take(1) consumer into "first complete snapshot" instead
-        // of "first partial snapshot".
-        var initialMask = (1L << queries.Count) - 1L; // all 1s for queries.Count bits
+        // Fold change deltas into a path → MeshNode dictionary AND a per-query
+        // count of how many provider Initials have been received. Suppress
+        // downstream emissions until count[i] == providerCount for every
+        // query — that turns the first .Take(1) consumer into "first complete
+        // snapshot" instead of "first partial snapshot".
         return taggedChanges
             .Scan(
                 (Dict: ImmutableDictionary<string, MeshNode>.Empty,
-                 InitialsReceived: 0L),
+                 InitialCounts: ImmutableArray.CreateRange(Enumerable.Repeat(0, queries.Count))),
                 (state, tagged) =>
                 {
-                    var (dict, initials) = state;
+                    var (dict, counts) = state;
                     var change = tagged.Change;
 
-                    // Track Initial / Reset arrivals by query index — once every
-                    // upstream has reported, we unblock the downstream gate.
+                    // Track Initial / Reset arrivals by query index — increment
+                    // the per-query count so the gate waits for ALL providers.
                     if (!tagged.IsExternal &&
                         (change.ChangeType == QueryChangeType.Initial ||
-                         change.ChangeType == QueryChangeType.Reset))
+                         change.ChangeType == QueryChangeType.Reset) &&
+                        tagged.QueryIndex >= 0 &&
+                        tagged.QueryIndex < counts.Length)
                     {
-                        initials |= 1L << tagged.QueryIndex;
+                        counts = counts.SetItem(
+                            tagged.QueryIndex,
+                            counts[tagged.QueryIndex] + 1);
                     }
 
                     var nextDict = change.ChangeType switch
@@ -294,9 +302,10 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                         _ => dict,
                     };
 
-                    return (nextDict, initials);
+                    return (nextDict, counts);
                 })
-            .Where(state => state.InitialsReceived == initialMask)
+            .Where(state => providerCount == 0 ||
+                            state.InitialCounts.All(c => c >= providerCount))
             .Do(state => pathSet.OnNext(state.Dict.Keys.ToImmutableHashSet()))
             .Select(state => state.Dict)
             .DistinctUntilChanged()
