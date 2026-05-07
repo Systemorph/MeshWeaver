@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// Provider nodes (roles) bypass path/scope checks (they are global).
 /// Configuration nodes (type definitions) respect path/scope and context filtering.
 /// </summary>
-public class StaticNodeQueryProvider : IMeshQueryProvider
+public class StaticNodeQueryProvider : IMeshQueryProvider, ISyncedMeshNodeQueryProvider
 {
     // Provider nodes (from IStaticNodeProvider) — global, no path/scope check
     private readonly MeshNode[] _providerNodes;

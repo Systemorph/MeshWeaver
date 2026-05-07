@@ -13,6 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Query.Test;
@@ -44,6 +45,22 @@ public class SyncedQueryTest(ITestOutputHelper output)
     // (sanity/alpha/one/beta/keep/drop/...) and distinct GetQuery names
     // ($add-test / $update-test / ...), so SP-sharing is collision-safe.
     protected override bool ShareMeshAcrossTests => true;
+
+    /// <summary>
+    /// Register a custom <see cref="IStaticNodeProvider"/> on the mesh
+    /// hub so the static-node fan-out test
+    /// (<c>SyncedQuery_FansOutAcrossAllQueryProviders_IncludingStaticNodes</c>)
+    /// has a node to assert against. Mirrors how
+    /// <c>BuiltInAgentProvider</c> / <c>BuiltInLanguageModelProvider</c>
+    /// register through <c>services.AddSingleton&lt;IStaticNodeProvider, …&gt;()</c>.
+    /// </summary>
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<IStaticNodeProvider, TestSyncedQueryStaticNodeProvider>();
+                return services;
+            });
 
     private const string SubjectsNamespace = $"{TestPartition}/SyncedQuerySubjects";
 
@@ -476,5 +493,79 @@ public class SyncedQueryTest(ITestOutputHelper output)
             .ToTask(ct);
         afterUpdate.Single(n => n.Path == path).Name.Should().Be("AfterUpdate",
             "a fresh subscription with .Where(...).Take(1) must converge to the post-update value");
+    }
+
+    /// <summary>
+    /// Pins the provider fan-out fix in
+    /// <see cref="SyncedQueryMeshNodes.BuildReadStreamCore"/>. The class
+    /// originally resolved <c>IMeshQueryCore</c> (a single in-memory
+    /// provider) and missed every <c>IStaticNodeProvider</c> entry —
+    /// chat dropdowns sourced from <c>workspace.GetQuery(...)</c> were
+    /// empty even though <c>IMeshService.QueryAsync</c> (which fans out
+    /// across all <see cref="IMeshQueryProvider"/>s including
+    /// <c>StaticNodeQueryProvider</c>) returned the same nodes fine.
+    ///
+    /// <para>This test seeds a static node via a custom
+    /// <see cref="IStaticNodeProvider"/> registered alongside the mesh
+    /// hub. If <see cref="SyncedQueryMeshNodes"/> regresses to
+    /// single-provider resolution, the synced query times out / returns
+    /// the persistence-only set and this test catches it. The shared
+    /// mesh fixture's <c>IStaticNodeProvider</c> registration goes
+    /// through the same <c>services.AddSingleton</c> path that
+    /// <c>BuiltInAgentProvider</c> + <c>BuiltInLanguageModelProvider</c>
+    /// use, so passing this test means the chat-side dropdowns work.</para>
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task SyncedQuery_FansOutAcrossAllQueryProviders_IncludingStaticNodes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Static-node-provider seeds a node under StaticNamespace at
+        // mesh-init time. ConfigureMesh below registers the provider with
+        // every test class instance; the constant ensures the path is
+        // unique to this test so it doesn't collide with other [Fact]s
+        // that share the mesh.
+        const string staticPath = TestSyncedQueryStaticNodeProvider.StaticPath;
+
+        var observable = Mesh.GetWorkspace().GetQuery(
+            "$static-fanout-test",
+            $"namespace:{TestSyncedQueryStaticNodeProvider.Namespace} scope:subtree nodeType:Markdown");
+
+        var snapshot = await observable
+            .Where(arr => arr.Any(n => n.Path == staticPath))
+            .Take(1)
+            .Timeout(15.Seconds())
+            .ToTask(ct);
+
+        snapshot.Should().Contain(n => n.Path == staticPath,
+            "SyncedQueryMeshNodes must fan out across IEnumerable<IMeshQueryProvider> "
+            + "(incl. StaticNodeQueryProvider) so static-node-provider entries surface "
+            + "in the synced collection — not just the in-memory persistence subset");
+    }
+}
+
+/// <summary>
+/// Test-only static node provider — seeds one
+/// <c>nodeType:Markdown</c> entry under
+/// <see cref="Namespace"/>. Exists to pin the
+/// <see cref="SyncedQueryMeshNodes"/> provider fan-out contract:
+/// nodes from this provider MUST appear in
+/// <c>workspace.GetQuery(...)</c> results, not just persisted nodes.
+/// Registered as an additional <see cref="IStaticNodeProvider"/>
+/// in the test fixture's mesh services.
+/// </summary>
+internal sealed class TestSyncedQueryStaticNodeProvider : IStaticNodeProvider
+{
+    public const string Namespace = "SyncedQueryProviderFanout";
+    public const string StaticPath = $"{Namespace}/static-seed";
+
+    public IEnumerable<MeshNode> GetStaticNodes()
+    {
+        yield return new MeshNode("static-seed", Namespace)
+        {
+            Name = "Static Seed",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+        };
     }
 }
