@@ -60,8 +60,32 @@ public static class PersistenceExtensions
                 services.TryAddSingleton<InMemoryMeshQueryCore>();
                 services.TryAddSingleton<IMeshQueryCore>(sp =>
                     sp.GetRequiredService<InMemoryMeshQueryCore>());
-                services.TryAddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
+
+                // 🚨 SyncedQuery providers MUST live on the mesh-hub scope
+                // (not split between root + mesh-hub) so every child hub —
+                // per-node hubs AND hosted sub-hubs like the per-user portal
+                // hub created by PortalApplication — inherits BOTH providers
+                // via Autofac child-scope resolution. Split registration was
+                // the bug that left chat dropdowns empty: the portal hub's
+                // scope saw only Core (registered here), not Static (registered
+                // at the root container in AddCoreAndWrapperServices). Server-
+                // side IMeshService.QueryAsync resolves at the root container
+                // so it saw both — that's why mesh search worked while chat
+                // dropdowns were empty. Plain AddSingleton (not TryAdd) so
+                // both registrations co-exist as IEnumerable members.
+                services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
                     sp.GetRequiredService<InMemoryMeshQueryCore>());
+                services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
+                {
+                    // Resolve StaticNodeQueryProvider from whichever scope
+                    // has it (root container — see AddCoreAndWrapperServices).
+                    // GetService (nullable) so a host without persistence
+                    // registered doesn't throw inside the synced query's
+                    // subscribe path; returns Core as a no-op duplicate
+                    // (harmless — the synced-query gate dedupes per provider).
+                    return sp.GetService<Query.StaticNodeQueryProvider>()
+                        ?? (ISyncedMeshNodeQueryProvider)sp.GetRequiredService<InMemoryMeshQueryCore>();
+                });
                 return services;
             }))
             // Register the cross-instance mirror handler on the mesh hub.
