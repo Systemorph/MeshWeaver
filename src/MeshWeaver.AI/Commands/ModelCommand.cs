@@ -21,7 +21,10 @@ public class ModelCommand : IChatCommand
     {
         if (context.ParsedCommand.Arguments.Length == 0)
         {
-            // List available models grouped by provider
+            // No args → ask the host to render the model picker. Same shape
+            // as AgentCommand — the host wires its selection back to
+            // SetCurrentModel. The textual list is kept as a fallback for
+            // non-Blazor hosts (and the test harness).
             if (context.AvailableModels == null || !context.AvailableModels.Any())
             {
                 return Task.FromResult(CommandResult.Error(
@@ -35,8 +38,9 @@ public class ModelCommand : IChatCommand
             var modelList = string.Join("\n", grouped.Select(g =>
                 $"**{g.Key}**: {string.Join(", ", g.Select(m => m.Name))}"));
 
-            return Task.FromResult(CommandResult.Error(
-                $"Usage: {Usage}\n\nAvailable models:\n{modelList}"));
+            return Task.FromResult(CommandResult.ShowWidget(
+                ChatWidget.ModelPicker,
+                $"Pick a model — or type `{Usage}`.\n\n{modelList}"));
         }
 
         // Parse model name from argument

@@ -1,6 +1,8 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.AI.Commands;
+using MeshWeaver.AI.Parsing;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Blazor.Portal.SidePanel;
@@ -27,6 +29,30 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
     [Inject] private IMeshService MeshQuery { get; set; } = null!;
     [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
+
+    /// <summary>
+    /// Optional — when present, leading "/word args" in the user input is
+    /// parsed by <see cref="ChatPreParser"/> and dispatched to the matching
+    /// <see cref="IChatCommand"/> instead of being sent to the agent. Wired
+    /// up by <c>AddAgentChatServices</c>.
+    /// </summary>
+    [Inject] private ChatCommandRegistry? CommandRegistry { get; set; }
+
+    /// <summary>Stateless — single instance reused per submission.</summary>
+    private static readonly ChatPreParser ChatParser = new();
+
+    /// <summary>
+    /// Most recent command-result message for the breadcrumb / status row.
+    /// Cleared on the next submission.
+    /// </summary>
+    private string? lastCommandStatus;
+    private bool lastCommandStatusIsError;
+
+    /// <summary>
+    /// Inline widget the most recent command asked us to render. <see cref="ChatWidget.None"/>
+    /// hides the widget area. Driven by <see cref="CommandResult.Widget"/>.
+    /// </summary>
+    private ChatWidget pendingWidget = ChatWidget.None;
 
     private bool _isDisposed;
     private IDisposable? _navContextSubscription;
@@ -60,6 +86,25 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             {
                 threadPath = value.ThreadPath ?? threadPath;
                 initialContext = value.InitialContext ?? initialContext;
+
+                // Restore the user's sticky agent / model selection from the
+                // Thread node so dropdowns survive a reload. Only fires when
+                // we actually have new values — won't clobber an in-progress
+                // user pick that hasn't yet been persisted.
+                if (!string.IsNullOrEmpty(value.SelectedAgentName) &&
+                    selectedAgentInfo?.Name != value.SelectedAgentName)
+                {
+                    var match = agentDisplayInfos.FirstOrDefault(a =>
+                        string.Equals(a.Name, value.SelectedAgentName, StringComparison.OrdinalIgnoreCase));
+                    if (match != null) selectedAgentInfo = match;
+                }
+                if (!string.IsNullOrEmpty(value.SelectedModelName) &&
+                    selectedModelInfo?.Name != value.SelectedModelName)
+                {
+                    var match = availableModels.FirstOrDefault(m =>
+                        string.Equals(m.Name, value.SelectedModelName, StringComparison.OrdinalIgnoreCase));
+                    if (match != null) selectedModelInfo = match;
+                }
             }
 
             // If messages changed, force re-render and release submission handler
@@ -271,59 +316,87 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         SubscribeToAgentNodes();
     }
 
-    // Merged agent nodes from multiple reactive queries, keyed by path
+    // Merged agent + model nodes from reactive queries, keyed by node path.
+    // Single union query (`nodeType:Agent|Model`) gathers both — fork by
+    // content type in OnAgentQueryChange.
     private readonly Dictionary<string, AgentDisplayInfo> _agentsByPath = new();
+    private readonly Dictionary<string, ModelInfo> _modelsByPath = new();
 
     private void SubscribeToAgentNodes()
     {
         agentSubscription?.Dispose();
         _agentsByPath.Clear();
+        _modelsByPath.Clear();
 
-        var subscriptions = new List<IDisposable>();
-
-        // Query 1: Agents from the Agent namespace
-        var agentNsRequest = MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent");
-        subscriptions.Add(MeshQuery.ObserveQuery<MeshNode>(agentNsRequest)
-            .Subscribe(change => InvokeAsync(() => OnAgentQueryChange(change))));
-
-        // Query 2: Agents along the current context path's ancestor chain
-        if (!string.IsNullOrEmpty(initialContext))
+        var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
+        if (workspace == null)
         {
-            var contextRequest = MeshQueryRequest.FromQuery($"namespace:{initialContext} nodeType:Agent scope:selfAndAncestors");
-            subscriptions.Add(MeshQuery.ObserveQuery<MeshNode>(contextRequest)
-                .Subscribe(change => InvokeAsync(() => OnAgentQueryChange(change))));
+            Logger.LogWarning("[ThreadChat:{InstanceId}] No IWorkspace — synced agent/model query skipped",
+                _instanceId);
+            return;
         }
 
-        agentSubscription = new System.Reactive.Disposables.CompositeDisposable(subscriptions);
+        // 🚨 Use SyncedQueryMeshNodes via workspace.GetQuery — NOT
+        // IMeshService.ObserveQuery directly. The synced query maintains a
+        // path → MeshNode dictionary, gates on every per-query Initial
+        // arriving (so we never see partial snapshots), and shares one
+        // upstream subscription across the lifetime of the workspace via
+        // Replay(1).RefCount(). Re-implementing the merge with
+        // ObserveQuery loses every one of those properties — that was
+        // why the dropdowns flashed empty + dropped agents on subsequent
+        // emissions.
+        const string typeAlt = "nodeType:Agent|LanguageModel";
+        var queries = new List<string>
+        {
+            $"namespace:Agent {typeAlt}",
+            $"namespace:Model {typeAlt}"
+        };
+        if (!string.IsNullOrEmpty(initialContext))
+            queries.Add($"namespace:{initialContext} {typeAlt} scope:selfAndAncestors");
+
+        var queryId = $"chat-picker:{initialContext ?? string.Empty}";
+        agentSubscription = workspace.GetQuery(queryId, queries.ToArray())
+            .Subscribe(snapshot => InvokeAsync(() => OnSyncedAgentSnapshot(snapshot)));
     }
 
-    private void OnAgentQueryChange(QueryResultChange<MeshNode> change)
+    /// <summary>
+    /// Receives the full path-keyed snapshot from
+    /// <see cref="SyncedQueryDataSourceExtensions.GetQuery(IWorkspace, object, string[])"/>
+    /// and forks each node into agent / model bucket. Snapshot semantics
+    /// are simple — every emission IS the complete current set, so we
+    /// rebuild from scratch each time (no delta tracking, no flashing
+    /// empty between queries' Initial events).
+    /// </summary>
+    private void OnSyncedAgentSnapshot(IEnumerable<MeshNode> snapshot)
     {
-        if (change.ChangeType == QueryChangeType.Initial ||
-            change.ChangeType == QueryChangeType.Reset ||
-            change.ChangeType == QueryChangeType.Added ||
-            change.ChangeType == QueryChangeType.Updated)
+        _agentsByPath.Clear();
+        _modelsByPath.Clear();
+
+        foreach (var node in snapshot)
         {
-            foreach (var node in change.Items)
+            if (node.Path == null) continue;
+
+            if (string.Equals(node.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
             {
-                var info = ToAgentDisplayInfo(node);
-                if (info != null && node.Path != null)
-                    _agentsByPath[node.Path] = info;
+                var modelInfo = ToModelInfo(node);
+                if (modelInfo != null)
+                    _modelsByPath[node.Path] = modelInfo;
+                continue;
             }
-        }
-        else if (change.ChangeType == QueryChangeType.Removed)
-        {
-            foreach (var node in change.Items)
-            {
-                if (node.Path != null)
-                    _agentsByPath.Remove(node.Path);
-            }
+
+            // Default branch: treat as Agent (covers nodeType:Agent and
+            // any future agent-shaped subtypes).
+            var info = ToAgentDisplayInfo(node);
+            if (info != null)
+                _agentsByPath[node.Path] = info;
         }
 
         agentDisplayInfos = _agentsByPath.Values
             .OrderBy(a => a.Order)
             .ThenBy(a => a.Name)
             .ToList();
+
+        RebuildAvailableModels();
 
         // Preserve current selection if still valid, otherwise select first
         if (selectedAgentInfo != null &&
@@ -345,10 +418,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
-    private static AgentDisplayInfo? ToAgentDisplayInfo(MeshNode node)
+    private AgentDisplayInfo? ToAgentDisplayInfo(MeshNode node)
     {
-        if (node.Content is not AgentConfiguration config)
-            return null;
+        var config = node.Content switch
+        {
+            AgentConfiguration ac => ac,
+            // Fallback: when the typed registry can't materialise Content
+            // (e.g. AddAITypes wasn't applied to the source hub) it arrives
+            // as a raw JsonElement. Deserialise on the spot — without this
+            // the dropdown is silently empty even though the synced query
+            // returned 9 nodes.
+            System.Text.Json.JsonElement je =>
+                TryDeserialise<AgentConfiguration>(je),
+            _ => null
+        };
+        if (config == null) return null;
         return new AgentDisplayInfo
         {
             Name = config.DisplayName ?? config.Id,
@@ -360,6 +444,73 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             CustomIconSvg = config.CustomIconSvg,
             AgentConfiguration = config
         };
+    }
+
+    /// <summary>
+    /// Projects a <c>nodeType:LanguageModel</c> node into the lighter
+    /// <see cref="ModelInfo"/> shape consumed by the picker. Same
+    /// JsonElement-fallback shape as
+    /// <see cref="ToAgentDisplayInfo"/> — covers the case where the
+    /// synced query produced raw JSON because the typed registry on the
+    /// source hub doesn't have ModelDefinition wired up.
+    /// </summary>
+    private ModelInfo? ToModelInfo(MeshNode node)
+    {
+        var def = node.Content switch
+        {
+            ModelDefinition md => md,
+            System.Text.Json.JsonElement je =>
+                TryDeserialise<ModelDefinition>(je),
+            _ => null
+        };
+        return def?.ToModelInfo();
+    }
+
+    private T? TryDeserialise<T>(System.Text.Json.JsonElement je) where T : class
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<T>(
+                je.GetRawText(), Hub.JsonSerializerOptions);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to deserialise {Type} from JsonElement",
+                _instanceId, typeof(T).Name);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Recomputes <see cref="availableModels"/> as the union of
+    /// factory-provided models (from <see cref="IChatClientFactory"/>) and
+    /// mesh-discovered <c>nodeType:Model</c> nodes. Mesh entries take
+    /// precedence on Id collision so a user-authored Model node can
+    /// override / customise a factory default.
+    /// </summary>
+    private void RebuildAvailableModels()
+    {
+        // Factory-provided baseline.
+        var factoryModels = ChatClientFactories
+            .OrderBy(f => f.Order)
+            .SelectMany(f => f.Models.Select(m => new ModelInfo
+            {
+                Name = m,
+                Provider = f.Name,
+                Order = f.Order
+            }));
+
+        var byName = factoryModels.ToDictionary(m => m.Name, m => m, StringComparer.OrdinalIgnoreCase);
+
+        // Mesh-defined models override on Id collision.
+        foreach (var meshModel in _modelsByPath.Values)
+            byName[meshModel.Name] = meshModel;
+
+        availableModels = byName.Values
+            .OrderBy(m => m.Order)
+            .ThenBy(m => m.Provider, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private ModelInfo? GetPreferredModelInfoForAgent(string agentName)
@@ -398,6 +549,26 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             // Use MessageText (updated via Monaco ValueChanged binding) — no blocking Monaco read.
             var userMessageText = MessageText;
+
+            // Slash-command interception: parse leading "/word args" via
+            // ChatPreParser. If a registered IChatCommand handles it,
+            // dispatch and short-circuit (don't post to the agent). Tests
+            // for /agent + /model live in MeshWeaver.AI.Test.
+            if (!string.IsNullOrWhiteSpace(userMessageText) && CommandRegistry != null)
+            {
+                var parsed = ChatParser.Parse(userMessageText);
+                if (parsed.Command != null)
+                {
+                    _ = HandleSlashCommandAsync(parsed.Command);
+                    // Clear the input + bail — submissionHandler.TryBeginSubmit
+                    // hasn't been called yet, so no need to release.
+                    MessageText = null;
+                    if (monacoEditor != null)
+                        _ = ClearMonacoAsync();
+                    StateHasChanged();
+                    return;
+                }
+            }
 
             // Attempt to begin submission — rejects empty text and concurrent submissions
             if (!submissionHandler.TryBeginSubmit(userMessageText))
@@ -486,6 +657,105 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             Logger.LogError(ex, "[ThreadChat:{InstanceId}] SubmitMessageCore failed", _instanceId);
         }
+    }
+
+    /// <summary>
+    /// Dispatches a parsed slash command through <see cref="ChatCommandRegistry"/>.
+    /// Reads + writes the chat view's local agent/model state via the
+    /// <see cref="CommandContext"/> callbacks; updates
+    /// <see cref="lastCommandStatus"/> for the breadcrumb. No await on hub
+    /// calls — the IChatCommand contract is in-process logic only.
+    /// </summary>
+    private async Task HandleSlashCommandAsync(ParsedCommand parsedCommand)
+    {
+        if (CommandRegistry == null)
+            return;
+
+        if (!CommandRegistry.TryGetCommand(parsedCommand.Name, out var command) || command == null)
+        {
+            lastCommandStatus = $"Unknown command: /{parsedCommand.Name}";
+            lastCommandStatusIsError = true;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var context = new CommandContext
+        {
+            ParsedCommand = parsedCommand,
+            AvailableAgents = agentDisplayInfos.ToDictionary(a => a.Name, a => a, StringComparer.OrdinalIgnoreCase),
+            CurrentAgent = selectedAgentInfo,
+            SetCurrentAgent = a => OnAgentChanged(a),
+            AvailableModels = availableModels,
+            CurrentModel = selectedModelInfo,
+            SetCurrentModel = m => OnModelChanged(m),
+            CommandRegistry = CommandRegistry
+        };
+
+        try
+        {
+            var result = await command.ExecuteAsync(context);
+            // When the command pops a picker widget, the picker IS the
+            // response — clear lastCommandStatus so the breadcrumb shows
+            // just the active-agent / active-model pills, not the long
+            // "Pick an agent — or type ..." help text that's only useful
+            // as a fallback for headless hosts.
+            pendingWidget = result.Widget;
+            if (result.Widget != ChatWidget.None)
+            {
+                lastCommandStatus = null;
+                lastCommandStatusIsError = false;
+            }
+            else
+            {
+                lastCommandStatus = result.Message;
+                lastCommandStatusIsError = !result.Success;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] /{Cmd} failed", _instanceId, parsedCommand.Name);
+            lastCommandStatus = $"/{parsedCommand.Name} failed: {ex.Message}";
+            lastCommandStatusIsError = true;
+            pendingWidget = ChatWidget.None;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Selection callback wired to the inline agent picker.
+    /// Equivalent to running <c>/agent &lt;name&gt;</c>.
+    /// </summary>
+    private void OnAgentPickerSelected(AgentDisplayInfo? agent)
+    {
+        if (agent == null) return;
+        OnAgentChanged(agent);
+        // The breadcrumb pill itself shows the new active agent — keep the
+        // confirmation short so the row stays clean.
+        lastCommandStatus = $"Switched agent → {agent.Name}";
+        lastCommandStatusIsError = false;
+        pendingWidget = ChatWidget.None;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Selection callback wired to the inline model picker.
+    /// Equivalent to running <c>/model &lt;name&gt;</c>.
+    /// </summary>
+    private void OnModelPickerSelected(ModelInfo? model)
+    {
+        if (model == null) return;
+        OnModelChanged(model);
+        lastCommandStatus = $"Switched model → {model.Name}";
+        lastCommandStatusIsError = false;
+        pendingWidget = ChatWidget.None;
+        StateHasChanged();
+    }
+
+    private void DismissWidget()
+    {
+        pendingWidget = ChatWidget.None;
+        StateHasChanged();
     }
 
     private async Task ClearMonacoAsync()
@@ -735,6 +1005,51 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         NavigationManager.NavigateTo($"/{path}");
     }
 
+    /// <summary>
+    /// Writes the user's sticky agent / model selection onto the
+    /// <see cref="Thread"/> node so the picker re-populates after a reload.
+    /// Distinct from <see cref="MeshWeaver.AI.Thread.PendingAgentName"/> /
+    /// <see cref="MeshWeaver.AI.Thread.PendingModelName"/> which the server
+    /// clears after each round — those describe the *next* execution, not
+    /// the user's preference. No-op when no thread exists yet (the choice
+    /// gets stamped onto the thread by ThreadInput.AppendUserInput when
+    /// the first message is submitted).
+    /// </summary>
+    private void PersistSelectionOnThread(string? agentName, string? modelName)
+    {
+        if (string.IsNullOrEmpty(threadPath))
+            return;
+        try
+        {
+            var ws = Hub.ServiceProvider.GetService<IWorkspace>();
+            if (ws == null) return;
+            ws.GetMeshNodeStream(threadPath).Update(node =>
+            {
+                var thread = node.Content as MeshWeaver.AI.Thread ?? new MeshWeaver.AI.Thread();
+                if (thread.SelectedAgentName == agentName && thread.SelectedModelName == modelName)
+                    return node; // no-op
+                return node with
+                {
+                    Content = thread with
+                    {
+                        SelectedAgentName = agentName ?? thread.SelectedAgentName,
+                        SelectedModelName = modelName ?? thread.SelectedModelName
+                    }
+                };
+            }).Subscribe(
+                _ => { },
+                ex => Logger.LogWarning(ex,
+                    "[ThreadChat:{InstanceId}] Persisting selection {Agent}/{Model} on {Thread} failed",
+                    _instanceId, agentName, modelName, threadPath));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex,
+                "[ThreadChat:{InstanceId}] PersistSelectionOnThread skipped (workspace unavailable)",
+                _instanceId);
+        }
+    }
+
     private void OnAgentChanged(AgentDisplayInfo? newAgent)
     {
         if (newAgent == null || newAgent.Name == selectedAgentInfo?.Name)
@@ -749,6 +1064,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             selectedModelInfo = preferredModel;
         }
 
+        // Persist the user's sticky choice on the thread so it survives a
+        // reload. Distinct from PendingAgentName which is transient (the
+        // server clears it after the round runs).
+        PersistSelectionOnThread(newAgent.Name, selectedModelInfo?.Name);
+
         StateHasChanged();
     }
 
@@ -758,6 +1078,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
 
         selectedModelInfo = newModel;
+
+        // Persist the model choice too (sticky, distinct from PendingModelName).
+        PersistSelectionOnThread(selectedAgentInfo?.Name, newModel.Name);
 
         if (selectedAgentInfo != null)
         {

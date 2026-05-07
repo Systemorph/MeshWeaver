@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.AI.Commands;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -6,6 +7,8 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -24,6 +27,7 @@ public static class AIExtensions
                     .AddThreadMessageType()
                     .AddThreadType()
                     .AddAgentType()
+                    .AddLanguageModelType()
                     .ConfigureServices(services => services.AddAgentChatServices())
                     // Register AI types on the MESH hub (for MeshQuery deserialization of Thread content)
                     .ConfigureHub(config =>
@@ -70,6 +74,7 @@ public static class AIExtensions
     public static ITypeRegistry AddAITypes(this ITypeRegistry typeRegistry)
         => typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration))
             .WithType(typeof(AgentDelegation), nameof(AgentDelegation))
+            .WithType(typeof(ModelDefinition), nameof(ModelDefinition))
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
             // MessageViewModel is not registered — handled as JsonElement on the wire
@@ -104,6 +109,25 @@ public static class AIExtensions
                 .BindConfiguration("ModelTier");
             services.AddTransient<IIconGenerator, IconGenerator>();
             services.AddTransient<IDescriptionGenerator, DescriptionGenerator>();
+
+            // Slash-command infrastructure: each IChatCommand is an
+            // independent class; the registry composes them. Registered as
+            // singletons so registration is idempotent across multiple
+            // AddAgentChatServices() calls (mesh hub + portal hub both
+            // configure AI). Help.HelpCommand resolves the registry lazily
+            // to break the constructor cycle.
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatCommand, AgentCommand>());
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatCommand, ModelCommand>());
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatCommand, HelpCommand>());
+            services.TryAddSingleton<ChatCommandRegistry>(sp =>
+            {
+                var registry = new ChatCommandRegistry(
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<ChatCommandRegistry>());
+                foreach (var cmd in sp.GetServices<IChatCommand>())
+                    registry.Register(cmd);
+                return registry;
+            });
+
             return services;
         }
 

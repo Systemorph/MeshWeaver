@@ -145,25 +145,33 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     }
 
     /// <summary>
-    /// Single-subscription pipeline: per-query mesh-query → fold every
-    /// Initial / Added / Updated / Removed event into a path → MeshNode
-    /// dictionary; emit the values whenever it changes.
+    /// Per <see href="../Doc/Architecture/CqrsAndContentAccess.md">CQRS</see>:
+    /// queries are for finding sets of paths, NOT for reading content.
+    /// The pipeline is:
     ///
-    /// <para>
-    /// We accumulate values directly from <see cref="IMeshQueryProvider.ObserveQuery"/>
-    /// rather than opening per-path remote streams + <c>CombineLatest</c>:
-    /// the upstream query already carries the latest <see cref="MeshNode"/>
-    /// for every result-set member through its <c>Updated</c> events, and
-    /// the per-path-remote-stream + <c>CombineLatest</c> design produces
-    /// the well-known feedback-loop pattern (outer re-emits when inner
-    /// values change → <c>CombineLatest</c> tears down + rebuilds → cycle).
-    /// </para>
+    /// <list type="number">
+    ///   <item>For each query, <see cref="IMeshQueryProvider.ObserveQuery"/>
+    ///         emits the set of matching paths (we IGNORE the MeshNode
+    ///         payload it carries — content read here would be lagged
+    ///         and stale).</item>
+    ///   <item>Union the per-query path sets via <c>CombineLatest</c> +
+    ///         <c>DistinctUntilChanged</c> so the downstream stream only
+    ///         re-emits when paths add or remove.</item>
+    ///   <item>For each path in the unioned set, open ONE
+    ///         <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>
+    ///         — the authoritative live content for that node from its
+    ///         owning hub. Combine the per-path streams via
+    ///         <c>Switch</c> + <c>CombineLatest</c> so an Update inside a
+    ///         single node propagates without re-running the path-set
+    ///         query.</item>
+    /// </list>
     ///
-    /// <para>
-    /// For multi-query unions, every query updates the same dictionary —
-    /// last-write-wins on duplicate paths, which is fine because all
-    /// queries return the same MeshNode for a given path.
-    /// </para>
+    /// <para>The previous design accumulated content directly from the
+    /// query's Updated events. That violated the CQRS contract — the
+    /// query layer is eventually consistent and Update events lagged
+    /// real writes by 10–100 ms. The remote-stream-per-path design
+    /// reads from the OWNING hub's workspace so every snapshot reflects
+    /// authoritative current state.</para>
     /// </summary>
     private static IObservable<IEnumerable<MeshNode>> BuildReadStream(
         IWorkspace workspace,
@@ -187,26 +195,36 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
         Subject<QueryResultChange<MeshNode>> externalChanges)
     {
-        // Use IMeshQueryCore (the unsecured surface) — its implementation
-        // (InMemoryMeshQueryCore) does NOT take ISecurityService as a
-        // constructor dependency, so resolving it here can never re-enter
-        // SecurityService and create the DI cycle that previously
-        // stack-overflowed.
+        // 🚨 Iterate the dedicated ISyncedMeshNodeQueryProvider marker
+        // interface — NOT IMeshQueryProvider. The marker pulls in the
+        // unsecured providers that are safe to consume from a synced
+        // query (StaticNodeQueryProvider + the unsecured persistence
+        // surface) and excludes the secured InMemoryMeshQuery whose
+        // SecurityService dependency creates a re-entrancy cycle when
+        // the synced query is the one feeding SecurityService itself
+        // (`nodeType:AccessAssignment`). Type-tagged registration —
+        // not a name-string filter — see ISyncedMeshNodeQueryProvider.
         //
-        // UserId = WellKnownUsers.System bypasses the RLS read-validator chain
-        // so the synced query stays infrastructure-level. Without this, a
-        // SecurityService-driven synced query for `nodeType:AccessAssignment`
-        // would recurse: the per-node read validator calls SecurityService
-        // which subscribes back to this same stream → deadlock waiting for
-        // its own Initial emission.
-        var queryCore = workspace.Hub.ServiceProvider
-            .GetRequiredService<IMeshQueryCore>();
+        // The previous design used IMeshQueryCore (a single in-memory
+        // provider) and missed every static-node-provider entry: chat
+        // dropdowns and every synced-query consumer were silently empty
+        // even though `IMeshService.QueryAsync` (which fans out across
+        // all IMeshQueryProviders) returned the same nodes fine. Marker
+        // fan-out fixes that without the cycle.
+        var providers = workspace.Hub.ServiceProvider
+            .GetServices<ISyncedMeshNodeQueryProvider>()
+            .ToArray();
         var options = workspace.Hub.JsonSerializerOptions;
 
-        IObservable<QueryResultChange<MeshNode>> ObserveOne(string query) =>
-            queryCore.ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery(query, WellKnownUsers.System),
-                options);
+        IObservable<QueryResultChange<MeshNode>> ObserveOne(string query)
+        {
+            var request = MeshQueryRequest.FromQuery(query, WellKnownUsers.System);
+            if (providers.Length == 0)
+                return Observable.Empty<QueryResultChange<MeshNode>>();
+            return providers
+                .Select(p => p.ObserveQuery<MeshNode>(request, options))
+                .Merge();
+        }
 
         // Hub-level change-feed deletion fast-path: when ANY hub publishes a
         // delete via IMeshChangeFeed (the canonical post-delete dispatch in

@@ -193,6 +193,15 @@ var portal = builder
     .WithEnvironment("Anthropic__Endpoint", anthropicEndpoint)
     .WithEnvironment("Anthropic__ApiKey", azureFoundryKey)
     .WithEnvironment("Anthropic__Order", "1")
+    // Advertise the deployed Claude catalog so the factory's Models[] is
+    // non-empty — that's what BuiltInLanguageModelProvider scans to seed
+    // the `nodeType:LanguageModel` mesh nodes under `Model/<id>`. Without
+    // these the picker lists nothing for Anthropic and `claude-sonnet-4-6`
+    // doesn't appear in autocomplete. Heavy/Standard/Light come from the
+    // ModelTier params below — keep the catalog in sync.
+    .WithEnvironment("Anthropic__Models__0", modelTierHeavy)
+    .WithEnvironment("Anthropic__Models__1", modelTierStandard)
+    .WithEnvironment("Anthropic__Models__2", modelTierLight)
     // Model tier → concrete model mapping. Sourced from parameters so the
     // deployment owns the model identity.
     .WithEnvironment("ModelTier__Heavy", modelTierHeavy)

@@ -38,7 +38,7 @@ internal class InMemoryMeshQueryCore(
     IDataChangeNotifier? changeNotifier = null,
     MeshConfiguration? meshConfiguration = null,
     ILogger<InMemoryMeshQueryCore>? logger = null)
-    : IMeshQueryCore
+    : IMeshQueryCore, ISyncedMeshNodeQueryProvider
 {
     protected readonly IStorageService Persistence = persistence;
     protected readonly AccessService? AccessServiceField = accessService;

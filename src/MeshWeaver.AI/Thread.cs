@@ -161,6 +161,22 @@ public record Thread
     /// <summary>Model name for pending execution.</summary>
     public string? PendingModelName { get; init; }
 
+    /// <summary>
+    /// Agent name selected on this thread (sticky across reloads). The
+    /// chat picker reads this on resume so the user's choice survives a
+    /// page refresh / Aspire restart. Updated whenever the user picks a
+    /// different agent (dropdown or <c>/agent</c> command). Null on a new
+    /// thread → the chat falls back to the orchestrator default.
+    /// </summary>
+    public string? SelectedAgentName { get; init; }
+
+    /// <summary>
+    /// Model id selected on this thread (sticky across reloads). Same
+    /// resume semantics as <see cref="SelectedAgentName"/>. Null →
+    /// inherit the selected agent's PreferredModel (or first available).
+    /// </summary>
+    public string? SelectedModelName { get; init; }
+
     /// <summary>Context path for pending execution.</summary>
     public string? PendingContextPath { get; init; }
 

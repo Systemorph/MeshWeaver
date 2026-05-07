@@ -21,10 +21,16 @@ public class AgentCommand : IChatCommand
     {
         if (context.ParsedCommand.Arguments.Length == 0)
         {
-            // List available agents
+            // No args → ask the host to render a mesh-node picker filtered to
+            // nodeType:Agent. The host wires its selection back to
+            // SetCurrentAgent, exactly as if the user had typed /agent <Name>
+            // with that name. Falls back to the textual list of agents in the
+            // message body so non-Blazor hosts (and the test harness) still
+            // get a useful response.
             var agentNames = string.Join(", ", context.AvailableAgents.Keys.OrderBy(n => n));
-            return Task.FromResult(CommandResult.Error(
-                $"Usage: {Usage}\n\nAvailable agents: {agentNames}"));
+            return Task.FromResult(CommandResult.ShowWidget(
+                ChatWidget.AgentPicker,
+                $"Pick an agent — or type `{Usage}`. Available: {agentNames}"));
         }
 
         // Parse agent name from argument

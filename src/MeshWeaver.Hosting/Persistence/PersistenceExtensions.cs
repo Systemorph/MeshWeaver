@@ -57,7 +57,11 @@ public static class PersistenceExtensions
         return (TBuilder)builder
             .ConfigureHub(config => config.WithServices(services =>
             {
-                services.TryAddSingleton<IMeshQueryCore, InMemoryMeshQueryCore>();
+                services.TryAddSingleton<InMemoryMeshQueryCore>();
+                services.TryAddSingleton<IMeshQueryCore>(sp =>
+                    sp.GetRequiredService<InMemoryMeshQueryCore>());
+                services.TryAddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
+                    sp.GetRequiredService<InMemoryMeshQueryCore>());
                 return services;
             }))
             // Register the cross-instance mirror handler on the mesh hub.
@@ -345,10 +349,17 @@ public static class PersistenceExtensions
         // where the per-hub container couldn't see a root-level singleton.
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
-        services.AddSingleton<IMeshQueryProvider>(sp =>
+        // Registered as BOTH IMeshQueryProvider (for IMeshService fan-out)
+        // AND ISyncedMeshNodeQueryProvider (the dedicated marker for
+        // synced-query path discovery — see SyncedQueryMeshNodes).
+        services.AddSingleton<StaticNodeQueryProvider>(sp =>
             new StaticNodeQueryProvider(
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>()));
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            sp.GetRequiredService<StaticNodeQueryProvider>());
+        services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
+            sp.GetRequiredService<StaticNodeQueryProvider>());
 
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
@@ -558,10 +569,17 @@ public static class PersistenceExtensions
         // comment on <see cref="AddPersistence(IServiceCollection,IStorageService)"/>.
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
-        services.AddSingleton<IMeshQueryProvider>(sp =>
+        // Registered as BOTH IMeshQueryProvider (for IMeshService fan-out)
+        // AND ISyncedMeshNodeQueryProvider (the dedicated marker for
+        // synced-query path discovery — see SyncedQueryMeshNodes).
+        services.AddSingleton<StaticNodeQueryProvider>(sp =>
             new StaticNodeQueryProvider(
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>()));
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            sp.GetRequiredService<StaticNodeQueryProvider>());
+        services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
+            sp.GetRequiredService<StaticNodeQueryProvider>());
 
         // Register IVersionQuery for non-partitioned mode (uses FileSystemVersionStore if available)
         services.TryAddSingleton<IVersionQuery>(sp =>

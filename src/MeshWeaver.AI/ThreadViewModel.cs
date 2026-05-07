@@ -46,6 +46,19 @@ public record ThreadViewModel
     /// <summary>When the current execution started (for elapsed time display).</summary>
     public DateTime? ExecutionStartedAt { get; init; }
 
+    /// <summary>
+    /// Sticky agent selection from <see cref="Thread.SelectedAgentName"/>.
+    /// On thread load the chat picker pre-selects this so the user's choice
+    /// survives a page reload. Null on a brand-new thread.
+    /// </summary>
+    public string? SelectedAgentName { get; init; }
+
+    /// <summary>
+    /// Sticky model selection from <see cref="Thread.SelectedModelName"/>.
+    /// Same persistence shape as <see cref="SelectedAgentName"/>.
+    /// </summary>
+    public string? SelectedModelName { get; init; }
+
     public virtual bool Equals(ThreadViewModel? other)
     {
         if (other is null) return false;
@@ -60,6 +73,8 @@ public record ThreadViewModel
                && StreamingText == other.StreamingText
                && TokensUsed == other.TokensUsed
                && ExecutionStartedAt == other.ExecutionStartedAt
+               && SelectedAgentName == other.SelectedAgentName
+               && SelectedModelName == other.SelectedModelName
                && Messages.SequenceEqual(other.Messages)
                && (StreamingToolCalls ?? []).SequenceEqual(other.StreamingToolCalls ?? []);
     }
@@ -77,6 +92,8 @@ public record ThreadViewModel
         hash.Add(StreamingText);
         hash.Add(TokensUsed);
         hash.Add(ExecutionStartedAt);
+        hash.Add(SelectedAgentName);
+        hash.Add(SelectedModelName);
         foreach (var msg in Messages)
             hash.Add(msg);
         if (StreamingToolCalls != null)

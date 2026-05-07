@@ -117,6 +117,36 @@
     overflow: visible;
     min-width: 0;
     max-width: 100%;
+    /* Position context so the "Allocating agent…" overlay can sit on top of
+       the dimmed input content without changing the box's outer height. */
+    position: relative;
+}
+
+.thread-chat-input-area.is-allocating .thread-allocating-panel {
+    /* Float the banner over the (still-rendered) input content so the box
+       keeps its natural height. The dialog used to swap the entire input
+       subtree for a small spinner panel and snap back when the thread
+       was ready, which the user noticed as a layout jump. */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    z-index: 2;
+    background: color-mix(in srgb, var(--neutral-layer-card-container) 92%, transparent);
+    backdrop-filter: blur(2px);
+    border-radius: 8px;
+}
+
+.thread-chat-input-content {
+    transition: opacity 120ms ease;
+}
+
+.thread-chat-input-content.dimmed {
+    opacity: 0.35;
+    pointer-events: none;
+    user-select: none;
 }
 
 .input-container {
@@ -135,6 +165,192 @@
     overflow: visible;
     flex-wrap: nowrap;
     min-width: 0;
+}
+
+/* Agent + Model dropdown row above the chat input. Driven by the
+   workspace synced query (loadedAgents / availableModels). Slash
+   commands /agent and /model update the same state — both surfaces stay
+   in sync. */
+.thread-chat-selectors {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 2px 6px 2px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+/* SimpleDropdown root has `width: 100%` so it fills its container in
+   form layouts. Inside the flex selectors row that means each dropdown
+   takes the whole row and they stack. Constrain width here so they sit
+   side-by-side; allow the button itself to size to its content. */
+.thread-chat-selectors ::deep .simple-dropdown {
+    width: auto;
+    flex: 0 0 auto;
+    max-width: 280px;
+}
+
+.thread-chat-selectors .simple-dropdown-item-path,
+.thread-chat-selectors .simple-dropdown-item-description {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+}
+
+/* Icon / name layout inside dropdown items. Explicit color: in dark mode
+   the inner <span> inherits transparent text from FluentIcon's wrapper
+   if we don't pin it — that produced "icon visible, name invisible"
+   chips that the user noticed. */
+.thread-chat-selectors ::deep .dropdown-icon-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--neutral-foreground-rest);
+}
+
+.thread-chat-selectors ::deep .dropdown-icon-name span {
+    color: var(--neutral-foreground-rest);
+    font-weight: 500;
+}
+
+.thread-chat-selectors ::deep .dropdown-icon-name svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    color: var(--neutral-foreground-hint);
+}
+
+/* Inside the SELECTED dropdown button — same layout, but the span/icon
+   inherit the button's foreground (which Fluent's button styling
+   already sets correctly for accent / neutral surfaces). */
+.thread-chat-selectors ::deep .simple-dropdown-button .dropdown-icon-name,
+.thread-chat-selectors ::deep .simple-dropdown-button .dropdown-icon-name span,
+.thread-chat-selectors ::deep .simple-dropdown-button .dropdown-icon-name svg {
+    color: inherit;
+}
+
+/* Confirmation / error message from a slash-command (e.g. "Switched
+   agent → Worker"). Trails after the dropdowns; cleared on next
+   submission. */
+.thread-chat-status-msg {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
+}
+
+.thread-chat-status-msg.error {
+    color: var(--error-rest, #c0392b);
+    font-style: normal;
+}
+
+/* Inline picker widget rendered above the editor when /agent or /model
+   is invoked without an argument. Theme-aware via Fluent design tokens
+   so dark mode + high-contrast read correctly. */
+.thread-chat-widget {
+    margin-bottom: 8px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    background: var(--neutral-layer-1);
+    overflow: hidden;
+    max-height: 280px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.thread-chat-widget-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+    background: var(--neutral-layer-2);
+    border-bottom: 1px solid var(--neutral-stroke-rest);
+}
+
+.thread-chat-widget-list {
+    overflow-y: auto;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.thread-chat-widget-group {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--neutral-foreground-hint);
+    padding: 8px 8px 4px 8px;
+    font-weight: 600;
+}
+
+/* Reset native button defaults — without `appearance: none` the chip-style
+   buttons fell back to the browser's grey-on-grey button rendering and
+   ignored the dark-mode tokens. */
+.thread-chat-widget-item {
+    appearance: none;
+    -webkit-appearance: none;
+    text-align: left;
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--neutral-foreground-rest);
+    font: inherit;
+    transition: background 80ms ease, border-color 80ms ease;
+}
+
+.thread-chat-widget-item:hover,
+.thread-chat-widget-item:focus-visible {
+    background: var(--neutral-fill-stealth-hover);
+    border-color: var(--neutral-stroke-rest);
+    outline: none;
+}
+
+.thread-chat-widget-item.selected {
+    background: var(--accent-fill-rest);
+    color: var(--foreground-on-accent-rest);
+    border-color: var(--accent-stroke-control-rest);
+}
+
+.thread-chat-widget-item-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: inherit;
+}
+
+.thread-chat-widget-item-path,
+.thread-chat-widget-item-desc {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+}
+
+.thread-chat-widget-item.selected .thread-chat-widget-item-path,
+.thread-chat-widget-item.selected .thread-chat-widget-item-desc {
+    color: var(--foreground-on-accent-rest);
+    opacity: 0.85;
+}
+
+.thread-chat-widget-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.85rem;
+}
+
+/* Attachment chips moved below the send button — they're inputs to the
+   next message, not state about the current one, so they belong at the
+   bottom of the dialog where the user is actively composing. */
+.thread-chat-attachments {
+    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px dashed var(--neutral-stroke-rest);
 }
 
 .loading-overlay {

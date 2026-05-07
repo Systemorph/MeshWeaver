@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -52,6 +53,41 @@ public class AgentChatClient : IAgentChat
 
     // Conversation history loaded from persisted ThreadMessage nodes for resume
     private IReadOnlyList<ThreadMessage>? conversationHistory;
+
+    /// <summary>
+    /// Mesh-discovered models — bring-your-own-model entries from
+    /// <c>nodeType:Model</c> nodes. Surfaced into ThreadChatView's picker
+    /// alongside the factory-provided defaults.
+    /// </summary>
+    private ImmutableList<ModelInfo> loadedModels = ImmutableList<ModelInfo>.Empty;
+
+    /// <summary>
+    /// Snapshot of the synced model collection. Read by the chat view on
+    /// every <see cref="WhenInitialized"/> emission.
+    /// </summary>
+    public IReadOnlyList<ModelInfo> LoadedModels => loadedModels;
+
+    // Live subscription to the workspace-level synced agent collection. Disposed
+    // and replaced on every Initialize() call so the current context's queries
+    // become the active source. The synced query itself is cached at the
+    // workspace level (per (contextPath, nodeType) tuple), so subscribing
+    // again to the same id reuses one upstream subscription across instances.
+    private IDisposable? agentsSubscription;
+
+    // Latches the current loadedAgents emission as a hot observable so callers
+    // (ThreadExecution + tests) can opt into an explicit ready-gate without
+    // forcing Initialize itself to be async.
+    private readonly ReplaySubject<AgentChatClient> agentsLoadedSubject = new(bufferSize: 1);
+
+    /// <summary>
+    /// Hot observable that emits this client every time the synced agent
+    /// collection refreshes (initial load + every subsequent change). Replays
+    /// the latest emission to new subscribers, so callers can use
+    /// <c>chat.WhenInitialized.Take(1)</c> as a "wait until agents are ready"
+    /// gate without coupling to the cold/warm distinction inside
+    /// <see cref="Initialize"/>.
+    /// </summary>
+    public IObservable<AgentChatClient> WhenInitialized => agentsLoadedSubject;
 
     public AgentChatClient(IServiceProvider serviceProvider)
     {
@@ -496,8 +532,8 @@ public class AgentChatClient : IAgentChat
         var lastMessageText = messages.LastOrDefault() is { } last ? ExtractTextFromMessage(last) : null;
         DetectMessageAgentReferences(lastMessageText);
 
-        // Select which agent to use (async to avoid deadlock in Blazor context)
-        var agent = await SelectAgentAsync(messages.LastOrDefault());
+        // Pure in-memory lookup against the synced agent cache.
+        var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
             yield return new ChatMessage(ChatRole.Assistant, "No suitable agent found to handle the request.");
@@ -616,8 +652,8 @@ public class AgentChatClient : IAgentChat
         var lastMessageTextStreaming = messages.LastOrDefault() is { } lastMsg ? ExtractTextFromMessage(lastMsg) : null;
         DetectMessageAgentReferences(lastMessageTextStreaming);
 
-        // Select which agent to use (async to avoid deadlock in Blazor context)
-        var agent = await SelectAgentAsync(messages.LastOrDefault());
+        // Pure in-memory lookup against the synced agent cache.
+        var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
             yield return new ChatResponseUpdate(ChatRole.Assistant, "No suitable agent found to handle the request.");
@@ -794,7 +830,15 @@ public class AgentChatClient : IAgentChat
     private static readonly Regex AgentReferencePattern =
         new(@"@agent/(\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private async Task<ChatClientAgent?> SelectAgentAsync(ChatMessage? lastMessage)
+    /// <summary>
+    /// Pure in-memory selection over the synced agent cache (<see cref="loadedAgents"/>
+    /// + <see cref="agents"/>). No queries, no awaits — both collections are
+    /// kept fresh by the workspace-level synced query subscription wired up in
+    /// <see cref="Initialize"/>. Anyone who needs the agent list elsewhere
+    /// must read from those caches; do NOT add per-call <c>QueryAsync</c>
+    /// fallbacks here.
+    /// </summary>
+    private ChatClientAgent? SelectAgent(ChatMessage? lastMessage)
     {
         // 1. Check for explicit @agent/Name reference in message (highest priority)
         if (lastMessage != null)
@@ -831,12 +875,11 @@ public class AgentChatClient : IAgentChat
         if (!string.IsNullOrEmpty(currentAgentName) && agents.TryGetValue(currentAgentName, out var selectedAgent))
             return selectedAgent;
 
-        // 4. Use ordered agents - first one is the best match for context
-        // GetOrderedAgentsAsync already handles: context pattern matching, NodeType namespace, path relevance
-        var orderedAgents = await GetOrderedAgentsAsync();
-        if (orderedAgents.Count > 0)
+        // 4. Use the synced ordered list — best match for context, kept fresh
+        // by the workspace synced query (see Initialize).
+        if (loadedAgents.Count > 0)
         {
-            var bestAgent = orderedAgents[0];
+            var bestAgent = loadedAgents[0];
             if (agents.TryGetValue(bestAgent.Name, out var agent))
                 return agent;
         }
@@ -873,7 +916,15 @@ public class AgentChatClient : IAgentChat
     /// Re-emits when agent definitions change (system prompt updates, new agents added).
     /// Uses ObserveQuery (reactive) — no await, no blocking, no deadlock.
     /// </summary>
-    public IObservable<AgentChatClient> Initialize(string? contextPath, string? modelName = null)
+    /// <summary>
+    /// Synchronously binds this chat client to the workspace's shared synced
+    /// agent collection for the given context. Returns immediately; agents
+    /// populate when the underlying <see cref="SyncedQueryDataSourceExtensions.GetQuery(IWorkspace, object, string[])"/>
+    /// emits — synchronously when warm-cached, asynchronously on first cold
+    /// load. Callers that need an explicit ready-gate should subscribe to
+    /// <see cref="WhenInitialized"/>.
+    /// </summary>
+    public AgentChatClient Initialize(string? contextPath, string? modelName = null)
     {
         // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
         // their main-node path before any downstream query/cache key uses them.
@@ -882,271 +933,269 @@ public class AgentChatClient : IAgentChat
         lastLoadedContextPath = contextPath;
 
         if (meshQuery == null)
-            return Observable.Return(this);
-
-        var q1 = string.IsNullOrEmpty(contextPath)
-            ? "nodeType:Agent"
-            : $"nodeType:Agent namespace:{contextPath} scope:selfAndAncestors";
-
-        // 🚨 Both streams MUST emit at least one value or CombineLatest hangs and chat
-        // never escapes "Allocating agent…". Seed each with an empty Initial-snapshot
-        // (StartWith) so even a stalled / mis-routed ObserveQuery doesn't gate the
-        // whole chat flow on agent discovery — if no agents exist the chat continues
-        // and SelectAgentAsync will fall back to its NullAgent path. Also Timeout
-        // each individual stream so a pathologically slow query is bounded.
-        var emptyInitial = new QueryResultChange<MeshNode>
         {
-            ChangeType = QueryChangeType.Initial,
-            Items = Array.Empty<MeshNode>()
-        };
-        var contextAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q1))
-            .Timeout(TimeSpan.FromSeconds(10), Observable.Empty<QueryResultChange<MeshNode>>())
-            .StartWith(emptyInitial);
-        var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent"))
-            .Timeout(TimeSpan.FromSeconds(10), Observable.Empty<QueryResultChange<MeshNode>>())
-            .StartWith(emptyInitial);
-
-        // CombineLatest: re-emit whenever either query updates (agent added/changed)
-        return contextAgents.CombineLatest(globalAgents, (ctx, global) =>
-        {
-            var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
-
-            foreach (var node in ctx.Items)
-            {
-                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-            }
-            foreach (var node in global.Items)
-            {
-                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-            }
-
-            loadedAgents = agentsDict.Values.Select(x => new AgentDisplayInfo
-            {
-                Name = x.Config.Id, Path = x.Path,
-                Description = x.Config.Description ?? x.Config.DisplayName ?? x.Config.Id,
-                GroupName = x.Config.GroupName, Order = x.Config.Order,
-                Icon = x.Config.Icon, CustomIconSvg = x.Config.CustomIconSvg,
-                AgentConfiguration = x.Config
-            }).ToImmutableList();
-
-            loadedAgents = AgentOrderingHelper.OrderByRelevance(
-                loadedAgents, contextPath?.TrimStart('/') ?? "", "").ToImmutableList();
-
-            logger.LogInformation("[AgentChatClient] Initialize: {Count} agents: [{Agents}]",
-                loadedAgents.Count, string.Join(", ", loadedAgents.Select(a => a.Name)));
-
-            agentsInitialized = false;
-            agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
-            CreateAgentsSync();
+            agentsLoadedSubject.OnNext(this);
             return this;
-        });
-    }
-
-    /// <summary>
-    /// Reactive initialization — uses ObserveQuery (IObservable) instead of QueryAsync.
-    /// No await anywhere. Returns Task completed by subscription when agents are ready.
-    /// The AI framework awaits the returned Task — our code never awaits.
-    /// </summary>
-    public Task InitializeAsync(string? contextPath, string? modelName = null)
-    {
-        // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
-        // their main-node path before any downstream query/cache key uses them.
-        contextPath = NormalizeContextPath(contextPath);
-        currentModelName = modelName;
-        lastLoadedContextPath = contextPath;
-
-        if (meshQuery == null)
-            return Task.CompletedTask;
-
-        var tcs = new TaskCompletionSource();
-
-        // Use ObserveQuery (IObservable) — NOT QueryAsync. No await, no deadlock.
-        // Use scope:subtree on root namespace to find deeply nested agents (e.g. ACME/Project/TodoAgent).
-        // Previously used scope:selfAndAncestors which only searched direct children of ancestors.
-        var rootNamespace = contextPath?.Split('/').FirstOrDefault(s => !string.IsNullOrEmpty(s)) ?? "";
-        var contextQuery = string.IsNullOrEmpty(rootNamespace)
-            ? "nodeType:Agent"
-            : $"nodeType:Agent path:{rootNamespace} scope:subtree";
-
-        var contextAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(contextQuery));
-        var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:Agent nodeType:Agent scope:subtree"));
-
-        var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
-        var dictLock = new object();
-        var queriesCompleted = 0;
-
-        void OnAgentQueryResult(QueryResultChange<MeshNode> change)
-        {
-            if (change.ChangeType != QueryChangeType.Initial)
-                return;
-
-            lock (dictLock)
-            {
-                foreach (var node in change.Items)
-                {
-                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-                }
-            }
-
-            if (Interlocked.Increment(ref queriesCompleted) < 2)
-                return;
-
-            // Both queries emitted initial — build agents
-            try
-            {
-                var displayInfos = agentsDict.Values.Select(x => new AgentDisplayInfo
-                {
-                    Name = x.Config.Id, Path = x.Path,
-                    Description = x.Config.Description ?? x.Config.DisplayName ?? x.Config.Id,
-                    GroupName = x.Config.GroupName, Order = x.Config.Order,
-                    Icon = x.Config.Icon, CustomIconSvg = x.Config.CustomIconSvg,
-                    AgentConfiguration = x.Config
-                }).ToImmutableList();
-
-                loadedAgents = AgentOrderingHelper.OrderByRelevance(
-                    displayInfos, contextPath?.TrimStart('/') ?? "", "").ToImmutableList();
-
-                logger.LogInformation("[AgentChatClient] Loaded {Count} agents: [{Agents}]",
-                    loadedAgents.Count, string.Join(", ", loadedAgents.Select(a => a.Name)));
-
-                CreateAgentsSync();
-                tcs.TrySetResult();
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "[AgentChatClient] Failed to create agents");
-                tcs.TrySetException(ex);
-            }
         }
 
-        void OnQueryError(Exception ex, string queryName)
-        {
-            logger.LogWarning(ex, "{QueryName} agent query failed", queryName);
-            if (Interlocked.Increment(ref queriesCompleted) >= 2)
-                tcs.TrySetResult(); // Resolve with whatever agents were found (possibly empty)
-        }
+        // Three-query union — every query carries the nodeType alternation
+        // `Agent|Model` so a single subscription discovers BOTH agents AND
+        // bring-your-own-model entries. ApplyAgentNodes forks the resulting
+        // collection into agents + models. We use IMeshService.ObserveQuery
+        // (the typed, hub-scoped surface) so node.Content arrives as a
+        // deserialised AgentConfiguration / ModelDefinition — IMeshQueryCore
+        // would leave Content as raw JsonElement because the Core lives on
+        // the mesh hub whose JsonSerializerOptions don't carry the AI type
+        // discriminators that AddAITypes registers on the portal hub.
+        //
+        //   1) Global agents/models under /Agent + /Model.
+        //   2) Agents/models along the current path's hierarchy — lets a
+        //      project at /ACME/Foo register custom ones at /ACME and have
+        //      them surface here.
+        //   3) Agents/models under the current node's NodeType namespace —
+        //      type-specific (e.g. /Markdown/MarkdownEditor).
+        const string TypeAlternation = "nodeType:Agent|LanguageModel";
+        var queries = ImmutableArray.CreateBuilder<string>();
+        queries.Add($"namespace:Agent {TypeAlternation}");
+        queries.Add($"namespace:Model {TypeAlternation}");
 
-        contextAgents.Subscribe(OnAgentQueryResult, ex => OnQueryError(ex, "Context"));
-        globalAgents.Subscribe(OnAgentQueryResult, ex => OnQueryError(ex, "Global"));
-
-        return tcs.Task;
-    }
-
-    /// <summary>
-    /// Loads agents from mesh and returns them ordered by relevance.
-    /// Two queries: path hierarchy + NodeType hierarchy.
-    /// </summary>
-    private async Task<ImmutableList<AgentDisplayInfo>> LoadOrderedAgentsAsync(string? contextPath)
-    {
-        if (meshQuery == null)
-            return ImmutableList<AgentDisplayInfo>.Empty;
-
-        var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
-
-        // 1. Get NodeType of current node — single-node-by-path content read goes through
-        // the per-node MeshNodeReference reducer (hub.GetMeshNode), NOT QueryAsync (lagged).
-        // Subscribe + TCS instead of .ToTask() to avoid bridging a hub round-trip via the
-        // calling scheduler — see Doc/Architecture/AsynchronousCalls.md.
-        string? nodeTypePath = null;
         if (!string.IsNullOrEmpty(contextPath))
+            queries.Add($"namespace:{contextPath} scope:selfAndAncestors {TypeAlternation}");
+
+        var nodeType = Context?.Node?.NodeType;
+        if (!string.IsNullOrEmpty(nodeType))
+            queries.Add($"namespace:{nodeType} scope:selfAndAncestors {TypeAlternation}");
+
+        var queryId = $"agents:{contextPath ?? string.Empty}:{nodeType ?? string.Empty}";
+
+        logger.LogInformation(
+            "[AgentChatClient] Initialize: subscribing typed synced query id={QueryId} queries={Queries}",
+            queryId, string.Join(" | ", queries));
+
+        // Per-query observable: keep a running set of path → MeshNode tuples
+        // (Initial / Added / Updated / Removed). The N streams are
+        // CombineLatest-merged into a single union dict so every emission
+        // yields the current synced collection.
+        //
+        // 🚨 Lazy empty seed (NOT StartWith): CombineLatest only emits once
+        // *every* input has fired at least once. A naive StartWith(empty) on
+        // each input fires immediately, opens the gate with all-empty, and
+        // WhenInitialized.Take(1) downstream sees the empty snapshot and
+        // starts streaming before real agents arrive — the user reports
+        // "No suitable agent" even when the catalog has 9 agents. So instead
+        // we MERGE the source with a 4-second timer that emits the empty
+        // dict — but the timer is cancelled (TakeUntil) if the source
+        // emits first. Net effect: real Initial wins when present, empty
+        // fallback only kicks in for queries whose providers never produce
+        // Initial in time (e.g. unmatched namespaces in some routing). The
+        // source is `Publish().RefCount()`'d so the TakeUntil and the
+        // forwarded subscription share one upstream connection.
+        static IObservable<ImmutableDictionary<string, MeshNode>> WithSilentFallback(
+            IObservable<ImmutableDictionary<string, MeshNode>> source)
         {
-            var nodeTypeTcs = new TaskCompletionSource<string?>();
-            hub.GetMeshNode(contextPath, TimeSpan.FromSeconds(15))
-                .Subscribe(
-                    node =>
+            var shared = source.Publish().RefCount();
+            var fallback = Observable.Timer(TimeSpan.FromSeconds(4))
+                .Select(_ => ImmutableDictionary<string, MeshNode>.Empty)
+                .TakeUntil(shared);
+            return shared.Merge(fallback);
+        }
+
+        var perQuery = queries
+            .Select(q => WithSilentFallback(
+                meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))
+                    .Scan(
+                        ImmutableDictionary<string, MeshNode>.Empty,
+                        (acc, change) => change.ChangeType switch
+                        {
+                            QueryChangeType.Removed =>
+                                change.Items.Aggregate(acc, (d, n) =>
+                                    string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
+                            _ =>
+                                change.Items.Aggregate(acc, (d, n) =>
+                                    string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n))
+                        })))
+            .ToArray();
+
+        var unioned = perQuery.Length switch
+        {
+            0 => Observable.Return(ImmutableDictionary<string, MeshNode>.Empty),
+            1 => perQuery[0],
+            _ => perQuery
+                    .Cast<IObservable<ImmutableDictionary<string, MeshNode>>>()
+                    .CombineLatest()
+                    .Select(snapshots =>
                     {
-                        var nt = !string.IsNullOrEmpty(node?.NodeType)
-                                 && node.NodeType != "Agent" && node.NodeType != "Markdown"
-                            ? node.NodeType
-                            : null;
-                        nodeTypeTcs.TrySetResult(nt);
-                    },
-                    ex =>
-                    {
-                        logger.LogWarning(ex, "Error getting NodeType for {ContextPath}", contextPath);
-                        nodeTypeTcs.TrySetResult(null);
-                    });
-            nodeTypePath = await nodeTypeTcs.Task;
-        }
+                        var merged = ImmutableDictionary<string, MeshNode>.Empty;
+                        foreach (var snap in snapshots)
+                            foreach (var kv in snap)
+                                merged = merged.SetItem(kv.Key, kv.Value);
+                        return merged;
+                    })
+        };
 
-        // 2. Query agents from context path hierarchy (or root if no context)
-        try
-        {
-            var pathQuery = string.IsNullOrEmpty(contextPath)
-                ? "namespace: nodeType:Agent"  // Root level: get direct children agents
-                : $"path:{contextPath} nodeType:Agent scope:AncestorsAndSelf";
-
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>(pathQuery))
-            {
-                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error querying path hierarchy for {ContextPath}", contextPath ?? "root");
-        }
-
-        // 3. Query agents from root namespace subtree (to find sibling agents)
-        if (!string.IsNullOrEmpty(contextPath))
-        {
-            try
-            {
-                // Extract root namespace (first segment of the path)
-                var rootNamespace = contextPath.Split('/').FirstOrDefault(s => !string.IsNullOrEmpty(s));
-                if (!string.IsNullOrEmpty(rootNamespace))
+        agentsSubscription?.Dispose();
+        // Race-guard: WhenInitialized.OnNext must NOT fire on the FIRST empty
+        // snapshot — under CI timing the merged ObserveQuery can emit an
+        // Initial with zero items in <300ms (faster than agents materialise on
+        // some providers). If we propagate that empty snapshot, downstream
+        // GetResponseAsync calls SelectAgent → null → "No suitable agent" —
+        // the exact failure mode CI was reporting on Threading.Test.
+        // Fix: keep updating loadedAgents on every snapshot, but only signal
+        // WhenInitialized once we have at least one agent, OR the outer 8s
+        // timeout fires (genuinely empty catalog → unblock so chat doesn't hang).
+        var readinessFired = false;
+        agentsSubscription = unioned
+            // 🚨 If a query never fires Initial we still want the chat to
+            // unblock — emit an empty snapshot after 8s and warn loudly so
+            // we know it's the slow path, not a hang.
+            .Timeout(TimeSpan.FromSeconds(8), Observable.Return(ImmutableDictionary<string, MeshNode>.Empty)
+                .Do(_ => logger.LogWarning(
+                    "[AgentChatClient] Typed query id={QueryId} did not emit within 8s — proceeding with empty agent set",
+                    queryId)))
+            .Subscribe(
+                snapshot =>
                 {
-                    var subtreeQuery = $"path:{rootNamespace} nodeType:Agent scope:Subtree";
-                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(subtreeQuery))
+                    logger.LogInformation(
+                        "[AgentChatClient] Typed query id={QueryId} emitted {Count} nodes",
+                        queryId, snapshot.Count);
+                    try
                     {
-                        if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                            agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
+                        ApplyAgentNodes(snapshot.Values, contextPath);
                     }
-                }
-            }
-            catch (Exception ex)
+                    catch (Exception ex)
+                    {
+                        // Defence in depth — ApplyAgentNodes calls
+                        // CreateAgentsSync which now catches per-agent
+                        // factory failures, but JSON deserialise / projection
+                        // bugs would still surface here. Logging + swallowing
+                        // here keeps the synced-query subscription alive so
+                        // the next emission has a chance to recover.
+                        logger.LogWarning(ex,
+                            "[AgentChatClient] ApplyAgentNodes threw for id={QueryId}; chat will use whatever agents loaded so far",
+                            queryId);
+                    }
+                    // Fire WhenInitialized on the first non-empty snapshot
+                    // (real catalog) — or on later snapshots that aren't
+                    // empty (catalog refreshed). Empty Initials are observed
+                    // silently; the 8s outer Timeout fallback below produces
+                    // the empty-catalog terminal signal if no agents ever
+                    // arrive.
+                    if (!readinessFired && loadedAgents.Count > 0)
+                    {
+                        readinessFired = true;
+                        agentsLoadedSubject.OnNext(this);
+                    }
+                    else if (readinessFired)
+                    {
+                        // Subsequent live updates: keep downstream observers
+                        // (UI dropdowns) refreshed.
+                        agentsLoadedSubject.OnNext(this);
+                    }
+                },
+                ex =>
+                {
+                    logger.LogWarning(ex,
+                        "[AgentChatClient] Typed agent query failed for id={QueryId} — unblocking chat with empty set",
+                        queryId);
+                    ApplyAgentNodes(Array.Empty<MeshNode>(), contextPath);
+                    readinessFired = true;
+                    agentsLoadedSubject.OnNext(this);
+                },
+                () =>
+                {
+                    // The Timeout fallback above completes the stream after
+                    // emitting the empty dict — that's the "genuinely empty
+                    // catalog" terminal. Fire readiness so chat unblocks.
+                    if (!readinessFired)
+                    {
+                        readinessFired = true;
+                        agentsLoadedSubject.OnNext(this);
+                    }
+                });
+
+        return this;
+    }
+
+    /// <summary>
+    /// Projects a synced agent-node collection into <see cref="loadedAgents"/>
+    /// and rebuilds the in-memory <see cref="agents"/> dictionary. Shared by
+    /// the reactive <see cref="Initialize"/> and the legacy
+    /// <see cref="InitializeAsync"/> bridge.
+    /// </summary>
+    private void ApplyAgentNodes(IEnumerable<MeshNode> nodes, string? contextPath)
+    {
+        // The synced query is `nodeType:Agent|LanguageModel` — fork by the runtime
+        // type of node.Content. Content arrives in two shapes depending on
+        // the upstream provider:
+        //   • Already-deserialised AgentConfiguration / ModelDefinition —
+        //     when the producer used a typed registry to materialise the
+        //     node.
+        //   • Raw JsonElement — when ObserveQuery returns the storage
+        //     payload as JSON. Same shape as OnboardingMiddleware.FoldRoles
+        //     handles for AccessAssignment. Falling through this branch is
+        //     what made the synced collection *appear* empty in the
+        //     IMeshQueryCore path that lacked the AI type discriminators.
+        var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
+        var modelsDict = ImmutableDictionary<string, ModelDefinition>.Empty;
+        var skippedAgent = 0;
+        foreach (var node in nodes)
+        {
+            switch (node.Content)
             {
-                logger.LogWarning(ex, "Error querying root namespace subtree for {ContextPath}", contextPath);
+                case AgentConfiguration ac:
+                    if (!agentsDict.ContainsKey(ac.Id))
+                        agentsDict = agentsDict.SetItem(ac.Id, (ac, node.Path ?? string.Empty));
+                    break;
+                case ModelDefinition md:
+                    if (!modelsDict.ContainsKey(md.Id))
+                        modelsDict = modelsDict.SetItem(md.Id, md);
+                    break;
+                case JsonElement je:
+                    if (TryDeserialise<AgentConfiguration>(je) is { } agentJson)
+                    {
+                        if (!agentsDict.ContainsKey(agentJson.Id))
+                            agentsDict = agentsDict.SetItem(agentJson.Id, (agentJson, node.Path ?? string.Empty));
+                    }
+                    else if (TryDeserialise<ModelDefinition>(je) is { } modelJson)
+                    {
+                        if (!modelsDict.ContainsKey(modelJson.Id))
+                            modelsDict = modelsDict.SetItem(modelJson.Id, modelJson);
+                    }
+                    else
+                    {
+                        skippedAgent++;
+                    }
+                    break;
+                default:
+                    skippedAgent++;
+                    break;
             }
         }
+        if (skippedAgent > 0)
+            logger.LogDebug(
+                "[AgentChatClient] ApplyAgentNodes: skipped {Skipped} node(s) with unrecognised content",
+                skippedAgent);
 
-        // 4. Query agents from NodeType hierarchy
-        if (!string.IsNullOrEmpty(nodeTypePath))
+        // Project models for the picker (factory-provided ones are
+        // unioned into the picker by ThreadChatView).
+        loadedModels = modelsDict.Values
+            .OrderBy(m => m.Order)
+            .ThenBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(m => m.ToModelInfo())
+            .ToImmutableList();
+
+        T? TryDeserialise<T>(JsonElement je) where T : class
         {
             try
             {
-                var nodeTypeQuery = $"path:{nodeTypePath} nodeType:Agent scope:AncestorsAndSelf";
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery))
-                {
-                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-                }
+                return JsonSerializer.Deserialize<T>(je.GetRawText(), hub.JsonSerializerOptions);
             }
-            catch (Exception ex)
+            catch
             {
-                logger.LogWarning(ex, "Error querying NodeType hierarchy for {NodeType}", nodeTypePath);
+                return null;
             }
         }
 
-        // 5. Query default agents from Agent namespace
-        try
-        {
-            var agentNamespaceQuery = "path:Agent nodeType:Agent scope:Subtree";
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>(agentNamespaceQuery))
-            {
-                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error querying Agent namespace");
-        }
-
-        // Convert to AgentDisplayInfo
         var displayInfos = agentsDict.Values.Select(x => new AgentDisplayInfo
         {
             Name = x.Config.Id,
@@ -1159,15 +1208,36 @@ public class AgentChatClient : IAgentChat
             AgentConfiguration = x.Config
         }).ToImmutableList();
 
-        // Order by relevance: own namespace > NodeType namespace > hierarchy (path > nodeType)
-        var contextPathNorm = contextPath?.TrimStart('/') ?? "";
-        var nodeTypePathNorm = nodeTypePath?.TrimStart('/') ?? "";
+        loadedAgents = AgentOrderingHelper.OrderByRelevance(
+            displayInfos, contextPath?.TrimStart('/') ?? string.Empty, string.Empty).ToImmutableList();
 
-        var result = AgentOrderingHelper.OrderByRelevance(displayInfos, contextPathNorm, nodeTypePathNorm).ToImmutableList();
-        logger.LogDebug("Loaded {Count} agents for context {ContextPath}: [{Agents}]",
-            result.Count, contextPath ?? "(none)", string.Join(", ", result.Select(a => a.Name)));
-        return result;
+        logger.LogInformation("[AgentChatClient] Initialize: {Count} agents: [{Agents}]",
+            loadedAgents.Count, string.Join(", ", loadedAgents.Select(a => a.Name)));
+
+        agentsInitialized = false;
+        agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
+        CreateAgentsSync();
     }
+
+    /// <summary>
+    /// Task-shaped bridge for callers that pre-date the sync surface
+    /// (utility flows like <see cref="IconGenerator"/>/<see cref="DescriptionGenerator"/>
+    /// and the existing test base). Triggers the synced-query subscription
+    /// via <see cref="Initialize"/> and resolves on the first
+    /// <see cref="WhenInitialized"/> emission. All hub-reachable code should
+    /// use the sync <see cref="Initialize"/> + <see cref="WhenInitialized"/>
+    /// surface directly — no <c>await</c> in the hub flow.
+    /// </summary>
+    public Task InitializeAsync(string? contextPath, string? modelName = null)
+    {
+        Initialize(contextPath, modelName);
+        return WhenInitialized.Take(1).ToTask();
+    }
+
+    // (Legacy LoadOrderedAgentsAsync removed — its 5 parallel QueryAsync calls
+    // were the source of the chat-load deadlock. Agents are now sourced
+    // exclusively from the workspace synced query subscription wired up in
+    // Initialize. Anyone who wants the agent list reads loadedAgents.)
 
     /// <summary>
     /// Creates ChatClientAgent instances synchronously — no await, no deadlock.
@@ -1205,13 +1275,28 @@ public class AgentChatClient : IAgentChat
         var createdAgents = ImmutableDictionary<string, ChatClientAgent>.Empty;
         var orderedConfigs = OrderAgentsForCreation(configs);
 
+        // 🚨 Per-agent try/catch is mandatory: factory misconfig (e.g. an
+        // Azure Foundry endpoint not set) throws inside CreateAgent and used
+        // to escape the synced-query Subscribe callback as an unhandled
+        // exception that killed the portal process. Now we log + skip the
+        // misconfigured agent so the rest of the catalog still loads and
+        // SelectAgent can fall back to a working one.
         foreach (var agentConfig in orderedConfigs)
         {
             var effectiveModel = agentConfig.PreferredModel ?? currentModelName;
             var factory = GetFactoryForModel(effectiveModel) ?? defaultFactory;
-            var agent = factory.CreateAgent(agentConfig, this, createdAgents, configs, effectiveModel);
-            createdAgents = createdAgents.SetItem(agentConfig.Id, agent);
-            agents = agents.SetItem(agentConfig.Id, agent);
+            try
+            {
+                var agent = factory.CreateAgent(agentConfig, this, createdAgents, configs, effectiveModel);
+                createdAgents = createdAgents.SetItem(agentConfig.Id, agent);
+                agents = agents.SetItem(agentConfig.Id, agent);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "[AgentChatClient] Skipping agent {Agent} ({Factory}/{Model}): {Message}",
+                    agentConfig.Id, factory?.Name, effectiveModel, ex.Message);
+            }
         }
 
         var cyclicAgents = FindCyclicDelegations(configs);
@@ -1219,9 +1304,18 @@ public class AgentChatClient : IAgentChat
         {
             var effectiveModel = agentConfig.PreferredModel ?? currentModelName;
             var factory = GetFactoryForModel(effectiveModel) ?? defaultFactory;
-            var updatedAgent = factory.CreateAgent(agentConfig, this, createdAgents, configs, effectiveModel);
-            createdAgents = createdAgents.SetItem(agentConfig.Id, updatedAgent);
-            agents = agents.SetItem(agentConfig.Id, updatedAgent);
+            try
+            {
+                var updatedAgent = factory.CreateAgent(agentConfig, this, createdAgents, configs, effectiveModel);
+                createdAgents = createdAgents.SetItem(agentConfig.Id, updatedAgent);
+                agents = agents.SetItem(agentConfig.Id, updatedAgent);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "[AgentChatClient] Skipping cyclic agent {Agent}: {Message}",
+                    agentConfig.Id, ex.Message);
+            }
         }
 
         agentsInitialized = true;
@@ -1369,30 +1463,21 @@ public class AgentChatClient : IAgentChat
     }
 
     /// <summary>
-    /// Returns the ordered list of agents for the current context.
-    /// Reloads agents when context path changes.
+    /// Returns the synced agent collection — populated by the workspace-level
+    /// synced query subscription wired up in <see cref="Initialize"/>.
+    /// If the explicit context has changed since the last init, re-binds the
+    /// subscription to the new context's id (the workspace's per-id cache
+    /// makes this cheap when warm-cached) and returns whatever the synced
+    /// collection currently holds. Task-shaped only for
+    /// <see cref="IAgentChat"/> compat — no awaits.
     /// </summary>
-    public async Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
+    public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
     {
-        // Only check for context changes if Context has been explicitly set via SetContext()
-        // This prevents reloading with null when agents were already loaded by InitializeAsync
         var currentContextPath = Context?.Address?.ToString();
-
-        // Only reload if:
-        // 1. Context has been set (not null), AND
-        // 2. It's different from what was already loaded
         if (currentContextPath != null && currentContextPath != lastLoadedContextPath)
-        {
-            loadedAgents = await LoadOrderedAgentsAsync(currentContextPath);
-            lastLoadedContextPath = currentContextPath;
+            Initialize(currentContextPath, currentModelName);
 
-            // Recreate agent instances for new context
-            agentsInitialized = false;
-            agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
-            CreateAgentsSync();
-        }
-
-        return loadedAgents;
+        return Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(loadedAgents);
     }
 
     public Task ResumeAsync(ChatConversation conversation)

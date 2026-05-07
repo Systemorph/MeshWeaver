@@ -1,4 +1,6 @@
 @inherits BlazorView<ThreadChatControl, ThreadChatView>
+@using MeshWeaver.AI
+@using MeshWeaver.AI.Commands
 @using MeshWeaver.Layout
 @using MeshWeaver.Blazor.Components
 @using MeshWeaver.Blazor.Components.Monaco
@@ -98,14 +100,18 @@ else
         </div>
     }
 
-    <!-- Footer: input — pinned at bottom, never scrolls -->
+    <!-- Footer: input — pinned at bottom, never scrolls. The
+         `is-allocating` modifier overlays the "Allocating agent…" banner
+         INSIDE the existing input-area box rather than replacing the
+         whole subtree, so the dialog keeps its full height (breadcrumb +
+         editor + send + attachments stay laid out underneath, just
+         dimmed + non-interactive). Without this the chat shrinks to a
+         small panel during thread allocation and snaps back when the
+         thread is ready, which the user noticed. -->
     <div class="thread-chat-footer">
-        <div class="thread-chat-input-area">
+        <div class="thread-chat-input-area @(showSubmissionProgress ? "is-allocating" : "")">
         @if (showSubmissionProgress)
         {
-            <!-- During thread creation (compact/embedded flow on User Activity etc.) we hide
-                 the editor entirely and show a prominent "Allocating agent..." panel with a
-                 spinner. When OnThreadCreated fires the page navigates to the new thread. -->
             <div class="thread-allocating-panel">
                 <FluentProgressRing Style="width: 28px; height: 28px;" />
                 <div class="thread-allocating-text">
@@ -114,13 +120,131 @@ else
                 </div>
             </div>
         }
-        else
+        @{ var inputDimmed = showSubmissionProgress; }
+        <div class="thread-chat-input-content @(inputDimmed ? "dimmed" : "")" aria-hidden="@(inputDimmed.ToString().ToLowerInvariant())">
+
+        @* Active agent + model selectors. Sourced from the workspace synced
+           query (agents from namespace:Agent, models from namespace:Model
+           via the same nodeType:Agent|LanguageModel union). Selecting an
+           agent updates the model to that agent's preferred model
+           (GetPreferredModelInfoForAgent); the user can override per
+           thread by picking a different model. Slash commands /agent and
+           /model still work (ChatCommandRegistry) and update the same
+           selection state. *@
+        <div class="thread-chat-selectors">
+            <SimpleDropdown TOption="AgentDisplayInfo"
+                            SelectedItem="@selectedAgentInfo"
+                            SelectedItemChanged="@OnAgentChanged"
+                            Items="@agentDisplayInfos"
+                            GetDisplayText="@(a => a?.Name ?? "Agent…")"
+                            Placeholder="Agent…"
+                            Tooltip="@(selectedAgentInfo?.Path ?? "Pick an agent (or type /agent)")"
+                            PanelWidth="320px"
+                            Class="selector-agent">
+                <ItemTemplate Context="agent">
+                    <div class="dropdown-icon-name">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Bot())" />
+                        <span class="simple-dropdown-item-name">@agent.Name</span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(agent.Description))
+                    {
+                        <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
+                    }
+                </ItemTemplate>
+            </SimpleDropdown>
+
+            <SimpleDropdown TOption="ModelInfo"
+                            SelectedItem="@selectedModelInfo"
+                            SelectedItemChanged="@OnModelChanged"
+                            Items="@availableModels"
+                            GetDisplayText="@(m => m?.Name ?? (availableModels.Count == 0 ? "(no models)" : "Model…"))"
+                            GetGroupKey="@(m => m.Provider)"
+                            Placeholder="Model…"
+                            Tooltip="@(selectedModelInfo != null ? $"{selectedModelInfo.Provider}: {selectedModelInfo.Name}" : "Pick a model (or type /model)")"
+                            ShowSearch="false"
+                            PanelWidth="280px"
+                            Class="selector-model">
+                <ItemTemplate Context="model">
+                    <div class="dropdown-icon-name">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Sparkle())" />
+                        <span class="simple-dropdown-item-name">@model.Name</span>
+                    </div>
+                </ItemTemplate>
+            </SimpleDropdown>
+
+            @if (!string.IsNullOrEmpty(lastCommandStatus))
+            {
+                <span class="thread-chat-status-msg @(lastCommandStatusIsError ? "error" : "")">@lastCommandStatus</span>
+            }
+        </div>
+
+        @* Inline picker rendered when /agent or /model was invoked without
+           an argument. AgentCommand and ModelCommand return Widget = AgentPicker
+           or ModelPicker; selection routes back through OnAgentPickerSelected
+           / OnModelPickerSelected which is equivalent to running
+           /agent <name> / /model <name>. *@
+        @if (pendingWidget == ChatWidget.AgentPicker)
         {
-        <!-- Attachment chip collection -->
-        <ReferenceChipCollection
-            Attachments="@attachments"
-            OnAttachmentRemoved="@OnAttachmentRemoved"
-            OnChipClick="@OnChipClicked" />
+            <div class="thread-chat-widget">
+                <div class="thread-chat-widget-header">
+                    <span>Pick an agent</span>
+                    <FluentButton Appearance="FluentAppearance.Stealth" OnClick="DismissWidget" Title="Close">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
+                    </FluentButton>
+                </div>
+                <div class="thread-chat-widget-list">
+                    @foreach (var agent in agentDisplayInfos)
+                    {
+                        var captured = agent;
+                        <button class="thread-chat-widget-item @(captured.Name == selectedAgentInfo?.Name ? "selected" : "")"
+                                @onclick="() => OnAgentPickerSelected(captured)" type="button">
+                            <div class="thread-chat-widget-item-name">@captured.Name</div>
+                            @if (!string.IsNullOrEmpty(captured.Path) && captured.Path != captured.Name)
+                            {
+                                <div class="thread-chat-widget-item-path">@captured.Path</div>
+                            }
+                            @if (!string.IsNullOrEmpty(captured.Description))
+                            {
+                                <div class="thread-chat-widget-item-desc">@TruncateText(captured.Description, 90)</div>
+                            }
+                        </button>
+                    }
+                    @if (agentDisplayInfos.Count == 0)
+                    {
+                        <div class="thread-chat-widget-empty">No agents available.</div>
+                    }
+                </div>
+            </div>
+        }
+        else if (pendingWidget == ChatWidget.ModelPicker)
+        {
+            <div class="thread-chat-widget">
+                <div class="thread-chat-widget-header">
+                    <span>Pick a model</span>
+                    <FluentButton Appearance="FluentAppearance.Stealth" OnClick="DismissWidget" Title="Close">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
+                    </FluentButton>
+                </div>
+                <div class="thread-chat-widget-list">
+                    @foreach (var grp in availableModels.GroupBy(m => m.Provider).OrderBy(g => g.First().Order))
+                    {
+                        <div class="thread-chat-widget-group">@grp.Key</div>
+                        @foreach (var model in grp)
+                        {
+                            var captured = model;
+                            <button class="thread-chat-widget-item @(captured.Name == selectedModelInfo?.Name ? "selected" : "")"
+                                    @onclick="() => OnModelPickerSelected(captured)" type="button">
+                                <div class="thread-chat-widget-item-name">@captured.Name</div>
+                            </button>
+                        }
+                    }
+                    @if (availableModels.Count == 0)
+                    {
+                        <div class="thread-chat-widget-empty">No models available.</div>
+                    }
+                </div>
+            </div>
+        }
 
         @* Monaco editor for markdown input with completion *@
         <div class="input-container" style="@(!submissionHandler.IsInputEnabled ? "display: none;" : "")">
@@ -136,48 +260,8 @@ else
                               CompletionProvider="@GetCompletionConfig()"
                               CompletionCallback="@GetCompletions" />
         </div>
-        <!-- Selector bar (agent + model + send) — right-aligned -->
+        <!-- Send button row (agent + model dropdowns removed; use /agent and /model commands) -->
         <div class="selector-bar">
-            <SimpleDropdown TOption="AgentDisplayInfo"
-                            SelectedItem="@selectedAgentInfo"
-                            SelectedItemChanged="@OnAgentChanged"
-                            Items="@agentDisplayInfos"
-                            GetDisplayText="@(a => a?.Name ?? "Select agent...")"
-                            Placeholder="Select agent..."
-                            Tooltip="@(selectedAgentInfo?.Path ?? "Select agent")"
-                            PanelWidth="320px"
-                            Class="selector-agent">
-                <ItemTemplate Context="agent">
-                    <div class="simple-dropdown-item-name">@agent.Name</div>
-                    @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
-                    {
-                        <div class="simple-dropdown-item-path">@agent.Path</div>
-                    }
-                    @if (!string.IsNullOrEmpty(agent.Description))
-                    {
-                        <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
-                    }
-                </ItemTemplate>
-            </SimpleDropdown>
-
-            @if (availableModels.Count > 0)
-            {
-                <SimpleDropdown TOption="ModelInfo"
-                                SelectedItem="@selectedModelInfo"
-                                SelectedItemChanged="@OnModelChanged"
-                                Items="@availableModels"
-                                GetDisplayText="@(m => m?.Name ?? "Select model...")"
-                                GetGroupKey="@(m => m.Provider)"
-                                Placeholder="Select model..."
-                                ShowSearch="false"
-                                PanelWidth="280px"
-                                Class="selector-model">
-                    <ItemTemplate Context="model">
-                        <div class="simple-dropdown-item-name">@model.Name</div>
-                    </ItemTemplate>
-                </SimpleDropdown>
-            }
-
             @if (!submissionHandler.IsInputEnabled)
             {
                 <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">
@@ -192,7 +276,19 @@ else
                 </FluentButton>
             }
         </div>
+
+        @* Attachment chips — pinned to the bottom of the input dialog,
+           below the send button. Removable; click navigates to the node. *@
+        @if (attachments.Count > 0)
+        {
+            <div class="thread-chat-attachments">
+                <ReferenceChipCollection
+                    Attachments="@attachments"
+                    OnAttachmentRemoved="@OnAttachmentRemoved"
+                    OnChipClick="@OnChipClicked" />
+            </div>
         }
+        </div> @* /thread-chat-input-content *@
     </div>
     </div>
 }

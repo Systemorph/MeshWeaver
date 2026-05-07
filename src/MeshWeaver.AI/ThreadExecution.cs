@@ -618,9 +618,13 @@ public static class ThreadExecution
             return c;
         });
 
-        // Subscribe to Initialize: when agents are ready, start the streaming loop
-        var initSub = chatClient.Initialize(request.ContextPath, request.ModelName)
-            .Take(1) // first emission = agents ready
+        // Initialize is sync (binds the chat client to the workspace's shared
+        // synced agent collection). Wait for the first WhenInitialized
+        // emission — synchronous when the synced query is warm-cached, async
+        // on first cold load — before starting the streaming loop.
+        chatClient.Initialize(request.ContextPath, request.ModelName);
+        var initSub = chatClient.WhenInitialized
+            .Take(1)
             .Subscribe(client =>
             {
                 // [IDENTITY-TRACE] does this Subscribe callback still see the user context?
