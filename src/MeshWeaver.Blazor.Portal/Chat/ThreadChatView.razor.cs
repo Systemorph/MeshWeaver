@@ -372,15 +372,47 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         _agentsByPath.Clear();
         _modelsByPath.Clear();
 
-        foreach (var node in snapshot)
+        // 🔬 Diagnostic logging: dump the raw snapshot so we can tell whether
+        // (a) the synced query returned nothing, (b) returned nodes but with
+        // wrong NodeType, (c) returned the right nodes but Content is null /
+        // unexpected type / has empty Id. The previous "models without names"
+        // and "agents missing" symptoms were silently consumed by the
+        // null-check fallthroughs below; this log surfaces the exact shape.
+        var nodes = snapshot as IList<MeshNode> ?? snapshot.ToList();
+        var byType = nodes
+            .GroupBy(n => n.NodeType ?? "(null)", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count());
+        Logger.LogInformation(
+            "[ThreadChat:{InstanceId}] Snapshot received: total={Total} byNodeType={ByType}",
+            _instanceId, nodes.Count, string.Join(", ", byType.Select(kv => $"{kv.Key}={kv.Value}")));
+
+        foreach (var node in nodes)
         {
-            if (node.Path == null) continue;
+            if (node.Path == null)
+            {
+                Logger.LogDebug("[ThreadChat:{InstanceId}] Skipping node with null Path; NodeType={NodeType}",
+                    _instanceId, node.NodeType);
+                continue;
+            }
+
+            var contentTypeName = node.Content?.GetType().FullName ?? "(null)";
 
             if (string.Equals(node.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
             {
                 var modelInfo = ToModelInfo(node);
                 if (modelInfo != null)
+                {
+                    Logger.LogInformation(
+                        "[ThreadChat:{InstanceId}] Model node OK path={Path} contentType={CT} name={Name} provider={Provider}",
+                        _instanceId, node.Path, contentTypeName, modelInfo.Name, modelInfo.Provider);
                     _modelsByPath[node.Path] = modelInfo;
+                }
+                else
+                {
+                    Logger.LogWarning(
+                        "[ThreadChat:{InstanceId}] Model node DROPPED path={Path} contentType={CT} — ToModelInfo returned null (unparseable Content?)",
+                        _instanceId, node.Path, contentTypeName);
+                }
                 continue;
             }
 
@@ -388,8 +420,22 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // any future agent-shaped subtypes).
             var info = ToAgentDisplayInfo(node);
             if (info != null)
+            {
+                Logger.LogInformation(
+                    "[ThreadChat:{InstanceId}] Agent node OK path={Path} contentType={CT} name={Name} order={Order}",
+                    _instanceId, node.Path, contentTypeName, info.Name, info.Order);
                 _agentsByPath[node.Path] = info;
+            }
+            else
+            {
+                Logger.LogWarning(
+                    "[ThreadChat:{InstanceId}] Agent node DROPPED path={Path} contentType={CT} nodeType={NT} — ToAgentDisplayInfo returned null",
+                    _instanceId, node.Path, contentTypeName, node.NodeType);
+            }
         }
+        Logger.LogInformation(
+            "[ThreadChat:{InstanceId}] Snapshot processed: agents={Agents} models={Models}",
+            _instanceId, _agentsByPath.Count, _modelsByPath.Count);
 
         agentDisplayInfos = _agentsByPath.Values
             .OrderBy(a => a.Order)

@@ -8,6 +8,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -215,14 +216,31 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             .GetServices<ISyncedMeshNodeQueryProvider>()
             .ToArray();
         var options = workspace.Hub.JsonSerializerOptions;
+        var diagLogger = workspace.Hub.ServiceProvider
+            .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.SyncedQuery");
+
+        diagLogger?.LogInformation(
+            "[SyncedQuery] BuildReadStreamCore hub={HubAddress} queries=[{Queries}] providers=[{Providers}]",
+            workspace.Hub.Address,
+            string.Join(" | ", queries),
+            string.Join(", ", providers.Select(p => p.Name)));
 
         IObservable<QueryResultChange<MeshNode>> ObserveOne(string query)
         {
             var request = MeshQueryRequest.FromQuery(query, WellKnownUsers.System);
             if (providers.Length == 0)
+            {
+                diagLogger?.LogWarning(
+                    "[SyncedQuery] No ISyncedMeshNodeQueryProvider registered on hub={HubAddress} — query='{Query}' returns Empty",
+                    workspace.Hub.Address, query);
                 return Observable.Empty<QueryResultChange<MeshNode>>();
+            }
             return providers
-                .Select(p => p.ObserveQuery<MeshNode>(request, options))
+                .Select(p => p.ObserveQuery<MeshNode>(request, options).Do(change =>
+                    diagLogger?.LogInformation(
+                        "[SyncedQuery] provider={Provider} query='{Query}' change={Type} count={Count}",
+                        p.Name, query, change.ChangeType, change.Items?.Count ?? 0)))
                 .Merge();
         }
 
@@ -304,8 +322,19 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
 
                     return (nextDict, counts);
                 })
+            .Do(state => diagLogger?.LogDebug(
+                "[SyncedQuery] state hub={HubAddress} dictCount={Dict} initialCounts=[{Counts}] needed>={Need}",
+                workspace.Hub.Address,
+                state.Dict.Count,
+                string.Join(",", state.InitialCounts),
+                providerCount))
             .Where(state => providerCount == 0 ||
                             state.InitialCounts.All(c => c >= providerCount))
+            .Do(state => diagLogger?.LogInformation(
+                "[SyncedQuery] gate OPEN hub={HubAddress} dictCount={Dict} keys=[{Keys}]",
+                workspace.Hub.Address,
+                state.Dict.Count,
+                string.Join(", ", state.Dict.Keys.Take(10))))
             .Do(state => pathSet.OnNext(state.Dict.Keys.ToImmutableHashSet()))
             .Select(state => state.Dict)
             .DistinctUntilChanged()

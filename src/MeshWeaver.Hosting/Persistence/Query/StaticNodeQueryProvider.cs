@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 
@@ -24,14 +25,24 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, ISyncedMeshNodeQueryP
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
+    private readonly Microsoft.Extensions.Logging.ILogger? _logger;
 
     public StaticNodeQueryProvider(
         IEnumerable<IStaticNodeProvider> providers,
-        MeshConfiguration? meshConfiguration = null)
+        MeshConfiguration? meshConfiguration = null,
+        Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
     {
         _meshConfiguration = meshConfiguration;
+        _logger = loggerFactory?.CreateLogger<StaticNodeQueryProvider>();
 
-        _providerNodes = providers.SelectMany(p => p.GetStaticNodes()).ToArray();
+        var providerList = providers as IList<IStaticNodeProvider> ?? providers.ToList();
+        _providerNodes = providerList.SelectMany(p => p.GetStaticNodes()).ToArray();
+        _logger?.LogInformation(
+            "[StaticNodeQueryProvider] ctor: {Providers} provider(s) -> {Count} nodes; byType=[{ByType}]; byNamespace(top)=[{ByNs}]",
+            providerList.Count,
+            _providerNodes.Length,
+            string.Join(", ", _providerNodes.GroupBy(n => n.NodeType ?? "(null)").Select(g => $"{g.Key}={g.Count()}")),
+            string.Join(", ", _providerNodes.GroupBy(n => n.Namespace ?? "(null)").OrderByDescending(g => g.Count()).Take(5).Select(g => $"{g.Key}={g.Count()}")));
 
         var providerPaths = new HashSet<string>(
             _providerNodes.Select(n => n.Path),
@@ -184,6 +195,12 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, ISyncedMeshNodeQueryP
         // Collect synchronously and return a completed Observable.Return — no async, no scheduler.
         var parsedQuery = _parser.Parse(request.Query);
         var items = CollectStaticResults<T>(parsedQuery, request.Context);
+        _logger?.LogInformation(
+            "[StaticNodeQueryProvider] ObserveQuery query='{Query}' parsedPath='{Path}' parsedNodeType='{NodeType}' -> {Count} item(s)",
+            request.Query, parsedQuery.Path ?? "(null)",
+            (parsedQuery.Filter as MeshWeaver.Mesh.QueryComparison)?.Condition.Values is { } vs
+                ? string.Join("|", vs) : "(complex)",
+            items.Count);
         return Observable.Return(new QueryResultChange<T>
         {
             ChangeType = QueryChangeType.Initial,
