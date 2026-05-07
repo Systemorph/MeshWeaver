@@ -29,11 +29,19 @@ namespace MeshWeaver.Hosting.Security;
 /// IMPORTANT: This service uses the UNSECURED persistence core directly to avoid
 /// circular dependency (security checking cannot go through security-filtered persistence).
 /// </summary>
-internal class SecurityService : ISecurityService
+internal class SecurityService : ISecurityService, IDisposable
 {
     private readonly AccessService _accessService;
     private readonly ILogger<SecurityService> _logger;
     private readonly IMessageHub _hub;
+
+    // Keep-alive Subscribe handles for the two long-standing synced-query
+    // streams (AccessAssignment + PartitionAccessPolicy). Held for the
+    // service's lifetime so the Replay(1).RefCount caches stay warm —
+    // first HasPermission call hits an Initial that's already landed
+    // instead of racing the 2 s Timeout in GetEffectivePermissions on a
+    // cold subscription. Disposed on service teardown.
+    private readonly System.Reactive.Disposables.CompositeDisposable _warmupSubscriptions = new();
 
     // Built-in roles lookup
     private static readonly Dictionary<string, Role> BuiltInRoles = new()
@@ -118,6 +126,44 @@ internal class SecurityService : ISecurityService
             .Where(n => n.NodeType == "AccessAssignment" && n.Content != null)
             .GroupBy(n => n.Namespace ?? "")
             .ToDictionary(g => g.Key, g => g.ToList());
+
+        // Eager-subscribe to both synced-query streams so the
+        // Replay(1).RefCount caches are populated by the time the first
+        // HasPermission / GetEffectivePermissions call arrives. Without
+        // this, the first caller activates the upstream subscription cold
+        // and races the 2 s Timeout in GetEffectivePermissions — which is
+        // exactly what surfaced as the
+        // EffectivePermissionPostgresTest.RuntimeCreateNode_AccessAssignment_PgBacked
+        // flake: Admin's CreateNode fired before the AccessAssignment
+        // synced query had emitted Initial, the Timeout fell through to
+        // an empty role set, and the validator denied an Admin write.
+        // Errors during initial subscribe (e.g. provider not ready yet)
+        // surface only as warnings — the lazy double-checked init in
+        // ObserveAllMeshNodes / ObserveAllPolicies remains the safety net
+        // for any truly-late HasPermission caller.
+        try
+        {
+            _warmupSubscriptions.Add(ObserveAllMeshNodes()
+                .Subscribe(_ => { },
+                    ex => _logger.LogWarning(ex,
+                        "SecurityService warm-up: AccessAssignment synced-query subscription faulted")));
+            _warmupSubscriptions.Add(ObserveAllPolicies()
+                .Subscribe(_ => { },
+                    ex => _logger.LogWarning(ex,
+                        "SecurityService warm-up: PartitionAccessPolicy synced-query subscription faulted")));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "SecurityService warm-up: failed to subscribe at construction — falling back to lazy init");
+        }
+    }
+
+    public void Dispose()
+    {
+        _warmupSubscriptions.Dispose();
+        if (_userScopeRolesCache is IDisposable disposableCache)
+            disposableCache.Dispose();
     }
 
     private JsonSerializerOptions Options => _hub.JsonSerializerOptions;
