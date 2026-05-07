@@ -79,9 +79,18 @@ var azureFoundryEndpoint = builder.AddParameter("azure-foundry-endpoint", value:
 // Model-tier mappings: agents declare ModelTier ("heavy" / "standard" /
 // "light") and the factory resolves it to a concrete model name via these
 // parameters. Hidden from source so the deployment owns the model identity.
-var modelTierHeavy = builder.AddParameter("model-tier-heavy", value: "", secret: false);
-var modelTierStandard = builder.AddParameter("model-tier-standard", value: "", secret: false);
-var modelTierLight = builder.AddParameter("model-tier-light", value: "", secret: false);
+//
+// 🚨 NO `value:` argument: passing `value: ""` makes Aspire treat the param
+// as resolved to the literal empty string and SKIP user-secrets / config
+// lookup entirely — so even with `Parameters:model-tier-heavy` set in
+// user-secrets the portal received empty Anthropic__Models__0 etc., which
+// in turn left the BuiltInLanguageModelProvider catalog empty and the
+// chat dropdown with zero models. Without `value:`, Aspire reads from
+// `Parameters:model-tier-{name}` (user-secrets locally, container env in
+// deployed mode).
+var modelTierHeavy = builder.AddParameter("model-tier-heavy", secret: false);
+var modelTierStandard = builder.AddParameter("model-tier-standard", secret: false);
+var modelTierLight = builder.AddParameter("model-tier-light", secret: false);
 
 // Optional secrets/params: ACA rejects secrets with empty values; ConfigureCustomDomain
 // rejects empty hostnames. Read actual config values to guard optional registrations.

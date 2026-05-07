@@ -51,6 +51,31 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
 
     public IEnumerable<MeshNode> GetStaticNodes()
     {
+        // 🔬 One-shot tracer to disk — Aspire OTLP-only logging makes it
+        // impossible to read these from outside the dashboard, so write a
+        // minimal trace to a known temp path so MCP/Bash can grep it.
+        // Remove once the catalog issue is resolved.
+        try
+        {
+            var tracePath = Path.Combine(Path.GetTempPath(), "meshweaver-langmodel-trace.log");
+            File.AppendAllText(tracePath, $"[{DateTime.UtcNow:O}] BuiltInLanguageModelProvider.GetStaticNodes called; sources.Count={options.Sources.Count}; sourceNames=[{string.Join(", ", options.Sources.Select(s => s.SectionName))}]\n");
+            foreach (var src in options.Sources)
+            {
+                try
+                {
+                    var section = configuration.GetSection($"{src.SectionName}:Models");
+                    var children = section.GetChildren().ToList();
+                    var asArray = section.Get<string[]>();
+                    File.AppendAllText(tracePath, $"  section={src.SectionName} children={children.Count} arrLen={(asArray?.Length ?? -1)} arr=[{string.Join(",", asArray ?? Array.Empty<string>())}]\n");
+                }
+                catch (Exception innerEx)
+                {
+                    File.AppendAllText(tracePath, $"  section={src.SectionName} EXCEPTION: {innerEx.Message}\n");
+                }
+            }
+        }
+        catch { /* don't break the provider on disk failure */ }
+
         // Stable de-dup: first registered source wins on Id collision —
         // matches the order callers register them via
         // AddLanguageModelCatalogSource.

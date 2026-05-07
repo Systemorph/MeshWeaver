@@ -51,8 +51,14 @@ public static class LanguageModelNodeType
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
-            services.TryAddEnumerable(
-                ServiceDescriptor.Singleton<IStaticNodeProvider, BuiltInLanguageModelProvider>());
+            // 🚨 Plain AddSingleton (not TryAddEnumerable): TryAddEnumerable
+            // dedupes by impl-type AND ServiceLifetime AND ImplementationFactory
+            // — combinations that occasionally suppress the registration in
+            // ways that left BuiltInLanguageModelProvider invisible to DI
+            // resolution while BuiltInAgentProvider (using plain AddSingleton)
+            // worked. Match the AgentProvider pattern so both follow the
+            // same path.
+            services.AddSingleton<IStaticNodeProvider, BuiltInLanguageModelProvider>();
             return services;
         });
 
