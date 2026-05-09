@@ -1008,24 +1008,15 @@ public class AgentChatClient : IAgentChat
                     }
                 });
 
-        // One-shot 8s fallback: if no agents have emitted within 8s of
-        // first Initialize, surface a warning AND fire the readiness gate so
-        // ThreadExecution doesn't hang forever on WhenInitialized.Subscribe.
-        // Crucially this does NOT call ApplyAgents — a real Initial event
-        // arriving later will populate loadedAgents normally.
-        Observable.Timer(TimeSpan.FromSeconds(8))
-            .Subscribe(_ =>
-            {
-                if (!readinessFired)
-                {
-                    logger.LogWarning(
-                        "[AgentChatClient] Agent query did not emit within 8s — proceeding with empty agent set");
-                    readinessFired = true;
-                    agentsLoadedSubject.OnNext(this);
-                }
-            });
+        // No timer fallback: cold-start synced queries (especially on sub-thread
+        // workspaces) can take longer than any arbitrary timer to populate.
+        // Forcing readiness with empty agents only causes "No suitable agent
+        // found" false-positives. Genuine "synced query never emits" cases are
+        // covered by the OnError / OnCompleted handlers above and by the
+        // ThreadSubmission cancel button — manual cancellation is preferable
+        // to an arbitrary deadline.
 
-        // Same fix as agents: live subscription with no Timeout fallback —
+        // Same shape: live subscription with no Timeout fallback —
         // the synced query emits Initial then quiesces, so a Timeout(8s,
         // empty) wrapper would wipe loadedModels 8s after the real Initial.
         modelsSubscription = AgentPickerProjection.ObserveModels(workspace, hub, contextPath)
