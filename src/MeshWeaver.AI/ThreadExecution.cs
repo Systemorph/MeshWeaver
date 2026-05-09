@@ -611,6 +611,20 @@ public static class ThreadExecution
                 Type = ThreadMessageType.AgentResponse,
                 Status = ThreadMessageStatus.Streaming
             };
+                // Status: once terminal (Completed/Cancelled/Error), no patch can
+                // regress to Streaming. Sample(100ms) emits its last buffered value
+                // on source completion (snapshots.OnCompleted), and that emission's
+                // callback writes Status=Streaming — if it lands after the final
+                // success/cancel/error push it would flip the UI back to "still
+                // running" until the next render. Visible as flickering at the end
+                // of the response.
+                var requestedStatus = status ?? current.Status;
+                var nextStatus = current.Status is ThreadMessageStatus.Completed
+                                                or ThreadMessageStatus.Cancelled
+                                                or ThreadMessageStatus.Error
+                                 && requestedStatus == ThreadMessageStatus.Streaming
+                    ? current.Status
+                    : requestedStatus;
                 var updatedContent = current with
                 {
                     Text = text,
@@ -622,7 +636,7 @@ public static class ThreadExecution
                     OutputTokens = outputTokens ?? current.OutputTokens,
                     TotalTokens = totalTokens ?? current.TotalTokens,
                     CompletedAt = completedAt ?? current.CompletedAt,
-                    Status = status ?? current.Status
+                    Status = nextStatus
                 };
                 var updated = node != null
                     ? node with { Content = updatedContent }
