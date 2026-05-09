@@ -20,30 +20,42 @@ namespace MeshWeaver.Graph;
 ///
 /// <para>The read pipeline (single subscription, shared by every consumer):</para>
 /// <list type="number">
-///   <item>For each query in <see cref="Queries"/>:
-///     <see cref="IMeshQueryProvider.ObserveQuery{MeshNode}"/> →
-///     <c>Scan</c> the Initial / Added / Updated / Removed deltas into a
-///     running set of paths.</item>
-///   <item>Combine all per-query path sets via <c>CombineLatest</c> and union
-///     them, then <c>DistinctUntilChanged</c> with element equality on the
-///     unioned set so identical sets don't trigger redundant
-///     re-subscription to per-path streams.</item>
-///   <item>For every path in the current set, resolve the workspace's per-node
-///     remote stream (<c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>),
-///     then <c>CombineLatest</c> them into the synced collection.
-///     <c>Switch</c> when the path set changes — old per-path subscriptions
-///     are dropped, new ones added.</item>
+///   <item>For each query in <see cref="Queries"/>: subscribe to
+///     <see cref="IMeshQueryCore.ObserveQuery{MeshNode}"/> with
+///     <see cref="WellKnownUsers.System"/> identity (so the security pipeline
+///     short-circuits and there's no recursion back through SecurityService).</item>
+///   <item>A single <c>Scan</c> folds every query's
+///     <c>Initial</c>/<c>Reset</c>/<c>Added</c>/<c>Updated</c>/<c>Removed</c>
+///     deltas into an <see cref="ImmutableDictionary{TKey,TValue}"/> keyed by
+///     <see cref="MeshNode.Path"/> — the dictionary IS the live collection.
+///     A side <see cref="BehaviorSubject{T}"/> keeps the live path set in
+///     parallel for synchronous <see cref="Owns"/> checks by the write reducer.</item>
+///   <item>Per-query Initial gating: the downstream <c>Where(...)</c>
+///     suppresses emissions until every query has produced its first
+///     <c>Initial</c>/<c>Reset</c>, so the first <c>.Take(1)</c> consumer
+///     sees a complete snapshot rather than a partial one. After the gate
+///     opens, each change re-emits the full <c>dict.Values</c>.</item>
 /// </list>
+///
+/// <para>Reads come from the MeshNode payloads carried by the query events;
+/// the upstream <see cref="IMeshQueryCore.ObserveQuery"/> pipeline already
+/// mirrors per-hub change notifications into <c>Updated</c>/<c>Removed</c>
+/// events, so the snapshot stays current without per-node read subscriptions.
+/// Static-node providers (built-in agents, language models, embedded markdown)
+/// fan into the same <c>IMeshQueryCore</c>, so the synced collection sees
+/// them too.</para>
 ///
 /// <para>Writes — via the reducer registered in
 /// <see cref="SyncedQueryDataSourceExtensions.AddSyncedQuery"/>:
 /// <c>workspace.GetStream(new MeshNodeReference(path))</c> resolves to the
-/// cached per-path remote stream. <c>.Update(...)</c> on it propagates through
-/// the synchronization protocol to the owning per-node hub for persistence.</para>
+/// workspace's cached per-(addr, ref) remote stream — opening a write-side
+/// subscription on demand if no other caller has already cached one.
+/// <c>.Update(...)</c> on that stream propagates through the synchronization
+/// protocol to the owning per-node hub for persistence.</para>
 ///
-/// <para>Discriminator (multiple synced sources on the same hub): each source's
-/// reducer first checks <see cref="Owns"/> against its live unioned path set;
-/// the first reducer that returns non-null wins.</para>
+/// <para>Discriminator (multiple synced sources on the same hub): each
+/// source's write reducer first checks <see cref="Owns"/> against its live
+/// path set; the first reducer that returns non-null wins.</para>
 /// </summary>
 public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
 {
@@ -146,33 +158,36 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     }
 
     /// <summary>
-    /// Per <see href="../Doc/Architecture/CqrsAndContentAccess.md">CQRS</see>:
-    /// queries are for finding sets of paths, NOT for reading content.
-    /// The pipeline is:
+    /// Builds the live snapshot pipeline:
     ///
     /// <list type="number">
-    ///   <item>For each query, <see cref="IMeshQueryProvider.ObserveQuery"/>
-    ///         emits the set of matching paths (we IGNORE the MeshNode
-    ///         payload it carries — content read here would be lagged
-    ///         and stale).</item>
-    ///   <item>Union the per-query path sets via <c>CombineLatest</c> +
-    ///         <c>DistinctUntilChanged</c> so the downstream stream only
-    ///         re-emits when paths add or remove.</item>
-    ///   <item>For each path in the unioned set, open ONE
-    ///         <c>workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>
-    ///         — the authoritative live content for that node from its
-    ///         owning hub. Combine the per-path streams via
-    ///         <c>Switch</c> + <c>CombineLatest</c> so an Update inside a
-    ///         single node propagates without re-running the path-set
-    ///         query.</item>
+    ///   <item>For each query, subscribe to
+    ///         <see cref="IMeshQueryCore.ObserveQuery"/>; merge every
+    ///         per-query stream plus the
+    ///         <see cref="_externalChanges"/> side-channel (synthetic
+    ///         <see cref="NotifyDeleted"/> events) and
+    ///         <see cref="IMeshChangeFeed"/> deletion fast-path into a
+    ///         single tagged stream of
+    ///         <see cref="QueryResultChange{MeshNode}"/>.</item>
+    ///   <item>A single <c>Scan</c> folds the deltas into
+    ///         <see cref="ImmutableDictionary{TKey,TValue}"/> keyed by
+    ///         <see cref="MeshNode.Path"/> AND a per-query Initial-count
+    ///         array. <c>Initial</c>/<c>Reset</c>/<c>Added</c>/<c>Updated</c>
+    ///         set/replace the dict entry; <c>Removed</c> drops it.</item>
+    ///   <item>Suppress emissions until every query has produced its first
+    ///         provider Initial, so the first <c>.Take(1)</c> consumer sees
+    ///         the complete path set rather than a partial one. Push the
+    ///         live path set into <see cref="_pathSet"/> for synchronous
+    ///         <see cref="Owns"/> checks by the write reducer, then emit
+    ///         <c>dict.Values</c>.</item>
     /// </list>
     ///
-    /// <para>The previous design accumulated content directly from the
-    /// query's Updated events. That violated the CQRS contract — the
-    /// query layer is eventually consistent and Update events lagged
-    /// real writes by 10–100 ms. The remote-stream-per-path design
-    /// reads from the OWNING hub's workspace so every snapshot reflects
-    /// authoritative current state.</para>
+    /// <para>For single-node content reads on a known path use
+    /// <see cref="MeshWeaver.Mesh.MeshNodeStreamExtensions.GetMeshNodeStream(MeshWeaver.Data.IWorkspace,string)"/>
+    /// instead — the synced collection is for live <em>collections</em>
+    /// (chat dropdowns, AccessAssignment scope-walks, NodeType source/test
+    /// listings), not for fetching one node by path. See
+    /// <see href="../Doc/Architecture/CqrsAndContentAccess.md">CQRS</see>.</para>
     /// </summary>
     private static IObservable<IEnumerable<MeshNode>> BuildReadStream(
         IWorkspace workspace,

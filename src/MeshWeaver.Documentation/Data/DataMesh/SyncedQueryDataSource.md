@@ -50,24 +50,33 @@ stream". The mesh adds a thin extension method
 [`WithMeshQuery`](xref:MeshWeaver.Graph.SyncedQueryDataSourceExtensions.WithMeshQuery*)
 that composes three pieces:
 
-1. **Observe the mesh query.** A live `IObservable<QueryResultChange<MeshNode>>`
-   from [`IMeshQueryProvider.ObserveQuery`](xref:MeshWeaver.Mesh.Services.IMeshQueryProvider.ObserveQuery``1).
-   Folded with `Scan` into a running set of matched paths.
-2. **Open a per-path remote stream for every path in the set.** Each
-   per-path stream is `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ref)`.
-   The workspace caches that stream **per `(address, reference)`** with
-   `Replay(1).RefCount()` semantics — re-asking for the same `(addr, ref)`
-   returns the same instance, so the data source's read subscription and
-   any later writer share a single upstream stream per path.
-3. **Combine all per-path streams** via `CombineLatest` into a single live
-   `IEnumerable<MeshNode>` that updates whenever any per-node value or the
-   path set changes. When the path set changes the chain `Switch()`es into
-   a fresh `CombineLatest` — but per-path streams already in the previous
-   set hit the workspace cache and are *not* reopened.
+1. **Observe each mesh query.** One
+   [`IMeshQueryCore.ObserveQuery<MeshNode>`](xref:MeshWeaver.Mesh.Services.IMeshQueryCore.ObserveQuery``1)
+   subscription per query string (multi-query collections are fine — the
+   result is the union). Each `QueryResultChange<MeshNode>` carries
+   `Initial` / `Reset` / `Added` / `Updated` / `Removed` deltas and the
+   matched `MeshNode` payloads.
+2. **Fold deltas into a path-keyed dictionary.** A single `Scan`
+   accumulates `ImmutableDictionary<string, MeshNode>` keyed by
+   `MeshNode.Path` from every change event (across all queries) and
+   tracks how many `Initial`/`Reset` events each query has produced. The
+   dictionary is the union of every query's matches, deduplicated by path.
+3. **Gate the first emission until every query has produced its `Initial`.**
+   The downstream `Where(...)` suppresses emission until each query's
+   per-query Initial-count reaches the provider count, so the first
+   `.Take(1)` consumer sees a complete snapshot rather than a partial one.
+   After the gate opens, every change re-emits the full
+   `IEnumerable<MeshNode>` (i.e. `dict.Values`).
 
-There is no manual dictionary, no per-path cache eviction, no TTL. The
-workspace's per-`(addr, ref)` cache + `Replay(1).RefCount` is the entire
-lifetime model.
+A side `BehaviorSubject<ImmutableHashSet<string>>` tracks the live path set
+in parallel — the `AddSyncedQuery` reducer reads it synchronously to decide
+whether this source `Owns` a given path before opening the per-node remote
+stream for a write.
+
+There is no per-path read subscription. Read content comes from the
+`MeshNode` payloads carried by the query events; the synchronization
+protocol re-pushes those payloads on every owning-hub change, so the
+synced collection re-emits as soon as the query layer notices.
 
 # Configuration
 
@@ -107,34 +116,48 @@ The non-generic overload is the everyday case (collection of `MeshNode`).
 The generic overload accepts a content type and projects via `OfType<T>` —
 useful when the query selects a single content shape.
 
-# Reading and writing — one stream per node, always live
+# Reading and writing
 
-There is exactly **one MeshNode stream per node** in a hub's workspace.
-It is hot, replayed, and stays open for the lifetime of the data source.
-The synced data source's job is to keep that stream alive for every node
-in the query result set; your code reads and writes through it
-continuously — never `Take(1)`, never `await` an "initial value", never
-treat it as a one-shot lookup.
+The synced collection has two distinct read and write surfaces. The
+**read** surface is the dict-of-MeshNode snapshot the data source emits;
+the **write** surface goes through the per-node hub via the workspace's
+`(address, reference)` remote-stream cache.
+
+## Read — subscribe to the snapshot observable
 
 ```csharp
 var workspace = hub.GetWorkspace();
+var collection = workspace.GetQuery(
+    "my-collection-id",
+    "namespace:Agent nodeType:Agent");
+
+var sub = collection.Subscribe(snapshot =>
+{
+    // snapshot is IEnumerable<MeshNode> — the COMPLETE current set,
+    // path-keyed and deduplicated. Rebuild your view from this each time.
+});
+```
+
+Every emission carries the full current collection, not deltas — the
+Scan inside `SyncedQueryMeshNodes` already merged them. The observable
+is `Replay(1).RefCount()`, so a late subscriber gets the cached latest
+snapshot immediately and the upstream subscriptions are shared across
+every consumer of the same id.
+
+For a single-node read by path, use
+[`workspace.GetMeshNodeStream(path)`](xref:MeshWeaver.Mesh.MeshNodeStreamExtensions.GetMeshNodeStream*)
+— `GetQuery` is for *collections*, not for a known-path lookup.
+
+## Write — Update on the per-node remote stream
+
+```csharp
+// AddSyncedQuery's reducer routes any
+// workspace.GetStream(new MeshNodeReference(path)) call to
+// GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), ref)
+// when `path` is in the source's live path set (Owns(path)).
 var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
     new Address(path), new MeshNodeReference());
 
-// READ — long-lived subscription. Every change at the owning hub
-// re-emits here. Hold the IDisposable in a field; dispose on hub
-// disposal, never sooner.
-var sub = stream
-    .Where(c => c.Value != null)
-    .Subscribe(change =>
-    {
-        var node = change.Value!;
-        // react to the new value — UI, projection, validation, ...
-    });
-
-// WRITE — same stream instance. The synchronization protocol propagates
-// the patch to the owning per-node hub; the echo flows back through this
-// subscription, so the Subscribe handler above sees the new value.
 stream.Update(current => current is null
     ? null
     : new ChangeItem<MeshNode>(
@@ -147,29 +170,25 @@ stream.Update(current => current is null
 ```
 
 Because `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ref)`
-caches per `(address, reference)`, every caller in this hub gets the same
-instance — read- and write-paths share one upstream subscription per
-node. Repeated `GetRemoteStream(...)` calls are free and return the same
-hot stream.
-
-> The data source's role is to ensure those per-node streams are alive
-> for every result the query returns. As the query's path set evolves
-> (a new match appears, an existing match drops out), the data source
-> opens / releases the underlying remote streams accordingly. Hub-internal
-> code never has to manage stream lifetime — it only subscribes.
+caches per `(address, reference)`, every caller in the hub gets the same
+instance — write-paths share one upstream subscription per node, and a
+write made through this stream propagates to the owning per-node hub via
+the synchronization protocol. The owning hub's update echoes back to the
+query layer (and from there to the synced collection's next emission).
 
 # Live updates without polling
 
-The per-node remote stream is *always live*. When a node is updated
-anywhere in the mesh, the synchronization protocol pushes the new value
-into every workspace subscribed to it. Subscribers see the change on the
-next tick.
+When a node is updated anywhere in the mesh, the change reaches the
+synced collection via the upstream `IMeshQueryProvider.ObserveQuery`
+stream — the query layer already mirrors per-hub change notifications
+into `Updated` / `Removed` events. The Scan folds those into the
+dictionary and re-emits the snapshot on the next tick. There is no
+manual cache to invalidate — the query stream *is* the cache.
 
-Practical implication: a NodeType hub's compile pipeline reads its
-`Source/*.cs` nodes via the per-node stream. When a developer edits a
-file, the patch propagates through the synchronization protocol and the
-next compile already sees the new content. There is no cache to
-invalidate — the stream *is* the cache.
+Practical implication: a synced collection of `nodeType:Code` nodes
+re-emits within ~tens of ms of a developer's save reaching persistence;
+consumers (compile pipeline, side-menu listings) re-render off the new
+snapshot.
 
 # Why this is safe — the actor model
 
@@ -191,22 +210,22 @@ collide. No reader ever observes a half-applied state.
 
 ## Workspace remote-stream cache — one stream per `(address, reference)`
 
-The thing that makes the synced data source's read- and write-paths
-share a single subscription per node is `Workspace._remoteStreamCache`
-(`src/MeshWeaver.Data/Workspace.cs`). It is a plain
+The thing that makes the synced data source's write path share a single
+subscription per node with any other writer in the same hub is
+`Workspace._remoteStreamCache` (`src/MeshWeaver.Data/Workspace.cs`). It
+is a plain
 `ConcurrentDictionary<(Address, WorkspaceReference), ISynchronizationStream>`
 keyed by exactly the inputs to `workspace.GetRemoteStream<TReduced, TReference>(addr, ref)`.
 The first call for a given key opens an external client subscription and
 stores the stream; every subsequent call returns the same instance.
 
-This is what the `MeshNodeReference(path)` reducer relies on: when the
-reducer returns
+This is what the `MeshNodeReference(path)` reducer registered by
+`AddSyncedQuery` relies on: when the reducer returns
 `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference())`,
-it is *not* opening a fresh subscription — it is handing back the same
-stream the synced data source already opened (and that any other caller
-in the workspace would also see). Read consumers, write consumers, and
-the synced source's `CombineLatest` all observe one upstream pump per
-node.
+every writer through the synced collection — and any other code in the
+workspace asking for the same `(addr, ref)` — gets back the same stream
+instance. One upstream pump per node, regardless of how many writers
+share it.
 
 The cache evicts entries lazily:
 
@@ -231,10 +250,10 @@ hands it out.
 # Caveat — RAM footprint
 
 The only real cost is memory: every synced collection holds the full
-result set (and every per-node remote stream replays its latest value)
-in the hub's address space. A query that selects 100 nodes pins 100
-MeshNodes' worth of memory on every subscriber hub. Pick the query
-narrowly enough that the live set actually belongs in RAM.
+result-set dictionary in the hub's address space. A query that selects
+100 nodes pins 100 MeshNodes' worth of memory on every subscriber hub.
+Pick the query narrowly enough that the live set actually belongs in
+RAM.
 
 # Testing
 
@@ -264,8 +283,8 @@ protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         });
 ```
 
-The subscriber's per-node hub now mirrors every matching node via
-per-node remote streams — same wiring as production.
+The subscriber's per-node hub now mirrors every matching node via the
+upstream mesh-query subscription — same wiring as production.
 
 ## 2. Drive the test from the **client**, never from `Mesh`
 
@@ -299,8 +318,8 @@ handlers.** They route around the contract you are trying to test.
   MeshNodeReference` on a dedicated reader hub.
 
 Verification is a `Task.Delay(_) → assert` rhythm (mirrors
-`ObservableQueryTests`); the synced collection's per-node streams stay
-hot the whole time — no `Take(1)`, no draining.
+`ObservableQueryTests`); the synced collection stays subscribed the
+whole time — no `Take(1)`, no draining.
 
 ## End-to-end test sketch
 

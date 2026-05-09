@@ -8,21 +8,24 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Wires <see cref="IMeshQueryProvider.ObserveQuery{T}"/> + per-node remote
-/// streams into a hub's data context as a synced collection of
-/// <see cref="MeshNode"/>s. Two pieces are registered together:
+/// Wires <see cref="IMeshQueryCore.ObserveQuery{T}"/> into a hub's data
+/// context as a synced collection of <see cref="MeshNode"/>s. Two pieces are
+/// registered together:
 ///
 /// <list type="bullet">
 ///   <item>A <see cref="VirtualDataSource"/> hosting a
-///     <see cref="SyncedQueryMeshNodes"/> typesource (the read side — combined
-///     per-node remote streams driven by the live query result set).</item>
+///     <see cref="SyncedQueryMeshNodes"/> typesource (the read side — a
+///     path-keyed dictionary fold of every query's
+///     <see cref="QueryResultChange{T}"/> deltas, gated on per-query Initial,
+///     re-emitted as <c>IEnumerable&lt;MeshNode&gt;</c> snapshots).</item>
 ///   <item>A workspace-level reducer that resolves
-///     <c>MeshNodeReference(path)</c> to the cached per-node remote stream when
-///     <paramref name="path"/> is in this source's result set. <c>.Update(...)</c>
-///     on the resulting stream propagates through the synchronization protocol
-///     to the owning per-node hub. The reducer returns null for paths outside
-///     the source's set so a sibling synced source (e.g. a different query)
-///     gets a chance — first match wins.</item>
+///     <c>MeshNodeReference(path)</c> to the workspace's cached per-(addr, ref)
+///     remote stream when <paramref name="path"/> is in this source's live
+///     path set. <c>.Update(...)</c> on the resulting stream propagates
+///     through the synchronization protocol to the owning per-node hub. The
+///     reducer returns null for paths outside the source's set so a sibling
+///     synced source (e.g. a different query) gets a chance — first match
+///     wins.</item>
 /// </list>
 /// </summary>
 public static class SyncedQueryDataSourceExtensions
@@ -85,9 +88,11 @@ public static class SyncedQueryDataSourceExtensions
                 if (!typeSource.Owns(path))
                     return null;
 
-                // The workspace's per-(addr, ref) cache means this is the same
-                // stream the synced read side is subscribed to — read + write
-                // share one upstream subscription per node.
+                // The workspace's per-(addr, ref) cache de-duplicates this
+                // stream with any other writer in the hub asking for the same
+                // (path, MeshNodeReference) — every Update goes through one
+                // upstream subscription per node, regardless of how many
+                // synced collections include the same path.
                 return workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
                     new Address(path), new MeshNodeReference());
             }));
