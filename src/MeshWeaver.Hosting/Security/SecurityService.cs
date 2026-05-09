@@ -574,7 +574,7 @@ internal class SecurityService : ISecurityService, IDisposable
     /// <c>_staticAccessAssignments</c>.
     ///
     /// <para>The recursion that previously made this dangerous (synced query
-    /// → IMeshQueryProvider → InMemoryMeshQuery's QueryAsync → RlsNodeValidator
+    /// → IMeshQueryProvider → MeshQueryEngine's QueryAsync → RlsNodeValidator
     /// → SecurityService → here) is now broken at the validator: SyncedQueryMeshNodes
     /// runs the upstream <see cref="IMeshQueryProvider.ObserveQuery"/> call
     /// with <see cref="WellKnownUsers.System"/>, and

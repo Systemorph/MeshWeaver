@@ -170,7 +170,7 @@ public class CircuitAccessHandler : CircuitHandler
 
             // IAsyncEnumerable + await foreach — pull-based protocol, no hub
             // round-trip on the observable side, so no risk of the
-            // ObserveQuery + .ToTask() deadlock the user flagged. InMemoryMeshQueryCore's
+            // ObserveQuery + .ToTask() deadlock the user flagged. MeshQueryEngineCore's
             // QueryAsync is an in-memory filter with no hub messaging; the
             // enumeration yields cooperatively. Take the first match (limit:1)
             // and bail; the loop exits via the break before it sees a second.

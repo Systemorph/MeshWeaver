@@ -1,13 +1,8 @@
 @inherits BlazorView<ThreadChatControl, ThreadChatView>
-@using MeshWeaver.AI
 @using MeshWeaver.AI.Commands
 @using MeshWeaver.Layout
-@using MeshWeaver.Blazor.Components
 @using MeshWeaver.Blazor.Components.Monaco
-@using FluentOrientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@using FluentVerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
-@using FluentJustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent
 @inject NavigationManager NavigationManager
 
 <div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")" style="@Style">
@@ -139,7 +134,7 @@ else
                             GetDisplayText="@(a => a?.Name ?? "Agent…")"
                             Placeholder="Agent…"
                             Tooltip="@(selectedAgentInfo?.Path ?? "Pick an agent (or type /agent)")"
-                            PanelWidth="320px"
+                            PanelWidth="420px"
                             Class="selector-agent">
                 <ItemTemplate Context="agent">
                     <div class="dropdown-icon-name">
@@ -162,11 +157,14 @@ else
                             Placeholder="Model…"
                             Tooltip="@(selectedModelInfo != null ? $"{selectedModelInfo.Provider}: {selectedModelInfo.Name}" : "Pick a model (or type /model)")"
                             ShowSearch="false"
-                            PanelWidth="280px"
+                            PanelWidth="360px"
                             Class="selector-model">
                 <ItemTemplate Context="model">
                     <div class="dropdown-icon-name">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Sparkle())" />
+                        @{
+                            var brand = ModelBadge(model);
+                        }
+                        <span class="model-badge @brand.Class" title="@brand.Tooltip">@brand.Label</span>
                         <span class="simple-dropdown-item-name">@model.Name</span>
                     </div>
                 </ItemTemplate>
@@ -294,43 +292,3 @@ else
 }
 
 </div>
-
-<style>
-    .thread-allocating-panel {
-        display: flex; align-items: center; gap: 14px;
-        padding: 18px 22px; border-radius: 12px;
-        background: var(--neutral-layer-2);
-        border: 1px solid var(--neutral-stroke-rest);
-    }
-    .thread-allocating-text { display: flex; flex-direction: column; gap: 2px; }
-    .thread-allocating-title {
-        font-weight: 600; font-size: 0.95rem;
-        color: var(--accent-fill-rest);
-    }
-    .thread-allocating-subtitle {
-        font-size: 0.8rem; color: var(--neutral-foreground-hint);
-    }
-    @@keyframes thread-pending-pulse {
-        0%, 100% { opacity: 0.6; }
-        50% { opacity: 1; }
-    }
-    .thread-msg-dot {
-        width: 5px; height: 5px; border-radius: 50%;
-        background: var(--neutral-foreground-hint);
-        animation: thread-dots-blink 1.4s infinite both;
-    }
-    @@keyframes thread-dots-blink {
-        0%, 80%, 100% { opacity: 0.3; }
-        40% { opacity: 1; }
-    }
-    .thread-exec-star {
-        animation: thread-exec-star-pulse 1.5s ease-in-out infinite;
-    }
-    @@keyframes thread-exec-star-pulse {
-        0% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
-        25% { color: #ff6b6b; transform: scale(1.3) rotate(15deg); }
-        50% { color: #ffd93d; transform: scale(1) rotate(0deg); }
-        75% { color: #6bcb77; transform: scale(1.3) rotate(-15deg); }
-        100% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
-    }
-</style>

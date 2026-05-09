@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// <c>ObserveQuery</c> → fold Initial / Added / Updated / Removed into a
 /// path → <see cref="MeshNode"/> dictionary → emit values. PG drives the
 /// Update / Delete events through pg_notify so we can verify the dict folds
-/// correctly without the in-memory race the InMemoryMeshQuery exhibits.
+/// correctly without the in-memory race the MeshQueryEngine exhibits.
 /// </summary>
 [Collection("PostgreSql")]
 public class SyncedQueryPgTest : IAsyncLifetime

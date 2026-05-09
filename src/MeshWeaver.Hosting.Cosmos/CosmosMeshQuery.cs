@@ -52,7 +52,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
         // so $type:MeshNode is always true and other $type values always false.
         parsedQuery = StripTypeFilter(parsedQuery);
 
-        // Apply default path/scope logic (same as InMemoryMeshQuery)
+        // Apply default path/scope logic (same as MeshQueryEngine)
         var effectivePath = parsedQuery.Path;
         var effectiveScope = parsedQuery.Scope;
         if (string.IsNullOrEmpty(effectivePath))

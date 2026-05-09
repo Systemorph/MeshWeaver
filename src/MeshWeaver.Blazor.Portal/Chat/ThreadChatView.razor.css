@@ -182,12 +182,15 @@
 
 /* SimpleDropdown root has `width: 100%` so it fills its container in
    form layouts. Inside the flex selectors row that means each dropdown
-   takes the whole row and they stack. Constrain width here so they sit
-   side-by-side; allow the button itself to size to its content. */
+   takes the whole row and they stack. Pin a comfortable min-width so the
+   trigger isn't squashed, and lift the max-width so long agent / model
+   names ("Description Writer", "claude-sonnet-4-6") aren't truncated to
+   ellipsis after one or two chars. */
 .thread-chat-selectors ::deep .simple-dropdown {
     width: auto;
     flex: 0 0 auto;
-    max-width: 280px;
+    min-width: 220px;
+    max-width: 360px;
 }
 
 .thread-chat-selectors .simple-dropdown-item-path,
@@ -501,4 +504,98 @@
     font-size: 0.75rem;
     color: var(--neutral-foreground-hint);
     margin-top: 2px;
+}
+
+/* Allocating-thread / message-pending styles — moved out of the inline
+   <style> block in ThreadChatView.razor so the CSS analyzer parses them
+   without the @@keyframes Razor escape (CSS041 false positives). */
+.thread-allocating-panel {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 22px;
+    border-radius: 12px;
+    background: var(--neutral-layer-2);
+    border: 1px solid var(--neutral-stroke-rest);
+}
+
+.thread-allocating-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.thread-allocating-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--accent-fill-rest);
+}
+
+.thread-allocating-subtitle {
+    font-size: 0.8rem;
+    color: var(--neutral-foreground-hint);
+}
+
+@keyframes thread-pending-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+.thread-msg-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--neutral-foreground-hint);
+    animation: thread-dots-blink 1.4s infinite both;
+}
+
+@keyframes thread-dots-blink {
+    0%, 80%, 100% { opacity: 0.3; }
+    40% { opacity: 1; }
+}
+
+.thread-exec-star {
+    animation: thread-exec-star-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes thread-exec-star-pulse {
+    0%   { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
+    25%  { color: #ff6b6b; transform: scale(1.3) rotate(15deg); }
+    50%  { color: #ffd93d; transform: scale(1) rotate(0deg); }
+    75%  { color: #6bcb77; transform: scale(1.3) rotate(-15deg); }
+    100% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
+}
+
+/* Provider-coloured model badge (replaces the generic Sparkle icon in the
+   model picker). Anthropic tiers get distinct hues (Opus = brand-orange,
+   Sonnet = brand-purple, Haiku = brand-teal) so the user can spot the tier
+   at a glance; OpenAI shows the model number on green. */
+.model-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #fff;
+    background: var(--neutral-foreground-hint);
+    flex: 0 0 auto;
+    line-height: 1;
+    letter-spacing: 0.02em;
+}
+
+.model-badge-anthropic-opus    { background: #c4814a; }   /* warm tan */
+.model-badge-anthropic-sonnet  { background: #7c5cd1; }   /* purple */
+.model-badge-anthropic-haiku   { background: #2fb39e; }   /* teal */
+.model-badge-openai            { background: #10a37f; }   /* OpenAI green */
+.model-badge-other             { background: var(--accent-fill-rest); }
+
+/* In the selected dropdown button, badge inherits parent foreground for
+   accent-on-accent contrast — but keep the colored chip background.
+   The text on the chip stays white regardless of theme. */
+.thread-chat-selectors ::deep .simple-dropdown-button .model-badge {
+    color: #fff;
 }

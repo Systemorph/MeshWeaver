@@ -196,52 +196,39 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         BehaviorSubject<ImmutableHashSet<string>> pathSet,
         Subject<QueryResultChange<MeshNode>> externalChanges)
     {
-        // 🚨 Iterate the dedicated ISyncedMeshNodeQueryProvider marker
-        // interface — NOT IMeshQueryProvider. The marker pulls in the
-        // unsecured providers that are safe to consume from a synced
-        // query (StaticNodeQueryProvider + the unsecured persistence
-        // surface) and excludes the secured InMemoryMeshQuery whose
-        // SecurityService dependency creates a re-entrancy cycle when
-        // the synced query is the one feeding SecurityService itself
-        // (`nodeType:AccessAssignment`). Type-tagged registration —
-        // not a name-string filter — see ISyncedMeshNodeQueryProvider.
-        //
-        // The previous design used IMeshQueryCore (a single in-memory
-        // provider) and missed every static-node-provider entry: chat
-        // dropdowns and every synced-query consumer were silently empty
-        // even though `IMeshService.QueryAsync` (which fans out across
-        // all IMeshQueryProviders) returned the same nodes fine. Marker
-        // fan-out fixes that without the cycle.
-        var providers = workspace.Hub.ServiceProvider
-            .GetServices<ISyncedMeshNodeQueryProvider>()
-            .ToArray();
+        // Single IMeshQueryCore — the unsecured query surface. Has no
+        // ISecurityService dependency, so SecurityService can consume a
+        // synced query (`nodeType:AccessAssignment`) without an Autofac
+        // cycle. Static-node providers are folded into the same surface
+        // (see <c>MeshQueryEngine</c>'s ctor), so a single
+        // ObserveQuery returns persistence + static union — no DI-marker
+        // fan-out, no per-provider gating.
+        var queryCore = workspace.Hub.ServiceProvider.GetService<IMeshQueryCore>();
         var options = workspace.Hub.JsonSerializerOptions;
         var diagLogger = workspace.Hub.ServiceProvider
             .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SyncedQuery");
 
         diagLogger?.LogInformation(
-            "[SyncedQuery] BuildReadStreamCore hub={HubAddress} queries=[{Queries}] providers=[{Providers}]",
+            "[SyncedQuery] BuildReadStreamCore hub={HubAddress} queries=[{Queries}] core={CoreType}",
             workspace.Hub.Address,
             string.Join(" | ", queries),
-            string.Join(", ", providers.Select(p => p.Name)));
+            queryCore?.GetType().Name ?? "(null)");
 
         IObservable<QueryResultChange<MeshNode>> ObserveOne(string query)
         {
-            var request = MeshQueryRequest.FromQuery(query, WellKnownUsers.System);
-            if (providers.Length == 0)
+            if (queryCore == null)
             {
                 diagLogger?.LogWarning(
-                    "[SyncedQuery] No ISyncedMeshNodeQueryProvider registered on hub={HubAddress} — query='{Query}' returns Empty",
+                    "[SyncedQuery] No IMeshQueryCore registered on hub={HubAddress} — query='{Query}' returns Empty",
                     workspace.Hub.Address, query);
                 return Observable.Empty<QueryResultChange<MeshNode>>();
             }
-            return providers
-                .Select(p => p.ObserveQuery<MeshNode>(request, options).Do(change =>
-                    diagLogger?.LogInformation(
-                        "[SyncedQuery] provider={Provider} query='{Query}' change={Type} count={Count}",
-                        p.Name, query, change.ChangeType, change.Items?.Count ?? 0)))
-                .Merge();
+            var request = MeshQueryRequest.FromQuery(query, WellKnownUsers.System);
+            return queryCore.ObserveQuery<MeshNode>(request, options).Do(change =>
+                diagLogger?.LogInformation(
+                    "[SyncedQuery] query='{Query}' change={Type} count={Count}",
+                    query, change.ChangeType, change.Items?.Count ?? 0));
         }
 
         // Hub-level change-feed deletion fast-path: when ANY hub publishes a
@@ -264,17 +251,10 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                     }),
                     MeshChangeKind.Deleted));
 
-        // Per-query Initial gating: with multi-query unions AND multi-provider
-        // fan-out, the gate must wait for EVERY provider to send Initial for
-        // EVERY query — not just the first provider per query. Otherwise an
-        // empty Initial from a fast provider (e.g. StaticNodeQueryProvider
-        // returning [] for a `nodeType:Code` query because no Code nodes are
-        // in its static set) would race ahead of the slower provider
-        // (InMemoryMeshQueryCore returning the persisted Code files) and the
-        // first .Take(1) consumer (MeshNodeCompilationService.discoverCodeFiles)
-        // would see "no source files" — exactly the regression that broke the
-        // Hosting.Monolith.Test compile suite.
-        var providerCount = providers.Length;
+        // Per-query Initial gating: wait for one Initial event from
+        // each query before opening the gate. Single-provider model —
+        // IMeshQueryCore folds persistence + static into one observable.
+        var providerCount = queryCore == null ? 0 : 1;
         var taggedChanges = queries
             .Select((q, i) => ObserveOne(q).Select(c => (Change: c, QueryIndex: i, IsExternal: false)))
             .Merge()

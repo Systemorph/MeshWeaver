@@ -58,6 +58,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private IDisposable? _navContextSubscription;
     private NavigationContext? _currentNavContext;
     private IDisposable? agentSubscription;
+    private IDisposable? modelSubscription;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
 
     // Thread state
@@ -297,7 +298,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         // Load available models from DI-registered factories
         var factories = ChatClientFactories.ToList();
-        Logger.LogInformation("[ThreadChat:{InstanceId}] IChatClientFactory instances resolved: {Count}", _instanceId, factories.Count);
+        Logger.LogDebug("[ThreadChat:{InstanceId}] IChatClientFactory instances resolved: {Count}", _instanceId, factories.Count);
 
         availableModels = factories
             .OrderBy(f => f.Order)
@@ -309,7 +310,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             }))
             .ToList();
 
-        Logger.LogInformation("[ThreadChat:{InstanceId}] Available models ({Count}): [{Models}]",
+        Logger.LogDebug("[ThreadChat:{InstanceId}] Available models ({Count}): [{Models}]",
             _instanceId, availableModels.Count, string.Join(", ", availableModels.Select(m => $"{m.Name} ({m.Provider})")));
 
         // Subscribe to agent MeshNodes reactively
@@ -325,6 +326,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void SubscribeToAgentNodes()
     {
         agentSubscription?.Dispose();
+        modelSubscription?.Dispose();
         _agentsByPath.Clear();
         _modelsByPath.Clear();
 
@@ -336,27 +338,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return;
         }
 
-        // 🚨 Use SyncedQueryMeshNodes via workspace.GetQuery — NOT
-        // IMeshService.ObserveQuery directly. The synced query maintains a
-        // path → MeshNode dictionary, gates on every per-query Initial
-        // arriving (so we never see partial snapshots), and shares one
-        // upstream subscription across the lifetime of the workspace via
-        // Replay(1).RefCount(). Re-implementing the merge with
-        // ObserveQuery loses every one of those properties — that was
-        // why the dropdowns flashed empty + dropped agents on subsequent
-        // emissions.
-        const string typeAlt = "nodeType:Agent|LanguageModel";
-        var queries = new List<string>
-        {
-            $"namespace:Agent {typeAlt}",
-            $"namespace:Model {typeAlt}"
-        };
-        if (!string.IsNullOrEmpty(initialContext))
-            queries.Add($"namespace:{initialContext} {typeAlt} scope:selfAndAncestors");
-
-        var queryId = $"chat-picker:{initialContext ?? string.Empty}";
-        agentSubscription = workspace.GetQuery(queryId, queries.ToArray())
-            .Subscribe(snapshot => InvokeAsync(() => OnSyncedAgentSnapshot(snapshot)));
+        // 🚨 Two independent subscriptions through the SAME ObserveAgents /
+        // ObserveModels methods that AgentPickerProjectionTest drives.
+        // No query string or projection logic in this file — both live
+        // in AgentPickerProjection so the dropdown can't drift from the
+        // test.
+        agentSubscription = AgentPickerProjection.ObserveAgents(workspace, Hub, initialContext)
+            .Subscribe(agents => InvokeAsync(() => OnAgentList(agents)));
+        modelSubscription = AgentPickerProjection.ObserveModels(workspace, Hub, initialContext)
+            .Subscribe(models => InvokeAsync(() => OnModelList(models)));
     }
 
     /// <summary>
@@ -367,84 +357,37 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// rebuild from scratch each time (no delta tracking, no flashing
     /// empty between queries' Initial events).
     /// </summary>
-    private void OnSyncedAgentSnapshot(IEnumerable<MeshNode> snapshot)
+    private void OnAgentList(IReadOnlyList<AgentDisplayInfo> agents)
     {
+        Logger.LogDebug("[ThreadChat:{InstanceId}] Agents received: count={Count}",
+            _instanceId, agents.Count);
+
         _agentsByPath.Clear();
+        foreach (var a in agents)
+            if (!string.IsNullOrEmpty(a.Path))
+                _agentsByPath[a.Path] = a;
+
+        agentDisplayInfos = agents;
+        ApplySelections();
+        StateHasChanged();
+    }
+
+    private void OnModelList(IReadOnlyList<ModelInfo> models)
+    {
+        Logger.LogDebug("[ThreadChat:{InstanceId}] Models received: count={Count}",
+            _instanceId, models.Count);
+
         _modelsByPath.Clear();
-
-        // 🔬 Diagnostic logging: dump the raw snapshot so we can tell whether
-        // (a) the synced query returned nothing, (b) returned nodes but with
-        // wrong NodeType, (c) returned the right nodes but Content is null /
-        // unexpected type / has empty Id. The previous "models without names"
-        // and "agents missing" symptoms were silently consumed by the
-        // null-check fallthroughs below; this log surfaces the exact shape.
-        var nodes = snapshot as IList<MeshNode> ?? snapshot.ToList();
-        var byType = nodes
-            .GroupBy(n => n.NodeType ?? "(null)", StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Count());
-        Logger.LogInformation(
-            "[ThreadChat:{InstanceId}] Snapshot received: total={Total} byNodeType={ByType}",
-            _instanceId, nodes.Count, string.Join(", ", byType.Select(kv => $"{kv.Key}={kv.Value}")));
-
-        foreach (var node in nodes)
-        {
-            if (node.Path == null)
-            {
-                Logger.LogDebug("[ThreadChat:{InstanceId}] Skipping node with null Path; NodeType={NodeType}",
-                    _instanceId, node.NodeType);
-                continue;
-            }
-
-            var contentTypeName = node.Content?.GetType().FullName ?? "(null)";
-
-            if (string.Equals(node.NodeType, LanguageModelNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
-            {
-                var modelInfo = ToModelInfo(node);
-                if (modelInfo != null)
-                {
-                    Logger.LogInformation(
-                        "[ThreadChat:{InstanceId}] Model node OK path={Path} contentType={CT} name={Name} provider={Provider}",
-                        _instanceId, node.Path, contentTypeName, modelInfo.Name, modelInfo.Provider);
-                    _modelsByPath[node.Path] = modelInfo;
-                }
-                else
-                {
-                    Logger.LogWarning(
-                        "[ThreadChat:{InstanceId}] Model node DROPPED path={Path} contentType={CT} — ToModelInfo returned null (unparseable Content?)",
-                        _instanceId, node.Path, contentTypeName);
-                }
-                continue;
-            }
-
-            // Default branch: treat as Agent (covers nodeType:Agent and
-            // any future agent-shaped subtypes).
-            var info = ToAgentDisplayInfo(node);
-            if (info != null)
-            {
-                Logger.LogInformation(
-                    "[ThreadChat:{InstanceId}] Agent node OK path={Path} contentType={CT} name={Name} order={Order}",
-                    _instanceId, node.Path, contentTypeName, info.Name, info.Order);
-                _agentsByPath[node.Path] = info;
-            }
-            else
-            {
-                Logger.LogWarning(
-                    "[ThreadChat:{InstanceId}] Agent node DROPPED path={Path} contentType={CT} nodeType={NT} — ToAgentDisplayInfo returned null",
-                    _instanceId, node.Path, contentTypeName, node.NodeType);
-            }
-        }
-        Logger.LogInformation(
-            "[ThreadChat:{InstanceId}] Snapshot processed: agents={Agents} models={Models}",
-            _instanceId, _agentsByPath.Count, _modelsByPath.Count);
-
-        agentDisplayInfos = _agentsByPath.Values
-            .OrderBy(a => a.Order)
-            .ThenBy(a => a.Name)
-            .ToList();
+        foreach (var m in models)
+            _modelsByPath[m.Name] = m;
 
         RebuildAvailableModels();
+        ApplySelections();
+        StateHasChanged();
+    }
 
-        // Preserve current selection if still valid, otherwise select first
+    private void ApplySelections()
+    {
         if (selectedAgentInfo != null &&
             agentDisplayInfos.Any(a => a.Path == selectedAgentInfo.Path))
         {
@@ -455,76 +398,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             selectedAgentInfo = agentDisplayInfos.FirstOrDefault();
         }
 
-        // Set model from agent's preferred model
         if (selectedAgentInfo != null)
             selectedModelInfo = GetPreferredModelInfoForAgent(selectedAgentInfo.Name);
         else
             selectedModelInfo = availableModels.FirstOrDefault();
-
-        StateHasChanged();
-    }
-
-    private AgentDisplayInfo? ToAgentDisplayInfo(MeshNode node)
-    {
-        var config = node.Content switch
-        {
-            AgentConfiguration ac => ac,
-            // Fallback: when the typed registry can't materialise Content
-            // (e.g. AddAITypes wasn't applied to the source hub) it arrives
-            // as a raw JsonElement. Deserialise on the spot — without this
-            // the dropdown is silently empty even though the synced query
-            // returned 9 nodes.
-            System.Text.Json.JsonElement je =>
-                TryDeserialise<AgentConfiguration>(je),
-            _ => null
-        };
-        if (config == null) return null;
-        return new AgentDisplayInfo
-        {
-            Name = config.DisplayName ?? config.Id,
-            Path = node.Path,
-            Description = config.Description ?? "",
-            GroupName = config.GroupName,
-            Order = config.Order,
-            Icon = config.Icon,
-            CustomIconSvg = config.CustomIconSvg,
-            AgentConfiguration = config
-        };
-    }
-
-    /// <summary>
-    /// Projects a <c>nodeType:LanguageModel</c> node into the lighter
-    /// <see cref="ModelInfo"/> shape consumed by the picker. Same
-    /// JsonElement-fallback shape as
-    /// <see cref="ToAgentDisplayInfo"/> — covers the case where the
-    /// synced query produced raw JSON because the typed registry on the
-    /// source hub doesn't have ModelDefinition wired up.
-    /// </summary>
-    private ModelInfo? ToModelInfo(MeshNode node)
-    {
-        var def = node.Content switch
-        {
-            ModelDefinition md => md,
-            System.Text.Json.JsonElement je =>
-                TryDeserialise<ModelDefinition>(je),
-            _ => null
-        };
-        return def?.ToModelInfo();
-    }
-
-    private T? TryDeserialise<T>(System.Text.Json.JsonElement je) where T : class
-    {
-        try
-        {
-            return System.Text.Json.JsonSerializer.Deserialize<T>(
-                je.GetRawText(), Hub.JsonSerializerOptions);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Failed to deserialise {Type} from JsonElement",
-                _instanceId, typeof(T).Name);
-            return null;
-        }
     }
 
     /// <summary>
@@ -588,6 +465,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void SubmitMessageCore()
     {
+        // 🔬 Track submit → thread-created → first-message-visible timings.
+        // Logs at Information level under channel `ChatPerf` so you can grep
+        // a single resource log for "[ChatPerf]" and see step-by-step elapsed.
+        var perfSw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             if (_isDisposed)
@@ -667,6 +548,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 OnThreadCreated = node => InvokeAsync(() =>
                 {
                     if (_isDisposed) return;
+                    Logger.LogInformation(
+                        "[Chat] Thread created path={Path} elapsed={Ms}ms",
+                        node.Path, perfSw.ElapsedMilliseconds);
                     threadPath = node.Path;
                     threadName = node.Name;
                     UpdateSidePanelTitle();
@@ -686,10 +570,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (string.IsNullOrEmpty(threadPath))
             {
                 showSubmissionProgress = isCompact;
+                Logger.LogInformation("[Chat] Creating thread + submitting message");
                 ThreadSubmission.CreateThreadAndSubmit(ctx);
             }
             else
             {
+                Logger.LogInformation("[Chat] Submitting to thread {Thread}", threadPath);
                 ThreadSubmission.Submit(ctx);
             }
 
@@ -1381,6 +1267,47 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return text[..maxLength] + "...";
     }
 
+    /// <summary>
+    /// Maps a model to its brand badge (label + CSS color class + tooltip).
+    /// Anthropic models → tier letter (O/S/H) coloured by tier; OpenAI models →
+    /// stripped GPT version (4o, o1, etc.); other providers → first two letters.
+    /// </summary>
+    private static (string Label, string Class, string Tooltip) ModelBadge(ModelInfo model)
+    {
+        var name = model.Name?.ToLowerInvariant() ?? "";
+        var provider = model.Provider ?? "";
+
+        // Anthropic Claude — tier letter coloured per tier
+        if (name.Contains("claude") || provider.Contains("Anthropic", StringComparison.OrdinalIgnoreCase)
+                                    || provider.Contains("Claude", StringComparison.OrdinalIgnoreCase))
+        {
+            if (name.Contains("opus"))
+                return ("O", "model-badge-anthropic-opus", $"Anthropic Opus ({model.Name})");
+            if (name.Contains("sonnet"))
+                return ("S", "model-badge-anthropic-sonnet", $"Anthropic Sonnet ({model.Name})");
+            if (name.Contains("haiku"))
+                return ("H", "model-badge-anthropic-haiku", $"Anthropic Haiku ({model.Name})");
+            return ("A", "model-badge-anthropic-opus", $"Anthropic ({model.Name})");
+        }
+
+        // OpenAI / GPT — strip the gpt- prefix to leave the version
+        if (name.StartsWith("gpt-") || name.StartsWith("o") && name.Length > 1 && char.IsDigit(name[1])
+            || provider.Contains("OpenAI", StringComparison.OrdinalIgnoreCase)
+            || provider.Contains("Foundry", StringComparison.OrdinalIgnoreCase))
+        {
+            var label = name.StartsWith("gpt-") ? name[4..] : name;
+            // truncate after the first segment so badge stays readable (e.g. "4o-mini" → "4o")
+            var dash = label.IndexOf('-');
+            if (dash > 0) label = label[..dash];
+            if (label.Length > 4) label = label[..4];
+            return (label.ToUpperInvariant(), "model-badge-openai", $"OpenAI ({model.Name})");
+        }
+
+        // Fallback: first two letters of the model name
+        var fallback = (model.Name ?? "?").Length >= 2 ? model.Name![..2].ToUpperInvariant() : "?";
+        return (fallback, "model-badge-other", $"{provider} ({model.Name})");
+    }
+
     public override ValueTask DisposeAsync()
     {
         if (!_isDisposed)
@@ -1388,6 +1315,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             _isDisposed = true;
             _navContextSubscription?.Dispose();
             agentSubscription?.Dispose();
+            modelSubscription?.Dispose();
             submissionHandler.Dispose();
             SidePanelState.OnActionRequested -= OnSidePanelAction;
         }

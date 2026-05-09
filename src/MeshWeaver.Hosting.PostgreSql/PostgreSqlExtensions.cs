@@ -89,7 +89,7 @@ public static class PostgreSqlExtensions
         services.AddKeyedSingleton<IStorageAdapterFactory, PostgreSqlStorageAdapterFactory>(
             PostgreSqlStorageAdapterFactory.StorageType);
 
-        // Register PostgreSqlMeshQuery so it takes priority over InMemoryMeshQuery
+        // Register PostgreSqlMeshQuery so it takes priority over MeshQueryEngine
         services.AddSingleton<IMeshQueryProvider>(sp =>
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as PostgreSqlStorageAdapter

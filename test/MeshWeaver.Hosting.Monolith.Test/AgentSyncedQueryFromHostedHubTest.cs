@@ -25,12 +25,10 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <para>The chat view runs on <c>PortalApplication.Hub</c> — a HOSTED
 /// sub-hub of the mesh hub created via <c>hub.GetHostedHub(...)</c>, NOT
 /// the mesh hub itself. Its DI scope inherits from the mesh hub via Autofac
-/// child-scope resolution. The split registration of
-/// <see cref="ISyncedMeshNodeQueryProvider"/> (Core on mesh hub, Static on
-/// root container) used to leave the hosted sub-hub seeing zero providers
-/// — server-side <c>IMeshService.QueryAsync</c> worked because it resolves
-/// at the root, but <c>workspace.GetQuery</c> on the chat hub returned
-/// empty. This test exercises the EXACT path that broke.</para>
+/// child-scope resolution. The synced query resolves a single
+/// <c>IMeshQueryCore</c> on the hub's service provider; static-node
+/// providers are folded into the core directly. This test exercises the
+/// EXACT path that the chat view hits in production.</para>
 ///
 /// <para>If you change the synced-query registration shape, run this test
 /// — it will catch dropdown-empty regressions before they reach the
@@ -80,23 +78,11 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
 
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        // Sanity check — the bug was that this resolved to zero providers
-        // on the hosted sub-hub even though the mesh hub had two registered.
-        var providers = portalHub.ServiceProvider
-            .GetServices<ISyncedMeshNodeQueryProvider>()
-            .ToArray();
-        providers.Should().NotBeEmpty(
-            "the hosted sub-hub MUST inherit ISyncedMeshNodeQueryProvider registrations from "
-            + "its parent (mesh hub). Empty here means workspace.GetQuery will return zero "
-            + "snapshots and chat dropdowns will be empty in production.");
-
-        // Drive the EXACT same workspace.GetQuery the chat view fires
-        // (ThreadChatView.SubscribeToAgentNodes:348-358).
-        const string typeAlt = "nodeType:Agent|LanguageModel";
+        // Drive workspace.GetQuery just like the chat view does.
         var observable = workspace.GetQuery(
             "test-chat-picker",
-            $"namespace:Agent {typeAlt}",
-            $"namespace:Model {typeAlt}");
+            "namespace:Agent nodeType:Agent",
+            "namespace:Model nodeType:LanguageModel");
 
         var snapshot = await observable
             .Where(s => s.Any())
@@ -109,8 +95,7 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
         // ---- Agent assertions ----
         var agents = nodes.Where(n => n.NodeType == AgentNodeType.NodeType).ToList();
         agents.Should().NotBeEmpty(
-            "the synced query on a hosted sub-hub must return all built-in agents — "
-            + "if this is empty, ISyncedMeshNodeQueryProvider isn't reaching this scope");
+            "the synced query on a hosted sub-hub must return all built-in agents");
         agents.Select(a => a.Id).Should().Contain("Orchestrator",
             "Orchestrator is one of the built-in agents shipped via BuiltInAgentProvider");
 
@@ -119,8 +104,7 @@ public class AgentSyncedQueryFromHostedHubTest : MonolithMeshTestBase
             n.Name.Should().NotBeNullOrWhiteSpace(
                 $"agent {n.Id} MUST have a non-empty Name — empty Name = invisible dropdown rows");
             n.Content.Should().BeOfType<AgentConfiguration>(
-                $"agent {n.Id} Content must arrive typed (not as JsonElement) — "
-                + "ToAgentDisplayInfo silently drops nodes whose Content is the wrong shape");
+                $"agent {n.Id} Content must arrive typed (not as JsonElement)");
         });
 
         // ---- Model assertions ----

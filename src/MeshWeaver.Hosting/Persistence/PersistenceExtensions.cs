@@ -37,7 +37,7 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Registers <see cref="IMeshQueryCore"/> as a singleton on the top-most
-    /// mesh hub's service container. Resolves to <see cref="InMemoryMeshQueryCore"/>,
+    /// mesh hub's service container. Resolves to <see cref="MeshQueryEngine"/>,
     /// the unsecured surface (no <c>ISecurityService</c> dep) used by
     /// <see cref="SyncedQueryMeshNodes"/> and other infrastructure paths
     /// (NavigationService, VUserHelper, etc.).
@@ -54,44 +54,13 @@ public static class PersistenceExtensions
     public static TBuilder RegisterMeshQueryCoreOnMeshHub<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder
     {
+        // Register the cross-instance mirror handler on the mesh hub.
+        // Any caller (UI click, MCP tool, hub message) posts a MirrorRequest
+        // at this address and the handler runs StorageImporter against the
+        // remote portal. See Doc/Architecture/CrossInstanceMirror.md.
+        // (IMeshQueryCore registration moved to the root container —
+        // see AddCoreAndWrapperServices / AddPartitionedCoreAndWrapperServices.)
         return (TBuilder)builder
-            .ConfigureHub(config => config.WithServices(services =>
-            {
-                services.TryAddSingleton<InMemoryMeshQueryCore>();
-                services.TryAddSingleton<IMeshQueryCore>(sp =>
-                    sp.GetRequiredService<InMemoryMeshQueryCore>());
-
-                // 🚨 SyncedQuery providers MUST live on the mesh-hub scope
-                // (not split between root + mesh-hub) so every child hub —
-                // per-node hubs AND hosted sub-hubs like the per-user portal
-                // hub created by PortalApplication — inherits BOTH providers
-                // via Autofac child-scope resolution. Split registration was
-                // the bug that left chat dropdowns empty: the portal hub's
-                // scope saw only Core (registered here), not Static (registered
-                // at the root container in AddCoreAndWrapperServices). Server-
-                // side IMeshService.QueryAsync resolves at the root container
-                // so it saw both — that's why mesh search worked while chat
-                // dropdowns were empty. Plain AddSingleton (not TryAdd) so
-                // both registrations co-exist as IEnumerable members.
-                services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
-                    sp.GetRequiredService<InMemoryMeshQueryCore>());
-                services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
-                {
-                    // Resolve StaticNodeQueryProvider from whichever scope
-                    // has it (root container — see AddCoreAndWrapperServices).
-                    // GetService (nullable) so a host without persistence
-                    // registered doesn't throw inside the synced query's
-                    // subscribe path; returns Core as a no-op duplicate
-                    // (harmless — the synced-query gate dedupes per provider).
-                    return sp.GetService<Query.StaticNodeQueryProvider>()
-                        ?? (ISyncedMeshNodeQueryProvider)sp.GetRequiredService<InMemoryMeshQueryCore>();
-                });
-                return services;
-            }))
-            // Register the cross-instance mirror handler on the mesh hub.
-            // Any caller (UI click, MCP tool, hub message) posts a MirrorRequest
-            // at this address and the handler runs StorageImporter against the
-            // remote portal. See Doc/Architecture/CrossInstanceMirror.md.
             .ConfigureHub(config => config.AddMirrorHandler());
     }
 
@@ -362,28 +331,24 @@ public static class PersistenceExtensions
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton(persistenceServiceCore);
-        services.TryAddSingleton<InMemoryMeshQuery>();
-        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
-        // IMeshQueryCore is the unsecured infrastructure-query surface — it is
-        // registered ONCE on the top-most mesh hub via
-        // <see cref="RegisterMeshQueryCoreOnMeshHub{TBuilder}"/> so per-node
-        // hubs resolve it through Autofac's child-scope inheritance. Do NOT
-        // register it on the root service collection here; the FutuRe AsiaRe
-        // failure ("IMeshQueryCore has not been registered") came from a path
-        // where the per-hub container couldn't see a root-level singleton.
+        services.TryAddSingleton<MeshQueryEngine>();
+        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<MeshQueryEngine>());
 
-        // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
-        // Registered as BOTH IMeshQueryProvider (for IMeshService fan-out)
-        // AND ISyncedMeshNodeQueryProvider (the dedicated marker for
-        // synced-query path discovery — see SyncedQueryMeshNodes).
+        // IMeshQueryCore — root-container registration; child hub scopes
+        // inherit via Autofac. Static-node providers fold into the core via
+        // its constructor.
+        services.TryAddSingleton<IMeshQueryCore>(sp =>
+            sp.GetRequiredService<MeshQueryEngine>());
+
+        // Static node provider — IMeshQueryProvider for IMeshService fan-out.
+        // (Synced queries no longer use a separate marker; static nodes flow
+        // through MeshQueryEngine directly via its constructor.)
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
             new StaticNodeQueryProvider(
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>(),
                 sp.GetService<ILoggerFactory>()));
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            sp.GetRequiredService<StaticNodeQueryProvider>());
-        services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
             sp.GetRequiredService<StaticNodeQueryProvider>());
 
         // Register MeshCatalog and its interfaces
@@ -522,9 +487,18 @@ public static class PersistenceExtensions
                 logger);
         });
 
-        // IMeshQueryCore registration moved to the top-most mesh hub via
-        // <see cref="RegisterMeshQueryCoreOnMeshHub{TBuilder}"/> — see the
-        // comment on <see cref="AddPersistence(IServiceCollection,IStorageService)"/>.
+        // IMeshQueryCore — unsecured query surface used by SyncedQueryMeshNodes.
+        // Root-container registration so every hub (mesh, per-node, hosted
+        // sub-hubs) inherits via Autofac child-scope resolution. The
+        // partitioned path's IMeshQueryProvider is RoutingMeshQueryProvider
+        // (so MeshQueryEngine isn't otherwise registered), but synced
+        // queries still need an unsecured IMeshQueryCore — register
+        // MeshQueryEngine as the impl, backed by the routing
+        // IStorageService and the same static-node providers the chat
+        // picker relies on.
+        services.TryAddSingleton<MeshQueryEngine>();
+        services.TryAddSingleton<IMeshQueryCore>(sp =>
+            sp.GetRequiredService<MeshQueryEngine>());
 
         // Register the routing version query
         services.AddSingleton<IVersionQuery>(sp =>
@@ -587,25 +561,23 @@ public static class PersistenceExtensions
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton<IStorageService, TPersistenceCore>();
-        services.TryAddSingleton<InMemoryMeshQuery>();
-        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
+        services.TryAddSingleton<MeshQueryEngine>();
+        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<MeshQueryEngine>());
 
-        // IMeshQueryCore registration moved to the top-most mesh hub via
-        // <see cref="RegisterMeshQueryCoreOnMeshHub{TBuilder}"/> — see the
-        // comment on <see cref="AddPersistence(IServiceCollection,IStorageService)"/>.
+        // IMeshQueryCore — unsecured query surface used by SyncedQueryMeshNodes.
+        // Root-container registration so every hub (mesh, per-node, hosted
+        // sub-hubs) inherits via Autofac child-scope resolution. Static-node
+        // providers fold into the core via its constructor.
+        services.TryAddSingleton<IMeshQueryCore>(sp =>
+            sp.GetRequiredService<MeshQueryEngine>());
 
-        // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
-        // Registered as BOTH IMeshQueryProvider (for IMeshService fan-out)
-        // AND ISyncedMeshNodeQueryProvider (the dedicated marker for
-        // synced-query path discovery — see SyncedQueryMeshNodes).
+        // Static node provider — IMeshQueryProvider for IMeshService fan-out.
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
             new StaticNodeQueryProvider(
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>(),
                 sp.GetService<ILoggerFactory>()));
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            sp.GetRequiredService<StaticNodeQueryProvider>());
-        services.AddSingleton<ISyncedMeshNodeQueryProvider>(sp =>
             sp.GetRequiredService<StaticNodeQueryProvider>());
 
         // Register IVersionQuery for non-partitioned mode (uses FileSystemVersionStore if available)
