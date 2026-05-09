@@ -396,13 +396,20 @@ public static class MeshExtensions
                     if (mode == "create" && capturedRequest.Argument is { } arg)
                     {
                         var nodeAddress = new Address(resultNode.Path);
-                        hub.Post(arg, o =>
+                        logger.LogDebug(
+                            "[ArgFwd] Forwarding {ArgType} to {NodePath} (accessCtx={AccessCtx})",
+                            arg.GetType().Name, resultNode.Path,
+                            request.AccessContext?.ObjectId ?? "(null)");
+                        var argDelivery = hub.Post(arg, o =>
                         {
                             o = o.WithTarget(nodeAddress);
                             return request.AccessContext is { } accessCtx
                                 ? o.WithAccessContext(accessCtx)
                                 : o;
                         });
+                        logger.LogDebug(
+                            "[ArgFwd] Post returned delivery={DeliveryNull} for {ArgType} → {NodePath}",
+                            argDelivery == null ? "null" : argDelivery.Id, arg.GetType().Name, resultNode.Path);
                     }
 
                     // Run post-creation handlers and post the terminal response. On every
