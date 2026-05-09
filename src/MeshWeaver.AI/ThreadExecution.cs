@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.AI.Plugins;
@@ -23,6 +24,16 @@ namespace MeshWeaver.AI;
 /// </summary>
 public static class ThreadExecution
 {
+    // Cell-stream patches are not free — at this cap a 30s response generates
+    // ~300 patches instead of token-rate. 100ms is below the perceptual threshold
+    // for "live typing" while keeping patch volume bounded.
+    private static readonly TimeSpan StreamingSampleInterval = TimeSpan.FromMilliseconds(100);
+
+    private sealed record StreamingSnapshot(
+        string Text,
+        ImmutableList<ToolCallEntry> ToolCalls,
+        ImmutableList<NodeChangeEntry> NodeChanges);
+
     /// <summary>
     /// Registers thread execution handlers on a hub configuration.
     /// Includes a startup recovery check for stale executing cells from crashed sessions.
@@ -526,6 +537,37 @@ public static class ThreadExecution
                 return;
             }
 
+            // 🚨 The Update lambda's `node` is null when the synchronization
+            // handshake hasn't yet delivered the initial state from the per-
+            // message hub (race when streaming output arrives faster than the
+            // remote stream's handshake). Returning null here drops the patch
+            // — symptom is "response cell stuck at 'Allocating agent...'" on
+            // 2nd-and-later chat rounds in tests where the inner LLM is
+            // synchronous (Echo) and the stream's Initial OnNext loses the
+            // race against the streaming write.
+            //
+            // Fallback: when node is null, route through the per-message hub
+            // directly via UpdateThreadMessageContent — same path the
+            // "Allocating agent..." placeholder uses; that path doesn't need
+            // a primed sync stream to land on the cell.
+            if (responseStream == null
+                || (responseStream.Current?.Value is null))
+            {
+                parentHub.Post(new UpdateThreadMessageContent
+                {
+                    Text = text,
+                    ToolCalls = toolCalls,
+                    UpdatedNodes = updatedNodes,
+                    AgentName = agentName,
+                    ModelName = modelName,
+                    InputTokens = inputTokens,
+                    OutputTokens = outputTokens,
+                    TotalTokens = totalTokens,
+                    CompletedAt = completedAt
+                }, o => o.WithTarget(new Address(responsePath)));
+                return;
+            }
+
             responseStream.Update(node =>
             {
                 if (node == null) return null;
@@ -549,7 +591,8 @@ public static class ThreadExecution
                     updated, responseStream.StreamId, responseStream.StreamId,
                     ChangeType.Patch, responseStream.Hub.Version,
                     [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = node }]);
-            });
+            }, ex => logger.LogWarning(ex,
+                "[ThreadExec] responseStream.Update failed for {Path}", responsePath));
         }
 
         // Helper: update Thread execution state via parentHub workspace.
@@ -666,11 +709,22 @@ public static class ThreadExecution
                     UserAccessContext = userAccessContext
                 });
 
-                // History is now constructor-injected on AgentChatClient (cache miss
-                // path). Each round just provides the new user message — the agent
-                // pulls in the prior conversation from its own session.
+                // 🚨 Load FULL prior conversation (user + assistant) per round.
+                // Real LLMs (Anthropic, OpenAI) don't share session state across
+                // SubmitMessageRequest deliveries, and Echo (used by tests)
+                // doesn't track history at all. So if every round only sent the
+                // new user message, the agent would never see prior turns —
+                // ChatHistoryTest catches exactly this regression.
+                LoadFullConversationHistoryFromMesh(parentHub, threadPath,
+                        excludeUserMessageId: request.UserMessageId,
+                        excludeResponseMessageId: responseMsgId,
+                        logger)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(5),
+                        Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>()))
+                    .Subscribe(history =>
                 {
-                    var chatHistory = ImmutableList<ChatMessage>.Empty;
+                    var chatHistory = history.ToImmutableList();
 
                     var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
@@ -709,12 +763,12 @@ public static class ThreadExecution
 
                 var agentDisplayName = request.AgentName ?? "Agent";
 
-                // Build full message list: history (from GetDataRequest) + current message
-                // chatHistory already includes the current user message (loaded from the cell).
-                // Only add it if history is empty (delegation sub-thread, text from PendingUserMessage).
-                var allMessages = chatHistory.Count > 0
-                    ? chatHistory
-                    : chatHistory.Add(new ChatMessage(ChatRole.User, request.UserMessageText));
+                // Build full message list: prior history (loaded above, EXCLUDES the
+                // current submission's user/response cells) + current user message.
+                // The system prompt is added by AgentChatClient.GetStreamingResponseAsync
+                // before forwarding to the inner IChatClient.
+                var allMessages = chatHistory.Add(
+                    new ChatMessage(ChatRole.User, request.UserMessageText));
                 logger.LogInformation("[ThreadExec] Sending {Count} messages to agent ({HistoryCount} history + 1 new): threadPath={ThreadPath}, agent={Agent}",
                     allMessages.Count, chatHistory.Count, threadPath, request.AgentName ?? "(default)");
 
@@ -782,8 +836,12 @@ public static class ThreadExecution
                     // Keep the grain alive during the entire execution — including tool calls
                     // and delegations where the streaming loop is blocked.
                     using var heartbeatSubscription = parentHub.BeginAsyncOperation();
-                    var lastUpdate = DateTimeOffset.MinValue;
-                    var lastPushedTextLength = 0;
+                    var snapshots = new Subject<StreamingSnapshot>();
+                    using var pushSub = snapshots
+                        .Sample(StreamingSampleInterval)
+                        .Subscribe(s => PushToResponseMessage(
+                            s.Text, s.ToolCalls, s.NodeChanges,
+                            request.AgentName, request.ModelName));
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
 
@@ -888,36 +946,19 @@ public static class ThreadExecution
                 if (!string.IsNullOrEmpty(update.Text))
                     responseText.Append(update.Text);
 
-                // Push streaming content at ~1/3sec — reduced frequency to avoid
-                // overloading the grain scheduler (messages expire if queue backs up).
-                // Push as a TEXT DELTA: we send only the new characters since the last
-                // push (tracked by lastPushedTextLength). The response cell appends it,
-                // so we never ship the whole growing string every tick.
-                if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(3000))
-                {
-                    // Stamp delegation paths on any unmatched delegation tool calls
-                    var pathValues = chatClient.DelegationPaths.Values.ToList();
-                    var pathIdx = 0;
-                    toolCallLog = toolCallLog.Select(e =>
-                    {
-                        if (e.Name.StartsWith("delegate_to") && e.DelegationPath == null && pathIdx < pathValues.Count)
-                            return e with { DelegationPath = pathValues[pathIdx++] };
-                        return e;
-                    }).ToImmutableList();
+                // Stamp delegation paths on any unmatched delegation tool calls.
+                var pathValues = chatClient.DelegationPaths.Values.ToList();
+                var pathIdx = 0;
+                toolCallLog = toolCallLog.Select(e =>
+                    e.Name.StartsWith("delegate_to") && e.DelegationPath == null && pathIdx < pathValues.Count
+                        ? e with { DelegationPath = pathValues[pathIdx++] }
+                        : e).ToImmutableList();
 
-                    // We own the running text accumulator (responseText) — push the
-                    // full string each tick. The TextDelta append protocol from the
-                    // legacy UpdateThreadMessageContent path is gone: ChangeType.Patch
-                    // through the synchronization protocol is idempotent for equal
-                    // payloads, and there is no second writer racing this one.
-                    lastPushedTextLength = responseText.Length;
-                    PushToResponseMessage(responseText.ToString(), toolCallLog, nodeChangeLog,
-                        request.AgentName, request.ModelName);
-                    lastUpdate = DateTimeOffset.UtcNow;
-                }
+                snapshots.OnNext(new StreamingSnapshot(
+                    responseText.ToString(), toolCallLog, nodeChangeLog));
             }
 
-                    // Final update — aggregate node changes (merges sub-thread changes with min/max versions),
+                    snapshots.OnCompleted();
                     // include token usage + completion timestamp so the cell can show duration / tokens.
                     var aggregatedChanges = AggregateNodeChanges(nodeChangeLog);
                     if (totalTokens is null && (inputTokens.HasValue || outputTokens.HasValue))
@@ -987,7 +1028,7 @@ public static class ThreadExecution
                         }
                     }
                 });
-                    } // end of synchronous history block (no historyObs)
+                    }); // end of LoadFullConversationHistory.Subscribe
                 }); // end of contextNodeObs.Subscribe
                 }, // end of WhenInitialized.Subscribe onNext
                 ex => logger.LogError(ex, "[ThreadExec] Initialize failed for {ThreadPath}", threadPath));
@@ -1195,6 +1236,70 @@ public static class ThreadExecution
             o => o.ResponseFor(delivery));
 
         return delivery.Processed();
+    }
+
+    /// <summary>
+    /// Loads ALL prior ThreadMessage cells (both user and assistant) for the
+    /// thread, excluding the current submission's user cell and any cell with
+    /// empty text (e.g. the just-created in-flight response cell). Ordered by
+    /// timestamp. Used per-round to give the agent full conversation context —
+    /// without this, every round only sees the new user message and tests like
+    /// <c>ChatHistoryTest</c> see "I received 2 messages" forever.
+    /// </summary>
+    internal static IObservable<IReadOnlyList<ChatMessage>> LoadFullConversationHistoryFromMesh(
+        IMessageHub hub, string threadPath, string? excludeUserMessageId, string? excludeResponseMessageId,
+        ILogger logger)
+    {
+        // 🚨 Walk the LIVE thread node's Messages list and resolve each cell
+        // via GetMeshNodeStream (per-node hub) — this picks up writes that
+        // haven't yet propagated to IMeshQueryCore's persistence layer.
+        // Querying via IMeshQueryCore against the same thread can return
+        // stale-empty or missing cells when a prior round's
+        // responseStream.Update committed to the per-cell hub but the
+        // persistence-side index hasn't caught up.
+        var workspace = hub.GetWorkspace();
+        return workspace.GetMeshNodeStream(threadPath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Select(threadNode => threadNode.Content as MeshThread)
+            .Where(t => t != null)
+            .SelectMany(thread =>
+            {
+                var cellIds = thread!.Messages
+                    .Where(id => id != excludeUserMessageId && id != excludeResponseMessageId)
+                    .ToList();
+                if (cellIds.Count == 0)
+                    return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
+
+                // Fetch each cell once via its per-node hub (live state).
+                var cellLookups = cellIds.Select(id =>
+                    workspace.GetMeshNodeStream($"{threadPath}/{id}")
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>()));
+
+                return cellLookups.Concat()
+                    .ToList()
+                    .Select(nodes => (IReadOnlyList<ChatMessage>)nodes
+                        .Select(n => n.Content as ThreadMessage)
+                        .Where(m => m != null && !string.IsNullOrEmpty(m.Text))
+                        .OrderBy(m => m!.Timestamp)
+                        .Select(m =>
+                        {
+                            var role = string.Equals(m!.Role, "user", StringComparison.OrdinalIgnoreCase)
+                                ? ChatRole.User
+                                : ChatRole.Assistant;
+                            return new ChatMessage(role, m.Text);
+                        })
+                        .ToList());
+            })
+            .Catch<IReadOnlyList<ChatMessage>, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "[ThreadExec] LoadFullConversationHistory: failed/timed out for {ThreadPath} — empty history",
+                    threadPath);
+                return Observable.Return<IReadOnlyList<ChatMessage>>(Array.Empty<ChatMessage>());
+            });
     }
 
     /// <summary>
