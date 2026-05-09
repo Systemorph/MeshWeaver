@@ -241,6 +241,13 @@ public static class ThreadSubmission
         IMessageDelivery<AppendUserMessageRequest> delivery)
     {
         var req = delivery.Message;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.ThreadSubmission");
+        logger?.LogDebug(
+            "[AppendUserMsg] handler entry hub={Hub} threadPath={ThreadPath} accessCtx={AccessCtx} textLen={TextLen} agent={Agent} model={Model}",
+            hub.Address, req.ThreadPath,
+            delivery.AccessContext?.ObjectId ?? "(null)",
+            req.UserText?.Length ?? 0, req.AgentName ?? "(null)", req.ModelName ?? "(null)");
         try
         {
             var msg = ThreadInput.CreateUserMessage(
@@ -255,10 +262,15 @@ public static class ThreadSubmission
             // Tests + the legacy client posted the id eagerly; the new flow only uses
             // server-allocated ids so we don't honour the request's id here.
             ThreadInput.AppendUserInput(hub.GetWorkspace(), req.ThreadPath, msg);
+            logger?.LogDebug(
+                "[AppendUserMsg] AppendUserInput dispatched for {ThreadPath} (cold subscribe fired)",
+                req.ThreadPath);
             hub.Post(new AppendUserMessageResponse { Success = true }, o => o.ResponseFor(delivery));
         }
         catch (Exception ex)
         {
+            logger?.LogWarning(ex,
+                "[AppendUserMsg] handler threw for {ThreadPath}", req.ThreadPath);
             hub.Post(new AppendUserMessageResponse { Success = false, Error = ex.Message }, o => o.ResponseFor(delivery));
         }
         return delivery.Processed();

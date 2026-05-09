@@ -96,6 +96,20 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     MessageHubRunLevel RunLevel { get; }
 
     /// <summary>
+    /// Per-hub property bag — key is <c>(<paramref name="context"/>, typeof(T))</c>.
+    /// Used to cache instance state on a hub without a separate static dictionary
+    /// (e.g. <c>AgentChatClient</c>, <c>CancellationTokenSource</c>, completion
+    /// callbacks). Disposed with the hub.
+    /// </summary>
+    void Set<T>(T obj, string context = "");
+
+    /// <summary>
+    /// Reads the value previously stored via <see cref="Set{T}"/>. Returns
+    /// <c>default</c> when no entry exists.
+    /// </summary>
+    T Get<T>(string context = "");
+
+    /// <summary>
     /// Opens a named initialization gate, allowing all deferred messages to be processed.
     /// </summary>
     /// <param name="name">The name of the gate to open</param>

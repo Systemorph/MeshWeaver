@@ -55,6 +55,17 @@ public class AgentChatClient : IAgentChat
     private IReadOnlyList<ThreadMessage>? conversationHistory;
 
     /// <summary>
+    /// Captured during <see cref="CreateAgentsSync"/> when an
+    /// <see cref="IChatClientFactory"/> throws while materialising an agent
+    /// (typical cause: factory matches the model via <c>Supports(...)</c>
+    /// but its underlying config — Endpoint / ApiKey — isn't set). Surfaced
+    /// in the chat response when <see cref="SelectAgent"/> returns null, so
+    /// the user sees the actual misconfiguration instead of the opaque
+    /// "No suitable agent found" string.
+    /// </summary>
+    private string? lastAgentCreationError;
+
+    /// <summary>
     /// Mesh-discovered models — bring-your-own-model entries from
     /// <c>nodeType:Model</c> nodes. Surfaced into ThreadChatView's picker
     /// alongside the factory-provided defaults.
@@ -89,12 +100,20 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     public IObservable<AgentChatClient> WhenInitialized => agentsLoadedSubject;
 
-    public AgentChatClient(IServiceProvider serviceProvider)
+    /// <summary>
+    /// Constructs a chat client with optional prior conversation history —
+    /// passed in from the caller (typically <c>ThreadExecution</c> on a fresh
+    /// grain after restart). The client itself stays out of the history-load
+    /// concern: callers fetch prior messages and inject them via this ctor.
+    /// </summary>
+    public AgentChatClient(IServiceProvider serviceProvider, IReadOnlyList<ThreadMessage>? priorMessages = null)
     {
         hub = serviceProvider.GetRequiredService<IMessageHub>();
         logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         meshQuery = serviceProvider.GetService<IMeshService>();
         chatClientFactories = serviceProvider.GetServices<IChatClientFactory>().ToImmutableList();
+        if (priorMessages is { Count: > 0 })
+            conversationHistory = priorMessages;
     }
 
     /// <summary>
@@ -181,6 +200,15 @@ public class AgentChatClient : IAgentChat
     {
         currentAttachments = paths is { Count: > 0 } ? paths : null;
     }
+
+    /// <summary>
+    /// True once an <see cref="AgentSession"/> has been created for this client —
+    /// i.e. at least one streaming response has run, so the agent is carrying the
+    /// conversation in memory. The thread-execution layer uses this as the
+    /// "is this a fresh grain?" signal to decide whether persisted history needs
+    /// to be re-loaded from the mesh.
+    /// </summary>
+    public bool HasActiveSession => sharedThread != null;
 
     /// <summary>
     /// Sets conversation history from persisted ThreadMessage nodes.
@@ -536,7 +564,8 @@ public class AgentChatClient : IAgentChat
         var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
-            yield return new ChatMessage(ChatRole.Assistant, "No suitable agent found to handle the request.");
+            yield return new ChatMessage(ChatRole.Assistant,
+                lastAgentCreationError ?? "No suitable agent found to handle the request.");
             yield break;
         }
 
@@ -656,7 +685,8 @@ public class AgentChatClient : IAgentChat
         var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
-            yield return new ChatResponseUpdate(ChatRole.Assistant, "No suitable agent found to handle the request.");
+            yield return new ChatResponseUpdate(ChatRole.Assistant,
+                lastAgentCreationError ?? "No suitable agent found to handle the request.");
             yield break;
         }
 
@@ -932,154 +962,35 @@ public class AgentChatClient : IAgentChat
         currentModelName = modelName;
         lastLoadedContextPath = contextPath;
 
-        if (meshQuery == null)
-        {
-            agentsLoadedSubject.OnNext(this);
-            return this;
-        }
-
-        // Three-query union — every query carries the nodeType alternation
-        // `Agent|Model` so a single subscription discovers BOTH agents AND
-        // bring-your-own-model entries. ApplyAgentNodes forks the resulting
-        // collection into agents + models. We use IMeshService.ObserveQuery
-        // (the typed, hub-scoped surface) so node.Content arrives as a
-        // deserialised AgentConfiguration / ModelDefinition — IMeshQueryCore
-        // would leave Content as raw JsonElement because the Core lives on
-        // the mesh hub whose JsonSerializerOptions don't carry the AI type
-        // discriminators that AddAITypes registers on the portal hub.
-        //
-        //   1) Global agents/models under /Agent + /Model.
-        //   2) Agents/models along the current path's hierarchy — lets a
-        //      project at /ACME/Foo register custom ones at /ACME and have
-        //      them surface here.
-        //   3) Agents/models under the current node's NodeType namespace —
-        //      type-specific (e.g. /Markdown/MarkdownEditor).
-        const string TypeAlternation = "nodeType:Agent|LanguageModel";
-        var queries = ImmutableArray.CreateBuilder<string>();
-        queries.Add($"namespace:Agent {TypeAlternation}");
-        queries.Add($"namespace:Model {TypeAlternation}");
-
-        if (!string.IsNullOrEmpty(contextPath))
-            queries.Add($"namespace:{contextPath} scope:selfAndAncestors {TypeAlternation}");
-
-        var nodeType = Context?.Node?.NodeType;
-        if (!string.IsNullOrEmpty(nodeType))
-            queries.Add($"namespace:{nodeType} scope:selfAndAncestors {TypeAlternation}");
-
-        var queryId = $"agents:{contextPath ?? string.Empty}:{nodeType ?? string.Empty}";
-
-        logger.LogInformation(
-            "[AgentChatClient] Initialize: subscribing typed synced query id={QueryId} queries={Queries}",
-            queryId, string.Join(" | ", queries));
-
-        // Per-query observable: keep a running set of path → MeshNode tuples
-        // (Initial / Added / Updated / Removed). The N streams are
-        // CombineLatest-merged into a single union dict so every emission
-        // yields the current synced collection.
-        //
-        // 🚨 Lazy empty seed (NOT StartWith): CombineLatest only emits once
-        // *every* input has fired at least once. A naive StartWith(empty) on
-        // each input fires immediately, opens the gate with all-empty, and
-        // WhenInitialized.Take(1) downstream sees the empty snapshot and
-        // starts streaming before real agents arrive — the user reports
-        // "No suitable agent" even when the catalog has 9 agents. So instead
-        // we MERGE the source with a 4-second timer that emits the empty
-        // dict — but the timer is cancelled (TakeUntil) if the source
-        // emits first. Net effect: real Initial wins when present, empty
-        // fallback only kicks in for queries whose providers never produce
-        // Initial in time (e.g. unmatched namespaces in some routing). The
-        // source is `Publish().RefCount()`'d so the TakeUntil and the
-        // forwarded subscription share one upstream connection.
-        static IObservable<ImmutableDictionary<string, MeshNode>> WithSilentFallback(
-            IObservable<ImmutableDictionary<string, MeshNode>> source)
-        {
-            var shared = source.Publish().RefCount();
-            var fallback = Observable.Timer(TimeSpan.FromSeconds(4))
-                .Select(_ => ImmutableDictionary<string, MeshNode>.Empty)
-                .TakeUntil(shared);
-            return shared.Merge(fallback);
-        }
-
-        var perQuery = queries
-            .Select(q => WithSilentFallback(
-                meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))
-                    .Scan(
-                        ImmutableDictionary<string, MeshNode>.Empty,
-                        (acc, change) => change.ChangeType switch
-                        {
-                            QueryChangeType.Removed =>
-                                change.Items.Aggregate(acc, (d, n) =>
-                                    string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
-                            _ =>
-                                change.Items.Aggregate(acc, (d, n) =>
-                                    string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n))
-                        })))
-            .ToArray();
-
-        var unioned = perQuery.Length switch
-        {
-            0 => Observable.Return(ImmutableDictionary<string, MeshNode>.Empty),
-            1 => perQuery[0],
-            _ => perQuery
-                    .Cast<IObservable<ImmutableDictionary<string, MeshNode>>>()
-                    .CombineLatest()
-                    .Select(snapshots =>
-                    {
-                        var merged = ImmutableDictionary<string, MeshNode>.Empty;
-                        foreach (var snap in snapshots)
-                            foreach (var kv in snap)
-                                merged = merged.SetItem(kv.Key, kv.Value);
-                        return merged;
-                    })
-        };
-
+        // 🚨 Subscribe to the SAME synced-query pipe the chat picker UI uses
+        // (AgentPickerProjection.ObserveAgents/ObserveModels). One source of
+        // truth — no separate "AgentChatClient does its own ObserveQuery"
+        // chain that drifted from the picker and produced "No suitable agent"
+        // even though the dropdown showed 9 of them. The synced query runs on
+        // the workspace of THIS hub (the thread hub passed in via the ctor's
+        // service provider), not the _Exec child — _Exec is blocked by the
+        // streaming Task.Run.
+        var workspace = hub.GetWorkspace();
         agentsSubscription?.Dispose();
-        // Race-guard: WhenInitialized.OnNext must NOT fire on the FIRST empty
-        // snapshot — under CI timing the merged ObserveQuery can emit an
-        // Initial with zero items in <300ms (faster than agents materialise on
-        // some providers). If we propagate that empty snapshot, downstream
-        // GetResponseAsync calls SelectAgent → null → "No suitable agent" —
-        // the exact failure mode CI was reporting on Threading.Test.
-        // Fix: keep updating loadedAgents on every snapshot, but only signal
-        // WhenInitialized once we have at least one agent, OR the outer 8s
-        // timeout fires (genuinely empty catalog → unblock so chat doesn't hang).
         var readinessFired = false;
-        agentsSubscription = unioned
-            // 🚨 If a query never fires Initial we still want the chat to
-            // unblock — emit an empty snapshot after 8s and warn loudly so
-            // we know it's the slow path, not a hang.
-            .Timeout(TimeSpan.FromSeconds(8), Observable.Return(ImmutableDictionary<string, MeshNode>.Empty)
-                .Do(_ => logger.LogWarning(
-                    "[AgentChatClient] Typed query id={QueryId} did not emit within 8s — proceeding with empty agent set",
-                    queryId)))
+        agentsSubscription = Observable.CombineLatest(
+                AgentPickerProjection.ObserveAgents(workspace, hub, contextPath),
+                AgentPickerProjection.ObserveModels(workspace, hub, contextPath),
+                (agents, models) => (agents, models))
+            .Timeout(TimeSpan.FromSeconds(8),
+                Observable.Return((
+                    (IReadOnlyList<AgentDisplayInfo>)Array.Empty<AgentDisplayInfo>(),
+                    (IReadOnlyList<ModelInfo>)Array.Empty<ModelInfo>()))
+                    .Do(_ => logger.LogWarning(
+                        "[AgentChatClient] Picker queries did not emit within 8s — proceeding with empty agent/model set")))
             .Subscribe(
-                snapshot =>
+                tuple =>
                 {
+                    var (agents, models) = tuple;
                     logger.LogInformation(
-                        "[AgentChatClient] Typed query id={QueryId} emitted {Count} nodes",
-                        queryId, snapshot.Count);
-                    try
-                    {
-                        ApplyAgentNodes(snapshot.Values, contextPath);
-                    }
-                    catch (Exception ex)
-                    {
-                        // Defence in depth — ApplyAgentNodes calls
-                        // CreateAgentsSync which now catches per-agent
-                        // factory failures, but JSON deserialise / projection
-                        // bugs would still surface here. Logging + swallowing
-                        // here keeps the synced-query subscription alive so
-                        // the next emission has a chance to recover.
-                        logger.LogWarning(ex,
-                            "[AgentChatClient] ApplyAgentNodes threw for id={QueryId}; chat will use whatever agents loaded so far",
-                            queryId);
-                    }
-                    // Fire WhenInitialized on the first non-empty snapshot
-                    // (real catalog) — or on later snapshots that aren't
-                    // empty (catalog refreshed). Empty Initials are observed
-                    // silently; the 8s outer Timeout fallback below produces
-                    // the empty-catalog terminal signal if no agents ever
-                    // arrive.
+                        "[AgentChatClient] Picker emission: {Agents} agents, {Models} models for ctx={Ctx}",
+                        agents.Count, models.Count, contextPath ?? "(null)");
+                    ApplyDisplayInfos(agents, models, contextPath);
                     if (!readinessFired && loadedAgents.Count > 0)
                     {
                         readinessFired = true;
@@ -1087,25 +998,18 @@ public class AgentChatClient : IAgentChat
                     }
                     else if (readinessFired)
                     {
-                        // Subsequent live updates: keep downstream observers
-                        // (UI dropdowns) refreshed.
                         agentsLoadedSubject.OnNext(this);
                     }
                 },
                 ex =>
                 {
-                    logger.LogWarning(ex,
-                        "[AgentChatClient] Typed agent query failed for id={QueryId} — unblocking chat with empty set",
-                        queryId);
-                    ApplyAgentNodes(Array.Empty<MeshNode>(), contextPath);
+                    logger.LogWarning(ex, "[AgentChatClient] Picker subscription faulted — unblocking with empty");
+                    ApplyDisplayInfos(Array.Empty<AgentDisplayInfo>(), Array.Empty<ModelInfo>(), contextPath);
                     readinessFired = true;
                     agentsLoadedSubject.OnNext(this);
                 },
                 () =>
                 {
-                    // The Timeout fallback above completes the stream after
-                    // emitting the empty dict — that's the "genuinely empty
-                    // catalog" terminal. Fire readiness so chat unblocks.
                     if (!readinessFired)
                     {
                         readinessFired = true;
@@ -1117,107 +1021,31 @@ public class AgentChatClient : IAgentChat
     }
 
     /// <summary>
-    /// Projects a synced agent-node collection into <see cref="loadedAgents"/>
-    /// and rebuilds the in-memory <see cref="agents"/> dictionary. Shared by
-    /// the reactive <see cref="Initialize"/> and the legacy
-    /// <see cref="InitializeAsync"/> bridge.
+    /// Stash the projected display infos from <see cref="AgentPickerProjection"/>
+    /// into <see cref="loadedAgents"/> + <see cref="loadedModels"/> and rebuild
+    /// the <see cref="agents"/> dictionary. Replaces the old MeshNode-driven
+    /// <c>ApplyAgentNodes</c>; the projection has already done the
+    /// JsonElement-fallback fork inside the chat-picker source of truth.
     /// </summary>
-    private void ApplyAgentNodes(IEnumerable<MeshNode> nodes, string? contextPath)
+    private void ApplyDisplayInfos(
+        IReadOnlyList<AgentDisplayInfo> agentInfos,
+        IReadOnlyList<ModelInfo> modelInfos,
+        string? contextPath)
     {
-        // The synced query is `nodeType:Agent|LanguageModel` — fork by the runtime
-        // type of node.Content. Content arrives in two shapes depending on
-        // the upstream provider:
-        //   • Already-deserialised AgentConfiguration / ModelDefinition —
-        //     when the producer used a typed registry to materialise the
-        //     node.
-        //   • Raw JsonElement — when ObserveQuery returns the storage
-        //     payload as JSON. Same shape as OnboardingMiddleware.FoldRoles
-        //     handles for AccessAssignment. Falling through this branch is
-        //     what made the synced collection *appear* empty in the
-        //     IMeshQueryCore path that lacked the AI type discriminators.
-        var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
-        var modelsDict = ImmutableDictionary<string, ModelDefinition>.Empty;
-        var skippedAgent = 0;
-        foreach (var node in nodes)
-        {
-            switch (node.Content)
-            {
-                case AgentConfiguration ac:
-                    if (!agentsDict.ContainsKey(ac.Id))
-                        agentsDict = agentsDict.SetItem(ac.Id, (ac, node.Path ?? string.Empty));
-                    break;
-                case ModelDefinition md:
-                    if (!modelsDict.ContainsKey(md.Id))
-                        modelsDict = modelsDict.SetItem(md.Id, md);
-                    break;
-                case JsonElement je:
-                    if (TryDeserialise<AgentConfiguration>(je) is { } agentJson)
-                    {
-                        if (!agentsDict.ContainsKey(agentJson.Id))
-                            agentsDict = agentsDict.SetItem(agentJson.Id, (agentJson, node.Path ?? string.Empty));
-                    }
-                    else if (TryDeserialise<ModelDefinition>(je) is { } modelJson)
-                    {
-                        if (!modelsDict.ContainsKey(modelJson.Id))
-                            modelsDict = modelsDict.SetItem(modelJson.Id, modelJson);
-                    }
-                    else
-                    {
-                        skippedAgent++;
-                    }
-                    break;
-                default:
-                    skippedAgent++;
-                    break;
-            }
-        }
-        if (skippedAgent > 0)
-            logger.LogDebug(
-                "[AgentChatClient] ApplyAgentNodes: skipped {Skipped} node(s) with unrecognised content",
-                skippedAgent);
-
-        // Project models for the picker (factory-provided ones are
-        // unioned into the picker by ThreadChatView).
-        loadedModels = modelsDict.Values
-            .OrderBy(m => m.Order)
-            .ThenBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(m => m.ToModelInfo())
-            .ToImmutableList();
-
-        T? TryDeserialise<T>(JsonElement je) where T : class
-        {
-            try
-            {
-                return JsonSerializer.Deserialize<T>(je.GetRawText(), hub.JsonSerializerOptions);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        var displayInfos = agentsDict.Values.Select(x => new AgentDisplayInfo
-        {
-            Name = x.Config.Id,
-            Path = x.Path,
-            Description = x.Config.Description ?? x.Config.DisplayName ?? x.Config.Id,
-            GroupName = x.Config.GroupName,
-            Order = x.Config.Order,
-            Icon = x.Config.Icon,
-            CustomIconSvg = x.Config.CustomIconSvg,
-            AgentConfiguration = x.Config
-        }).ToImmutableList();
-
+        loadedModels = modelInfos.ToImmutableList();
         loadedAgents = AgentOrderingHelper.OrderByRelevance(
-            displayInfos, contextPath?.TrimStart('/') ?? string.Empty, string.Empty).ToImmutableList();
+            agentInfos.ToImmutableList(),
+            contextPath?.TrimStart('/') ?? string.Empty,
+            string.Empty).ToImmutableList();
 
-        logger.LogInformation("[AgentChatClient] Initialize: {Count} agents: [{Agents}]",
+        logger.LogInformation("[AgentChatClient] {Count} agents: [{Agents}]",
             loadedAgents.Count, string.Join(", ", loadedAgents.Select(a => a.Name)));
 
         agentsInitialized = false;
         agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
         CreateAgentsSync();
     }
+
 
     /// <summary>
     /// Task-shaped bridge for callers that pre-date the sync surface
@@ -1247,11 +1075,16 @@ public class AgentChatClient : IAgentChat
     {
         if (chatClientFactories.Count == 0)
         {
-            logger.LogWarning("[AgentChatClient] No IChatClientFactory available, cannot create agents");
+            lastAgentCreationError =
+                "No IChatClientFactory is registered. Add e.g. AddAzureFoundryClaude / AddAzureOpenAI in your host configuration.";
+            logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
             return;
         }
 
         if (agentsInitialized) return;
+        // Reset before this attempt — a previous failure shouldn't be surfaced
+        // if the new attempt succeeds.
+        lastAgentCreationError = null;
 
         // Per-agent factory selection. The agent's PreferredModel is the source
         // of truth (see ChatClientAgentFactory subclasses' CreateChatClient
@@ -1264,7 +1097,10 @@ public class AgentChatClient : IAgentChat
         var defaultFactory = GetFactoryForModel(currentModelName);
         if (defaultFactory == null)
         {
-            logger.LogWarning("[AgentChatClient] No factory can serve model: {ModelName}", currentModelName);
+            lastAgentCreationError =
+                $"No registered IChatClientFactory accepts model '{currentModelName ?? "(none selected)"}'. "
+                + $"Configured factories: [{string.Join(", ", chatClientFactories.Select(f => f.Name))}].";
+            logger.LogWarning("[AgentChatClient] {Error}", lastAgentCreationError);
             return;
         }
         isPersistentFactory = defaultFactory.IsPersistent;
@@ -1293,6 +1129,8 @@ public class AgentChatClient : IAgentChat
             }
             catch (Exception ex)
             {
+                lastAgentCreationError =
+                    $"Failed to create agent '{agentConfig.Id}' via factory '{factory?.Name}' for model '{effectiveModel}': {ex.Message}";
                 logger.LogWarning(ex,
                     "[AgentChatClient] Skipping agent {Agent} ({Factory}/{Model}): {Message}",
                     agentConfig.Id, factory?.Name, effectiveModel, ex.Message);

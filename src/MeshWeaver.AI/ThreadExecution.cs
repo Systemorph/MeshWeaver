@@ -27,15 +27,6 @@ public static class ThreadExecution
     /// Registers thread execution handlers on a hub configuration.
     /// Includes a startup recovery check for stale executing cells from crashed sessions.
     /// </summary>
-    /// <summary>
-    /// Stores completion callbacks keyed by thread path.
-    /// Used to route ExecutionCompleted responses from the _Exec hub
-    /// back to the original client delivery on the thread hub.
-    /// Safe: thread hub + _Exec hub always run on the same grain/process.
-    /// </summary>
-    private static readonly ConcurrentDictionary<string, Action<SubmitMessageResponse>> CompletionCallbacks = new();
-    private static readonly ConcurrentDictionary<string, CancellationTokenSource> ExecutionCancellations = new();
-    private static readonly ConcurrentDictionary<string, AgentChatClient> AgentCache = new();
 
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
@@ -60,23 +51,6 @@ public static class ThreadExecution
         hub.RegisterForDisposal(sub);
     }
 
-    /// <summary>
-    /// Cancels the active execution on <paramref name="threadPath"/> — used by the explicit
-    /// user "Stop" button. Do NOT call this automatically when queued user messages arrive
-    /// during execution: the Anthropic Messages API does not support mid-stream injection,
-    /// and cancelling during a tool_use produces orphaned tool_use blocks that require a
-    /// synthetic error tool_result to recover. The correct pattern for queued input is
-    /// "wait for the round to complete, then dispatch a fresh round with all queued
-    /// messages in history". See ThreadSubmissionServer.InstallServerWatcher.
-    /// Idempotent — repeated calls during the same round are no-ops.
-    /// </summary>
-    internal static void RequestSafeCancellation(string threadPath)
-    {
-        if (ExecutionCancellations.TryGetValue(threadPath, out var cts) && !cts.IsCancellationRequested)
-        {
-            try { cts.Cancel(); } catch { /* already disposed */ }
-        }
-    }
 
     /// <summary>
     /// Sets the thread hub's access context to the thread creator's identity.
@@ -390,15 +364,13 @@ public static class ThreadExecution
             // Register the completion callback BEFORE starting execution. The
             // _Exec hub's ExecuteMessageAsync calls NotifyParentCompletion when
             // the agent finishes streaming; that lookup needs the callback to
-            // already be in CompletionCallbacks. Without this registration the
-            // delegation tool's TaskCompletionSource never resolves and the
-            // parent thread hangs (ExecutionCompleted response never arrives at
-            // the original SubmitMessageRequest delivery).
-            CompletionCallbacks[threadPath] = completionResponse =>
+            // already be on the hub. Without this the delegation tool's
+            // TaskCompletionSource never resolves and the parent thread hangs.
+            hub.Set<Action<SubmitMessageResponse>>(completionResponse =>
             {
                 hub.Post(completionResponse, o => o.ResponseFor(delivery));
-                CompletionCallbacks.TryRemove(threadPath, out _);
-            };
+                hub.Set<Action<SubmitMessageResponse>>(null!);
+            });
 
             hub.Post(new SubmitMessageResponse { Success = true, Messages = ImmutableList.Create(userMsgId, responseMsgId) },
                 o => o.ResponseFor(delivery));
@@ -507,14 +479,6 @@ public static class ThreadExecution
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        // [IDENTITY-TRACE] who is the request being executed for?
-        logger.LogInformation(
-            "[ThreadExec] ENTER ExecuteMessageAsync thread={ThreadPath} responsePath={ResponsePath} delivery.AccessContext={DeliveryUser}, hub.Address={HubAddress}, parentHub.Address={ParentAddress}",
-            threadPath, responsePath,
-            delivery.AccessContext?.ObjectId ?? "<null>",
-            hub.Address.ToString(),
-            parentHub.Address.ToString());
-
         // Long-lived per-message remote stream. Opened once at the start of
         // execution; every chunk-tick / tool-result / final write goes through
         // _responseStream.Update(...). Disposed in the Task.Run finally block.
@@ -610,31 +574,44 @@ public static class ThreadExecution
         if (delivery.AccessContext != null)
             accessService?.SetContext(delivery.AccessContext);
 
-        // Reuse cached agent (skips 3+ seconds of agent initialization on 2nd+ message)
-        var chatClient = AgentCache.GetOrAdd(threadPath, _ =>
+        // Reuse cached agent (skips 3+ seconds of agent init on 2nd+ message).
+        // hub.Get<T> / hub.Set<T> is per-hub instance state — same hub across
+        // rounds = same cached client. Cache miss = resume after restart:
+        // load prior user messages from the persisted thread (excluding the
+        // current submission, which request.UserMessageText already carries),
+        // construct the client with that history, cache it, and proceed.
+        var cachedClient = parentHub.Get<AgentChatClient>();
+        IObservable<AgentChatClient> clientObs;
+        if (cachedClient != null)
         {
-            var c = new AgentChatClient(parentHub.ServiceProvider);
-            c.SetThreadId(threadPath);
-            return c;
-        });
+            clientObs = Observable.Return(cachedClient);
+        }
+        else
+        {
+            PushToResponseMessage("Loading conversation history...", ImmutableList<ToolCallEntry>.Empty,
+                ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName);
+            clientObs = LoadPriorUserMessagesFromMesh(parentHub, threadPath, request.UserMessageId, logger)
+                .Select(prior =>
+                {
+                    var c = new AgentChatClient(parentHub.ServiceProvider, prior);
+                    c.SetThreadId(threadPath);
+                    parentHub.Set(c);
+                    return c;
+                });
+        }
 
-        // Initialize is sync (binds the chat client to the workspace's shared
-        // synced agent collection). Wait for the first WhenInitialized
-        // emission — synchronous when the synced query is warm-cached, async
-        // on first cold load — before starting the streaming loop.
-        chatClient.Initialize(request.ContextPath, request.ModelName);
-        var initSub = chatClient.WhenInitialized
-            .Take(1)
-            .Subscribe(client =>
-            {
-                // [IDENTITY-TRACE] does this Subscribe callback still see the user context?
-                var initAccess = parentHub.ServiceProvider.GetService<AccessService>();
-                logger.LogInformation(
-                    "[ThreadExec] Subscribe(Initialize) thread={ThreadPath} ctx.ObjectId={CtxUser}, circuit.ObjectId={CircuitUser}",
-                    threadPath,
-                    initAccess?.Context?.ObjectId ?? "<null>",
-                    initAccess?.CircuitContext?.ObjectId ?? "<null>");
-                logger.LogInformation("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
+        var initSub = clientObs.Take(1).Subscribe(chatClient =>
+        {
+            // Initialize is sync (binds the chat client to the workspace's shared
+            // synced agent collection). Wait for the first WhenInitialized
+            // emission — synchronous when the synced query is warm-cached, async
+            // on first cold load — before starting the streaming loop.
+            chatClient.Initialize(request.ContextPath, request.ModelName);
+            chatClient.WhenInitialized
+                .Take(1)
+                .Subscribe(client =>
+                {
+                logger.LogDebug("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
 
                 // Set context from remote stream — must subscribe (Current is null on cold streams).
                 // When ContextPath is empty we just set null; otherwise wait for the first emission
@@ -689,106 +666,11 @@ public static class ThreadExecution
                     UserAccessContext = userAccessContext
                 });
 
-                // Load history via GetDataRequest to each message — fully reactive
-                PushToResponseMessage("Loading conversation history...", ImmutableList<ToolCallEntry>.Empty,
-                    ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName);
-
-                // Load history: subscribe to Thread stream → get Messages → GetDataRequest each → CombineLatest
-                threadWorkspace.GetStream(new MeshNodeReference())!
-                    .Select(node => (node.Value?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty)
-                    .Where(msgs => msgs.Count > 0)
-                    .Take(1)
-                    .Subscribe(allMsgIds =>
+                // History is now constructor-injected on AgentChatClient (cache miss
+                // path). Each round just provides the new user message — the agent
+                // pulls in the prior conversation from its own session.
                 {
-                    // History = all messages EXCEPT the last one (response cell).
-                    // The current user cell IS included — its text comes from the cell itself.
-                    var historyMsgIds = allMsgIds.Count > 1
-                        ? allMsgIds.Take(allMsgIds.Count - 1).ToImmutableList()
-                        : ImmutableList<string>.Empty;
-                    logger.LogInformation("[ThreadExec] Loading {Count} history messages via GetDataRequest for {ThreadPath}",
-                        historyMsgIds.Count, threadPath);
-
-                    // Post GetDataRequest to each message, collect responses
-                    var historySubjects = historyMsgIds.Select(msgId =>
-                    {
-                        var subject = new System.Reactive.Subjects.AsyncSubject<(string Id, ThreadMessage? Msg)>();
-                        logger.LogDebug("[ThreadExec] HISTORY_REQ: posting GetDataRequest for {MsgPath}",
-                            $"{threadPath}/{msgId}");
-                        var del = parentHub.Post(new GetDataRequest(new MeshNodeReference()),
-                            o => o.WithTarget(new Address($"{threadPath}/{msgId}")));
-                        if (del != null)
-                        {
-                            logger.LogDebug("[ThreadExec] HISTORY_REQ: posted, delivery={Id} for {MsgId}", del.Id, msgId);
-                            parentHub.Observe((IMessageDelivery)del)
-                                .Subscribe(
-                                    resp =>
-                                    {
-                                        ThreadMessage? tmsg = null;
-                                        if (resp.Message is GetDataResponse gdr)
-                                            tmsg = (gdr.Data as MeshNode)?.Content as ThreadMessage;
-                                        logger.LogDebug("[ThreadExec] HISTORY_RESP: {MsgId} → role={Role}, textLen={Len}, respType={Type}",
-                                            msgId, tmsg?.Role ?? "(null)", tmsg?.Text?.Length ?? -1, resp.Message?.GetType().Name);
-                                        subject.OnNext((msgId, tmsg));
-                                        subject.OnCompleted();
-                                    },
-                                    ex =>
-                                    {
-                                        logger.LogDebug(ex, "[ThreadExec] HISTORY_REQ failed for {MsgId}", msgId);
-                                        subject.OnNext((msgId, null));
-                                        subject.OnCompleted();
-                                    });
-                        }
-                        else
-                        {
-                            logger.LogDebug("[ThreadExec] HISTORY_REQ: Post returned null for {MsgId}", msgId);
-                            subject.OnNext((msgId, null));
-                            subject.OnCompleted();
-                        }
-                        return subject.AsObservable();
-                    }).ToList();
-
-                    // When all responses arrive (or timeout), build history and start streaming
-                    var historyObs = historySubjects.Count > 0
-                        ? Observable.CombineLatest(historySubjects).Take(1)
-                            .Select(results =>
-                            {
-                                var lookup = results.Where(r => r.Msg != null).ToDictionary(r => r.Id, r => r.Msg!);
-                                return historyMsgIds
-                                    .Where(id => lookup.ContainsKey(id))
-                                    .Select(id =>
-                                    {
-                                        var msg = lookup[id];
-                                        var role = msg.Role == "user" ? ChatRole.User : ChatRole.Assistant;
-                                        var text = msg.Text ?? "";
-
-                                        // For assistant messages: prepend tool call summaries so the
-                                        // agent knows what it did (tools called, data read, results)
-                                        if (role == ChatRole.Assistant && msg.ToolCalls is { Count: > 0 })
-                                        {
-                                            var toolSummary = string.Join("\n", msg.ToolCalls.Select(tc =>
-                                                $"[Tool: {tc.Name}({tc.Arguments ?? ""})" +
-                                                (tc.Result != null ? $" → {tc.Result[..Math.Min(500, tc.Result.Length)]}" : "") +
-                                                "]"));
-                                            text = $"{toolSummary}\n\n{text}";
-                                        }
-
-                                        return new ChatMessage(role, text);
-                                    })
-                                    .ToImmutableList();
-                            })
-                            .Timeout(TimeSpan.FromSeconds(10))
-                            .Catch<ImmutableList<ChatMessage>, Exception>(ex =>
-                            {
-                                logger.LogDebug("[ThreadExec] HISTORY_TIMEOUT: {ThreadPath}, {Count} messages requested, error={Error}",
-                                    threadPath, historyMsgIds.Count, ex.Message);
-                                return Observable.Return(ImmutableList<ChatMessage>.Empty);
-                            })
-                        : Observable.Return(ImmutableList<ChatMessage>.Empty);
-
-                    historyObs.Take(1).Subscribe(chatHistory =>
-                    {
-                    logger.LogInformation("[ThreadExec] Assembled {Count}/{Total} history messages for {ThreadPath}",
-                        chatHistory.Count, historyMsgIds.Count, threadPath);
+                    var chatHistory = ImmutableList<ChatMessage>.Empty;
 
                     var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
@@ -847,7 +729,7 @@ public static class ThreadExecution
                 // BeginAsyncOperation signals the grain keep-alive timer.
                 // After await Task.Run(...), execution returns to the grain scheduler.
                 var executionCts = new CancellationTokenSource();
-                ExecutionCancellations[threadPath] = executionCts;
+                parentHub.Set(executionCts);
                 // Cancel Task.Run when the hub disposes (grain deactivation).
                 // Without this, OnDeactivateAsync waits up to 120s for the Task.Run
                 // that's stuck on an AI API call with no cancellation signal.
@@ -876,13 +758,6 @@ public static class ThreadExecution
                     int? totalTokens = null;
                     try
                     {
-                    // [IDENTITY-TRACE] do we still see the user identity inside Task.Run on the thread pool?
-                    var streamAccess = parentHub.ServiceProvider.GetService<AccessService>();
-                    logger.LogInformation(
-                        "[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath} ctx.ObjectId={CtxUser}, circuit.ObjectId={CircuitUser}",
-                        DateTime.UtcNow, threadPath,
-                        streamAccess?.Context?.ObjectId ?? "<null>",
-                        streamAccess?.CircuitContext?.ObjectId ?? "<null>");
                     // Keep the grain alive during the entire execution — including tool calls
                     // and delegations where the streaming loop is blocked.
                     using var heartbeatSubscription = parentHub.BeginAsyncOperation();
@@ -899,14 +774,8 @@ public static class ThreadExecution
                 {
                     if (content is FunctionCallContent functionCall)
                     {
-                        // [IDENTITY-TRACE] who is logged in when a tool call starts?
-                        var toolAccess = parentHub.ServiceProvider.GetService<AccessService>();
-                        logger.LogInformation(
-                            "[ThreadExec] TOOL_START: {Time:HH:mm:ss.fff} {Name} callId={CallId} ctx.ObjectId={CtxUser}, circuit.ObjectId={CircuitUser}",
-                            DateTime.UtcNow, functionCall.Name, functionCall.CallId,
-                            toolAccess?.Context?.ObjectId ?? "<null>",
-                            toolAccess?.CircuitContext?.ObjectId ?? "<null>");
-                        logger.LogDebug("[ThreadExec] TOOL_START_args: {Args}",
+                        logger.LogDebug("[ThreadExec] TOOL_START: {Name} callId={CallId} args={Args}",
+                            functionCall.Name, functionCall.CallId,
                             SerializeArgs(functionCall.Arguments)?[..Math.Min(100, SerializeArgs(functionCall.Arguments)?.Length ?? 0)]);
                         var formatted = ToolStatusFormatter.Format(functionCall);
                         var argsDetail = SerializeArgs(functionCall.Arguments);
@@ -1078,7 +947,7 @@ public static class ThreadExecution
                     }
                     finally
                     {
-                        ExecutionCancellations.TryRemove(threadPath, out _);
+                        parentHub.Set<CancellationTokenSource>(null!);
                         executionCts.Dispose();
                         // Tear down the per-message remote stream now that streaming
                         // is done. The stream stays alive for the whole run because
@@ -1090,11 +959,11 @@ public static class ThreadExecution
                         }
                     }
                 });
-                    }); // end of historyObs.Subscribe
-                }); // end of threadStream.Subscribe (Messages)
+                    } // end of synchronous history block (no historyObs)
                 }); // end of contextNodeObs.Subscribe
-            }, // end of Initialize().Subscribe onNext
-            ex => logger.LogError(ex, "[ThreadExec] Initialize failed for {ThreadPath}", threadPath));
+                }, // end of WhenInitialized.Subscribe onNext
+                ex => logger.LogError(ex, "[ThreadExec] Initialize failed for {ThreadPath}", threadPath));
+        }); // end of clientObs.Subscribe
 
         // Register subscription for disposal
         workspace.AddDisposable(initSub);
@@ -1124,9 +993,10 @@ public static class ThreadExecution
             threadPath, status, responseText.Length);
 
         // Invoke the completion callback registered by HandleSubmitMessage.
-        // This posts a SubmitMessageResponse(ExecutionCompleted) via ResponseFor(originalDelivery)
-        // on the thread hub, which routes back to the client's RegisterCallback.
-        if (CompletionCallbacks.TryGetValue(threadPath, out var callback))
+        // The callback was stored on this same hub via hub.Set; here we read it
+        // back from the same per-hub property bag.
+        var callback = hub.Get<Action<SubmitMessageResponse>>();
+        if (callback != null)
         {
             callback(new SubmitMessageResponse
             {
@@ -1282,8 +1152,11 @@ public static class ThreadExecution
             ex => logger?.LogWarning(ex,
                 "HandleCancelStream: read failed for {ThreadPath}", threadPath));
 
-        // Cancel own execution via CancellationTokenSource (streaming runs on thread pool)
-        if (ExecutionCancellations.TryGetValue(threadPath, out var cts))
+        // Cancel own execution via CancellationTokenSource (streaming runs on
+        // thread pool). The CTS was stored on the parent thread hub via Set —
+        // the _Exec hub stored it on its parent (= this hub).
+        var cts = hub.Get<CancellationTokenSource>();
+        if (cts != null)
         {
             logger?.LogInformation("[ThreadExec] Cancelling own execution for {ThreadPath}", threadPath);
             cts.Cancel();
@@ -1294,5 +1167,50 @@ public static class ThreadExecution
             o => o.ResponseFor(delivery));
 
         return delivery.Processed();
+    }
+
+    /// <summary>
+    /// Loads prior user-message ThreadMessage cells for <paramref name="threadPath"/>
+    /// via <see cref="IMeshQueryCore.ObserveQuery{T}"/> — single observable, no
+    /// per-message GetDataRequest fan-out, no CombineLatest hang. Filters to
+    /// user-role cells, excludes <paramref name="excludeMessageId"/> (the current
+    /// submission, whose text already comes via <c>request.UserMessageText</c>),
+    /// and orders by timestamp. Called only on AgentChatClient cache miss
+    /// (post-restart resume). The returned list is fed straight into the
+    /// AgentChatClient constructor.
+    /// </summary>
+    private static IObservable<IReadOnlyList<ThreadMessage>> LoadPriorUserMessagesFromMesh(
+        IMessageHub hub, string threadPath, string? excludeMessageId, ILogger<AgentChatClient> logger)
+    {
+        var queryCore = hub.ServiceProvider.GetService<IMeshQueryCore>();
+        if (queryCore == null)
+        {
+            logger.LogWarning("[ThreadExec] LoadPriorUserMessages: no IMeshQueryCore on {Hub} — empty",
+                hub.Address);
+            return Observable.Return<IReadOnlyList<ThreadMessage>>(Array.Empty<ThreadMessage>());
+        }
+
+        var request = MeshQueryRequest.FromQuery(
+            $"path:{threadPath} scope:children nodeType:{ThreadMessageNodeType.NodeType}",
+            MeshWeaver.Mesh.Security.WellKnownUsers.System);
+
+        return queryCore.ObserveQuery<MeshNode>(request, hub.JsonSerializerOptions)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Select(change => (IReadOnlyList<ThreadMessage>)change.Items
+                .Where(n => excludeMessageId == null || n.Id != excludeMessageId)
+                .Select(n => n.Content as ThreadMessage)
+                .Where(m => m != null && string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(m => m!.Timestamp)
+                .Cast<ThreadMessage>()
+                .ToList())
+            .Catch<IReadOnlyList<ThreadMessage>, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "[ThreadExec] LoadPriorUserMessages: failed/timed out for {ThreadPath} — empty history",
+                    threadPath);
+                return Observable.Return<IReadOnlyList<ThreadMessage>>(Array.Empty<ThreadMessage>());
+            });
     }
 }

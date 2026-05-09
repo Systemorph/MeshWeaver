@@ -85,8 +85,16 @@ public static class ThreadInput
         // dispatches the message — the original "chat doesn't work in prod" symptom.
         var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadInput");
+        logger?.LogDebug(
+            "[AppendUserInput] entry workspace.Hub={Hub} threadPath={ThreadPath} msgId={MsgId} agent={Agent} model={Model}",
+            workspace.Hub.Address, threadPath, msgId,
+            message.AgentName ?? "(null)", message.ModelName ?? "(null)");
         workspace.GetMeshNodeStream().Update(node =>
         {
+            logger?.LogDebug(
+                "[AppendUserInput] update lambda invoked for {ThreadPath} (node.Path={NodePath} contentType={ContentType})",
+                threadPath, node.Path ?? "(null)",
+                node.Content?.GetType().Name ?? "(null)");
             var thread = node.Content as MeshThread ?? new MeshThread();
             var userIds = thread.UserMessageIds.Contains(msgId)
                 ? thread.UserMessageIds
@@ -105,9 +113,13 @@ public static class ThreadInput
                 }
             };
         }).Subscribe(
-            _ => { },
+            updated => logger?.LogDebug(
+                "[AppendUserInput] OnNext for {ThreadPath} msgId={MsgId} — userIds={UserIds} pending={Pending}",
+                threadPath, msgId,
+                (updated.Content as MeshThread)?.UserMessageIds.Count ?? -1,
+                (updated.Content as MeshThread)?.PendingUserMessages.Count ?? -1),
             ex => logger?.LogWarning(ex,
-                "AppendUserInput: UpdateMeshNode failed for thread {ThreadPath} message {MessageId}",
+                "[AppendUserInput] UpdateMeshNode FAILED for thread {ThreadPath} message {MessageId}",
                 threadPath, msgId));
 
         return msgId;
