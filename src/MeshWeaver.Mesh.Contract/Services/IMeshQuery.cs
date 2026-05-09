@@ -110,8 +110,32 @@ public record MeshQueryRequest
     /// - "status:Open laptop" - filter + text search
     /// - "sort:lastAccessedAt-desc limit:20" - with ordering and limit
     /// - "source:activity" - query activity records
+    ///
+    /// <para>Single-query convenience. When <see cref="Queries"/> is also set,
+    /// it takes precedence and this property is ignored.</para>
     /// </summary>
     public string Query { get; init; } = "";
+
+    /// <summary>
+    /// Multi-query union: when set, the mesh query engine runs every query in
+    /// this list and yields the path-keyed union of their result sets as a
+    /// single combined snapshot (the same de-dup the per-result <c>Items</c>
+    /// list applies to a single query). Set this when you want a single live
+    /// snapshot whose membership is "matches query A OR matches query B OR ..."
+    /// without managing N parallel subscriptions in user code.
+    ///
+    /// <para>Sort/limit/skip are applied to the unioned result set using the
+    /// first query's parameters (the others contribute membership only).</para>
+    /// </summary>
+    public IReadOnlyList<string>? Queries { get; init; }
+
+    /// <summary>
+    /// All effective query strings — <see cref="Queries"/> when set, otherwise
+    /// a one-element view over <see cref="Query"/>. Engines that union over
+    /// multiple queries iterate this; single-query engines call <c>.First()</c>.
+    /// </summary>
+    public IReadOnlyList<string> EffectiveQueries =>
+        Queries is { Count: > 0 } qs ? qs : new[] { Query };
 
     /// <summary>
     /// User ID for access control filtering.
@@ -178,6 +202,18 @@ public record MeshQueryRequest
     /// </summary>
     public static MeshQueryRequest FromQuery(string query, string? userId, string? defaultPath)
         => new() { Query = query, UserId = userId, DefaultPath = defaultPath };
+
+    /// <summary>
+    /// Creates a multi-query union request. The engine runs every query and
+    /// returns the path-keyed union of matched nodes as a single snapshot.
+    /// Sort/limit/skip are taken from the first query.
+    /// </summary>
+    public static MeshQueryRequest FromQueries(IEnumerable<string> queries, string? userId = null)
+    {
+        var list = (queries ?? throw new ArgumentNullException(nameof(queries))).ToList();
+        if (list.Count == 0) throw new ArgumentException("At least one query required", nameof(queries));
+        return new MeshQueryRequest { Queries = list, Query = list[0], UserId = userId };
+    }
 }
 
 /// <summary>

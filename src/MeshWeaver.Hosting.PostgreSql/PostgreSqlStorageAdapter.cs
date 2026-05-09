@@ -495,6 +495,144 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     }
 
     /// <summary>
+    /// Multi-query UNION variant of <see cref="QueryNodesAsync(ParsedQuery, JsonSerializerOptions, string?, string?, string?, IReadOnlyCollection{string}?, CancellationToken)"/>.
+    /// Generates one SELECT per parsed query (with disjoint <c>@qI_*</c> parameter names),
+    /// joins them with <c>UNION</c> (Postgres dedupes by row across the union),
+    /// and executes the result as a single command — one round-trip, server-side
+    /// dedup-by-Path. Used by SyncedQueryMeshNodes via
+    /// <see cref="MeshQueryRequest.FromQueries"/>.
+    ///
+    /// <para>Each parsed query is run through the existing single-query SQL
+    /// generator + scope-clause logic; the only new work is param-name
+    /// disambiguation by query index, so behaviour stays bug-compatible with
+    /// the single-query path.</para>
+    /// </summary>
+    public async IAsyncEnumerable<MeshNode> QueryNodesAsync(
+        IReadOnlyList<ParsedQuery> queries,
+        JsonSerializerOptions options,
+        string? userId = null,
+        string? basePath = null,
+        string? activityUserId = null,
+        IReadOnlyCollection<string>? excludedNodeTypes = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (queries == null || queries.Count == 0) yield break;
+        if (queries.Count == 1)
+        {
+            await foreach (var node in QueryNodesAsync(
+                queries[0], options, userId, basePath, activityUserId, excludedNodeTypes, ct))
+                yield return node;
+            yield break;
+        }
+
+        var unionedSelects = new List<string>(queries.Count);
+        var unionedParams = new Dictionary<string, object>(StringComparer.Ordinal);
+
+        for (var qi = 0; qi < queries.Count; qi++)
+        {
+            var (perSql, perParams) = BuildSingleQuerySql(
+                queries[qi], options, userId, basePath, activityUserId, excludedNodeTypes);
+            // Disambiguate param names across the union: rename every @xxx token
+            // in BOTH the SQL string and the parameters dict to @qI_xxx so each
+            // SELECT's bindings stay disjoint.
+            var prefix = $"q{qi}_";
+            var renamedSql = perSql;
+            var renamedParams = new Dictionary<string, object>(perParams.Count, StringComparer.Ordinal);
+            foreach (var (k, v) in perParams)
+            {
+                var newKey = "@" + prefix + k.TrimStart('@');
+                renamedSql = renamedSql.Replace(k, newKey);
+                renamedParams[newKey] = v;
+            }
+            unionedSelects.Add($"({renamedSql})");
+            foreach (var (k, v) in renamedParams)
+                unionedParams[k] = v;
+        }
+
+        // UNION (not UNION ALL) so Postgres dedupes the row stream — same path
+        // emitted by two queries collapses to one row, matching the engine's
+        // path-keyed dictionary fold.
+        var sql = string.Join(" UNION ", unionedSelects);
+
+        if (_logger?.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug) == true)
+        {
+            _logger.LogDebug("UNION SQL ({Count} queries): {Sql}", queries.Count, sql);
+            foreach (var (name, value) in unionedParams)
+                _logger.LogDebug("  Param {Name} = {Value}", name, value);
+        }
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        foreach (var (name, value) in unionedParams)
+            cmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            yield return ReadMeshNode(reader, options);
+    }
+
+    /// <summary>
+    /// Builds the same SELECT + scope-clause SQL that the single-query
+    /// <see cref="QueryNodesAsync(ParsedQuery, JsonSerializerOptions, string?, string?, string?, IReadOnlyCollection{string}?, CancellationToken)"/>
+    /// path emits, but returns the (sql, parameters) pair instead of executing.
+    /// Shared by the multi-query UNION path so per-query SQL stays
+    /// bug-compatible with the single-query path.
+    /// </summary>
+    private (string Sql, Dictionary<string, object> Parameters) BuildSingleQuerySql(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        string? userId,
+        string? basePath,
+        string? activityUserId,
+        IReadOnlyCollection<string>? excludedNodeTypes)
+    {
+        var effectivePath = query.Path ?? basePath;
+        string rawTable;
+        if (!string.IsNullOrEmpty(effectivePath))
+            rawTable = _partitionDefinition?.ResolveTable(effectivePath) ?? "mesh_nodes";
+        else
+            rawTable = _partitionDefinition?.ResolveTableByNodeType(query.ExtractNodeType()) ?? "mesh_nodes";
+
+        var satelliteRedirect = false;
+        if (rawTable == "mesh_nodes" && _partitionDefinition != null)
+        {
+            var satelliteTable = _partitionDefinition.ResolveTableByNodeType(query.ExtractNodeType());
+            if (satelliteTable != null && satelliteTable != "mesh_nodes")
+            {
+                rawTable = satelliteTable;
+                satelliteRedirect = true;
+            }
+        }
+        var tableName = QualifyTable(rawTable);
+        var activityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("Activity") ?? "mesh_nodes");
+        var userActivityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("UserActivity") ?? "mesh_nodes");
+
+        var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
+        var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
+            activityTable, userActivityTable, excludedNodeTypes);
+        if (!string.IsNullOrEmpty(effectivePath) || (query.Paths is { Count: > 1 }))
+        {
+            var (scopeClause, scopeParams) = query.Paths is { Count: > 1 }
+                ? generator.GenerateScopeClause(query.Paths, query.Scope, useMainNode: satelliteRedirect)
+                : generator.GenerateScopeClause(effectivePath, query.Scope, useMainNode: satelliteRedirect);
+
+            if (!string.IsNullOrEmpty(scopeClause))
+            {
+                foreach (var (k, v) in scopeParams)
+                    parameters[k] = v;
+
+                if (sql.Contains("WHERE"))
+                    sql = sql.Replace("WHERE", $"WHERE {scopeClause} AND");
+                else if (sql.Contains("ORDER BY"))
+                    sql = sql.Replace("ORDER BY", $"WHERE {scopeClause} ORDER BY");
+                else
+                    sql += $" WHERE {scopeClause}";
+            }
+        }
+
+        return (sql, parameters);
+    }
+
+    /// <summary>
     /// Performs vector similarity search.
     /// </summary>
     public async IAsyncEnumerable<MeshNode> VectorSearchAsync(

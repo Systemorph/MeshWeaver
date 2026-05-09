@@ -230,20 +230,25 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             string.Join(" | ", queries),
             queryCore?.GetType().Name ?? "(null)");
 
-        IObservable<QueryResultChange<MeshNode>> ObserveOne(string query)
+        // 🚨 ONE call into the engine — the engine unions every query's hits
+        // by Path (see MeshQueryEngine.CollectMatchedAsync; PostgreSQL pushes
+        // UNION down to SQL via PostgreSqlMeshQuery.QueryAsync). No per-query
+        // merge / per-query Initial gating in user code.
+        IObservable<QueryResultChange<MeshNode>> upstream;
+        if (queryCore == null)
         {
-            if (queryCore == null)
-            {
-                diagLogger?.LogWarning(
-                    "[SyncedQuery] No IMeshQueryCore registered on hub={HubAddress} — query='{Query}' returns Empty",
-                    workspace.Hub.Address, query);
-                return Observable.Empty<QueryResultChange<MeshNode>>();
-            }
-            var request = MeshQueryRequest.FromQuery(query, WellKnownUsers.System);
-            return queryCore.ObserveQuery<MeshNode>(request, options).Do(change =>
+            diagLogger?.LogWarning(
+                "[SyncedQuery] No IMeshQueryCore registered on hub={HubAddress} — queries=[{Queries}] returns Empty",
+                workspace.Hub.Address, string.Join(" | ", queries));
+            upstream = Observable.Empty<QueryResultChange<MeshNode>>();
+        }
+        else
+        {
+            var request = MeshQueryRequest.FromQueries(queries, WellKnownUsers.System);
+            upstream = queryCore.ObserveQuery<MeshNode>(request, options).Do(change =>
                 diagLogger?.LogInformation(
-                    "[SyncedQuery] query='{Query}' change={Type} count={Count}",
-                    query, change.ChangeType, change.Items?.Count ?? 0));
+                    "[SyncedQuery] queries=[{Queries}] change={Type} count={Count}",
+                    string.Join(" | ", queries), change.ChangeType, change.Items?.Count ?? 0));
         }
 
         // Hub-level change-feed deletion fast-path: when ANY hub publishes a
@@ -266,72 +271,31 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
                     }),
                     MeshChangeKind.Deleted));
 
-        // Per-query Initial gating: wait for one Initial event from
-        // each query before opening the gate. Single-provider model —
-        // IMeshQueryCore folds persistence + static into one observable.
-        var providerCount = queryCore == null ? 0 : 1;
-        var taggedChanges = queries
-            .Select((q, i) => ObserveOne(q).Select(c => (Change: c, QueryIndex: i, IsExternal: false)))
-            .Merge()
-            .Merge(externalChanges.Select(c => (Change: c, QueryIndex: -1, IsExternal: true)))
-            .Merge(feedRemovals.Select(c => (Change: c, QueryIndex: -1, IsExternal: true)));
+        var allChanges = upstream.Merge(externalChanges).Merge(feedRemovals);
 
-        // Fold change deltas into a path → MeshNode dictionary AND a per-query
-        // count of how many provider Initials have been received. Suppress
-        // downstream emissions until count[i] == providerCount for every
-        // query — that turns the first .Take(1) consumer into "first complete
-        // snapshot" instead of "first partial snapshot".
-        return taggedChanges
+        // Fold change deltas into a path → MeshNode dictionary. The engine
+        // already unions across all queries, so a single Initial seeds the
+        // complete snapshot; subsequent Added/Updated/Removed events apply
+        // verbatim.
+        return allChanges
             .Scan(
-                (Dict: ImmutableDictionary<string, MeshNode>.Empty,
-                 InitialCounts: ImmutableArray.CreateRange(Enumerable.Repeat(0, queries.Count))),
-                (state, tagged) =>
+                ImmutableDictionary<string, MeshNode>.Empty,
+                (dict, change) => change.ChangeType switch
                 {
-                    var (dict, counts) = state;
-                    var change = tagged.Change;
-
-                    // Track Initial / Reset arrivals by query index — increment
-                    // the per-query count so the gate waits for ALL providers.
-                    if (!tagged.IsExternal &&
-                        (change.ChangeType == QueryChangeType.Initial ||
-                         change.ChangeType == QueryChangeType.Reset) &&
-                        tagged.QueryIndex >= 0 &&
-                        tagged.QueryIndex < counts.Length)
-                    {
-                        counts = counts.SetItem(
-                            tagged.QueryIndex,
-                            counts[tagged.QueryIndex] + 1);
-                    }
-
-                    var nextDict = change.ChangeType switch
-                    {
-                        QueryChangeType.Initial or QueryChangeType.Reset
-                            or QueryChangeType.Added or QueryChangeType.Updated =>
-                            change.Items.Aggregate(dict, (d, n) =>
-                                string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)),
-                        QueryChangeType.Removed =>
-                            change.Items.Aggregate(dict, (d, n) =>
-                                string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
-                        _ => dict,
-                    };
-
-                    return (nextDict, counts);
+                    QueryChangeType.Initial or QueryChangeType.Reset
+                        or QueryChangeType.Added or QueryChangeType.Updated =>
+                        change.Items.Aggregate(dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)),
+                    QueryChangeType.Removed =>
+                        change.Items.Aggregate(dict, (d, n) =>
+                            string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)),
+                    _ => dict,
                 })
-            .Do(state => diagLogger?.LogDebug(
-                "[SyncedQuery] state hub={HubAddress} dictCount={Dict} initialCounts=[{Counts}] needed>={Need}",
-                workspace.Hub.Address,
-                state.Dict.Count,
-                string.Join(",", state.InitialCounts),
-                providerCount))
-            .Where(state => providerCount == 0 ||
-                            state.InitialCounts.All(c => c >= providerCount))
-            .Do(state => diagLogger?.LogInformation(
-                "[SyncedQuery] gate OPEN hub={HubAddress} dictCount={Dict} keys=[{Keys}]",
-                workspace.Hub.Address,
-                state.Dict.Count,
-                string.Join(", ", state.Dict.Keys.Take(10))))
-            .Do(state => pathSet.OnNext(state.Dict.Keys.ToImmutableHashSet()))
-            .Select(state => state.Dict)
+            .Do(dict => diagLogger?.LogInformation(
+                "[SyncedQuery] snapshot hub={HubAddress} count={Count} keys=[{Keys}]",
+                workspace.Hub.Address, dict.Count,
+                string.Join(", ", dict.Keys.Take(10))))
+            .Do(dict => pathSet.OnNext(dict.Keys.ToImmutableHashSet()))
             .DistinctUntilChanged()
             .Select(dict => (IEnumerable<MeshNode>)dict.Values);
     }

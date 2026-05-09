@@ -67,6 +67,18 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Multi-query union: push UNION down to PostgreSQL via the adapter so
+        // the database does the dedup-by-path in a single round-trip. The
+        // first query's sort/limit/skip apply to the unioned result set;
+        // additional queries contribute membership only. See
+        // PostgreSqlStorageAdapter.QueryNodesAsync(IReadOnlyList&lt;ParsedQuery&gt;,...).
+        if (request.Queries is { Count: > 1 })
+        {
+            await foreach (var item in QueryNodesUnionAsync(request, options, ct))
+                yield return item;
+            yield break;
+        }
+
         var parsedQuery = _parser.Parse(request.Query);
 
         if (request.Limit.HasValue)
@@ -149,6 +161,69 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
 
             countOrig++;
             if (parsedQuery.Limit.HasValue && countOrig >= parsedQuery.Limit.Value)
+                yield break;
+        }
+    }
+
+    /// <summary>
+    /// Multi-query union path: parses each query in <see cref="MeshQueryRequest.Queries"/>,
+    /// applies the same path/scope/limit fallbacks as the single-query branch,
+    /// then hands the parsed list to the adapter's UNION-emitting overload.
+    /// First query's sort/limit/skip apply to the unioned result set.
+    /// </summary>
+    private async IAsyncEnumerable<object> QueryNodesUnionAsync(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var queries = request.Queries!;
+        var parsedList = new List<ParsedQuery>(queries.Count);
+        ParsedQuery? firstParsed = null;
+        for (var qi = 0; qi < queries.Count; qi++)
+        {
+            var pq = _parser.Parse(queries[qi]);
+            if (qi == 0 && request.Limit.HasValue)
+                pq = pq with { Limit = request.Limit };
+            pq = StripTypeFilter(pq);
+
+            var effectivePath = pq.Path;
+            var effectiveScope = pq.Scope;
+            if (string.IsNullOrEmpty(effectivePath))
+            {
+                if (!string.IsNullOrEmpty(request.DefaultPath))
+                    effectivePath = request.DefaultPath;
+                if (pq.Scope == QueryScope.Exact)
+                    effectiveScope = QueryScope.Children;
+            }
+            pq = pq with { Path = effectivePath, Scope = effectiveScope };
+            if (qi == 0) firstParsed = pq;
+            parsedList.Add(pq);
+        }
+
+        var context = request.Context ?? firstParsed!.Context;
+        var excludedNodeTypes = context != null
+            ? _meshConfiguration?.GetExcludedNodeTypes(context)
+            : null;
+        var activityUserId = firstParsed!.Source == QuerySource.Accessed
+            ? GetEffectiveUserId(request)
+            : null;
+
+        var skip = request.Skip ?? 0;
+        var count = 0;
+        var effectiveUserId = GetEffectiveUserId(request);
+        await foreach (var node in _adapter.QueryNodesAsync(
+            parsedList, options, effectiveUserId, activityUserId: activityUserId,
+            excludedNodeTypes: excludedNodeTypes, ct: ct))
+        {
+            if (context != null && node.ExcludeFromContext?.Contains(context) == true)
+                continue;
+            if (skip > 0) { skip--; continue; }
+
+            yield return firstParsed.Select != null
+                ? ParsedQuery.ProjectToSelect(node, firstParsed.Select)
+                : node;
+            count++;
+            if (firstParsed.Limit.HasValue && count >= firstParsed.Limit.Value)
                 yield break;
         }
     }
