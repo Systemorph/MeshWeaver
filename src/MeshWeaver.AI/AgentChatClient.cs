@@ -385,29 +385,13 @@ public class AgentChatClient : IAgentChat
             }
             messageText.AppendLine();
 
-            // Show nearby nodes so the agent understands the structure
-            if (!string.IsNullOrEmpty(contextPath))
-            {
-                try
-                {
-                    var nearby = ImmutableList<string>.Empty;
-                    var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
-                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(
-                        $"namespace:{contextPath} select:name,nodeType,icon"))
-                    {
-                        nearby = nearby.Add($"- `{node.Path}` ({node.NodeType}): {node.Name}");
-                        if (nearby.Count >= 15) break;
-                    }
-                    if (nearby.Count > 0)
-                    {
-                        messageText.AppendLine("**Children of current node:**");
-                        foreach (var line in nearby)
-                            messageText.AppendLine(line);
-                        messageText.AppendLine();
-                    }
-                }
-                catch { /* ignore context loading errors */ }
-            }
+            // 🚨 No await foreach over IMeshService.QueryAsync here.
+            // That used to enumerate children of the context path to inject
+            // into the system prompt. The fan-out through IMeshQueryProvider
+            // bridges back through hub messaging in a way that can park the
+            // streaming task indefinitely (chat stuck on "Generating
+            // response..."). The agent has a `Search` tool — it can pull the
+            // children itself when it actually needs them.
 
             messageText.AppendLine("When creating nodes, first explore the structure to find the best place:");
             messageText.AppendLine("- `Search('namespace:{path} scope:descendants')` to see the full tree");
@@ -972,25 +956,28 @@ public class AgentChatClient : IAgentChat
         // streaming Task.Run.
         var workspace = hub.GetWorkspace();
         agentsSubscription?.Dispose();
+        modelsSubscription?.Dispose();
+
+        // 🚨 Subscribe to agents and models INDEPENDENTLY. Models are not
+        // required for agent selection — only for the picker UI's model
+        // dropdown. Tying readiness to a CombineLatest of both means a slow
+        // model emission delays the first user-visible reply by however long
+        // the model query takes; we observed multi-second extra latency on
+        // Postgres-backed deploys with cold synced-query caches. Decouple:
+        // WhenInitialized fires as soon as agents are ready; models populate
+        // their own loadedModels in the background.
         var readinessFired = false;
-        agentsSubscription = Observable.CombineLatest(
-                AgentPickerProjection.ObserveAgents(workspace, hub, contextPath),
-                AgentPickerProjection.ObserveModels(workspace, hub, contextPath),
-                (agents, models) => (agents, models))
+        agentsSubscription = AgentPickerProjection.ObserveAgents(workspace, hub, contextPath)
             .Timeout(TimeSpan.FromSeconds(8),
-                Observable.Return((
-                    (IReadOnlyList<AgentDisplayInfo>)Array.Empty<AgentDisplayInfo>(),
-                    (IReadOnlyList<ModelInfo>)Array.Empty<ModelInfo>()))
+                Observable.Return((IReadOnlyList<AgentDisplayInfo>)Array.Empty<AgentDisplayInfo>())
                     .Do(_ => logger.LogWarning(
-                        "[AgentChatClient] Picker queries did not emit within 8s — proceeding with empty agent/model set")))
+                        "[AgentChatClient] Agent query did not emit within 8s — proceeding with empty agent set")))
             .Subscribe(
-                tuple =>
+                agents =>
                 {
-                    var (agents, models) = tuple;
-                    logger.LogInformation(
-                        "[AgentChatClient] Picker emission: {Agents} agents, {Models} models for ctx={Ctx}",
-                        agents.Count, models.Count, contextPath ?? "(null)");
-                    ApplyDisplayInfos(agents, models, contextPath);
+                    logger.LogDebug("[AgentChatClient] Agent emission: {Count} for ctx={Ctx}",
+                        agents.Count, contextPath ?? "(null)");
+                    ApplyAgents(agents, contextPath);
                     if (!readinessFired && loadedAgents.Count > 0)
                     {
                         readinessFired = true;
@@ -1003,8 +990,8 @@ public class AgentChatClient : IAgentChat
                 },
                 ex =>
                 {
-                    logger.LogWarning(ex, "[AgentChatClient] Picker subscription faulted — unblocking with empty");
-                    ApplyDisplayInfos(Array.Empty<AgentDisplayInfo>(), Array.Empty<ModelInfo>(), contextPath);
+                    logger.LogWarning(ex, "[AgentChatClient] Agent subscription faulted — unblocking with empty");
+                    ApplyAgents(Array.Empty<AgentDisplayInfo>(), contextPath);
                     readinessFired = true;
                     agentsLoadedSubject.OnNext(this);
                 },
@@ -1017,22 +1004,32 @@ public class AgentChatClient : IAgentChat
                     }
                 });
 
+        modelsSubscription = AgentPickerProjection.ObserveModels(workspace, hub, contextPath)
+            .Timeout(TimeSpan.FromSeconds(8),
+                Observable.Return((IReadOnlyList<ModelInfo>)Array.Empty<ModelInfo>()))
+            .Subscribe(
+                models =>
+                {
+                    logger.LogDebug("[AgentChatClient] Model emission: {Count}", models.Count);
+                    loadedModels = models.ToImmutableList();
+                },
+                ex => logger.LogDebug(ex, "[AgentChatClient] Model subscription faulted — picker dropdown will be empty"));
+
         return this;
     }
 
+    private IDisposable? modelsSubscription;
+
     /// <summary>
-    /// Stash the projected display infos from <see cref="AgentPickerProjection"/>
-    /// into <see cref="loadedAgents"/> + <see cref="loadedModels"/> and rebuild
-    /// the <see cref="agents"/> dictionary. Replaces the old MeshNode-driven
-    /// <c>ApplyAgentNodes</c>; the projection has already done the
-    /// JsonElement-fallback fork inside the chat-picker source of truth.
+    /// Stash agents from <see cref="AgentPickerProjection.ObserveAgents"/>
+    /// into <see cref="loadedAgents"/> and rebuild the <see cref="agents"/>
+    /// dictionary. Models are populated independently in their own
+    /// subscription — see <c>Initialize</c>.
     /// </summary>
-    private void ApplyDisplayInfos(
+    private void ApplyAgents(
         IReadOnlyList<AgentDisplayInfo> agentInfos,
-        IReadOnlyList<ModelInfo> modelInfos,
         string? contextPath)
     {
-        loadedModels = modelInfos.ToImmutableList();
         loadedAgents = AgentOrderingHelper.OrderByRelevance(
             agentInfos.ToImmutableList(),
             contextPath?.TrimStart('/') ?? string.Empty,

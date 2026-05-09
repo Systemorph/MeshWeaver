@@ -756,6 +756,27 @@ public static class ThreadExecution
                     int? inputTokens = null;
                     int? outputTokens = null;
                     int? totalTokens = null;
+
+                    // 🚨 No-progress watchdog: if the underlying chat client makes
+                    // no streaming progress for 5 minutes (e.g. Anthropic endpoint
+                    // hung / unreachable, gateway swallowed the response), force-
+                    // cancel so the response cell shows "*Cancelled*" instead of
+                    // staying at "Generating response..." forever. Repro is in
+                    // StuckOnGeneratingResponseTest; the prod symptom is a chat
+                    // bubble that never advances past the placeholder.
+                    var lastProgress = DateTime.UtcNow;
+                    var watchdog = new System.Threading.Timer(_ =>
+                    {
+                        if (executionCts.IsCancellationRequested) return;
+                        if (DateTime.UtcNow - lastProgress > TimeSpan.FromMinutes(5))
+                        {
+                            logger.LogWarning(
+                                "[ThreadExec] WATCHDOG: no streaming progress for >5min on {ThreadPath} — cancelling",
+                                threadPath);
+                            try { executionCts.Cancel(); } catch { /* already disposed */ }
+                        }
+                    }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+
                     try
                     {
                     // Keep the grain alive during the entire execution — including tool calls
@@ -769,6 +790,7 @@ public static class ThreadExecution
                     // Pass ALL messages through the official AgentChatClient path
                     await foreach (var update in client.GetStreamingResponseAsync(allMessages, ct))
             {
+                lastProgress = DateTime.UtcNow; // tick the no-progress watchdog
                 // Capture function call / delegation activity for execution status
                 foreach (var content in update.Contents)
                 {
@@ -904,6 +926,11 @@ public static class ThreadExecution
                         DateTime.UtcNow, threadPath, responseText.Length, toolCallLog.Count,
                         inputTokens, outputTokens, totalTokens);
                     var finalText = responseText.ToString();
+                    // Empty stream + no tool calls = silent agent failure
+                    // (e.g. underlying API returned nothing). Surface so the
+                    // user sees a real terminal state instead of a blank cell.
+                    if (string.IsNullOrEmpty(finalText) && toolCallLog.IsEmpty)
+                        finalText = "*Agent returned no response — streaming completed with zero tokens.*";
                     PushToResponseMessage(finalText, toolCallLog, aggregatedChanges,
                         request.AgentName, request.ModelName,
                         inputTokens: inputTokens, outputTokens: outputTokens,
@@ -947,6 +974,7 @@ public static class ThreadExecution
                     }
                     finally
                     {
+                        watchdog.Dispose();
                         parentHub.Set<CancellationTokenSource>(null!);
                         executionCts.Dispose();
                         // Tear down the per-message remote stream now that streaming
