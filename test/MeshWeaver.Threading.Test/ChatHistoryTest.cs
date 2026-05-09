@@ -76,23 +76,38 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             UserMessageId = userMsgId, ResponseMessageId = responseMsgId
         }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        // Wait for execution to complete (Messages count reaches expected)
-        for (var i = 0; i < 60; i++)
-        {
-            var node = await ReadNodeAsync(threadPath, ct);
-            var thread = node?.Content as MeshThread;
-            if (thread is { IsExecuting: false } && thread.Messages.Count >= expectedMsgCount)
-            {
-                // Read the last response message
-                var lastMsgId = thread.Messages[^1];
-                var msgNode = await ReadNodeAsync($"{threadPath}/{lastMsgId}", ct);
-                var tmsg = msgNode?.Content as ThreadMessage;
-                if (tmsg?.Text is { Length: > 0 })
-                    return tmsg.Text;
-            }
-            await Task.Delay(200, ct);
-        }
-        throw new TimeoutException($"Execution did not complete for {threadPath}");
+        // Reactive wait — subscribe to the per-node MeshNodeReference stream
+        // and emit the moment IsExecuting flips to false AND the message
+        // count crosses the expected threshold. Beats the old poll-loop
+        // (200ms × 60 = 12s ceiling, plus race between read calls): no
+        // missed transitions, hard 60s timeout, and the test fails LOUD on
+        // hang instead of silently hitting the iteration cap.
+        // Reactive wait — IsExecuting flips false AND Messages.Count crosses
+        // the expected threshold. Reads via the per-node MeshNodeReference
+        // stream so we never miss the transition (vs. polling races).
+        var threadStream = Mesh.GetWorkspace().GetMeshNodeStream(threadPath);
+        var doneThread = await threadStream
+            .Select(n => n.Content as MeshThread)
+            .Where(t => t is { IsExecuting: false } && t.Messages.Count >= expectedMsgCount)
+            .Take(1)
+            .Timeout(60.Seconds())
+            .ToTask(ct);
+
+        // Then wait for the response cell text to advance past the in-flight
+        // UI placeholders so the test fails LOUD on a stuck pipeline.
+        var lastMsgId = doneThread!.Messages[^1];
+        var responseStream = Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{lastMsgId}");
+        var responseText = await responseStream
+            .Select(n => (n.Content as ThreadMessage)?.Text)
+            .Where(t => !string.IsNullOrEmpty(t)
+                && !t.StartsWith("Allocating agent", StringComparison.Ordinal)
+                && !t.StartsWith("Generating response", StringComparison.Ordinal)
+                && !t.StartsWith("Loading conversation history", StringComparison.Ordinal))
+            .Take(1)
+            .Timeout(60.Seconds())
+            .ToTask(ct);
+
+        return responseText!;
     }
 
     [Fact]

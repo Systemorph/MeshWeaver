@@ -946,14 +946,14 @@ public class AgentChatClient : IAgentChat
         currentModelName = modelName;
         lastLoadedContextPath = contextPath;
 
-        // 🚨 Subscribe to the SAME synced-query pipe the chat picker UI uses
-        // (AgentPickerProjection.ObserveAgents/ObserveModels). One source of
-        // truth — no separate "AgentChatClient does its own ObserveQuery"
-        // chain that drifted from the picker and produced "No suitable agent"
-        // even though the dropdown showed 9 of them. The synced query runs on
-        // the workspace of THIS hub (the thread hub passed in via the ctor's
-        // service provider), not the _Exec child — _Exec is blocked by the
-        // streaming Task.Run.
+        // First-time init or context switch: subscribe to the SAME synced-query
+        // pipe the chat picker UI uses (AgentPickerProjection.ObserveAgents/
+        // ObserveModels). One source of truth — no separate "AgentChatClient
+        // does its own ObserveQuery" chain that drifted from the picker and
+        // produced "No suitable agent" even though the dropdown showed 9 of
+        // them. The synced query runs on the workspace of THIS hub (the thread
+        // hub passed in via the ctor's service provider), not the _Exec child
+        // — _Exec is blocked by the streaming Task.Run.
         var workspace = hub.GetWorkspace();
         agentsSubscription?.Dispose();
         modelsSubscription?.Dispose();
@@ -966,12 +966,16 @@ public class AgentChatClient : IAgentChat
         // Postgres-backed deploys with cold synced-query caches. Decouple:
         // WhenInitialized fires as soon as agents are ready; models populate
         // their own loadedModels in the background.
+        // Subscribe to the live synced agent stream — every emission updates
+        // loadedAgents and rebuilds the agents dict. NO Timeout fallback: the
+        // synced query emits ONE Initial event and then goes quiet until
+        // agents change; a Timeout(8s, emptyFallback) wrapper would interpret
+        // that quiescence as a failure and wipe loadedAgents 8s after the
+        // genuine Initial emission, breaking every subsequent chat round.
+        // The 5-min no-progress watchdog in ThreadExecution is the canonical
+        // safety net for genuinely stuck pipelines.
         var readinessFired = false;
         agentsSubscription = AgentPickerProjection.ObserveAgents(workspace, hub, contextPath)
-            .Timeout(TimeSpan.FromSeconds(8),
-                Observable.Return((IReadOnlyList<AgentDisplayInfo>)Array.Empty<AgentDisplayInfo>())
-                    .Do(_ => logger.LogWarning(
-                        "[AgentChatClient] Agent query did not emit within 8s — proceeding with empty agent set")))
             .Subscribe(
                 agents =>
                 {
@@ -1004,9 +1008,27 @@ public class AgentChatClient : IAgentChat
                     }
                 });
 
+        // One-shot 8s fallback: if no agents have emitted within 8s of
+        // first Initialize, surface a warning AND fire the readiness gate so
+        // ThreadExecution doesn't hang forever on WhenInitialized.Subscribe.
+        // Crucially this does NOT call ApplyAgents — a real Initial event
+        // arriving later will populate loadedAgents normally.
+        Observable.Timer(TimeSpan.FromSeconds(8))
+            .Subscribe(_ =>
+            {
+                if (!readinessFired)
+                {
+                    logger.LogWarning(
+                        "[AgentChatClient] Agent query did not emit within 8s — proceeding with empty agent set");
+                    readinessFired = true;
+                    agentsLoadedSubject.OnNext(this);
+                }
+            });
+
+        // Same fix as agents: live subscription with no Timeout fallback —
+        // the synced query emits Initial then quiesces, so a Timeout(8s,
+        // empty) wrapper would wipe loadedModels 8s after the real Initial.
         modelsSubscription = AgentPickerProjection.ObserveModels(workspace, hub, contextPath)
-            .Timeout(TimeSpan.FromSeconds(8),
-                Observable.Return((IReadOnlyList<ModelInfo>)Array.Empty<ModelInfo>()))
             .Subscribe(
                 models =>
                 {

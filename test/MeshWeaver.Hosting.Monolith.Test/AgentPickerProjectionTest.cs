@@ -68,7 +68,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     public async Task ObserveAgents_FromMeshHub_PopulatesCombobox()
     {
         var agents = await AgentPickerProjection
-            .ObserveAgents(Workspace, Hub, initialContext: null)
+            .ObserveAgents(Workspace, Hub, currentPath: null)
             .Where(a => a.Count > 0)
             .Take(1)
             .Timeout(15.Seconds())
@@ -90,7 +90,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
     public async Task ObserveModels_FromMeshHub_PopulatesCombobox()
     {
         var models = await AgentPickerProjection
-            .ObserveModels(Workspace, Hub, initialContext: null)
+            .ObserveModels(Workspace, Hub, currentPath: null)
             .Where(m => m.Count > 0)
             .Take(1)
             .Timeout(15.Seconds())
@@ -125,7 +125,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var agents = await AgentPickerProjection
-            .ObserveAgents(workspace, portalHub, initialContext: null)
+            .ObserveAgents(workspace, portalHub, currentPath: null)
             .Where(a => a.Count > 0)
             .Take(1)
             .Timeout(15.Seconds())
@@ -146,7 +146,7 @@ public class AgentPickerProjectionTest : MonolithMeshTestBase
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var models = await AgentPickerProjection
-            .ObserveModels(workspace, portalHub, initialContext: null)
+            .ObserveModels(workspace, portalHub, currentPath: null)
             .Where(m => m.Count > 0)
             .Take(1)
             .Timeout(15.Seconds())
@@ -208,7 +208,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
     public async Task PartitionedPath_ObserveAgents_PopulatesCombobox()
     {
         var agents = await AgentPickerProjection
-            .ObserveAgents(Workspace, Hub, initialContext: null)
+            .ObserveAgents(Workspace, Hub, currentPath: null)
             .Where(a => a.Count > 0)
             .Take(1)
             .Timeout(15.Seconds())
@@ -231,7 +231,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
         var workspace = portalHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
         var agents = await AgentPickerProjection
-            .ObserveAgents(workspace, portalHub, initialContext: null)
+            .ObserveAgents(workspace, portalHub, currentPath: null)
             .Where(a => a.Count > 0)
             .Take(1)
             .Timeout(15.Seconds())
@@ -245,7 +245,7 @@ public class AgentPickerProjectionPartitionedTest : MonolithMeshTestBase
     public async Task PartitionedPath_ObserveModels_PopulatesCombobox()
     {
         var models = await AgentPickerProjection
-            .ObserveModels(Workspace, Hub, initialContext: null)
+            .ObserveModels(Workspace, Hub, currentPath: null)
             .Where(m => m.Count > 0)
             .Take(1)
             .Timeout(15.Seconds())

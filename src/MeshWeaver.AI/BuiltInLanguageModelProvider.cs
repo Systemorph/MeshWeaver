@@ -82,6 +82,21 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 continue;
             }
 
+            // Read driver config (Endpoint + ApiKey) from the same section
+            // the legacy IOptions<...Configuration> binding read from. Stamping
+            // these on the ModelDefinition makes the model MeshNode the source
+            // of truth for driver config — the factory reads them off the
+            // selected model instead of an out-of-band IOptions binding, and
+            // user-authored Model nodes can override the built-in defaults.
+            string? endpoint = null;
+            string? apiKey = null;
+            try
+            {
+                endpoint = configuration[$"{source.SectionName}:Endpoint"];
+                apiKey = configuration[$"{source.SectionName}:ApiKey"];
+            }
+            catch { /* malformed section — skip stamping */ }
+
             foreach (var modelId in models)
             {
                 if (string.IsNullOrWhiteSpace(modelId)) continue;
@@ -92,6 +107,8 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                     Id = modelId,
                     DisplayName = modelId,
                     Provider = source.ProviderName,
+                    Endpoint = endpoint,
+                    ApiKeySecretRef = apiKey,
                     Order = source.Order
                 };
 

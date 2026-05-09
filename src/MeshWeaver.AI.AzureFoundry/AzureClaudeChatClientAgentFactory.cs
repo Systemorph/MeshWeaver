@@ -1,4 +1,10 @@
-﻿using MeshWeaver.Messaging;
+﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
+using MeshWeaver.AI.Plugins;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -7,6 +13,14 @@ namespace MeshWeaver.AI.AzureFoundry;
 
 /// <summary>
 /// Factory for creating ChatClientAgent instances with Azure AI Foundry Claude/Anthropic services.
+///
+/// <para>Driver config (Endpoint + ApiKey) source-of-truth precedence:
+/// (1) the selected model's <see cref="ModelDefinition"/> on its MeshNode —
+///     <see cref="BuiltInLanguageModelProvider"/> stamps the built-ins from
+///     the <c>Anthropic</c> config section, but user-authored Model nodes
+///     can override per-model;
+/// (2) <see cref="AzureClaudeConfiguration"/> (legacy IOptions binding) as
+///     fallback when the model node is missing those fields.</para>
 /// </summary>
 public class AzureClaudeChatClientAgentFactory(
     IMessageHub hub,
@@ -15,6 +29,42 @@ public class AzureClaudeChatClientAgentFactory(
     : ChatClientAgentFactory(hub)
 {
     private readonly AzureClaudeConfiguration configuration = InitAndLog(options, logger);
+
+    /// <summary>
+    /// Live model-id → ModelDefinition cache, populated by a workspace synced
+    /// query on <c>namespace:Model nodeType:LanguageModel</c>. The factory
+    /// looks up the selected model here first to read per-model Endpoint /
+    /// ApiKeySecretRef. Subscribed lazily on first CreateChatClient call so
+    /// hub init doesn't pay the synced-query cost when no Claude agent ever
+    /// runs.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, ModelDefinition> modelDefinitionsById =
+        new(StringComparer.OrdinalIgnoreCase);
+    private IDisposable? modelSubscription;
+
+    private void EnsureModelSubscription()
+    {
+        if (modelSubscription != null) return;
+        var workspace = Hub.GetWorkspace();
+        // Same named-query id ("LanguageModels") + same query strings as the
+        // chat picker UI and AgentChatClient — the workspace caches one
+        // upstream subscription keyed by id, so all three consumers share it.
+        // No more ad-hoc "azure-claude-models" id and no more inline query
+        // string literals — see AgentPickerProjection.ObserveSnapshot.
+        modelSubscription = AgentPickerProjection
+            .ObserveSnapshot(workspace, Hub,
+                AgentPickerProjection.ModelsQueryId,
+                AgentPickerProjection.BuildModelQueries())
+            .Subscribe(snapshot =>
+            {
+                modelDefinitionsById.Clear();
+                foreach (var node in snapshot)
+                {
+                    if (node.Content is ModelDefinition def && !string.IsNullOrEmpty(def.Id))
+                        modelDefinitionsById[def.Id] = def;
+                }
+            });
+    }
 
     private static AzureClaudeConfiguration InitAndLog(IOptions<AzureClaudeConfiguration> options, ILogger logger)
     {
@@ -46,11 +96,7 @@ public class AzureClaudeChatClientAgentFactory(
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
-        if (string.IsNullOrEmpty(configuration.Endpoint))
-            throw new InvalidOperationException("Endpoint is required in AzureClaudeConfiguration");
-
-        if (string.IsNullOrEmpty(configuration.ApiKey))
-            throw new InvalidOperationException("ApiKey is required in AzureClaudeConfiguration");
+        EnsureModelSubscription();
 
         // Agent's PreferredModel wins; CurrentModelName fills in only when the agent doesn't pin one.
         var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
@@ -58,24 +104,30 @@ public class AzureClaudeChatClientAgentFactory(
             : configuration.Models.FirstOrDefault();
 
         if (string.IsNullOrEmpty(modelName))
-            throw new InvalidOperationException("At least one model must be configured in AzureClaudeConfiguration.Models");
+            throw new InvalidOperationException(
+                $"No model selected for agent {agentConfig.Id}. Set the agent's PreferredModel or pick one in the chat dropdown.");
+
+        // Driver config: prefer the model node's ModelDefinition (per-model
+        // Endpoint/ApiKey from the mesh) over the legacy IOptions binding.
+        modelDefinitionsById.TryGetValue(modelName, out var modelDef);
+        var endpoint = modelDef?.Endpoint ?? configuration.Endpoint;
+        var apiKey = modelDef?.ApiKeySecretRef ?? configuration.ApiKey;
+
+        if (string.IsNullOrEmpty(endpoint))
+            throw new InvalidOperationException(
+                $"Endpoint is missing for model '{modelName}'. Set it on the Model MeshNode (ModelDefinition.Endpoint) or in Anthropic:Endpoint config.");
+
+        if (string.IsNullOrEmpty(apiKey))
+            throw new InvalidOperationException(
+                $"ApiKey is missing for model '{modelName}'. Set it on the Model MeshNode (ModelDefinition.ApiKeySecretRef) or in Anthropic:ApiKey config.");
 
         logger.LogDebug(
-            "Creating Azure Claude chat client for agent {AgentName} using model {ModelName} at endpoint {Endpoint}",
-            agentConfig.Id, modelName, configuration.Endpoint);
+            "Creating Azure Claude chat client for agent {AgentName} using model {ModelName} at endpoint {Endpoint} (source: {Source})",
+            agentConfig.Id, modelName, endpoint, modelDef?.Endpoint != null ? "model node" : "IOptions");
 
         try
         {
-            var chatClient = new AzureClaudeChatClient(
-                endpoint: configuration.Endpoint,
-                apiKey: configuration.ApiKey,
-                modelId: modelName);
-
-            logger.LogDebug(
-                "Successfully configured Azure Claude chat client for agent {AgentName}",
-                agentConfig.Id);
-
-            return chatClient;
+            return new AzureClaudeChatClient(endpoint: endpoint, apiKey: apiKey, modelId: modelName);
         }
         catch (Exception ex)
         {

@@ -30,40 +30,49 @@ namespace MeshWeaver.AI;
 /// </summary>
 public static class AgentPickerProjection
 {
-    /// <summary>
-    /// Query strings for the AGENT synced subscription. Built-in
-    /// <c>namespace:Agent</c> plus an optional <c>scope:selfAndAncestors</c>
-    /// query for per-context custom agents.
-    /// </summary>
-    public static string[] BuildAgentQueries(string? initialContext)
-    {
-        var queries = new List<string>
-        {
-            $"namespace:{AgentRootNamespace} nodeType:{AgentNodeType.NodeType}",
-        };
-        if (!string.IsNullOrEmpty(initialContext))
-            queries.Add($"namespace:{initialContext} nodeType:{AgentNodeType.NodeType} scope:selfAndAncestors");
-        return queries.ToArray();
-    }
+    /// <summary>Named-query id for the agents synced subscription. Same id everywhere = one shared upstream subscription via the workspace's per-id cache.</summary>
+    public const string AgentsQueryId = "Agents";
 
-    /// <summary>
-    /// Query strings for the MODEL synced subscription. Built-in
-    /// <c>namespace:Model</c> plus an optional context-scoped query for
-    /// per-partition custom Model nodes.
-    /// </summary>
-    public static string[] BuildModelQueries(string? initialContext)
-    {
-        var queries = new List<string>
-        {
-            $"namespace:{LanguageModelNodeType.RootNamespace} nodeType:{LanguageModelNodeType.NodeType}",
-        };
-        if (!string.IsNullOrEmpty(initialContext))
-            queries.Add($"namespace:{initialContext} nodeType:{LanguageModelNodeType.NodeType} scope:selfAndAncestors");
-        return queries.ToArray();
-    }
+    /// <summary>Named-query id for the language-models synced subscription.</summary>
+    public const string ModelsQueryId = "LanguageModels";
 
     /// <summary>Conventional namespace for built-in agents (matches <c>BuiltInAgentProvider</c>).</summary>
     public const string AgentRootNamespace = "Agent";
+
+    /// <summary>
+    /// THE single source of truth for both agent and model picker query
+    /// strings. Three queries per kind, all carrying the same
+    /// <c>nodeType:</c> filter, varying only on namespace + scope:
+    /// <list type="number">
+    ///   <item>built-in: <c>namespace:Agent / namespace:Model</c></item>
+    ///   <item>per-context: <c>namespace:{currentPath} scope:selfAndAncestors</c></item>
+    ///   <item>per-NodeType: <c>namespace:{nodeTypePath} scope:selfAndAncestors</c></item>
+    /// </list>
+    ///
+    /// <para>Every consumer (chat picker UI, AgentChatClient, AzureClaude
+    /// driver factory) calls <see cref="BuildAgentQueries"/> or
+    /// <see cref="BuildModelQueries"/> — never inline a query string. Drop
+    /// any localized definition you find.</para>
+    /// </summary>
+    public static string[] BuildAgentQueries(string? currentPath = null, string? nodeTypePath = null)
+        => BuildQueries(AgentNodeType.NodeType, AgentRootNamespace, currentPath, nodeTypePath);
+
+    /// <inheritdoc cref="BuildAgentQueries" />
+    public static string[] BuildModelQueries(string? currentPath = null, string? nodeTypePath = null)
+        => BuildQueries(LanguageModelNodeType.NodeType, LanguageModelNodeType.RootNamespace, currentPath, nodeTypePath);
+
+    private static string[] BuildQueries(string nodeType, string rootNamespace, string? currentPath, string? nodeTypePath)
+    {
+        var queries = new List<string>
+        {
+            $"namespace:{rootNamespace} nodeType:{nodeType}",
+        };
+        if (!string.IsNullOrEmpty(currentPath))
+            queries.Add($"namespace:{currentPath} nodeType:{nodeType} scope:selfAndAncestors");
+        if (!string.IsNullOrEmpty(nodeTypePath))
+            queries.Add($"namespace:{nodeTypePath} nodeType:{nodeType} scope:selfAndAncestors");
+        return queries.ToArray();
+    }
 
     /// <summary>
     /// 🚨 The EXACT pipeline the chat agent combobox is bound to. The view
@@ -80,30 +89,10 @@ public static class AgentPickerProjection
     /// subscription never fired (workspace null / circuit lifecycle).</para>
     /// </summary>
     public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
-        IWorkspace workspace, IMessageHub hub, string? initialContext)
-    {
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.AI.AgentPickerProjection");
-        var queries = BuildAgentQueries(initialContext);
-        var id = $"chat-agents:{initialContext ?? string.Empty}";
-        logger?.LogDebug(
-            "[AgentPicker] subscribe agents id={Id} hub={Hub} workspaceHub={WsHub} queries=[{Queries}]",
-            id, hub.Address, workspace.Hub.Address,
-            string.Join(" | ", queries));
-        return workspace.GetQuery(id, queries)
-            .Do(snapshot =>
-            {
-                var nodes = snapshot as IReadOnlyCollection<MeshNode> ?? snapshot.ToList();
-                logger?.LogDebug(
-                    "[AgentPicker] raw agent snapshot id={Id} count={Count} types=[{Types}]",
-                    id, nodes.Count,
-                    string.Join(",", nodes.GroupBy(n => n.NodeType ?? "(null)")
-                        .Select(g => $"{g.Key}={g.Count()}")));
-            })
-            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions))
-            .Do(agents => logger?.LogDebug(
-                "[AgentPicker] projected agents id={Id} count={Count}", id, agents.Count));
-    }
+        IWorkspace workspace, IMessageHub hub,
+        string? currentPath = null, string? nodeTypePath = null)
+        => ObserveSnapshot(workspace, hub, AgentsQueryId, BuildAgentQueries(currentPath, nodeTypePath))
+            .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions));
 
     /// <summary>
     /// 🚨 The EXACT pipeline the chat model combobox is bound to. The view
@@ -111,29 +100,37 @@ public static class AgentPickerProjection
     /// Same logging shape as <see cref="ObserveAgents"/>.
     /// </summary>
     public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
-        IWorkspace workspace, IMessageHub hub, string? initialContext)
+        IWorkspace workspace, IMessageHub hub,
+        string? currentPath = null, string? nodeTypePath = null)
+        => ObserveSnapshot(workspace, hub, ModelsQueryId, BuildModelQueries(currentPath, nodeTypePath))
+            .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions));
+
+    /// <summary>
+    /// Live MeshNode snapshot for one of the named picker queries — single
+    /// <see cref="MeshWeaver.Graph.SyncedQueryDataSourceExtensions.GetQuery(MeshWeaver.Data.IWorkspace, object, string[])"/>
+    /// call so the workspace cache shares the same upstream subscription
+    /// across every consumer (chat view, AgentChatClient, AzureClaude
+    /// driver factory). The mesh query engine unions the queries internally.
+    /// </summary>
+    public static IObservable<IEnumerable<MeshNode>> ObserveSnapshot(
+        IWorkspace workspace, IMessageHub hub, string queryId, params string[] queries)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.AgentPickerProjection");
-        var queries = BuildModelQueries(initialContext);
-        var id = $"chat-models:{initialContext ?? string.Empty}";
         logger?.LogDebug(
-            "[AgentPicker] subscribe models id={Id} hub={Hub} workspaceHub={WsHub} queries=[{Queries}]",
-            id, hub.Address, workspace.Hub.Address,
+            "[AgentPicker] subscribe id={Id} hub={Hub} workspaceHub={WsHub} queries=[{Queries}]",
+            queryId, hub.Address, workspace.Hub.Address,
             string.Join(" | ", queries));
-        return workspace.GetQuery(id, queries)
+        return workspace.GetQuery(queryId, queries)
             .Do(snapshot =>
             {
                 var nodes = snapshot as IReadOnlyCollection<MeshNode> ?? snapshot.ToList();
                 logger?.LogDebug(
-                    "[AgentPicker] raw model snapshot id={Id} count={Count} types=[{Types}]",
-                    id, nodes.Count,
+                    "[AgentPicker] raw snapshot id={Id} count={Count} types=[{Types}]",
+                    queryId, nodes.Count,
                     string.Join(",", nodes.GroupBy(n => n.NodeType ?? "(null)")
                         .Select(g => $"{g.Key}={g.Count()}")));
-            })
-            .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions))
-            .Do(models => logger?.LogDebug(
-                "[AgentPicker] projected models id={Id} count={Count}", id, models.Count));
+            });
     }
 
     /// <summary>
