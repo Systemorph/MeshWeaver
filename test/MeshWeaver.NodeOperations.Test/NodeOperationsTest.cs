@@ -297,25 +297,28 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task CreateAndDeleteNode_FullLifecycle()
     {
-        // Arrange — use a legal NodeType so the per-node hub gets AddMeshDataSource
-        // (and therefore a GetDataRequest handler for ReadNodeAsync below).
+        // Arrange — use a legal NodeType so the per-node hub gets AddMeshDataSource.
         var nodePath = "lifecycle/test/Node";
         var node = new MeshNode("Node", "lifecycle/test") { Name = "Lifecycle Test", NodeType = "Markdown" };
 
-        // Act & Assert - Create
+        // Create — `await NodeFactory.CreateNode(...)` is the canonical
+        // "written" signal: CreateNodeResponse is posted only after the save
+        // observable completes AND the Created MeshChangeEvent has been
+        // published on IMeshChangeFeed (HandleCreateNodeRequest in
+        // MeshExtensions.cs). The returned node carries post-save state.
         var createdNode = await NodeFactory.CreateNode(node);
         createdNode.State.Should().Be(MeshNodeState.Active);
+        createdNode.Path.Should().Be(nodePath);
 
-        // Verify exists via stream (CQRS-correct)
-        var existingNode = await ReadNodeAsync(nodePath);
-        existingNode.Should().NotBeNull();
-
-        // Act - Delete
-        await NodeFactory.DeleteNode(nodePath);
-
-        // Verify deleted — per-node hub returns null Data for missing path.
-        var deletedNode = await ReadNodeAsync(nodePath);
-        deletedNode.Should().BeNull();
+        // Delete — same contract: DeleteNodeResponse is posted only after
+        // BulkDeleteViaStorage clears persistence AND every Deleted
+        // MeshChangeEvent is published on the change feed
+        // (HandleDeleteNodeRequest in MeshExtensions.cs:666-672). The await
+        // IS the verification — no follow-up GetDataRequest needed, which
+        // would race per-node hub disposal and used to flake at the 30s
+        // ReadNodeAsync watchdog.
+        var deleted = await NodeFactory.DeleteNode(nodePath);
+        deleted.Should().BeTrue();
     }
 
     #endregion
