@@ -47,6 +47,11 @@ public static class ThreadInput
             Attachments = attachments,
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.ExecutedInput,
+            // User cells don't have a streaming lifecycle — Submitted on creation.
+            // The "queued vs ingested" indicator is derived at the thread level
+            // (UserMessageIds minus IngestedMessageIds) so the UI can render
+            // queued user cells with a "waiting in queue" treatment without
+            // needing per-cell mutations on dispatch.
             Status = ThreadMessageStatus.Submitted
         };
 
@@ -69,27 +74,46 @@ public static class ThreadInput
 
         var msgId = NewId();
 
-        // Append the message to PendingUserMessages + UserMessageIds only.
+        // Materialize the user cell IMMEDIATELY (Status=Queued). The GUI binds
+        // to Thread.Messages and renders one LayoutAreaControl per id; without
+        // immediate cell creation, queued messages submitted while a previous
+        // round is still running are invisible until DispatchRound runs. We
+        // ALSO update Thread.Messages + UserMessageIds + PendingUserMessages
+        // in one atomic stream Update on the thread node — DispatchRound will
+        // see the cell already exists (CreateNode there is idempotent via
+        // Catch) and transition Status=Queued → Submitted on ingest.
         //
-        // We deliberately do NOT add to Thread.Messages here — the GUI renders one
-        // LayoutAreaControl per id in Messages, and rendering a control before its
-        // satellite ThreadMessage node has been created on the hub triggers
-        // "Cannot access a disposed object" + spurious area-stream errors. The
-        // server-side submission watcher creates the satellite cell first via
-        // IMeshService.CreateNode and only after CreateNode confirms success does
-        // it add the id into Messages (in the same atomic update that flips
-        // IsExecuting=true alongside the response cell id).
-        //
-        // Subscribe is mandatory — UpdateMeshNode returns a cold IObservable<MeshNode>
-        // and the side effect (dsStream.Update) only runs on Subscribe. Without this
-        // chain, AppendUserInput is silently a no-op and the chat workflow never
-        // dispatches the message — the original "chat doesn't work in prod" symptom.
+        // Subscribe is mandatory on both — these are cold observables and the
+        // side effects only run on Subscribe. Without this chain,
+        // AppendUserInput is silently a no-op and the chat workflow never
+        // dispatches the message (the original "chat doesn't work" symptom).
         var logger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadInput");
         logger?.LogDebug(
             "[AppendUserInput] entry workspace.Hub={Hub} threadPath={ThreadPath} msgId={MsgId} agent={Agent} model={Model}",
             workspace.Hub.Address, threadPath, msgId,
             message.AgentName ?? "(null)", message.ModelName ?? "(null)");
+
+        var meshService = workspace.Hub.ServiceProvider
+            .GetService<MeshWeaver.Mesh.Services.IMeshService>();
+        if (meshService != null)
+        {
+            // Resolve mainEntity: contextPath wins, fallback to threadPath.
+            var mainEntity = message.ContextPath ?? threadPath;
+            var userCell = new MeshNode(msgId, threadPath)
+            {
+                NodeType = ThreadMessageNodeType.NodeType,
+                MainNode = mainEntity,
+                Content = message
+            };
+            meshService.CreateNode(userCell).Subscribe(
+                _ => logger?.LogDebug(
+                    "[AppendUserInput] user cell created at {Path}", $"{threadPath}/{msgId}"),
+                ex => logger?.LogDebug(ex,
+                    "[AppendUserInput] user cell CreateNode returned error for {Path} (may already exist)",
+                    $"{threadPath}/{msgId}"));
+        }
+
         workspace.GetMeshNodeStream().Update(node =>
         {
             logger?.LogDebug(
@@ -97,6 +121,9 @@ public static class ThreadInput
                 threadPath, node.Path ?? "(null)",
                 node.Content?.GetType().Name ?? "(null)");
             var thread = node.Content as MeshThread ?? new MeshThread();
+            var msgs = thread.Messages.Contains(msgId)
+                ? thread.Messages
+                : thread.Messages.Add(msgId);
             var userIds = thread.UserMessageIds.Contains(msgId)
                 ? thread.UserMessageIds
                 : thread.UserMessageIds.Add(msgId);
@@ -105,6 +132,7 @@ public static class ThreadInput
             {
                 Content = thread with
                 {
+                    Messages = msgs,
                     UserMessageIds = userIds,
                     PendingUserMessages = pending,
                     PendingAgentName = message.AgentName ?? thread.PendingAgentName,
@@ -115,8 +143,9 @@ public static class ThreadInput
             };
         }).Subscribe(
             updated => logger?.LogDebug(
-                "[AppendUserInput] OnNext for {ThreadPath} msgId={MsgId} — userIds={UserIds} pending={Pending}",
+                "[AppendUserInput] OnNext for {ThreadPath} msgId={MsgId} — msgs={Msgs} userIds={UserIds} pending={Pending}",
                 threadPath, msgId,
+                (updated.Content as MeshThread)?.Messages.Count ?? -1,
                 (updated.Content as MeshThread)?.UserMessageIds.Count ?? -1,
                 (updated.Content as MeshThread)?.PendingUserMessages.Count ?? -1),
             ex => logger?.LogWarning(ex,
