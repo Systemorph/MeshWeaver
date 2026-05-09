@@ -17,6 +17,7 @@ using MeshWeaver.Reactive;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
@@ -37,6 +38,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// up by <c>AddAgentChatServices</c>.
     /// </summary>
     [Inject] private ChatCommandRegistry? CommandRegistry { get; set; }
+
+    /// <summary>
+    /// ModelTier mapping (heavy/standard/light → concrete model name). Used
+    /// to resolve an agent's <c>ModelTier</c> to its actual model so the
+    /// chat picker shows the SAME model the AzureClaude factory will route
+    /// the request to. Without this, agents that declare only ModelTier
+    /// (no PreferredModel) leave the picker on whatever happened to be
+    /// selected before — so picking "haiku" can quietly send to "sonnet"
+    /// because the agent's tier resolves to it server-side.
+    /// </summary>
+    [Inject] private IOptions<ModelTierConfiguration>? ModelTierOptions { get; set; }
 
     /// <summary>Stateless — single instance reused per submission.</summary>
     private static readonly ChatPreParser ChatParser = new();
@@ -395,7 +407,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
         else
         {
-            selectedAgentInfo = agentDisplayInfos.FirstOrDefault();
+            // Default agent: prefer the one marked IsDefault=true (Orchestrator),
+            // then fall back to the first in display order. Keeps the chat picker
+            // landing on Orchestrator when no thread-side selection exists.
+            selectedAgentInfo = agentDisplayInfos.FirstOrDefault(
+                    a => a.AgentConfiguration?.IsDefault == true)
+                ?? agentDisplayInfos.FirstOrDefault();
         }
 
         if (selectedAgentInfo != null)
@@ -442,11 +459,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             return availableModels.FirstOrDefault(m => m.Name == preferredModelName);
 
         var agentConfig = agentDisplayInfos.FirstOrDefault(a => a.Name == agentName)?.AgentConfiguration;
+
+        // 1) Explicit PreferredModel on the agent wins.
         if (!string.IsNullOrEmpty(agentConfig?.PreferredModel))
         {
             var configuredModel = availableModels.FirstOrDefault(m => m.Name == agentConfig.PreferredModel);
             if (configuredModel != null)
                 return configuredModel;
+        }
+
+        // 2) Resolve ModelTier (heavy/standard/light) the same way the factory does
+        //    in ChatClientAgentFactory.CreateAgent — keeps the picker in sync with
+        //    what the server will actually route the request to.
+        if (!string.IsNullOrEmpty(agentConfig?.ModelTier))
+        {
+            var resolvedModelName = ModelTierOptions?.Value?.Resolve(agentConfig.ModelTier);
+            if (!string.IsNullOrEmpty(resolvedModelName))
+            {
+                var resolved = availableModels.FirstOrDefault(m => m.Name == resolvedModelName);
+                if (resolved != null)
+                    return resolved;
+            }
         }
 
         return availableModels.FirstOrDefault();

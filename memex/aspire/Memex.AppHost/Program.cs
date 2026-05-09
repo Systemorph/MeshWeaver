@@ -73,8 +73,14 @@ var googleClientId = builder.AddParameter("google-client-id", value: "", secret:
 // Model names are configured per-tier below — also via parameters, never
 // inlined here. Configure with `dotnet user-secrets set "Parameters:anthropic-endpoint" "https://..."`
 // in dev, or via GitHub Actions / ACA env in deploy.
-var anthropicEndpoint = builder.AddParameter("anthropic-endpoint", value: "", secret: false);
-var azureFoundryEndpoint = builder.AddParameter("azure-foundry-endpoint", value: "", secret: false);
+//
+// 🚨 NO `value:` argument here either — same trap as the model-tier params
+// (see comment below). `value: ""` makes Aspire resolve the param to empty
+// string and skip user-secrets, leaving Anthropic__Endpoint blank in the
+// portal — the AzureClaude factory then errors with "Endpoint is missing
+// for model 'X'" even when user-secrets has Parameters:anthropic-endpoint set.
+var anthropicEndpoint = builder.AddParameter("anthropic-endpoint", secret: false);
+var azureFoundryEndpoint = builder.AddParameter("azure-foundry-endpoint", secret: false);
 
 // Model-tier mappings: agents declare ModelTier ("heavy" / "standard" /
 // "light") and the factory resolves it to a concrete model name via these

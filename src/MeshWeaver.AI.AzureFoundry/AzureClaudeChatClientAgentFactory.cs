@@ -98,7 +98,11 @@ public class AzureClaudeChatClientAgentFactory(
     {
         EnsureModelSubscription();
 
-        // Agent's PreferredModel wins; CurrentModelName fills in only when the agent doesn't pin one.
+        // Agent's PreferredModel wins (resolved from ModelTier in
+        // ChatClientAgentFactory.CreateAgent). The chat picker should
+        // auto-follow the selected agent's PreferredModel — see
+        // ThreadChatView's agent-change handler. CurrentModelName is the
+        // fallback when an agent doesn't pin a model.
         var modelName = !string.IsNullOrEmpty(agentConfig.PreferredModel) ? agentConfig.PreferredModel
             : !string.IsNullOrEmpty(CurrentModelName) ? CurrentModelName
             : configuration.Models.FirstOrDefault();
