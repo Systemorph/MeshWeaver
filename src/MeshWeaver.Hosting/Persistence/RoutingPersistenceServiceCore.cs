@@ -65,7 +65,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             if (_stores.TryAdd(ns, core))
             {
                 _queryProviders[ns] =
-                    new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                    new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
             }
         }
     }
@@ -133,7 +133,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
                         if (!_stores.TryAdd(segment, core))
                             return ((string, IMeshQueryProvider)?)null;
                         var queryProvider = partition.QueryProvider
-                            ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                            ?? new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
                         _queryProviders[segment] = queryProvider;
                         if (partition.VersionQuery != null)
                             _versionQueries[segment] = partition.VersionQuery;
@@ -192,7 +192,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
                 await providerCore.InitializeAsync(System.Text.Json.JsonSerializerOptions.Default, ct);
                 _stores[firstSegment] = providerCore;
                 _queryProviders[firstSegment] =
-                    new Query.InMemoryMeshQuery(providerCore, changeNotifier: _changeNotifier);
+                    new Query.MeshQueryEngine(providerCore, changeNotifier: _changeNotifier);
                 return providerCore;
             }
 
@@ -203,7 +203,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
             _stores[firstSegment] = core;
             var queryProvider = partition.QueryProvider
-                ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                ?? new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
             _queryProviders[firstSegment] = queryProvider;
             if (partition.VersionQuery != null)
                 _versionQueries[firstSegment] = partition.VersionQuery;
@@ -272,7 +272,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             if (_stores.TryAdd(ns, core))
             {
                 _queryProviders[ns] =
-                    new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                    new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
             }
         }
 
@@ -330,7 +330,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             var store = new StaticNodePartitionStore(nodesInPartition);
             if (_stores.TryAdd(def.Namespace, store))
             {
-                _queryProviders[def.Namespace] = new Query.InMemoryMeshQuery(store, changeNotifier: _changeNotifier);
+                _queryProviders[def.Namespace] = new Query.MeshQueryEngine(store, changeNotifier: _changeNotifier);
             }
         }
     }
@@ -498,7 +498,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
                         if (_stores.TryAdd(def.Namespace, core))
                         {
                             var queryProvider = partition.QueryProvider
-                                ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                                ?? new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
                             _queryProviders[def.Namespace] = queryProvider;
                             if (partition.VersionQuery != null)
                                 _versionQueries[def.Namespace] = partition.VersionQuery;

@@ -18,19 +18,65 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// In-memory implementation of IMeshService.
 /// Extracts query functionality from InMemoryPersistenceService for use as a standalone service.
 /// </summary>
-internal class InMemoryMeshQuery(
-    IStorageService persistence,
-    ISecurityService? securityService = null,
-    AccessService? accessService = null,
-    IDataChangeNotifier? changeNotifier = null,
-    MeshConfiguration? meshConfiguration = null,
-    IEnumerable<INodeValidator>? nodeValidators = null,
-    ILogger<InMemoryMeshQuery>? logger = null)
-    : IMeshQueryProvider, IMeshQueryCore
+internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
 {
+    private readonly IStorageService persistence;
+    private readonly AccessService? accessService;
+    private readonly IDataChangeNotifier? changeNotifier;
+    private readonly MeshConfiguration? meshConfiguration;
+    // 🚨 Lazy<INodeValidator> — NOT bare INodeValidator. RlsNodeValidator
+    // (the only non-test impl) takes ISecurityService at construction time.
+    // SecurityService warms up by subscribing to a synced query during its
+    // own ctor → reaches MeshQueryEngine → resolving INodeValidators eagerly
+    // would re-enter SecurityService and cycle. Lazy<T> defers each
+    // validator's construction to first ValidateReadAsync access; by then
+    // SecurityService is fully built.
+    private readonly IEnumerable<Lazy<INodeValidator>>? nodeValidators;
+    private readonly ILogger<MeshQueryEngine>? logger;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
     private long _version;
+
+    /// <summary>
+    /// Static-node providers folded into the query stream — built-in agents,
+    /// well-known roles, type definitions. Indexed by path so
+    /// <see cref="FindMatchingNodesAsync"/> can yield them alongside
+    /// persistence-served nodes with path-keyed dedup against persistence
+    /// (RoutingPersistenceServiceCore consumes IStaticNodeProvider directly,
+    /// so the same node may come from both sources in prod).
+    /// </summary>
+    private readonly IReadOnlyDictionary<string, MeshNode> staticNodes;
+
+    public MeshQueryEngine(
+        IStorageService persistence,
+        // 🚨 NO ISecurityService here — that parameter created the Autofac
+        // cycle SecurityService → SyncedQueryMeshNodes → IMeshQueryCore →
+        // MeshQueryEngine → SecurityService. Per-node read filtering on the
+        // secured IMeshQueryProvider surface goes through INodeValidator
+        // instead, which has no back-reference into the synced-query path.
+        // GetEffectivePermissions-style filtering for non-MeshNode results
+        // is intentionally dropped — IMeshService.QueryAsync results are
+        // MeshNodes today, and any future non-MeshNode projection should
+        // declare an INodeValidator if it needs gating.
+        AccessService? accessService = null,
+        IDataChangeNotifier? changeNotifier = null,
+        MeshConfiguration? meshConfiguration = null,
+        IEnumerable<Lazy<INodeValidator>>? nodeValidators = null,
+        IEnumerable<IStaticNodeProvider>? staticProviders = null,
+        ILogger<MeshQueryEngine>? logger = null)
+    {
+        this.persistence = persistence;
+        this.accessService = accessService;
+        this.changeNotifier = changeNotifier;
+        this.meshConfiguration = meshConfiguration;
+        this.nodeValidators = nodeValidators;
+        this.logger = logger;
+        staticNodes = (staticProviders ?? Enumerable.Empty<IStaticNodeProvider>())
+            .SelectMany(p => p.GetStaticNodes())
+            .Where(n => !string.IsNullOrEmpty(n.Path))
+            .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Default debounce interval for batching rapid changes.
@@ -117,22 +163,13 @@ internal class InMemoryMeshQuery(
             if (!seen.Add(node))
                 continue;
 
-            // Always apply access control filtering on the public query path.
+            // Per-node read filtering on the secured public query path —
+            // INodeValidator chain only. ISecurityService is intentionally
+            // not consumed here; see ctor comment.
             if (node is MeshNode meshNode)
             {
                 if (!await ValidateReadAsync(meshNode, userId, ct))
                     continue;
-            }
-            else if (securityService != null)
-            {
-                var itemPath = GetItemPath(node);
-                if (!string.IsNullOrEmpty(itemPath))
-                {
-                    var permissions = await securityService.GetEffectivePermissions(
-                        itemPath, userId).FirstAsync().ToTask(ct);
-                    if (!permissions.HasFlag(Permission.Read))
-                        continue;
-                }
             }
 
             matched.Add(node);
@@ -280,6 +317,7 @@ internal class InMemoryMeshQuery(
         [EnumeratorCancellation] CancellationToken ct)
     {
         var pathsToSearch = GetPathsForScope(basePath, effectiveScope);
+        var emittedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Exact path matches — bridge IObservable<MeshNode?> back to a one-shot Task
         // here at the IMeshQuery boundary (sanctioned per AsynchronousCalls.md).
@@ -290,6 +328,7 @@ internal class InMemoryMeshQuery(
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
             {
+                if (!string.IsNullOrEmpty(node.Path)) emittedPaths.Add(node.Path);
                 yield return node;
             }
         }
@@ -352,9 +391,53 @@ internal class InMemoryMeshQuery(
                 if (_evaluator.Matches(descendant, parsedQuery)
                     && !IsExcludedByContext(descendant, context)
                     && !IsExcludedByIsMain(descendant, parsedQuery))
+                {
+                    if (!string.IsNullOrEmpty(descendant.Path)) emittedPaths.Add(descendant.Path);
                     yield return descendant;
+                }
             }
         }
+
+        // Static nodes — same path/scope/context filtering as persistence
+        // results, with path-keyed dedup so backends that include static
+        // nodes directly (RoutingPersistenceServiceCore) don't double-count.
+        foreach (var (_, node) in staticNodes)
+        {
+            if (string.IsNullOrEmpty(node.Path)) continue;
+            if (emittedPaths.Contains(node.Path)) continue;
+            if (!StaticNodeMatchesScope(node, basePath, effectiveScope)) continue;
+            if (IsExcludedByContext(node, context)) continue;
+            if (IsExcludedByIsMain(node, parsedQuery)) continue;
+            if (!_evaluator.Matches(node, parsedQuery)) continue;
+            yield return node;
+        }
+    }
+
+    private static bool StaticNodeMatchesScope(MeshNode node, string basePath, QueryScope scope)
+    {
+        var path = node.Path ?? "";
+        if (string.IsNullOrEmpty(basePath))
+            return true;
+        return scope switch
+        {
+            QueryScope.Exact => string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase),
+            QueryScope.Children =>
+                string.Equals(node.Namespace ?? "", basePath, StringComparison.OrdinalIgnoreCase),
+            QueryScope.Subtree =>
+                string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase),
+            QueryScope.Descendants =>
+                path.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase),
+            QueryScope.Ancestors => basePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
+            QueryScope.AncestorsAndSelf =>
+                string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase) ||
+                basePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
+            QueryScope.Hierarchy =>
+                string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase) ||
+                basePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
+            _ => true,
+        };
     }
 
     /// <summary>
@@ -417,8 +500,11 @@ internal class InMemoryMeshQuery(
             AccessContext = accessContext
         };
 
-        foreach (var validator in nodeValidators)
+        foreach (var lazyValidator in nodeValidators)
         {
+            // Resolve lazily — see ctor comment on `nodeValidators` for the
+            // SecurityService cycle this defers.
+            var validator = lazyValidator.Value;
             if (validator.SupportedOperations.Count > 0 &&
                 !validator.SupportedOperations.Contains(NodeOperation.Read))
                 continue;

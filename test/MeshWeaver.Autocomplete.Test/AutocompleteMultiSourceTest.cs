@@ -216,7 +216,7 @@ public class AutocompleteMultiSourceTest : MonolithMeshTestBase
 
     /// <summary>
     /// Per user requirement: a file "one two three.docx" must appear when typing "one", "two", or "thr".
-    /// Tests fuzzy word-boundary matching using the same FuzzyScorer used in InMemoryMeshQuery.
+    /// Tests fuzzy word-boundary matching using the same FuzzyScorer used in MeshQueryEngine.
     /// Case-insensitive.
     /// </summary>
     [Theory]
