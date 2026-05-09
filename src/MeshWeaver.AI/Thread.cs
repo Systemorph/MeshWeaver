@@ -35,6 +35,45 @@ public record ThreadExecutionContext
 }
 
 /// <summary>
+/// Lifecycle state of a single ThreadMessage cell. Replaces magic-string text
+/// markers like trailing "*Cancelled*" / "*Error: ...*" with an explicit
+/// per-cell state machine.
+///
+/// User cells: created at <see cref="Submitted"/> on dispatch (the queued period
+/// lives at the thread level via <see cref="Thread.PendingUserMessages"/> —
+/// the cell doesn't exist until ingestion).
+///
+/// Assistant cells: created at <see cref="Streaming"/> on round start, transition
+/// to one of <see cref="Completed"/>, <see cref="Cancelled"/>, or <see cref="Error"/>
+/// when the streaming loop exits.
+///
+/// Pre-existing persisted cells without a Status field default to <see cref="Completed"/>
+/// (treated as stable history).
+/// </summary>
+public enum ThreadMessageStatus
+{
+    /// <summary>User cell appended to the thread queue, satellite not yet materialized.
+    /// In practice cells almost never carry this value (the queue lives on the thread,
+    /// not the cell) — included for completeness so external materializers can use it.</summary>
+    Queued,
+
+    /// <summary>User cell materialized into a round (the round may be running or done).</summary>
+    Submitted,
+
+    /// <summary>Assistant cell currently being generated — streaming loop active.</summary>
+    Streaming,
+
+    /// <summary>Cell's turn finished successfully.</summary>
+    Completed,
+
+    /// <summary>Cell's turn was cancelled mid-stream (ESC / Stop). Partial text preserved.</summary>
+    Cancelled,
+
+    /// <summary>Cell's turn failed with an error. Error message in <see cref="ThreadMessage.Text"/>.</summary>
+    Error
+}
+
+/// <summary>
 /// Defines the type of a thread message for rendering purposes.
 /// </summary>
 public enum ThreadMessageType
@@ -243,6 +282,14 @@ public record ThreadMessage
     /// Defaults to ExecutedInput for backward compatibility.
     /// </summary>
     public ThreadMessageType Type { get; init; } = ThreadMessageType.ExecutedInput;
+
+    /// <summary>
+    /// Lifecycle state of this cell. Default <see cref="ThreadMessageStatus.Completed"/>
+    /// keeps pre-existing persisted cells (loaded without a Status field) treated as
+    /// stable history. New cells set Status explicitly on creation:
+    /// user → Submitted, assistant → Streaming.
+    /// </summary>
+    public ThreadMessageStatus Status { get; init; } = ThreadMessageStatus.Completed;
 
     /// <summary>
     /// The name of the agent that generated this response (for AgentResponse messages).

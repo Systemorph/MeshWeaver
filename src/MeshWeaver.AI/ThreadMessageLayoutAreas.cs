@@ -27,7 +27,6 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadMessageViews(this MessageHubConfiguration configuration)
         => configuration
-            .WithHandler<UpdateThreadMessageContent>(HandleUpdateContent)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadMessageNodeType.OverviewArea)
                 .WithView(ThreadMessageNodeType.OverviewArea, Overview)
@@ -100,48 +99,6 @@ public static class ThreadMessageLayoutAreas
 
                 return (UiControl?)stack;
             });
-    }
-
-    /// <summary>
-    /// Handles content updates from thread execution.
-    /// Runs ON the response message grain — updates local workspace → sync stream → clients.
-    /// </summary>
-    private static IMessageDelivery HandleUpdateContent(
-        IMessageHub hub, IMessageDelivery<UpdateThreadMessageContent> delivery)
-    {
-        var msg = delivery.Message;
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.AI.MsgLayout");
-        logger?.LogInformation("[MsgLayout] HANDLE_UPDATE: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
-            hub.Address, msg.Text?.Length ?? -1, msg.ToolCalls?.Count ?? -1);
-        hub.GetWorkspace().GetMeshNodeStream().Update(node =>
-        {
-            var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
-            // Prefer incremental append (TextDelta). Full Text replacement is only used
-            // for final/terminal writes (completion, error, cancel markers).
-            var newText = msg.Text ?? (msg.TextDelta is { Length: > 0 } d
-                ? (current.Text ?? "") + d
-                : current.Text);
-            return node with
-            {
-                Content = current with
-                {
-                    Text = newText,
-                    ToolCalls = msg.ToolCalls ?? current.ToolCalls,
-                    UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
-                    AgentName = msg.AgentName ?? current.AgentName,
-                    ModelName = msg.ModelName ?? current.ModelName,
-                    InputTokens = msg.InputTokens ?? current.InputTokens,
-                    OutputTokens = msg.OutputTokens ?? current.OutputTokens,
-                    TotalTokens = msg.TotalTokens ?? current.TotalTokens,
-                    CompletedAt = msg.CompletedAt ?? current.CompletedAt
-                }
-            };
-        }).Subscribe(
-            _ => { },
-            ex => logger?.LogWarning(ex,
-                "HandleUpdateContent: UpdateMeshNode failed for {Hub}", hub.Address));
-        return delivery.Processed();
     }
 
     /// <summary>

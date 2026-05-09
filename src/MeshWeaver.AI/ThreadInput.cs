@@ -46,7 +46,8 @@ public static class ThreadInput
             ContextPath = contextPath,
             Attachments = attachments,
             Timestamp = DateTime.UtcNow,
-            Type = ThreadMessageType.ExecutedInput
+            Type = ThreadMessageType.ExecutedInput,
+            Status = ThreadMessageStatus.Submitted
         };
 
     /// <summary>

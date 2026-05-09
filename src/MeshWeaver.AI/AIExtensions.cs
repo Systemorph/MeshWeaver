@@ -89,7 +89,6 @@ public static class AIExtensions
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
-            .WithType(typeof(UpdateThreadMessageContent), nameof(UpdateThreadMessageContent))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
             // ChatHistoryEntry removed — ChatHistory uses string[] to avoid $type issues

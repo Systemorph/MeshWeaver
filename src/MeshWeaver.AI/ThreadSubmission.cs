@@ -53,6 +53,12 @@ public static class ThreadSubmission
     /// <summary>
     /// Returns the next round to dispatch given the current thread state.
     /// Returns <c>null</c> when the thread is currently executing or has no queued user messages.
+    ///
+    /// <para>One queued user message per round (Claude-Code-style turn structure):
+    /// each user submission gets its own response cell + its own agent turn. After
+    /// a turn completes (success/cancel/error), <c>IsExecuting</c> flips back to
+    /// false and the watcher fires again to dispatch the next queued message.
+    /// Multi-message batching with "---" joiners is gone.</para>
     /// </summary>
     public static RoundDispatch? PlanNextRound(MeshThread thread)
     {
@@ -60,9 +66,10 @@ public static class ThreadSubmission
         var unprocessed = FindUnprocessedUserMessages(thread);
         if (unprocessed.IsEmpty) return null;
 
+        var nextId = unprocessed[0];
         var responseMessageId = Guid.NewGuid().ToString("N")[..8];
         return new RoundDispatch(
-            unprocessed,
+            ImmutableList.Create(nextId),
             responseMessageId,
             thread.PendingAgentName,
             thread.PendingModelName,
@@ -479,8 +486,10 @@ public sealed record ResubmitContext
 }
 
 /// <summary>
-/// One execution round to dispatch. Includes every unprocessed user message id
-/// (batched ingestion) and the newly allocated output cell id.
+/// One execution round to dispatch. <see cref="UserMessageIds"/> contains exactly one
+/// id (per <see cref="ThreadSubmission.PlanNextRound"/> — one user message per round,
+/// one response cell per round, Claude-Code-style turn structure). The collection
+/// shape is kept for back-compat with downstream code that already iterates it.
 /// </summary>
 public sealed record RoundDispatch(
     ImmutableList<string> UserMessageIds,
@@ -665,13 +674,17 @@ internal static class ThreadSubmissionServer
             .Select(id => (Id: id, Msg: thread.PendingUserMessages[id]))
             .ToImmutableList();
 
-        var combinedUserText = pendingForRound.Count > 0
-            ? string.Join("\n\n---\n\n", pendingForRound.Select(p => p.Msg.Text))
+        // Single-message round (PlanNextRound returns one id at a time). pendingForRound
+        // is empty only on the legacy auto-execute-on-creation path that uses the
+        // singular `thread.PendingUserMessage` string instead of the dictionary.
+        var roundUserText = pendingForRound.Count > 0
+            ? pendingForRound[0].Msg.Text
             : (thread.PendingUserMessage ?? "");
 
         void AfterUserCellsReady()
         {
             // Step 1: create the assistant output cell (CreateNodeRequest → RegisterCallback).
+            // Status=Streaming until the streaming loop transitions it to Completed/Cancelled/Error.
             var responseCell = new MeshNode(responseMsgId, threadPath)
             {
                 NodeType = ThreadMessageNodeType.NodeType,
@@ -683,7 +696,8 @@ internal static class ThreadSubmissionServer
                     Timestamp = DateTime.UtcNow,
                     Type = ThreadMessageType.AgentResponse,
                     AgentName = dispatch.AgentName,
-                    ModelName = dispatch.ModelName
+                    ModelName = dispatch.ModelName,
+                    Status = ThreadMessageStatus.Streaming
                 }
             };
 
@@ -726,9 +740,9 @@ internal static class ThreadSubmissionServer
                         //
                         // Subscribe is mandatory: GetMeshNodeStream().Update returns a cold
                         // IObservable<MeshNode>; the dsStream.Update side effect only runs on
-                        // Subscribe. The downstream hub.Posts (UpdateThreadMessageContent +
-                        // SubmitMessageRequest) chain off the Subscribe(onNext) so they only
-                        // fire after the round commit is persisted.
+                        // Subscribe. The downstream UpdateResponseCell + SubmitMessageRequest
+                        // chain off the Subscribe(onNext) so they only fire after the round
+                        // commit is persisted.
                         hub.GetWorkspace().GetMeshNodeStream().Update(node =>
                         {
                             var t = node.Content as MeshThread ?? new MeshThread();
@@ -773,9 +787,10 @@ internal static class ThreadSubmissionServer
                         }).Subscribe(
                             _ =>
                             {
-                                hub.Post(
-                                    new UpdateThreadMessageContent { Text = "Allocating agent..." },
-                                    o => o.WithTarget(new Address(responsePath)));
+                                ThreadExecution.UpdateResponseCell(
+                                    hub.GetWorkspace(), responsePath, threadPath, responseMsgId, mainEntity,
+                                    msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
+                                    logger);
 
                                 // Step 3: post to _Exec hosted hub — actual agent streaming runs there.
                                 var executionHub = hub.GetHostedHub(
@@ -787,7 +802,7 @@ internal static class ThreadSubmissionServer
                                     new SubmitMessageRequest
                                     {
                                         ThreadPath = threadPath,
-                                        UserMessageText = combinedUserText,
+                                        UserMessageText = roundUserText,
                                         UserMessageId = dispatch.UserMessageIds.LastOrDefault(),
                                         ResponseMessageId = responseMsgId,
                                         ResponsePath = responsePath,

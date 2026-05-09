@@ -35,6 +35,65 @@ public static class ThreadExecution
         ImmutableList<NodeChangeEntry> NodeChanges);
 
     /// <summary>
+    /// Single canonical write path for ThreadMessage cells: opens a short-lived
+    /// remote synchronization stream, applies <paramref name="mutate"/> to the cell's
+    /// content, and disposes. Constructs a placeholder MeshNode when the sync
+    /// handshake hasn't delivered the initial state — the patch routes via StreamId
+    /// regardless of local cache freshness, so the cell hub applies it correctly.
+    ///
+    /// Use this for one-off cell updates from outside the streaming loop
+    /// (recovery, "Allocating agent…" placeholders). The streaming loop itself
+    /// uses a long-lived <c>responseStream</c> opened once per execution.
+    /// </summary>
+    internal static void UpdateResponseCell(
+        IWorkspace workspace,
+        string responsePath,
+        string threadPath,
+        string responseMsgId,
+        string mainEntity,
+        Func<ThreadMessage, ThreadMessage> mutate,
+        ILogger? logger)
+    {
+        ISynchronizationStream<MeshNode>? stream;
+        try
+        {
+            stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(responsePath), new MeshNodeReference());
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "[UpdateResponseCell] could not open stream for {Path}", responsePath);
+            return;
+        }
+
+        stream.Update(node =>
+        {
+            var current = node?.Content as ThreadMessage ?? new ThreadMessage
+            {
+                Role = "assistant",
+                Text = "",
+                Type = ThreadMessageType.AgentResponse,
+                Status = ThreadMessageStatus.Streaming
+            };
+            var updated = mutate(current);
+            var meshNode = node != null
+                ? node with { Content = updated }
+                : new MeshNode(responseMsgId, threadPath)
+                {
+                    NodeType = ThreadMessageNodeType.NodeType,
+                    MainNode = mainEntity,
+                    Content = updated
+                };
+            return new ChangeItem<MeshNode>(
+                meshNode, stream.StreamId, stream.StreamId,
+                ChangeType.Patch, stream.Hub.Version,
+                [new EntityUpdate(nameof(MeshNode), meshNode.Id, meshNode) { OldValue = node }]);
+        }, ex => logger?.LogWarning(ex,
+            "[UpdateResponseCell] update failed for {Path}", responsePath));
+    }
+
+    /// <summary>
     /// Registers thread execution handlers on a hub configuration.
     /// Includes a startup recovery check for stale executing cells from crashed sessions.
     /// </summary>
@@ -128,6 +187,8 @@ public static class ThreadExecution
             if (!string.IsNullOrEmpty(thread.ActiveMessageId))
             {
                 var responsePath = $"{threadPath}/{thread.ActiveMessageId}";
+                var responseMsgId = thread.ActiveMessageId!;
+                var mainEntity = threadNode.MainNode ?? threadPath;
 
                 // Mark all pending tool calls as cancelled — no query needed.
                 // Sub-thread recovery happens independently on their own hub init.
@@ -135,13 +196,17 @@ public static class ThreadExecution
                     .Select(tc => tc.Result != null
                         ? tc
                         : tc with { Result = "Cancelled (server restarted)", IsSuccess = false })
-                    .ToImmutableList();
+                    .ToImmutableList() ?? ImmutableList<ToolCallEntry>.Empty;
 
-                hub.Post(new UpdateThreadMessageContent
-                {
-                    Text = "*Cancelled (server restarted)*",
-                    ToolCalls = updatedToolCalls
-                }, o => o.WithTarget(new Address(responsePath)));
+                UpdateResponseCell(workspace, responsePath, threadPath, responseMsgId, mainEntity,
+                    msg => msg with
+                    {
+                        Text = msg.Text ?? "",
+                        ToolCalls = updatedToolCalls,
+                        Status = ThreadMessageStatus.Cancelled,
+                        CompletedAt = DateTime.UtcNow
+                    },
+                    logger);
             }
 
             // Clear thread execution state
@@ -250,8 +315,10 @@ public static class ThreadExecution
 
             void StartExecution()
             {
-                hub.Post(new UpdateThreadMessageContent { Text = "Allocating agent..." },
-                    o => o.WithTarget(new Address(responsePath)));
+                UpdateResponseCell(hub.GetWorkspace(), responsePath, threadPath, responseMsgId,
+                    mainEntity,
+                    msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
+                    logger);
 
                 var executionHub = hub.GetHostedHub(
                     new Address($"{hub.Address}/_Exec"),
@@ -386,8 +453,9 @@ public static class ThreadExecution
             hub.Post(new SubmitMessageResponse { Success = true, Messages = ImmutableList.Create(userMsgId, responseMsgId) },
                 o => o.ResponseFor(delivery));
 
-            hub.Post(new UpdateThreadMessageContent { Text = "Allocating agent..." },
-                o => o.WithTarget(new Address(responsePath)));
+            UpdateResponseCell(hub.GetWorkspace(), responsePath, threadPath, responseMsgId, mainEntity,
+                msg => msg with { Text = "Allocating agent...", Status = ThreadMessageStatus.Streaming },
+                logger);
 
             var executionHub = hub.GetHostedHub(
                 new Address($"{hub.Address}/_Exec"),
@@ -502,7 +570,7 @@ public static class ThreadExecution
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "[ThreadExec] Could not open response stream for {ResponsePath} — falling back to UpdateThreadMessageContent posts",
+            logger.LogWarning(ex, "[ThreadExec] Could not open response stream for {ResponsePath} — pushes will be skipped (cell will not show streaming output)",
                 responsePath);
         }
 
@@ -510,83 +578,60 @@ public static class ThreadExecution
         // stream. Fire-and-forget: ISynchronizationStream.Update posts an
         // UpdateStreamRequest to the workspace hub, which forwards the patch to
         // the owning per-message hub and broadcasts the echo to subscribers.
+        var mainEntity = request.ContextPath ?? threadPath;
         void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
             ImmutableList<NodeChangeEntry> updatedNodes,
             string? agentName, string? modelName,
             int? inputTokens = null, int? outputTokens = null, int? totalTokens = null,
-            DateTime? completedAt = null)
+            DateTime? completedAt = null,
+            ThreadMessageStatus? status = null)
         {
-            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}",
-                responsePath, text.Length, toolCalls.Count, updatedNodes.Count);
+            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}, status={Status}",
+                responsePath, text.Length, toolCalls.Count, updatedNodes.Count, status?.ToString() ?? "(preserve)");
 
             if (responseStream == null)
             {
-                // Fallback path — should only fire when GetRemoteStream threw above.
-                parentHub.Post(new UpdateThreadMessageContent
-                {
-                    Text = text,
-                    ToolCalls = toolCalls,
-                    UpdatedNodes = updatedNodes,
-                    AgentName = agentName,
-                    ModelName = modelName,
-                    InputTokens = inputTokens,
-                    OutputTokens = outputTokens,
-                    TotalTokens = totalTokens,
-                    CompletedAt = completedAt
-                }, o => o.WithTarget(new Address(responsePath)));
+                logger.LogWarning("[ThreadExec] responseStream not opened for {ResponsePath} — skipping push (text len={TextLen})",
+                    responsePath, text.Length);
                 return;
             }
 
-            // 🚨 The Update lambda's `node` is null when the synchronization
-            // handshake hasn't yet delivered the initial state from the per-
-            // message hub (race when streaming output arrives faster than the
-            // remote stream's handshake). Returning null here drops the patch
-            // — symptom is "response cell stuck at 'Allocating agent...'" on
-            // 2nd-and-later chat rounds in tests where the inner LLM is
-            // synchronous (Echo) and the stream's Initial OnNext loses the
-            // race against the streaming write.
-            //
-            // Fallback: when node is null, route through the per-message hub
-            // directly via UpdateThreadMessageContent — same path the
-            // "Allocating agent..." placeholder uses; that path doesn't need
-            // a primed sync stream to land on the cell.
-            if (responseStream == null
-                || (responseStream.Current?.Value is null))
-            {
-                parentHub.Post(new UpdateThreadMessageContent
-                {
-                    Text = text,
-                    ToolCalls = toolCalls,
-                    UpdatedNodes = updatedNodes,
-                    AgentName = agentName,
-                    ModelName = modelName,
-                    InputTokens = inputTokens,
-                    OutputTokens = outputTokens,
-                    TotalTokens = totalTokens,
-                    CompletedAt = completedAt
-                }, o => o.WithTarget(new Address(responsePath)));
-                return;
-            }
-
+            // The lambda's `node` is null until the synchronization handshake
+            // has delivered the initial state from the per-message hub. Don't
+            // return null (that drops the patch — old "stuck at Allocating
+            // agent..." symptom). Construct a placeholder from request context
+            // — the sync protocol routes the patch by StreamId, not by local
+            // cache state, so the cell hub applies our content correctly.
             responseStream.Update(node =>
             {
-                if (node == null) return null;
-                var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
-                var updated = node with
+                var current = node?.Content as ThreadMessage ?? new ThreadMessage
+            {
+                Role = "assistant",
+                Text = "",
+                Type = ThreadMessageType.AgentResponse,
+                Status = ThreadMessageStatus.Streaming
+            };
+                var updatedContent = current with
                 {
-                    Content = current with
-                    {
-                        Text = text,
-                        ToolCalls = toolCalls,
-                        UpdatedNodes = updatedNodes,
-                        AgentName = agentName ?? current.AgentName,
-                        ModelName = modelName ?? current.ModelName,
-                        InputTokens = inputTokens ?? current.InputTokens,
-                        OutputTokens = outputTokens ?? current.OutputTokens,
-                        TotalTokens = totalTokens ?? current.TotalTokens,
-                        CompletedAt = completedAt ?? current.CompletedAt
-                    }
+                    Text = text,
+                    ToolCalls = toolCalls,
+                    UpdatedNodes = updatedNodes,
+                    AgentName = agentName ?? current.AgentName,
+                    ModelName = modelName ?? current.ModelName,
+                    InputTokens = inputTokens ?? current.InputTokens,
+                    OutputTokens = outputTokens ?? current.OutputTokens,
+                    TotalTokens = totalTokens ?? current.TotalTokens,
+                    CompletedAt = completedAt ?? current.CompletedAt,
+                    Status = status ?? current.Status
                 };
+                var updated = node != null
+                    ? node with { Content = updatedContent }
+                    : new MeshNode(responseMsgId, threadPath)
+                    {
+                        NodeType = ThreadMessageNodeType.NodeType,
+                        MainNode = mainEntity,
+                        Content = updatedContent
+                    };
                 return new ChangeItem<MeshNode>(
                     updated, responseStream.StreamId, responseStream.StreamId,
                     ChangeType.Patch, responseStream.Hub.Version,
@@ -632,7 +677,8 @@ public static class ThreadExecution
         else
         {
             PushToResponseMessage("Loading conversation history...", ImmutableList<ToolCallEntry>.Empty,
-                ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName);
+                ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
+                status: ThreadMessageStatus.Streaming);
             clientObs = LoadPriorUserMessagesFromMesh(parentHub, threadPath, request.UserMessageId, logger)
                 .Select(prior =>
                 {
@@ -790,7 +836,8 @@ public static class ThreadExecution
                 hub.RegisterForDisposal(_ => executionCts.Cancel());
                 // Push progress: generating
                 PushToResponseMessage("Generating response...", ImmutableList<ToolCallEntry>.Empty,
-                    ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName);
+                    ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
+                    status: ThreadMessageStatus.Streaming);
 
                 _ = Task.Run(async () =>
                 {
@@ -841,7 +888,8 @@ public static class ThreadExecution
                         .Sample(StreamingSampleInterval)
                         .Subscribe(s => PushToResponseMessage(
                             s.Text, s.ToolCalls, s.NodeChanges,
-                            request.AgentName, request.ModelName));
+                            request.AgentName, request.ModelName,
+                            status: ThreadMessageStatus.Streaming));
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
 
@@ -975,7 +1023,8 @@ public static class ThreadExecution
                     PushToResponseMessage(finalText, toolCallLog, aggregatedChanges,
                         request.AgentName, request.ModelName,
                         inputTokens: inputTokens, outputTokens: outputTokens,
-                        totalTokens: totalTokens, completedAt: DateTime.UtcNow);
+                        totalTokens: totalTokens, completedAt: DateTime.UtcNow,
+                        status: ThreadMessageStatus.Completed);
                     // Clear streaming state
                     UpdateThreadExecution(t => t with
                     {
@@ -992,8 +1041,11 @@ public static class ThreadExecution
                     catch (OperationCanceledException)
                     {
                         logger.LogInformation("[ThreadExec] CANCELLED: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
-                        var cancelText = (responseText.ToString() + "\n\n*Cancelled*").Trim();
-                        PushToResponseMessage(cancelText, toolCallLog, nodeChangeLog, request.AgentName, request.ModelName);
+                        var cancelText = responseText.ToString();
+                        PushToResponseMessage(cancelText, toolCallLog, nodeChangeLog,
+                            request.AgentName, request.ModelName,
+                            completedAt: DateTime.UtcNow,
+                            status: ThreadMessageStatus.Cancelled);
                         UpdateThreadExecution(t => t with
                         {
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
@@ -1005,7 +1057,10 @@ public static class ThreadExecution
                     {
                         logger.LogError(ex, "[ThreadExec] ERROR: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
                         var errorText = (responseText.ToString() + $"\n\n*Error: {ex.Message}*").Trim();
-                        PushToResponseMessage(errorText, toolCallLog, nodeChangeLog, request.AgentName, request.ModelName);
+                        PushToResponseMessage(errorText, toolCallLog, nodeChangeLog,
+                            request.AgentName, request.ModelName,
+                            completedAt: DateTime.UtcNow,
+                            status: ThreadMessageStatus.Error);
                         UpdateThreadExecution(t => t with
                         {
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
