@@ -117,63 +117,8 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var parsedQuery = _parser.Parse(request.Query);
-
-        // Override limit from request if provided
-        if (request.Limit.HasValue)
-        {
-            parsedQuery = parsedQuery with { Limit = request.Limit };
-        }
-
-        // Both source:activity and source:accessed restrict to main nodes only (main_node = path).
-        if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
-        {
-            parsedQuery = parsedQuery with { IsMain = true };
-        }
-
-        // If no path is specified, use the default path from request or default to root
-        var effectivePath = parsedQuery.Path;
-        var effectiveScope = parsedQuery.Scope;
-        if (string.IsNullOrEmpty(effectivePath))
-        {
-            if (!string.IsNullOrEmpty(request.DefaultPath))
-            {
-                effectivePath = request.DefaultPath;
-            }
-            if (parsedQuery.Scope == QueryScope.Exact)
-            {
-                // When the query has conditions (e.g., nodeType:Thread), use Subtree
-                // so satellite nodes nested under _Thread/, _Comment/ etc. are found.
-                // Without conditions, Children is sufficient for general browsing.
-                effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
-            }
-        }
-
-        var basePath = NormalizePath(effectivePath);
-
-        var userId = GetEffectiveUserId(request);
-        var context = request.Context ?? parsedQuery.Context;
-
-        var matched = new List<object>();
-        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
-
-        await foreach (var node in FindMatchingNodesAsync(
-            parsedQuery, effectiveScope, basePath, userId, context, request, options, ct))
-        {
-            if (!seen.Add(node))
-                continue;
-
-            // Per-node read filtering on the secured public query path —
-            // INodeValidator chain only. ISecurityService is intentionally
-            // not consumed here; see ctor comment.
-            if (node is MeshNode meshNode)
-            {
-                if (!await ValidateReadAsync(meshNode, userId, ct))
-                    continue;
-            }
-
-            matched.Add(node);
-        }
+        var (matched, parsedQuery, basePath) = await CollectMatchedAsync(
+            request, options, useSecurityFilter: true, ct);
 
         // For source:activity, filter to nodes that actually have _activity children.
         // Scan all descendants for Activity satellite nodes and collect their MainNode paths.
@@ -232,35 +177,8 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var parsedQuery = _parser.Parse(request.Query);
-        if (request.Limit.HasValue)
-            parsedQuery = parsedQuery with { Limit = request.Limit };
-        if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
-            parsedQuery = parsedQuery with { IsMain = true };
-
-        var effectivePath = parsedQuery.Path;
-        var effectiveScope = parsedQuery.Scope;
-        if (string.IsNullOrEmpty(effectivePath))
-        {
-            if (!string.IsNullOrEmpty(request.DefaultPath))
-                effectivePath = request.DefaultPath;
-            if (parsedQuery.Scope == QueryScope.Exact)
-                effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
-        }
-
-        var basePath = NormalizePath(effectivePath);
-        var userId = GetEffectiveUserId(request);
-        var context = request.Context ?? parsedQuery.Context;
-
-        var matched = new List<object>();
-        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
-
-        await foreach (var node in FindMatchingNodesAsync(
-            parsedQuery, effectiveScope, basePath, userId, context, request, options, ct))
-        {
-            if (seen.Add(node))
-                matched.Add(node);
-        }
+        var (matched, parsedQuery, basePath) = await CollectMatchedAsync(
+            request, options, useSecurityFilter: false, ct);
 
         if (parsedQuery.Source == QuerySource.Activity && matched.Count > 0)
         {
@@ -300,6 +218,92 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 && yielded >= parsedQuery.Limit.Value)
                 yield break;
         }
+    }
+
+    /// <summary>
+    /// Shared collector: iterates <see cref="MeshQueryRequest.EffectiveQueries"/>,
+    /// runs <see cref="FindMatchingNodesAsync"/> per query, and unions hits by
+    /// <see cref="MeshNode.Path"/>. Returns the matched nodes plus the FIRST
+    /// query's parsed form + base path (used by the post-filter / sort blocks
+    /// in the public callers).
+    /// </summary>
+    private async Task<(List<object> Matched, ParsedQuery FirstParsed, string FirstBasePath)>
+        CollectMatchedAsync(
+            MeshQueryRequest request,
+            JsonSerializerOptions options,
+            bool useSecurityFilter,
+            CancellationToken ct)
+    {
+        var effectiveQueries = request.EffectiveQueries;
+        var userId = GetEffectiveUserId(request);
+
+        var matchedByPath = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+        var nonNodeMatched = new List<object>();
+        var seenRefs = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        ParsedQuery? firstParsed = null;
+        string firstBasePath = "";
+
+        for (var qi = 0; qi < effectiveQueries.Count; qi++)
+        {
+            var parsedQuery = _parser.Parse(effectiveQueries[qi]);
+            if (qi == 0 && request.Limit.HasValue)
+                parsedQuery = parsedQuery with { Limit = request.Limit };
+            if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
+                parsedQuery = parsedQuery with { IsMain = true };
+
+            var (basePath, effectiveScope) = ResolvePathAndScope(parsedQuery, request);
+            var context = request.Context ?? parsedQuery.Context;
+
+            if (qi == 0)
+            {
+                firstParsed = parsedQuery;
+                firstBasePath = basePath;
+            }
+
+            await foreach (var node in FindMatchingNodesAsync(
+                parsedQuery, effectiveScope, basePath, userId, context, request, options, ct))
+            {
+                if (node is MeshNode meshNode)
+                {
+                    if (!string.IsNullOrEmpty(meshNode.Path) && matchedByPath.ContainsKey(meshNode.Path))
+                        continue;
+                    if (useSecurityFilter && !await ValidateReadAsync(meshNode, userId, ct))
+                        continue;
+                    if (!string.IsNullOrEmpty(meshNode.Path))
+                        matchedByPath[meshNode.Path] = meshNode;
+                    else if (seenRefs.Add(meshNode))
+                        nonNodeMatched.Add(meshNode);
+                }
+                else if (seenRefs.Add(node))
+                {
+                    nonNodeMatched.Add(node);
+                }
+            }
+        }
+
+        var matched = matchedByPath.Values.Cast<object>().Concat(nonNodeMatched).ToList();
+        return (matched, firstParsed ?? _parser.Parse(""), firstBasePath);
+    }
+
+    /// <summary>
+    /// Resolves effective base path (request.DefaultPath fallback) and scope
+    /// (Children/Subtree fallback when query has no path + Exact scope) — same
+    /// rules previously inlined at the top of <see cref="QueryAsync"/>.
+    /// </summary>
+    private (string BasePath, QueryScope Scope) ResolvePathAndScope(
+        ParsedQuery parsedQuery, MeshQueryRequest request)
+    {
+        var effectivePath = parsedQuery.Path;
+        var effectiveScope = parsedQuery.Scope;
+        if (string.IsNullOrEmpty(effectivePath))
+        {
+            if (!string.IsNullOrEmpty(request.DefaultPath))
+                effectivePath = request.DefaultPath;
+            if (parsedQuery.Scope == QueryScope.Exact)
+                effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
+        }
+        return (NormalizePath(effectivePath), effectiveScope);
     }
 
     /// <summary>
@@ -753,16 +757,24 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         // continuation deadlocks against the grain's single-threaded scheduler.
         return Observable.Create<QueryResultChange<T>>(observer =>
         {
-            var parsedQuery = _parser.Parse(request.Query);
-            var effectivePath = parsedQuery.Path;
-            var effectiveScope = parsedQuery.Scope;
-            if (string.IsNullOrEmpty(effectivePath))
-            {
-                effectivePath = request.DefaultPath ?? "";
-                if (parsedQuery.Scope == QueryScope.Exact)
-                    effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
-            }
-            var normalizedBasePath = NormalizePath(effectivePath);
+            // For change-feed scoping, accept a notification if it matches ANY
+            // of the request's queries' resolved (basePath, scope) pairs. The
+            // first query supplies the parsedQuery emitted on QueryResultChange
+            // for back-compat with single-query consumers.
+            var effectiveQueries = request.EffectiveQueries;
+            var scopeFilters = effectiveQueries
+                .Select(q =>
+                {
+                    var parsed = _parser.Parse(q);
+                    var (bp, sc) = ResolvePathAndScope(parsed, request);
+                    return (BasePath: bp, Scope: sc);
+                })
+                .ToList();
+            var parsedQuery = _parser.Parse(effectiveQueries[0]);
+            var (firstBasePath, firstScope) = scopeFilters[0];
+            var effectivePath = firstBasePath;
+            var effectiveScope = firstScope;
+            var normalizedBasePath = effectivePath;
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
             var disposables = new CompositeDisposable();
             var cts = new CancellationTokenSource();
@@ -818,7 +830,8 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                             disposables.Add(changeBuffer);
                             disposables.Add(
                                 changeNotifier
-                                    .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
+                                    .Where(n => scopeFilters.Any(sf =>
+                                        PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
                                     .Subscribe(changeBuffer));
                             disposables.Add(
                                 changeBuffer
