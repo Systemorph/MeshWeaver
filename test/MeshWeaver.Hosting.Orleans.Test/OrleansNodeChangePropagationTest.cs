@@ -458,7 +458,7 @@ internal class PatchToolChatClient : IChatClient
 }
 
 /// <summary>
-/// Factory: top-level agents (Navigator/Planner/Orchestrator) get ToolCallDelegatingChatClient;
+/// Factory: top-level agents (Navigator/Orchestrator) get ToolCallDelegatingChatClient;
 /// sub-agents (Worker/Executor/Coder) get PatchToolChatClient.
 /// </summary>
 internal class NodeChangeTestChatClientFactory : IChatClientFactory
@@ -473,7 +473,7 @@ internal class NodeChangeTestChatClientFactory : IChatClientFactory
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
         string? modelName = null)
     {
-        var isTopLevel = config.IsDefault || config.Id is "Navigator" or "Planner" or "Orchestrator";
+        var isTopLevel = config.IsDefault || config.Id is "Navigator" or "Orchestrator";
         IChatClient chatClient = isTopLevel
             ? new ToolCallDelegatingChatClient()
             : new PatchToolChatClient();

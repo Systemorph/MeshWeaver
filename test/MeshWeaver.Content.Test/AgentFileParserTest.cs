@@ -60,7 +60,7 @@ public class AgentFileParserTest
             nodeType: Agent
             name: Orchestrator
             delegations:
-              - agentPath: Planner
+              - agentPath: Specialist
                 instructions: Handle planning tasks
               - agentPath: Worker
                 instructions: Execute actions
@@ -76,7 +76,7 @@ public class AgentFileParserTest
         node.Should().NotBeNull();
         var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.Delegations.Should().HaveCount(2);
-        agentConfig.Delegations![0].AgentPath.Should().Be("Planner");
+        agentConfig.Delegations![0].AgentPath.Should().Be("Specialist");
         agentConfig.Delegations[0].Instructions.Should().Be("Handle planning tasks");
         agentConfig.Delegations[1].AgentPath.Should().Be("Worker");
         agentConfig.Delegations[1].Instructions.Should().Be("Execute actions");
@@ -201,7 +201,7 @@ public class AgentFileParserTest
               - agentPath: Researcher
                 instructions: Look up information
             handoffs:
-              - agentPath: Planner
+              - agentPath: Specialist
                 instructions: Handle planning tasks
               - agentPath: Worker
                 instructions: Execute actions directly
@@ -220,7 +220,7 @@ public class AgentFileParserTest
         agentConfig.Delegations![0].AgentPath.Should().Be("Researcher");
 
         agentConfig.Handoffs.Should().HaveCount(2);
-        agentConfig.Handoffs![0].AgentPath.Should().Be("Planner");
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Specialist");
         agentConfig.Handoffs[0].Instructions.Should().Be("Handle planning tasks");
         agentConfig.Handoffs[1].AgentPath.Should().Be("Worker");
         agentConfig.Handoffs[1].Instructions.Should().Be("Execute actions directly");
@@ -233,17 +233,17 @@ public class AgentFileParserTest
         var content = """
             ---
             nodeType: Agent
-            name: Planner
+            name: Specialist
             handoffs:
               - agentPath: Worker
                 instructions: Execute the planned tasks
             ---
 
-            You are Planner.
+            You are Specialist.
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Planner.md", content, "Planner.md");
+        var node = await _parser.ParseAsync("/Specialist.md", content, "Specialist.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -306,7 +306,7 @@ public class AgentFileParserTest
             Instructions = "Navigate requests.",
             Delegations =
             [
-                new AgentDelegation { AgentPath = "Planner", Instructions = "Plan tasks" },
+                new AgentDelegation { AgentPath = "Specialist", Instructions = "Plan tasks" },
                 new AgentDelegation { AgentPath = "Worker", Instructions = "Execute tasks" }
             ]
         };
@@ -323,7 +323,7 @@ public class AgentFileParserTest
 
         // Assert
         result.Should().Contain("delegations:");
-        result.Should().Contain("agentPath: Planner");
+        result.Should().Contain("agentPath: Specialist");
         result.Should().Contain("instructions: Plan tasks");
         result.Should().Contain("agentPath: Worker");
         result.Should().Contain("instructions: Execute tasks");
@@ -344,7 +344,7 @@ public class AgentFileParserTest
             ],
             Handoffs =
             [
-                new AgentHandoff { AgentPath = "Planner", Instructions = "Plan tasks" },
+                new AgentHandoff { AgentPath = "Specialist", Instructions = "Plan tasks" },
                 new AgentHandoff { AgentPath = "Worker", Instructions = "Execute tasks" }
             ]
         };
@@ -363,7 +363,7 @@ public class AgentFileParserTest
         result.Should().Contain("delegations:");
         result.Should().Contain("agentPath: Researcher");
         result.Should().Contain("handoffs:");
-        result.Should().Contain("agentPath: Planner");
+        result.Should().Contain("agentPath: Specialist");
         result.Should().Contain("instructions: Plan tasks");
         result.Should().Contain("agentPath: Worker");
         result.Should().Contain("instructions: Execute tasks");
@@ -382,7 +382,7 @@ public class AgentFileParserTest
               - agentPath: Researcher
                 instructions: Look up info
             handoffs:
-              - agentPath: Planner
+              - agentPath: Specialist
                 instructions: Plan tasks
               - agentPath: Worker
                 instructions: Execute tasks
@@ -405,7 +405,7 @@ public class AgentFileParserTest
         agentConfig.Delegations![0].AgentPath.Should().Be("Researcher");
 
         agentConfig.Handoffs.Should().HaveCount(2);
-        agentConfig.Handoffs![0].AgentPath.Should().Be("Planner");
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Specialist");
         agentConfig.Handoffs[0].Instructions.Should().Be("Plan tasks");
         agentConfig.Handoffs[1].AgentPath.Should().Be("Worker");
         agentConfig.Handoffs[1].Instructions.Should().Be("Execute tasks");

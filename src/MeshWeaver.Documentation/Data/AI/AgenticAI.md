@@ -202,13 +202,13 @@ Handoff **transfers control entirely** to the target agent. The source agent sto
 sequenceDiagram
     participant User
     participant AgentA as Navigator
-    participant AgentB as Planner
+    participant AgentB as Specialist
 
-    User->>AgentA: "Plan a product launch"
-    AgentA->>AgentB: handoff_to_agent("Planner", "Plan product launch")
+    User->>AgentA: "Help me with claims triage"
+    AgentA->>AgentB: handoff_to_agent("ClaimsSpecialist", "Triage incoming claims")
     Note over AgentA: Stops responding
     Note over AgentB: Takes over on shared thread
-    AgentB-->>User: "Here's my plan: 1. ..."
+    AgentB-->>User: "Here's the triage: 1. ..."
 ```
 
 **Use handoff when:**
@@ -220,13 +220,13 @@ sequenceDiagram
 ```yaml
 # Navigator.md
 handoffs:
-  - agentPath: Agent/Planner
-    instructions: Complex multi-step tasks
+  - agentPath: Agent/ClaimsSpecialist
+    instructions: Claims triage and follow-up questions
 
-# Planner.md
+# ClaimsSpecialist.md
 handoffs:
-  - agentPath: Agent/Executor
-    instructions: Execute the planned tasks
+  - agentPath: Agent/Worker
+    instructions: Execute the resulting actions
 ```
 
 ### Choosing Between Delegation and Handoff
@@ -234,9 +234,9 @@ handoffs:
 | Scenario | Pattern | Why |
 |----------|---------|-----|
 | Need research results to formulate answer | Delegation | Navigator needs the data back |
-| Complex planning task | Handoff | Planner should own the conversation |
+| Domain-specific long conversation | Handoff | The specialist should own the conversation |
 | Quick data lookup | Delegation | Small subtask within larger response |
-| Execute a multi-step plan | Handoff | Executor should report progress directly |
+| Execute a multi-step plan | Handoff | Worker should report progress directly |
 | Domain-specific question | Delegation | Route and relay the answer |
 
 ## The Future
