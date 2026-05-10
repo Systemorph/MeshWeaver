@@ -418,6 +418,50 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
     }
 
+    /// <summary>
+    /// Regression for the 2026-05-10 chat-render slowness in
+    /// <c>Memex.Portal.Distributed</c>: every fresh permission check for
+    /// a user without a static AccessAssignment paid the 2 s
+    /// <c>GetUserScopeRolesStream</c> Timeout fallback before falling
+    /// through to claim-based roles. Opening a chat thread fired
+    /// hundreds of these per render, each logging
+    /// <c>GetUserScopeRolesStream timed out for ...</c> on its way to the
+    /// Empty-Catch fallback. Cumulative: tens of seconds of wasted wall
+    /// time on a single click.
+    ///
+    /// <para>Health threshold: 20 unique-user permission checks must
+    /// complete in well under the cumulative Timeout budget (20 × 2 s =
+    /// 40 s if every check hit the fallback). 5 s catches the regression
+    /// — one regressed check adds ~2 s, two push past the threshold.</para>
+    ///
+    /// <para>The target fix replaces the per-user MemoryCache + scope:subtree
+    /// synced query with a per-scope cached 4-query union — see
+    /// <see href="../Architecture/AccessControl.md">AccessControl.md</see>
+    /// "Effective-assignments lookup: the 4-query union".</para>
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task PermissionChecks_DoNotPayTimeoutFallback()
+    {
+        // Warm the SecurityService with one throw-away check so the
+        // first-call cold paths (DI resolution, hub activation) don't
+        // count against the perf budget — the bug we're catching is
+        // per-check timeout, not first-call init.
+        await Mesh.GetPermissionAsync("warmup/scope", "warmup-user", TestTimeout);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 20; i++)
+        {
+            await Mesh.GetPermissionAsync($"some/scope/{i}", $"u{i}", TestTimeout);
+        }
+        sw.Stop();
+
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5),
+            "permission checks must not pay the 2 s GetUserScopeRolesStream " +
+            "timeout fallback. If this asserts > 5 s, the synced-query Initial " +
+            "is not landing within the timeout window for cold users/scopes — " +
+            "see AccessControl.md > 4-query union for the target shape.");
+    }
+
     [Fact(Timeout = 20000)]
     public Task GetRole_ReturnsBuiltInRole()
     {
