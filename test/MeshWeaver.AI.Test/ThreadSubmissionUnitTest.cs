@@ -126,8 +126,10 @@ public class ThreadSubmissionUnitTest
     }
 
     [Fact]
-    public void PlanNextRound_IdleWithThreeQueued_ReturnsBatchedDispatch()
+    public void PlanNextRound_IdleWithThreeQueued_ReturnsFirstQueuedOnly()
     {
+        // Claude-Code-style: one user message per round, not batched. After
+        // this round completes the watcher fires again for u2, then u3.
         var thread = new MeshThread
         {
             Messages = ImmutableList.Create("u1", "u2", "u3"),
@@ -138,7 +140,7 @@ public class ThreadSubmissionUnitTest
         var result = ThreadSubmission.PlanNextRound(thread);
 
         result.Should().NotBeNull();
-        result!.UserMessageIds.Should().ContainInOrder("u1", "u2", "u3");
+        result!.UserMessageIds.Should().ContainInOrder("u1");
         result.ResponseMessageId.Should().NotBeNullOrEmpty();
     }
 
@@ -158,10 +160,12 @@ public class ThreadSubmissionUnitTest
     }
 
     [Fact]
-    public void PlanNextRound_AfterInterruptedRound_ReturnsNewDispatchForQueuedInputs()
+    public void PlanNextRound_AfterInterruptedRound_ReturnsNextQueuedOnly()
     {
         // Scenario: r1 is in Messages but IsExecuting was set back to false
         // (the agent loop finalized the round early after seeing queued inputs).
+        // u1 is already ingested; u2 is first unprocessed. Single message per
+        // round — u3 picks up on the next watcher tick.
         var thread = new MeshThread
         {
             Messages = ImmutableList.Create("u1", "r1", "u2", "u3"),
@@ -173,6 +177,6 @@ public class ThreadSubmissionUnitTest
         var result = ThreadSubmission.PlanNextRound(thread);
 
         result.Should().NotBeNull();
-        result!.UserMessageIds.Should().ContainInOrder("u2", "u3");
+        result!.UserMessageIds.Should().ContainInOrder("u2");
     }
 }

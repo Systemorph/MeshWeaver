@@ -84,7 +84,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     [HubFact]
-    public async Task StreamUpdate_WithoutAsyncLocalIdentity_DelegateSeesNullContext()
+    public async Task StreamUpdate_WithoutAsyncLocalIdentity_DelegateSeesHubSelfIdentity()
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
@@ -107,17 +107,18 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
 
         var seen = await insideDelegate.Task.WaitAsync(5.Seconds());
 
-        // Post-08a9a27c1 invariant: when no caller identity is available, the
-        // post-pipeline does NOT stamp any AccessContext. The AsyncLocal stays
-        // null inside the delegate. This intentionally fails closed downstream
-        // (rather than smuggling a "sync/..." hub address as the apparent user
-        // identity, which produced the Orleans delegation cascade where access
-        // checks denied legitimate operations because the "user" had become
-        // the wrapping hub's path).
-        seen.Should().BeNull(
-            "post-pipeline no longer fabricates a hub-address fallback identity — when " +
-            "the AsyncLocal AccessContext is unset and there is no circuit context, the " +
-            "delivery rides without an AccessContext and downstream RLS fails closed.");
+        // Pipeline contract for non-mesh hubs: when no AsyncLocal / Circuit
+        // context is available, fall back to hub-self-impersonation
+        // (ObjectId = hub.Address.ToFullString()). This is load-bearing for
+        // internal flows like SyncStream pushing SetCurrentRequest, LayoutAreaHost
+        // bookkeeping, etc. — making non-mesh hubs fail-closed broke the
+        // layout-area sync chain in prod (blank screens / endless spinners).
+        // Mesh hubs are the only kind that stays fail-closed here.
+        seen.Should().NotBeNullOrEmpty(
+            "non-mesh hubs fall back to hub-self-impersonation when neither AsyncLocal nor " +
+            "CircuitContext is available — see MessageHubConfiguration.UserServicePostPipeline.");
+        seen.Should().Contain("/",
+            "the fallback identity is a hub address (e.g. sync/{guid}, portal/{guid}).");
     }
 
     /// <summary>

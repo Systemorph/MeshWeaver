@@ -462,15 +462,25 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         // Static nodes — same path/scope/context filtering as persistence
         // results, with path-keyed dedup so backends that include static
         // nodes directly (RoutingPersistenceServiceCore) don't double-count.
-        foreach (var (_, node) in staticNodes)
+        //
+        // 🚨 Skip when context == "search": StaticNodeQueryProvider is the
+        // canonical search-context source for static partitions and applies
+        // its own context filter (type definitions excluded from search).
+        // Iterating staticNodes here too leaks config-node type definitions
+        // into search results (regression caught by
+        // StaticNodeQueryContextTests.SearchContext_ExcludesStaticNodes).
+        if (!string.Equals(context, "search", StringComparison.OrdinalIgnoreCase))
         {
-            if (string.IsNullOrEmpty(node.Path)) continue;
-            if (emittedPaths.Contains(node.Path)) continue;
-            if (!StaticNodeMatchesScope(node, basePath, effectiveScope)) continue;
-            if (IsExcludedByContext(node, context)) continue;
-            if (IsExcludedByIsMain(node, parsedQuery)) continue;
-            if (!_evaluator.Matches(node, parsedQuery)) continue;
-            yield return node;
+            foreach (var (_, node) in staticNodes)
+            {
+                if (string.IsNullOrEmpty(node.Path)) continue;
+                if (emittedPaths.Contains(node.Path)) continue;
+                if (!StaticNodeMatchesScope(node, basePath, effectiveScope)) continue;
+                if (IsExcludedByContext(node, context)) continue;
+                if (IsExcludedByIsMain(node, parsedQuery)) continue;
+                if (!_evaluator.Matches(node, parsedQuery)) continue;
+                yield return node;
+            }
         }
     }
 
