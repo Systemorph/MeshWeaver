@@ -77,7 +77,24 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         _matches = matches;
 
         var providerList = providers as IList<IStaticNodeProvider> ?? providers.ToList();
-        _providerNodes = providerList.SelectMany(p => p.GetStaticNodes()).ToArray();
+
+        // MeshConfiguration.Nodes (AddMeshNodes seed) wins the "config" bucket —
+        // bridge providers like MeshConfigurationStaticNodeProvider re-emit those
+        // same nodes via IStaticNodeProvider, but they retain config-node
+        // semantics (search-context excluded). Without this priority, the
+        // bridged config nodes leak through QueryAsync's _providerNodes path
+        // which has no isSearch guard (caught by
+        // StaticNodeQueryContextTests.SearchContext_ExcludesStaticNodes).
+        var configPaths = new HashSet<string>(
+            (meshConfiguration?.Nodes.Values ?? Enumerable.Empty<MeshNode>())
+                .Select(n => n.Path)
+                .Where(p => !string.IsNullOrEmpty(p)),
+            StringComparer.OrdinalIgnoreCase);
+
+        _providerNodes = providerList
+            .SelectMany(p => p.GetStaticNodes())
+            .Where(n => !configPaths.Contains(n.Path))
+            .ToArray();
         _logger?.LogInformation(
             "[StaticNodeQueryProvider] ctor: {Providers} provider(s) -> {Count} nodes; byType=[{ByType}]; byNamespace(top)=[{ByNs}]",
             providerList.Count,
@@ -85,14 +102,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             string.Join(", ", _providerNodes.GroupBy(n => n.NodeType ?? "(null)").Select(g => $"{g.Key}={g.Count()}")),
             string.Join(", ", _providerNodes.GroupBy(n => n.Namespace ?? "(null)").OrderByDescending(g => g.Count()).Take(5).Select(g => $"{g.Key}={g.Count()}")));
 
-        var providerPaths = new HashSet<string>(
-            _providerNodes.Select(n => n.Path),
-            StringComparer.OrdinalIgnoreCase);
-
-        // Config nodes that aren't already in provider nodes (deduplicate)
-        _configNodes = (meshConfiguration?.Nodes.Values ?? Enumerable.Empty<MeshNode>())
-            .Where(n => !providerPaths.Contains(n.Path))
-            .ToArray();
+        _configNodes = (meshConfiguration?.Nodes.Values ?? Enumerable.Empty<MeshNode>()).ToArray();
 
         _allNodes = _providerNodes.Concat(_configNodes).ToArray();
 
