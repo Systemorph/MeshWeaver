@@ -376,7 +376,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         // Act - Create a new persistence service and initialize it
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
         var newPersistence = new AdapterPersistenceService(newStorageAdapter);
-        await newPersistence.InitializeAsync(JsonOptions);
+        await newPersistence.InitializeAsync();
 
         // Assert
         var children = await newPersistence.GetChildrenAsync("graph", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
@@ -430,7 +430,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         // Act
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
         var newPersistence = new AdapterPersistenceService(newStorageAdapter);
-        await newPersistence.InitializeAsync(JsonOptions);
+        await newPersistence.InitializeAsync();
 
         // Assert
         (await newPersistence.GetNodeAsync("graph/org1", JsonOptions)).Should().NotBeNull();
@@ -451,7 +451,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         // Act
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
         var newPersistence = new AdapterPersistenceService(newStorageAdapter);
-        await newPersistence.InitializeAsync(JsonOptions);
+        await newPersistence.InitializeAsync();
 
         // Assert
         var children = await newPersistence.GetChildrenAsync(null, JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
