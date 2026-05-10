@@ -2,6 +2,7 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.AI;
 
@@ -18,14 +19,30 @@ public static class AgentNodeType
 
     /// <summary>
     /// Registers the built-in "Agent" MeshNode on the mesh builder
-    /// and a static node provider for built-in agents (e.g., ThreadNamer).
+    /// plus the partition routing for built-in agents (e.g., ThreadNamer).
+    /// The "Agent" partition's storage of record is the
+    /// <see cref="BuiltInAgentProvider"/>'s output — wrapped in a
+    /// <see cref="StaticNodePartitionStorageProvider"/> so it goes through
+    /// the same first-match-wins routing as every other partition.
+    /// Also kept as an <see cref="IStaticNodeProvider"/> for the legacy
+    /// consumers (StaticNodeQueryProvider, MeshDataSource fallback) that
+    /// still iterate that DI collection directly.
     /// </summary>
     public static TBuilder AddAgentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         builder.ConfigureServices(services =>
-            services.AddSingleton<IStaticNodeProvider, BuiltInAgentProvider>());
+        {
+            services.TryAddSingleton<BuiltInAgentProvider>();
+            services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInAgentProvider>());
+            services.AddSingleton<IPartitionStorageProvider>(sp =>
+                new StaticNodePartitionStorageProvider(
+                    "Agent",
+                    sp.GetRequiredService<BuiltInAgentProvider>(),
+                    description: "Built-in agent definitions (read-only)."));
+            return services;
+        });
         return builder;
     }
 

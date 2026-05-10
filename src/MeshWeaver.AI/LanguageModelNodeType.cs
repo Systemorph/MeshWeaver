@@ -51,6 +51,7 @@ public static class LanguageModelNodeType
         builder.ConfigureServices(services =>
         {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
+            services.TryAddSingleton<BuiltInLanguageModelProvider>();
             // 🚨 Plain AddSingleton (not TryAddEnumerable): TryAddEnumerable
             // dedupes by impl-type AND ServiceLifetime AND ImplementationFactory
             // — combinations that occasionally suppress the registration in
@@ -58,7 +59,15 @@ public static class LanguageModelNodeType
             // resolution while BuiltInAgentProvider (using plain AddSingleton)
             // worked. Match the AgentProvider pattern so both follow the
             // same path.
-            services.AddSingleton<IStaticNodeProvider, BuiltInLanguageModelProvider>();
+            services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInLanguageModelProvider>());
+            // Partition routing — the same instance feeds the routing core's
+            // "Model" partition. The partition's StaticNodeStorageAdapter is
+            // its storage of record; no SeedIfAbsent fan-in required.
+            services.AddSingleton<IPartitionStorageProvider>(sp =>
+                new StaticNodePartitionStorageProvider(
+                    RootNamespace,
+                    sp.GetRequiredService<BuiltInLanguageModelProvider>(),
+                    description: "Built-in language model catalog (read-only)."));
             return services;
         });
 
