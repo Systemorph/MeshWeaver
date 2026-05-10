@@ -43,8 +43,16 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
 {
     private const string ContextPath = "TestUser";
 
-    // Cluster lifecycle, ClientMesh, GetClientAsync, ConfigureClient, and the standard
-    // mesh-node handler chain are inherited from OrleansTestBase<TSiloConfigurator>.
+    // Per-test unique client address — without this, every test in the class
+    // calls GetClientAsync() which defaults to client/1, OrleansRoutingService's
+    // streams dict overwrites the previous callback, and any in-flight response
+    // routing for an earlier test fires the new test's hub (or vice versa). The
+    // first two tests in the class pass because they finish their round-trip
+    // before the next test starts; later tests inherit a polluted streams entry
+    // and the streamed text never reaches the assertions. Mirrors the pattern
+    // OrleansHostedHubRoutingTest uses (client/hostedhubrouting-{caller}-{guid}).
+    private new async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+        => await base.GetClientAsync($"streaming-{name}-{Guid.NewGuid():N}", "TestUser");
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
