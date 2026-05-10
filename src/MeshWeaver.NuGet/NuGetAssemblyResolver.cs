@@ -197,17 +197,33 @@ public sealed class NuGetAssemblyResolver(
             return installedPath;
 
         // Try to hydrate from the persistent cache (e.g., Azure Blob) before hitting the feed.
-        // ⚠️ Hydrated content is trusted to match (id, versionString) — the cache
-        // implementation is responsible for keying its blobs correctly. If a
-        // poisoned cache (different package stored under wrong key) becomes a
-        // concern, INuGetPackageCache should evolve to expose a content-hash
-        // verification step here. See PR #95 review item #14.
+        // After hydration, validate that the package's own .nuspec (the
+        // canonical NuGet source of truth) declares the (id, version) we
+        // expected. A poisoned cache — different package stored under the
+        // wrong key, accidental cross-tenant blob, drift after a manual
+        // copy — would otherwise silently load wrong assemblies into a
+        // NodeType compile.
         Directory.CreateDirectory(installedPath);
         if (await _packageCache.TryHydrateAsync(info.Id, versionString, installedPath, ct))
         {
-            MsLogging.LoggerExtensions.LogInformation(logger,
-                "Hydrated NuGet package {Id} {Version} from persistent cache", info.Id, versionString);
-            return installedPath;
+            if (TryValidateHydratedPackage(installedPath, info.Id, info.Version, out var validationError))
+            {
+                MsLogging.LoggerExtensions.LogInformation(logger,
+                    "Hydrated NuGet package {Id} {Version} from persistent cache", info.Id, versionString);
+                return installedPath;
+            }
+
+            MsLogging.LoggerExtensions.LogWarning(logger,
+                "Hydrated package at {Path} failed identity check ({Error}); discarding and falling back to feed",
+                installedPath, validationError);
+            try { Directory.Delete(installedPath, recursive: true); }
+            catch (Exception delEx)
+            {
+                MsLogging.LoggerExtensions.LogWarning(logger, delEx,
+                    "Failed to delete poisoned cache contents at {Path}", installedPath);
+            }
+            // Recreate the empty directory for ExtractPackageAsync to land into.
+            Directory.CreateDirectory(installedPath);
         }
 
         var downloadResource = await info.Source.GetResourceAsync<DownloadResource>(ct);
@@ -253,6 +269,44 @@ public sealed class NuGetAssemblyResolver(
             .OrderBy(r => r.Id, StringComparer.OrdinalIgnoreCase)
             .Select(r => $"{r.Id}|{r.VersionRange ?? "*"}");
         return $"{framework.DotNetFrameworkName}::{string.Join(";", parts)}";
+    }
+
+    /// <summary>
+    /// Verifies that the package directory hydrated by
+    /// <see cref="INuGetPackageCache.TryHydrateAsync"/> actually contains the
+    /// (id, version) we asked for. Reads the package's own .nuspec via
+    /// <see cref="PackageFolderReader"/> — that's the canonical NuGet
+    /// source of truth, and a tampered/wrong-keyed cache entry can't
+    /// fake it without also rewriting the nuspec to claim the wrong
+    /// identity (which a static check at hydration time would catch).
+    /// Case-insensitive id compare; exact <see cref="NuGetVersion"/>
+    /// equality on version (normalised round-trip).
+    /// </summary>
+    private static bool TryValidateHydratedPackage(
+        string packageFolder, string expectedId, NuGetVersion expectedVersion, out string? error)
+    {
+        try
+        {
+            var reader = new PackageFolderReader(packageFolder);
+            var actual = reader.GetIdentity();
+            if (!string.Equals(actual.Id, expectedId, StringComparison.OrdinalIgnoreCase))
+            {
+                error = $"nuspec id '{actual.Id}' does not match expected '{expectedId}'";
+                return false;
+            }
+            if (actual.Version != expectedVersion)
+            {
+                error = $"nuspec version '{actual.Version.ToNormalizedString()}' does not match expected '{expectedVersion.ToNormalizedString()}'";
+                return false;
+            }
+            error = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = $"could not read .nuspec: {ex.Message}";
+            return false;
+        }
     }
 
     private sealed class NuGetLogger(MsLogging.ILogger logger) : LoggerBase
