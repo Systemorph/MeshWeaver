@@ -76,38 +76,40 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             UserMessageId = userMsgId, ResponseMessageId = responseMsgId
         }, o => o.WithTarget(new Address(threadPath))).FirstAsync().ToTask(ct);
 
-        // Reactive wait — subscribe to the per-node MeshNodeReference stream
-        // and emit the moment IsExecuting flips to false AND the message
-        // count crosses the expected threshold. Beats the old poll-loop
-        // (200ms × 60 = 12s ceiling, plus race between read calls): no
-        // missed transitions, hard 60s timeout, and the test fails LOUD on
-        // hang instead of silently hitting the iteration cap.
-        // Reactive wait — IsExecuting flips false AND Messages.Count crosses
-        // the expected threshold. Reads via the per-node MeshNodeReference
-        // stream so we never miss the transition (vs. polling races).
+        // Reactive wait #1 — thread settles: IsExecuting=false AND BOTH the
+        // user cell and the response cell are in Messages. Using Contains
+        // (instead of Count >=) makes the wait independent of any unrelated
+        // message-count drift and ensures we're observing THIS turn's cells,
+        // not the previous turn's tail emission.
         var threadStream = Mesh.GetWorkspace().GetMeshNodeStream(threadPath);
-        var doneThread = await threadStream
+        await threadStream
             .Select(n => n.Content as MeshThread)
-            .Where(t => t is { IsExecuting: false } && t.Messages.Count >= expectedMsgCount)
+            .Where(t => t is { IsExecuting: false }
+                && t.Messages.Contains(userMsgId)
+                && t.Messages.Contains(responseMsgId))
             .Take(1)
             .Timeout(60.Seconds())
             .ToTask(ct);
 
-        // Then wait for the response cell text to advance past the in-flight
-        // UI placeholders so the test fails LOUD on a stuck pipeline.
-        var lastMsgId = doneThread!.Messages[^1];
-        var responseStream = Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{lastMsgId}");
-        var responseText = await responseStream
-            .Select(n => (n.Content as ThreadMessage)?.Text)
-            .Where(t => !string.IsNullOrEmpty(t)
-                && !t.StartsWith("Allocating agent", StringComparison.Ordinal)
-                && !t.StartsWith("Generating response", StringComparison.Ordinal)
-                && !t.StartsWith("Loading conversation history", StringComparison.Ordinal))
+        // Reactive wait #2 — response cell has its FINAL emission, signalled
+        // by ThreadMessage.CompletedAt being set. ExecuteMessageAsync (in
+        // ThreadExecution.cs) only writes CompletedAt on the terminal
+        // PushToResponseMessage call, so this is the deterministic
+        // "streaming finished, text is final" signal. Beats text-pattern
+        // matching against in-flight UI placeholders ("Generating
+        // response...", etc.) — those are racy because the echo agent can
+        // emit its single chunk before the placeholder has been overwritten,
+        // making the test see a stale prior-turn placeholder as the "final"
+        // response.
+        var responseStream = Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{responseMsgId}");
+        var finalMessage = await responseStream
+            .Select(n => n.Content as ThreadMessage)
+            .Where(m => m is { CompletedAt: not null } && !string.IsNullOrEmpty(m.Text))
             .Take(1)
             .Timeout(60.Seconds())
             .ToTask(ct);
 
-        return responseText!;
+        return finalMessage!.Text!;
     }
 
     [Fact]
