@@ -275,14 +275,12 @@ public record MessageHubConfiguration
                 // because every SetCurrentRequest started getting rejected.
                 // For those hubs, restore hub-self-impersonation as the
                 // fallback identity. Tests pin both branches.
-                if (syncPipeline.Hub.Address.Type == AddressExtensions.MeshType
-                    || syncPipeline.Hub.Address.Type == "sync")
+                if (syncPipeline.Hub.Address.Type == AddressExtensions.MeshType)
                 {
                     // mesh hubs: fabricating hub-address identity would let a bare
                     // "mesh/{guid}" principal match AccessAssignments — deny silently.
-                    // sync hubs: the address is an implementation detail (stream/client id),
-                    // not a real principal. Fabricating it breaks identity-isolation tests
-                    // (StreamUpdate_WithoutAsyncLocalIdentity_DelegateSeesNullContext).
+                    // Stays fail-closed; intentional system writes from the mesh hub
+                    // must wrap with AccessService.ImpersonateAsHub / ImpersonateAsSystem.
                     logger?.LogWarning(
                         "PostPipeline: hub={Hub}, message={MessageType} posted with no AccessContext " +
                         "(no Context, no CircuitContext) — leaving AccessContext null so downstream " +
@@ -292,6 +290,12 @@ public record MessageHubConfiguration
                 }
                 else
                 {
+                    // Every other hub kind (sync/, portal/, apitoken/, activity/, per-node, …)
+                    // IS the legitimate originator of its own internal flows. Stamp hub-self
+                    // impersonation so the message has a non-null principal — gives the hub
+                    // Read access on the data the framework streams into it (workspace
+                    // synchronization, gate-opener, internal bookkeeping). Real cross-hub
+                    // data access still goes through the source hub's AccessContext check.
                     var hubAddress = syncPipeline.Hub.Address;
                     d = d.SetAccessContext(new AccessContext
                     {

@@ -159,13 +159,7 @@ public sealed class MessageHub : IMessageHub
     {
         messageService.Start();
         if (!Configuration.DeferredInitialization)
-            // Self-post: stamp hub-self impersonation so the PostPipeline's
-            // AccessContext fail-closed check (sync/ + mesh hubs) doesn't drop
-            // the framework's own gate-opener. Without this, sync sub-hubs
-            // created by SynchronizationStream.GetHostedHub never open their
-            // gates, every SetCurrentRequest stays buffered, and tests that
-            // depend on synced-query subscriptions timeout.
-            Post(new InitializeHubRequest(), o => o.ImpersonateAsHub(Address));
+            Post(new InitializeHubRequest());
     }
 
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
