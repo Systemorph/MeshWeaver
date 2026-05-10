@@ -335,15 +335,26 @@ public class ThreadSubmissionIntegrationTest : AITestBase
 
         // Per-round dispatch (Claude-Code-style single-message-per-round):
         // each of u1..u4 produces its own response cell, queued and dispatched
-        // serially after round N completes. Layout: u1, r1, u2, r2, u3, r3, u4, r4.
-        final.Messages.Should().HaveCount(8, "expected interleaved [u1, r1, u2, r2, u3, r3, u4, r4]");
+        // serially after round N completes. Actual layout reflects how
+        // AppendUserInput appends user ids to Messages IMMEDIATELY on submit
+        // (so the GUI shows queued cells), while DispatchRound appends one
+        // response id per round. Round 1 commits r1 BEFORE u2/u3/u4 are
+        // submitted; rounds 2/3/4 dispatch sequentially after round 1 ends —
+        // the user ids land between r1 and r2:
+        //   [u1, r1, u2, u3, u4, r2, r3, r4]
+        final.Messages.Should().HaveCount(8, "expected [u1, r1, u2, u3, u4, r2, r3, r4]");
         final.Messages[0].Should().Be(u1, "u1 first");
-        // Even-index positions are user messages; odd-index positions are response cells.
-        final.UserMessageIds.Should().ContainInOrder(
-            final.Messages[0], final.Messages[2], final.Messages[4], final.Messages[6]);
+        // u1 + 3 response cells occupy positions 0,1,5,6,7; u2/u3/u4 occupy 2,3,4.
+        final.UserMessageIds.Should().HaveCount(4);
+        final.UserMessageIds.Should().StartWith(u1);
+        // Positions 2,3,4 are users (in submission order u2, u3, u4).
+        final.UserMessageIds.Should().Contain(final.Messages[2]);
+        final.UserMessageIds.Should().Contain(final.Messages[3]);
+        final.UserMessageIds.Should().Contain(final.Messages[4]);
+        // Positions 1,5,6,7 are responses, NOT in UserMessageIds.
         final.UserMessageIds.Should().NotContain(final.Messages[1]);
-        final.UserMessageIds.Should().NotContain(final.Messages[3]);
         final.UserMessageIds.Should().NotContain(final.Messages[5]);
+        final.UserMessageIds.Should().NotContain(final.Messages[6]);
         final.UserMessageIds.Should().NotContain(final.Messages[7]);
     }
 

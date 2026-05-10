@@ -92,6 +92,24 @@ else
                     }
                 </div>
             }
+            @* Messages the user typed during the in-flight turn that the agent
+               has NOT yet pulled via check_inbox. Drained automatically when
+               the agent calls the tool — at which point they disappear from
+               here and stay visible only as ingested user cells in the
+               conversation. *@
+            @if (ThreadViewModel.PendingMessageTexts is { Count: > 0 })
+            {
+                <div class="thread-exec-pending-inbox">
+                    <div class="thread-exec-pending-inbox-header">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.MailInbox())" />
+                        <span>@ThreadViewModel.PendingMessageTexts.Count waiting for the agent to acknowledge</span>
+                    </div>
+                    @foreach (var pendingText in ThreadViewModel.PendingMessageTexts)
+                    {
+                        <div class="thread-exec-pending-inbox-item">@TruncateText(pendingText, 200)</div>
+                    }
+                </div>
+            }
         </div>
     }
 

@@ -143,6 +143,7 @@ public static class ThreadLayoutAreas
                 ExecutionStatus = threadContent?.ExecutionStatus,
                 StreamingText = threadContent?.StreamingText,
                 StreamingToolCalls = threadContent?.StreamingToolCalls,
+                PendingMessageTexts = ExtractPendingTexts(threadContent),
                 TokensUsed = threadContent?.TokensUsed ?? 0,
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
             };
@@ -226,6 +227,7 @@ public static class ThreadLayoutAreas
                 ExecutionStatus = threadContent?.ExecutionStatus,
                 StreamingText = threadContent?.StreamingText,
                 StreamingToolCalls = threadContent?.StreamingToolCalls,
+                PendingMessageTexts = ExtractPendingTexts(threadContent),
                 TokensUsed = threadContent?.TokensUsed ?? 0,
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
             };
@@ -797,5 +799,32 @@ public static class ThreadLayoutAreas
         sb.Append("</div>");
         sb.Append("</details>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Reads the still-pending user-message texts from <paramref name="thread"/>.
+    /// Pending = id is in <see cref="Thread.UserMessageIds"/> AND in
+    /// <see cref="Thread.PendingUserMessages"/>. The <c>check_inbox</c> tool
+    /// drains this queue mid-stream — once drained, the texts disappear from
+    /// this list (they remain visible as user cells in the conversation).
+    /// </summary>
+    internal static IReadOnlyList<string> ExtractPendingTexts(MeshThread? thread)
+    {
+        if (thread is null || thread.PendingUserMessages.IsEmpty)
+            return Array.Empty<string>();
+
+        var result = new List<string>(thread.PendingUserMessages.Count);
+        foreach (var id in thread.UserMessageIds)
+        {
+            if (thread.PendingUserMessages.TryGetValue(id, out var msg))
+                result.Add(msg.Text);
+        }
+        // Catch any pending entries not in UserMessageIds (defensive — shouldn't
+        // happen via the normal AppendUserInput path, but don't silently drop).
+        foreach (var (id, msg) in thread.PendingUserMessages)
+            if (!thread.UserMessageIds.Contains(id))
+                result.Add(msg.Text);
+
+        return result;
     }
 }

@@ -40,6 +40,17 @@ public record ThreadViewModel
     /// <summary>Streaming tool calls from the active response.</summary>
     public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
 
+    /// <summary>
+    /// Texts of user messages queued during the in-flight turn — i.e. entries
+    /// in <see cref="Thread.PendingUserMessages"/> that the agent has NOT yet
+    /// drained via the <c>check_inbox</c> tool. Rendered in the chat below the
+    /// "Generating response..." progress strip so the user can see what's
+    /// "still in the outbox" before the agent acknowledges it.
+    /// Empty when the queue has been drained or no follow-ups were typed.
+    /// Order: <see cref="Thread.UserMessageIds"/> submission order.
+    /// </summary>
+    public IReadOnlyList<string> PendingMessageTexts { get; init; } = [];
+
     /// <summary>Total tokens used in the current execution.</summary>
     public int TokensUsed { get; init; }
 
@@ -76,7 +87,8 @@ public record ThreadViewModel
                && SelectedAgentName == other.SelectedAgentName
                && SelectedModelName == other.SelectedModelName
                && Messages.SequenceEqual(other.Messages)
-               && (StreamingToolCalls ?? []).SequenceEqual(other.StreamingToolCalls ?? []);
+               && (StreamingToolCalls ?? []).SequenceEqual(other.StreamingToolCalls ?? [])
+               && PendingMessageTexts.SequenceEqual(other.PendingMessageTexts);
     }
 
     public override int GetHashCode()
@@ -99,6 +111,8 @@ public record ThreadViewModel
         if (StreamingToolCalls != null)
             foreach (var tc in StreamingToolCalls)
                 hash.Add(tc);
+        foreach (var txt in PendingMessageTexts)
+            hash.Add(txt);
         return hash.ToHashCode();
     }
 }

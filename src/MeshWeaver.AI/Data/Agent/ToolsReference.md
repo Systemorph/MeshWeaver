@@ -496,6 +496,35 @@ Search('namespace:{parentPath}/_Comment nodeType:Comment')   # Find comments
 Search('namespace:{parentPath}/_Activity')                   # Find activity logs
 ```
 
+## check_inbox
+
+Check whether the user has typed any new messages while the current turn was running. Pure read+drain — no arguments.
+
+**When to call:**
+- Between major steps in a multi-step task (after each tool call in a sequence).
+- Before starting a new file edit / `Update` / `Patch`.
+- Before delegating to another agent.
+- Roughly every 30–60 seconds during long synthesis passes.
+
+**When NOT to call:**
+- During a single fast read (`Get` then a one-line reply).
+- Right after a previous `check_inbox` returned `(no new messages)` in the same response — the queue can't fill that quickly.
+
+**Returns:**
+- `(no new messages)` if the queue is empty.
+- The text(s) of all messages typed since the last `check_inbox` call, otherwise.
+
+Once a message is returned by this tool it is **permanently delivered** to you (it won't be re-delivered on the next call). Fold the new input into your current response — if it's compatible, just include it; if it changes direction, acknowledge briefly and pivot. Do NOT ignore returned messages — they were the user's chance to steer you mid-task.
+
+### Example
+
+```
+check_inbox()
+→ "User sent a follow-up message:\n\nAlso include unit tests"
+```
+
+You then proceed with the original task AND add unit tests, without waiting for the round to end.
+
 ## Reading Documentation
 
 To browse all available documentation:

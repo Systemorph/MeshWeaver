@@ -696,8 +696,15 @@ public class AgentChatClient : IAgentChat
         // ChatClientAgent constructor places them).
         var functionInvoker = agent.ChatClient.GetService<FunctionInvokingChatClient>();
         var chatOptions = new ChatOptions();
-        if (functionInvoker?.AdditionalTools is { Count: > 0 } additionalTools)
-            chatOptions.Tools = additionalTools.ToList();
+        var tools = functionInvoker?.AdditionalTools is { Count: > 0 } additionalTools
+            ? additionalTools.ToList()
+            : new List<AITool>();
+        // Always inject check_inbox so the agent can poll for user messages
+        // queued during the in-flight turn. The tool drains
+        // Thread.PendingUserMessages atomically and returns the texts so the
+        // agent can fold them into the current response — see InboxTool.
+        tools.Add(InboxTool.CreateCheckInboxTool(hub, logger));
+        chatOptions.Tools = tools;
         await foreach (var update in agent.ChatClient.GetStreamingResponseAsync(turnMessages, chatOptions, cancellationToken))
         {
             // Forward the complete update with all contents (including FunctionCallContent)

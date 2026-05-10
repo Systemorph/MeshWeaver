@@ -99,6 +99,38 @@
     background: var(--neutral-layer-4);
 }
 
+/* Pending-inbox section inside the executing-progress strip.
+   Shows messages the user typed during the in-flight turn
+   that the agent has NOT yet pulled via check_inbox. */
+.thread-exec-pending-inbox {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    margin-top: 6px;
+    border: 1px dashed color-mix(in srgb, var(--accent-fill-rest) 50%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent-fill-rest) 4%, transparent);
+}
+.thread-exec-pending-inbox-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    color: var(--accent-fill-rest);
+    font-weight: 600;
+}
+.thread-exec-pending-inbox-item {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-rest);
+    padding: 2px 6px;
+    border-left: 2px solid color-mix(in srgb, var(--accent-fill-rest) 60%, transparent);
+    background: var(--neutral-layer-1);
+    border-radius: 0 4px 4px 0;
+    line-height: 1.35;
+    white-space: pre-wrap;
+}
+
 /* Footer: progress + input pinned at bottom */
 .thread-chat-footer {
     flex-shrink: 0;
