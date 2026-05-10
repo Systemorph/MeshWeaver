@@ -333,15 +333,18 @@ public class ThreadSubmissionIntegrationTest : AITestBase
         final.IngestedMessageIds.Should().HaveCount(4);
         final.IngestedMessageIds.Should().BeEquivalentTo(final.UserMessageIds);
 
-        // Final Messages layout must be: input - output - input - input - input - output
-        //                                 u1    - r1     - u2    - u3    - u4    - r2
-        // i.e. the first four positions are u1, r1, u2, u3; u4 precedes r2 at the end.
-        final.Messages.Should().HaveCount(6, "expected exactly [u1, r1, u2, u3, u4, r2]");
+        // Per-round dispatch (Claude-Code-style single-message-per-round):
+        // each of u1..u4 produces its own response cell, queued and dispatched
+        // serially after round N completes. Layout: u1, r1, u2, r2, u3, r3, u4, r4.
+        final.Messages.Should().HaveCount(8, "expected interleaved [u1, r1, u2, r2, u3, r3, u4, r4]");
         final.Messages[0].Should().Be(u1, "u1 first");
-        final.UserMessageIds.Should().ContainInOrder(final.Messages[0], final.Messages[2], final.Messages[3], final.Messages[4]);
-        // Positions 1 and 5 are response cells (not in UserMessageIds).
+        // Even-index positions are user messages; odd-index positions are response cells.
+        final.UserMessageIds.Should().ContainInOrder(
+            final.Messages[0], final.Messages[2], final.Messages[4], final.Messages[6]);
         final.UserMessageIds.Should().NotContain(final.Messages[1]);
+        final.UserMessageIds.Should().NotContain(final.Messages[3]);
         final.UserMessageIds.Should().NotContain(final.Messages[5]);
+        final.UserMessageIds.Should().NotContain(final.Messages[7]);
     }
 
     // ─── Queue-don't-cancel: new input during execution waits until round completes ───
