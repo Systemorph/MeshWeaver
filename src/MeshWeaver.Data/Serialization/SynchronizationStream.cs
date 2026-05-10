@@ -330,7 +330,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         try
         {
-            Hub.Post(new SetCurrentRequest(value));
+            // Self-post: sync hub posts SetCurrentRequest into itself to
+            // deliver stream values. Stamp hub-self impersonation so the
+            // PostPipeline AccessContext fail-closed check (sync/ + mesh)
+            // doesn't drop the stream's own data delivery.
+            Hub.Post(new SetCurrentRequest(value), o => o.ImpersonateAsHub(Hub.Address));
         }
         catch (Exception ex)
         {
