@@ -84,11 +84,13 @@ internal class RoutingGrain(
                 }, TaskScheduler.Default);
         }
 
+        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_BEGIN id={delivery.Id} addr={addressPath}");
         pathResolver.ResolvePath(addressPath)
             .Take(1)
             .Subscribe(resolution =>
             {
                 var grainKey = resolution?.Prefix ?? addressPath;
+                RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_EMIT id={delivery.Id} addr={addressPath} grainKey={grainKey} prefix={resolution?.Prefix ?? "(null)"} remainder={resolution?.Remainder ?? "(null)"}");
 
                 logger.LogDebug("[ROUTE] {MessageType} → resolved={Prefix} remainder={Remainder} grainKey={GrainKey}",
                     delivery.Message.GetType().Name, resolution?.Prefix ?? "(null)",
@@ -100,6 +102,7 @@ internal class RoutingGrain(
                         ? $"No node found at '{addressPath}'."
                         : $"No node found at '{addressPath}'. Closest ancestor is '{resolution.Prefix}' (remainder='{resolution.Remainder}').";
                     logger.LogWarning("[ROUTE] NotFound: {FailureMessage}", failureMessage);
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND id={delivery.Id} addr={addressPath}");
                     // Surface the failure back to the sender via memory stream
                     // (the sender's hub handles DeliveryFailure as a normal response).
                     var failStream = streamProvider.GetStream<IMessageDelivery>(delivery.Sender?.ToString() ?? addressPath);
@@ -113,11 +116,13 @@ internal class RoutingGrain(
                 }
 
                 logger.LogDebug("[ROUTE] Delivering {MessageType} to grain {GrainKey}", delivery.Message.GetType().Name, grainKey);
+                RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL id={delivery.Id} grainKey={grainKey}");
                 var grain = grainFactory.GetGrain<IMessageHubGrain>(grainKey);
                 grain.DeliverMessage(delivery).ContinueWith(t =>
                 {
                     if (t.IsFaulted)
                     {
+                        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_FAULT id={delivery.Id} grainKey={grainKey} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
                         logger.LogWarning(t.Exception, "[ROUTE] Grain {GrainKey} threw for {MessageType} → stream fallback",
                             grainKey, delivery.Message.GetType().Name);
                         var stream = streamProvider.GetStream<IMessageDelivery>(addressPath);
@@ -125,12 +130,17 @@ internal class RoutingGrain(
                     }
                     else if (t.IsCompletedSuccessfully)
                     {
+                        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_OK id={delivery.Id} grainKey={grainKey} state={t.Result.State}");
                         logger.LogDebug("[ROUTE] Grain {GrainKey} returned state={State} for {MessageType}",
                             grainKey, t.Result.State, delivery.Message.GetType().Name);
                     }
                 }, TaskScheduler.Default);
             },
-            ex => logger.LogWarning(ex, "[ROUTE] Path resolution failed for {Address}", addressPath));
+            ex =>
+            {
+                RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_FAULT id={delivery.Id} addr={addressPath} ex={ex.Message}");
+                logger.LogWarning(ex, "[ROUTE] Path resolution failed for {Address}", addressPath);
+            });
 
         return Task.FromResult(delivery.Forwarded(address));
     }
