@@ -344,10 +344,15 @@ public static class PersistenceExtensions
         // (Synced queries no longer use a separate marker; static nodes flow
         // through MeshQueryEngine directly via its constructor.)
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
-            new StaticNodeQueryProvider(
-                sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>(),
-                sp.GetService<ILoggerFactory>()));
+        {
+            var providers = sp.GetServices<IStaticNodeProvider>();
+            var config = sp.GetService<MeshConfiguration>();
+            return new StaticNodeQueryProvider(
+                providers,
+                StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
+                config,
+                sp.GetService<ILoggerFactory>());
+        });
         services.AddSingleton<IMeshQueryProvider>(sp =>
             sp.GetRequiredService<StaticNodeQueryProvider>());
 
@@ -512,10 +517,15 @@ public static class PersistenceExtensions
 
         // Always add static node provider
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            new StaticNodeQueryProvider(
-                sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>(),
-                sp.GetService<ILoggerFactory>()));
+        {
+            var providers = sp.GetServices<IStaticNodeProvider>();
+            var config = sp.GetService<MeshConfiguration>();
+            return new StaticNodeQueryProvider(
+                providers,
+                StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
+                config,
+                sp.GetService<ILoggerFactory>());
+        });
 
         // Surface AddMeshNodes seed (held in MeshConfiguration.Nodes) as an
         // IStaticNodeProvider. Without this bridge the seed nodes are invisible
@@ -580,10 +590,15 @@ public static class PersistenceExtensions
 
         // Static node provider — IMeshQueryProvider for IMeshService fan-out.
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
-            new StaticNodeQueryProvider(
-                sp.GetServices<IStaticNodeProvider>(),
-                sp.GetService<MeshConfiguration>(),
-                sp.GetService<ILoggerFactory>()));
+        {
+            var providers = sp.GetServices<IStaticNodeProvider>();
+            var config = sp.GetService<MeshConfiguration>();
+            return new StaticNodeQueryProvider(
+                providers,
+                StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
+                config,
+                sp.GetService<ILoggerFactory>());
+        });
         services.AddSingleton<IMeshQueryProvider>(sp =>
             sp.GetRequiredService<StaticNodeQueryProvider>());
 

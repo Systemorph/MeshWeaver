@@ -19,6 +19,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
     private readonly CosmosStorageAdapter _adapter;
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly MeshConfiguration? _meshConfiguration;
+    private readonly HashSet<string> _excludedNamespaces;
     private readonly QueryParser _parser = new();
     private long _version;
 
@@ -27,11 +28,23 @@ public class CosmosMeshQuery : IMeshQueryProvider
     public CosmosMeshQuery(
         CosmosStorageAdapter adapter,
         IDataChangeNotifier? changeNotifier = null,
-        MeshConfiguration? meshConfiguration = null)
+        MeshConfiguration? meshConfiguration = null,
+        IEnumerable<string>? excludedNamespaces = null)
     {
         _adapter = adapter;
         _changeNotifier = changeNotifier;
         _meshConfiguration = meshConfiguration;
+        _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <inheritdoc />
+    public bool Matches(IReadOnlyList<string> queryNamespaces)
+    {
+        for (var i = 0; i < queryNamespaces.Count; i++)
+            if (!_excludedNamespaces.Contains(queryNamespaces[i]))
+                return true;
+        return false;
     }
 
     /// <inheritdoc />

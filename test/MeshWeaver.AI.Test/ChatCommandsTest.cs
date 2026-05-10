@@ -132,7 +132,7 @@ public class ChatCommandsTest
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent"));
 
-        var result = await cmd.ExecuteAsync(ctx);
+        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
 
         // No-args = "show me the picker" — Success + Widget set, agent list
         // still listed in the message body as a fallback for non-Blazor hosts.
@@ -148,7 +148,7 @@ public class ChatCommandsTest
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent Worker"));
 
-        var result = await cmd.ExecuteAsync(ctx);
+        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
 
         result.Success.Should().BeTrue();
         result.Message.Should().Contain("Worker");
@@ -161,7 +161,7 @@ public class ChatCommandsTest
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent @agent/Worker"));
 
-        var result = await cmd.ExecuteAsync(ctx);
+        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
 
         result.Success.Should().BeTrue();
         switched.Value!.Name.Should().Be("Worker");
@@ -172,7 +172,7 @@ public class ChatCommandsTest
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent worker"));
 
-        var result = await cmd.ExecuteAsync(ctx);
+        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
 
         result.Success.Should().BeTrue();
         switched.Value!.Name.Should().Be("Worker"); // returns canonical-case from dict
@@ -183,7 +183,7 @@ public class ChatCommandsTest
     {
         var (cmd, ctx, switched) = MakeAgentCommandContext(parsed: ParseSlash("/agent Ghost"));
 
-        var result = await cmd.ExecuteAsync(ctx);
+        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
 
         result.Success.Should().BeFalse();
         result.Message.Should().Contain("Ghost");
@@ -197,7 +197,7 @@ public class ChatCommandsTest
     {
         var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model"));
 
-        var result = await cmd.ExecuteAsync(ctx);
+        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
 
         result.Success.Should().BeTrue();
         result.Widget.Should().Be(ChatWidget.ModelPicker);
@@ -211,7 +211,7 @@ public class ChatCommandsTest
     {
         var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model gpt-4o-mini"));
 
-        var result = await cmd.ExecuteAsync(ctx);
+        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
 
         result.Success.Should().BeTrue();
         switched.Value!.Name.Should().Be("gpt-4o-mini");
@@ -222,7 +222,7 @@ public class ChatCommandsTest
     {
         var (cmd, ctx, switched) = MakeModelCommandContext(parsed: ParseSlash("/model nope"));
 
-        var result = await cmd.ExecuteAsync(ctx);
+        var result = await cmd.ExecuteAsync(ctx, TestContext.Current.CancellationToken);
 
         result.Success.Should().BeFalse();
         switched.Value.Should().BeNull();

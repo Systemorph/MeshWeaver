@@ -27,16 +27,34 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
 
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
+    // Namespaces handled by other (static) partitions — Postgres excludes
+    // them from its Matches() predicate so a `namespace:Agent` query never
+    // round-trips to SQL to look for built-in agents. Populated from the
+    // partition registry at DI registration time.
+    private readonly HashSet<string> _excludedNamespaces;
+
     public PostgreSqlMeshQuery(
         PostgreSqlStorageAdapter adapter,
         IDataChangeNotifier? changeNotifier = null,
         AccessService? accessService = null,
-        MeshConfiguration? meshConfiguration = null)
+        MeshConfiguration? meshConfiguration = null,
+        IEnumerable<string>? excludedNamespaces = null)
     {
         _adapter = adapter;
         _changeNotifier = changeNotifier;
         _accessService = accessService;
         _meshConfiguration = meshConfiguration;
+        _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <inheritdoc/>
+    public bool Matches(IReadOnlyList<string> queryNamespaces)
+    {
+        for (var i = 0; i < queryNamespaces.Count; i++)
+            if (!_excludedNamespaces.Contains(queryNamespaces[i]))
+                return true;
+        return false;
     }
 
     /// <summary>

@@ -20,9 +20,13 @@ public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvid
     private readonly Func<string, bool> _matches;
     private readonly Lazy<IStorageAdapter> _adapter;
 
+    /// <inheritdoc/>
     public string Name { get; }
+    /// <inheritdoc/>
     public IStorageAdapter Adapter => _adapter.Value;
+    /// <inheritdoc/>
     public PartitionDefinition? PartitionDefinition { get; }
+    /// <inheritdoc/>
     public ImmutableHashSet<string> Contexts { get; }
 
     /// <summary>
@@ -76,5 +80,6 @@ public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvid
                 PartitionContexts.Browse);
     }
 
+    /// <inheritdoc/>
     public bool Matches(string firstSegment) => _matches(firstSegment);
 }

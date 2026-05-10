@@ -258,7 +258,7 @@ public static class ThreadSubmission
         try
         {
             var msg = ThreadInput.CreateUserMessage(
-                req.UserText,
+                req.UserText ?? string.Empty,
                 createdBy: delivery.AccessContext?.ObjectId,
                 authorName: null,
                 agentName: req.AgentName,

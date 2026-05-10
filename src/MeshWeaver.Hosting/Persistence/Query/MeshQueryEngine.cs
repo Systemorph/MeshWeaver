@@ -47,6 +47,15 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
     /// </summary>
     private readonly IReadOnlyDictionary<string, MeshNode> staticNodes;
 
+    /// <summary>
+    /// First-segment namespaces owned by static partitions (Agent, Model, …).
+    /// The engine excludes these from its <see cref="Matches"/> predicate so the
+    /// aggregator routes those queries to <see cref="StaticNodeQueryProvider"/>
+    /// only — Postgres / in-memory persistence never round-trips for built-in
+    /// content.
+    /// </summary>
+    private readonly HashSet<string> _excludedNamespaces;
+
     public MeshQueryEngine(
         IStorageService persistence,
         // 🚨 NO ISecurityService here — that parameter created the Autofac
@@ -63,6 +72,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<Lazy<INodeValidator>>? nodeValidators = null,
         IEnumerable<IStaticNodeProvider>? staticProviders = null,
+        IEnumerable<IPartitionStorageProvider>? partitionProviders = null,
         ILogger<MeshQueryEngine>? logger = null)
     {
         this.persistence = persistence;
@@ -76,6 +86,27 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
             .Where(n => !string.IsNullOrEmpty(n.Path))
             .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        // Exclusion derived from IPartitionStorageProvider — the partition
+        // registry. Only static-source partitions (DataSource="static") count
+        // as "owned by someone else" for the Matches predicate. AddMeshNodes
+        // seeds (writable runtime namespaces surfaced via
+        // MeshConfigurationStaticNodeProvider) are NOT in this list — they
+        // remain queryable through the engine.
+        _excludedNamespaces = (partitionProviders ?? Enumerable.Empty<IPartitionStorageProvider>())
+            .Where(p => string.Equals(p.PartitionDefinition?.DataSource, "static", StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <inheritdoc/>
+    public bool Matches(IReadOnlyList<string> queryNamespaces)
+    {
+        // Engage when at least one of the query's namespaces is NOT static-owned —
+        // i.e., we have writable persistence rows to contribute for it.
+        for (var i = 0; i < queryNamespaces.Count; i++)
+            if (!_excludedNamespaces.Contains(queryNamespaces[i]))
+                return true;
+        return false;
     }
 
     /// <summary>

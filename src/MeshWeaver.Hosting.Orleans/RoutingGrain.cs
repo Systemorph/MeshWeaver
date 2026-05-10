@@ -93,7 +93,7 @@ internal class RoutingGrain(
                 RoutingGrainTrace.Write($"RoutingGrain.RouteMessage RESOLVE_EMIT id={delivery.Id} addr={addressPath} grainKey={grainKey} prefix={resolution?.Prefix ?? "(null)"} remainder={resolution?.Remainder ?? "(null)"}");
 
                 logger.LogDebug("[ROUTE] {MessageType} → resolved={Prefix} remainder={Remainder} grainKey={GrainKey}",
-                    delivery.Message.GetType().Name, resolution?.Prefix ?? "(null)",
+                    delivery.Message?.GetType().Name ?? "(null)", resolution?.Prefix ?? "(null)",
                     resolution?.Remainder ?? "(null)", grainKey);
 
                 if (resolution == null || !string.IsNullOrEmpty(resolution.Remainder))
@@ -140,7 +140,7 @@ internal class RoutingGrain(
                     return;
                 }
 
-                logger.LogDebug("[ROUTE] Delivering {MessageType} to grain {GrainKey}", delivery.Message.GetType().Name, grainKey);
+                logger.LogDebug("[ROUTE] Delivering {MessageType} to grain {GrainKey}", delivery.Message?.GetType().Name ?? "(null)", grainKey);
                 RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL id={delivery.Id} grainKey={grainKey}");
                 var grain = grainFactory.GetGrain<IMessageHubGrain>(grainKey);
                 grain.DeliverMessage(delivery).ContinueWith(t =>
@@ -149,7 +149,7 @@ internal class RoutingGrain(
                     {
                         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_FAULT id={delivery.Id} grainKey={grainKey} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
                         logger.LogWarning(t.Exception, "[ROUTE] Grain {GrainKey} threw for {MessageType} → stream fallback",
-                            grainKey, delivery.Message.GetType().Name);
+                            grainKey, delivery.Message?.GetType().Name ?? "(null)");
                         var stream = streamProvider.GetStream<IMessageDelivery>(addressPath);
                         stream.OnNextAsync(delivery).ContinueWith(_ => { }, TaskScheduler.Default);
                     }
@@ -157,7 +157,7 @@ internal class RoutingGrain(
                     {
                         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage GRAIN_CALL_OK id={delivery.Id} grainKey={grainKey} state={t.Result.State}");
                         logger.LogDebug("[ROUTE] Grain {GrainKey} returned state={State} for {MessageType}",
-                            grainKey, t.Result.State, delivery.Message.GetType().Name);
+                            grainKey, t.Result.State, delivery.Message?.GetType().Name ?? "(null)");
                     }
                 }, TaskScheduler.Default);
             },

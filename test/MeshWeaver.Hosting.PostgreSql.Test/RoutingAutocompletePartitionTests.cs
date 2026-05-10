@@ -161,7 +161,9 @@ public class RoutingAutocompletePartitionTests
             NodeType = "Organization",
             State = MeshNodeState.Active
         };
-        var staticProvider = new StaticNodeQueryProvider(new[] { new TestStaticNodeProvider(staticNode) });
+        var staticProvider = new StaticNodeQueryProvider(
+            new[] { new TestStaticNodeProvider(staticNode) },
+            ns => ns.Count > 0);
 
         // Mimic MeshQuery's fan-out: collect from both providers and merge by Path.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -209,7 +211,9 @@ public class RoutingAutocompletePartitionTests
             NodeType = "Organization",
             State = MeshNodeState.Active
         };
-        var staticProvider = new StaticNodeQueryProvider(new[] { new TestStaticNodeProvider(staticNode) });
+        var staticProvider = new StaticNodeQueryProvider(
+            new[] { new TestStaticNodeProvider(staticNode) },
+            ns => ns.Count > 0);
 
         var routingSuggestions = new List<QuerySuggestion>();
         await foreach (var s in routingProvider.AutocompleteAsync("", "", _options, 30, ct))
