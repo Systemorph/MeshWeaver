@@ -28,7 +28,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task GetChildrenAsync_ReturnsDirectChildren()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/acme/project/web") with { Name = "Web Project" }, JsonOptions).FirstAsync().ToTask();
@@ -45,7 +45,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task GetChildrenAsync_ReturnsRootLevelNodes()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(new MeshNode("org") { Name = "Organizations" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(new MeshNode("system") { Name = "System" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
@@ -62,7 +62,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task GetChildrenAsync_ReturnsEmptyForNonExistentPath()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
 
         // Act
@@ -76,7 +76,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task SaveNodeAsync_NormalizesPath()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
 
         // Act
         await persistence.SaveNode(MeshNode.FromPath("ORG/Acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
@@ -91,7 +91,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task DeleteNodeAsync_RemovesNode()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
 
         // Act
@@ -106,7 +106,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task DeleteNodeAsync_Recursive_RemovesDescendants()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/acme/project/web") with { Name = "Web" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/acme/project/mobile") with { Name = "Mobile" }, JsonOptions).FirstAsync().ToTask();
@@ -126,7 +126,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task SearchAsync_FindsByName()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme Corporation" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" }, JsonOptions).FirstAsync().ToTask();
 
@@ -142,7 +142,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task ExistsAsync_ReturnsTrueForExistingNode()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
 
         // Act & Assert
@@ -154,7 +154,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task GetDescendantsAsync_ReturnsAllDescendants()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/acme/project/web") with { Name = "Web" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/acme/project/mobile") with { Name = "Mobile" }, JsonOptions).FirstAsync().ToTask();
@@ -172,7 +172,7 @@ public class PersistenceServiceTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task Content_IsPreserved()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         var content = new { Id = "acme", Website = "https://acme.com" };
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme", Content = content }, JsonOptions).FirstAsync().ToTask();
 
@@ -193,7 +193,7 @@ public class MeshCatalogQueryTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task QueryAsync_ReturnsFilteredResults()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso Software" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/fabrikam") with { Name = "Fabrikam Inc" }, JsonOptions).FirstAsync().ToTask();
@@ -213,7 +213,7 @@ public class MeshCatalogQueryTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task QueryAsync_RespectsMaxResults()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         for (int i = 0; i < 10; i++)
         {
             await persistence.SaveNode(MeshNode.FromPath($"org/company{i}") with { Name = $"Company {i}" }, JsonOptions).FirstAsync().ToTask();
@@ -231,7 +231,7 @@ public class MeshCatalogQueryTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task QueryAsync_ReturnsAllWhenNoFilter()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/contoso") with { Name = "Contoso" }, JsonOptions).FirstAsync().ToTask();
 
@@ -246,7 +246,7 @@ public class MeshCatalogQueryTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task QueryAsync_FiltersByPrefix()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
         await persistence.SaveNode(MeshNode.FromPath("org/acme") with { Name = "Acme" }, JsonOptions).FirstAsync().ToTask();
         await persistence.SaveNode(MeshNode.FromPath("org/acme-corp") with { Name = "Acme Corp" }, JsonOptions).FirstAsync().ToTask();
 

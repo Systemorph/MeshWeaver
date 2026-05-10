@@ -61,13 +61,42 @@ internal class RoutingPersistenceServiceCore : IStorageService
             if (string.IsNullOrEmpty(ns)) continue;
             if (_stores.ContainsKey(ns)) continue;
 
-            var core = new InMemoryPersistenceService(provider.Adapter, _changeNotifier);
+            var core = NewAdapterCore(ns, provider.Adapter);
             if (_stores.TryAdd(ns, core))
             {
                 _queryProviders[ns] =
                     new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
             }
         }
+    }
+
+    /// <summary>
+    /// Builds an <see cref="AdapterPersistenceService"/> for a given partition's
+    /// first segment and seeds it with every <see cref="IStaticNodeProvider"/>
+    /// node that lives under that segment. Without this fan-in the seeded
+    /// in-memory nodes (e.g. <c>builder.AddMeshNodes(...)</c> via
+    /// <see cref="MeshConfigurationStaticNodeProvider"/>) would be invisible to
+    /// reads — they used to be merged in the now-removed
+    /// <c>InMemoryPersistenceService._nodes</c> cache.
+    /// </summary>
+    private AdapterPersistenceService NewAdapterCore(string firstSegment, IStorageAdapter? adapter)
+    {
+        var core = new AdapterPersistenceService(adapter, _changeNotifier);
+        foreach (var staticProvider in _staticNodeProviders)
+        {
+            foreach (var node in staticProvider.GetStaticNodes())
+            {
+                if (string.IsNullOrEmpty(node.Path)) continue;
+                if (string.Equals(
+                        PathPartition.GetFirstSegment(node.Path),
+                        firstSegment,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    core.SeedIfAbsent(node);
+                }
+            }
+        }
+        return core;
     }
 
     /// <summary>
@@ -129,7 +158,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
                 Observable.FromAsync(token => _factory.CreateStoreAsync(segment, token), Scheduler.Default)
                     .Select(partition =>
                     {
-                        var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+                        var core = NewAdapterCore(segment, partition.StorageAdapter);
                         if (!_stores.TryAdd(segment, core))
                             return ((string, IMeshQueryProvider)?)null;
                         var queryProvider = partition.QueryProvider
@@ -188,8 +217,12 @@ internal class RoutingPersistenceServiceCore : IStorageService
                 if (!provider.Matches(firstSegment))
                     continue;
 
-                var providerCore = new InMemoryPersistenceService(provider.Adapter, _changeNotifier);
-                await providerCore.InitializeAsync(System.Text.Json.JsonSerializerOptions.Default, ct);
+                // 🚨 NO eager InitializeAsync — that drove a recursive
+                // ListChildPaths walk over the whole partition tree per
+                // first-segment activation (~30% of CPU per profiling).
+                // Lazy reads via GetNode/GetChildren/GetDescendants pull
+                // only what's actually queried.
+                var providerCore = NewAdapterCore(firstSegment, provider.Adapter);
                 _stores[firstSegment] = providerCore;
                 _queryProviders[firstSegment] =
                     new Query.MeshQueryEngine(providerCore, changeNotifier: _changeNotifier);
@@ -200,7 +233,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             // factory (FileSystem / Postgres / Cosmos). This is the implicit
             // catch-all until a wildcard provider is registered.
             var partition = await _factory.CreateStoreAsync(firstSegment, ct);
-            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+            var core = NewAdapterCore(firstSegment, partition.StorageAdapter);
             _stores[firstSegment] = core;
             var queryProvider = partition.QueryProvider
                 ?? new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
@@ -267,8 +300,10 @@ internal class RoutingPersistenceServiceCore : IStorageService
             if (_stores.ContainsKey(ns))
                 continue;
 
-            var core = new InMemoryPersistenceService(provider.Adapter, _changeNotifier);
-            await core.InitializeAsync(System.Text.Json.JsonSerializerOptions.Default, ct);
+            // No eager InitializeAsync — the cache is gone, reads pass
+            // through to the storage adapter directly (see
+            // AdapterPersistenceService rewrite).
+            var core = NewAdapterCore(ns, provider.Adapter);
             if (_stores.TryAdd(ns, core))
             {
                 _queryProviders[ns] =
@@ -311,7 +346,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         //    Namespace. This surfaces NodeType definitions, doc namespaces, and test
         //    seed nodes through the same routing path as writable partitions — without
         //    leaking IStaticNodeProvider into the writable persisters
-        //    (InMemoryPersistenceService, FileSystemPersistenceService, ...).
+        //    (AdapterPersistenceService, FileSystemPersistenceService, ...).
         //    See Doc/Architecture/PartitionedPersistence.md §"Where Partitions Come From".
         foreach (var def in allPartitionDefs)
         {
@@ -494,7 +529,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
                 : Observable.FromAsync(ct => _factory.CreateStoreAsync(def.Namespace, ct), Scheduler.Default)
                     .Select(partition =>
                     {
-                        var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+                        var core = NewAdapterCore(def.Namespace, partition.StorageAdapter);
                         if (_stores.TryAdd(def.Namespace, core))
                         {
                             var queryProvider = partition.QueryProvider

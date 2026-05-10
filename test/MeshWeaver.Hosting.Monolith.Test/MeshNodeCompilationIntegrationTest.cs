@@ -19,7 +19,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
 /// Integration tests for the NodeType compilation pipeline. Uses the real mesh
-/// (no mock IMessageHub, no direct InMemoryPersistenceService) — the NodeType
+/// (no mock IMessageHub, no direct AdapterPersistenceService) — the NodeType
 /// definition + its source code nodes are seeded via <see cref="IMeshService.CreateNode"/>,
 /// and compilation is exercised by posting <see cref="GetCompilationPathRequest"/>
 /// to the per-NodeType hub (the production flow).

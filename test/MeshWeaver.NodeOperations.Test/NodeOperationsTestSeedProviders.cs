@@ -43,7 +43,7 @@ internal static class NodeOperationsTypeNames
 /// to back the namespace with a read-only
 /// <see cref="MeshWeaver.Hosting.Persistence.StaticNodePartitionStore"/>
 /// instead of a writable
-/// <see cref="MeshWeaver.Hosting.Persistence.InMemoryPersistenceService"/> —
+/// <see cref="MeshWeaver.Hosting.Persistence.AdapterPersistenceService"/> —
 /// so the test-only NodeType definition stays addressable by routing without
 /// being mutable. See
 /// <c>Doc/Architecture/PartitionedPersistence.md</c> §"Where Partitions Come From".
@@ -86,7 +86,7 @@ internal static class NodeOperationsTypeProviderHelpers
     /// — which is what
     /// <c>NodeTypeService.GatherInputsAsync</c> does to find the
     /// <see cref="NodeTypeDefinition"/> content for compilation. Static-provider
-    /// partitions are NEVER wrapped by <c>InMemoryPersistenceService</c>; they
+    /// partitions are NEVER wrapped by <c>AdapterPersistenceService</c>; they
     /// are immutable. See
     /// <c>Doc/Architecture/PartitionedPersistence.md</c> §"Where Partitions Come From".
     /// </summary>

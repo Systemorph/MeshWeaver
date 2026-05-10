@@ -52,7 +52,7 @@ public class AgentChatClientNoSuitableAgentTest : MonolithMeshTestBase
             })
             .Build();
 
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
 
         return builder
             .UseMonolithMesh()

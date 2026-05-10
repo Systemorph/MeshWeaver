@@ -22,12 +22,12 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private InMemoryPersistenceService _persistence = null!;
+    private AdapterPersistenceService _persistence = null!;
     private static readonly JsonSerializerOptions JsonOptions = new();
 
     protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
     {
-        _persistence = new InMemoryPersistenceService();
+        _persistence = new AdapterPersistenceService();
 
         return conf
             .WithServices(services => services

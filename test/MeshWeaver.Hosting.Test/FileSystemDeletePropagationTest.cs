@@ -25,7 +25,7 @@ public class FileSystemDeletePropagationTest : IDisposable
     private readonly string _testDirectory;
     private readonly DataChangeNotifier _changeNotifier;
     private readonly FileSystemStorageAdapter _storageAdapter;
-    private readonly InMemoryPersistenceService _persistence;
+    private readonly AdapterPersistenceService _persistence;
     private readonly FileSystemChangeWatcher _watcher;
     private readonly JsonSerializerOptions _jsonOptions;
 
@@ -36,7 +36,7 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         _changeNotifier = new DataChangeNotifier();
         _storageAdapter = new FileSystemStorageAdapter(_testDirectory);
-        _persistence = new InMemoryPersistenceService(_storageAdapter, _changeNotifier);
+        _persistence = new AdapterPersistenceService(_storageAdapter, _changeNotifier);
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -69,7 +69,7 @@ public class FileSystemDeletePropagationTest : IDisposable
     }
 
     /// <summary>
-    /// Tests that when a file is deleted externally, the InMemoryPersistenceService.GetNodeAsync
+    /// Tests that when a file is deleted externally, the AdapterPersistenceService.GetNodeAsync
     /// no longer returns the deleted node.
     ///
     /// EXPECTED BEHAVIOR: After external file deletion, GetNodeAsync should return null.

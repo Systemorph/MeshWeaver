@@ -31,8 +31,8 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     private readonly string _testDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", Guid.NewGuid().ToString());
     private FileSystemStorageAdapter? _storageAdapterInstance;
     private FileSystemStorageAdapter _storageAdapter => _storageAdapterInstance ??= CreateStorageAdapter();
-    private InMemoryPersistenceService? _persistenceInstance;
-    private InMemoryPersistenceService _persistence => _persistenceInstance ??= new(_storageAdapter);
+    private AdapterPersistenceService? _persistenceInstance;
+    private AdapterPersistenceService _persistence => _persistenceInstance ??= new(_storageAdapter);
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     private FileSystemStorageAdapter CreateStorageAdapter()
@@ -375,7 +375,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
 
         // Act - Create a new persistence service and initialize it
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
-        var newPersistence = new InMemoryPersistenceService(newStorageAdapter);
+        var newPersistence = new AdapterPersistenceService(newStorageAdapter);
         await newPersistence.InitializeAsync(JsonOptions);
 
         // Assert
@@ -429,7 +429,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
 
         // Act
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
-        var newPersistence = new InMemoryPersistenceService(newStorageAdapter);
+        var newPersistence = new AdapterPersistenceService(newStorageAdapter);
         await newPersistence.InitializeAsync(JsonOptions);
 
         // Assert
@@ -450,7 +450,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
 
         // Act
         var newStorageAdapter = new FileSystemStorageAdapter(_testDirectory);
-        var newPersistence = new InMemoryPersistenceService(newStorageAdapter);
+        var newPersistence = new AdapterPersistenceService(newStorageAdapter);
         await newPersistence.InitializeAsync(JsonOptions);
 
         // Assert

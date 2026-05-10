@@ -55,7 +55,7 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
     protected override bool ShareMeshAcrossTests => true;
 
-    private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
+    private static void SetupTestConfiguration(AdapterPersistenceService persistence)
     {
         // Create Story type for testing content changes
         var storyCodeConfig = new CodeConfiguration
@@ -119,7 +119,7 @@ public record Graph
         var testDataDirectory = GetOrCreateTestDirectory();
 
         // Create fresh persistence for each test
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
 
         // Setup NodeType configurations
         SetupTestConfiguration(persistence);

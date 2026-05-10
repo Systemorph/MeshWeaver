@@ -514,9 +514,49 @@ public class CachingStorageAdapter : IStorageAdapter
                 _snapshot.Files[relativePath] = new Lazy<byte[]>(
                     () => File.ReadAllBytes(capturedPath),
                     LazyThreadSafetyMode.ExecutionAndPublication);
+
+                // 🚨 Also update the parent-directory entry chain so
+                // ListChildPathsAsync(parentPath) sees the new file. Without
+                // this, the post-removal-of-_nodes-cache routing path
+                // (AdapterPersistenceService.WalkDescendants) iterates the
+                // stale Directories snapshot and never finds runtime-created
+                // nodes (cause of MoveNodeAsync_* and similar test hangs:
+                // CreateNode → file on disk + Files entry, but Directories
+                // entry missing → ListChildPathsAsync returns empty for the
+                // parent → subtree query is empty → CopyNode reports
+                // SourceNotFound → MoveNodeRequest never resolves).
+                AddToDirectoryChain(relativePath);
             }
             else
+            {
                 _snapshot.Files.TryRemove(relativePath, out _);
+                RemoveFromDirectoryChain(relativePath);
+            }
+        }
+    }
+
+    private void AddToDirectoryChain(string relativeFilePath)
+    {
+        var dir = Path.GetDirectoryName(relativeFilePath)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
+        var entry = relativeFilePath;
+        while (true)
+        {
+            var entries = _snapshot.Directories.GetOrAdd(dir,
+                static _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            lock (entries) entries.Add(entry);
+
+            if (string.IsNullOrEmpty(dir)) break;
+            entry = dir + "/";
+            dir = Path.GetDirectoryName(dir)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
+        }
+    }
+
+    private void RemoveFromDirectoryChain(string relativeFilePath)
+    {
+        var dir = Path.GetDirectoryName(relativeFilePath)?.Replace(Path.DirectorySeparatorChar, '/') ?? "";
+        if (_snapshot.Directories.TryGetValue(dir, out var entries))
+        {
+            lock (entries) entries.Remove(relativeFilePath);
         }
     }
 
