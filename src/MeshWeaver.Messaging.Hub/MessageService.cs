@@ -254,6 +254,9 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
+        var typeName = delivery.Message?.GetType().Name ?? "(null)";
+        MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} ScheduleNotify ENTER runLevel={hub.RunLevel}");
+
         // During shutdown, only allow ShutdownRequest and DisposeRequest through.
         // All other messages (including DeliveryFailure) are dropped to prevent endless cascades.
         if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
@@ -261,18 +264,20 @@ public class MessageService : IMessageService
         {
             if (logger.IsEnabled(LogLevel.Debug))
                 logger.LogDebug("Dropping message {MessageType} (ID: {MessageId}) in {Address} - hub is shutting down (RunLevel={RunLevel})",
-                    delivery.Message.GetType().Name, delivery.Id, Address, hub.RunLevel);
+                    delivery.Message?.GetType().Name, delivery.Id, Address, hub.RunLevel);
+            MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}");
             return delivery.Failed("Hub is shutting down");
         }
 
         // Per-message; gate to skip GetType().Name + boxing when Debug is off.
         if (logger.IsEnabled(LogLevel.Debug))
             logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}",
-                delivery.Message.GetType().Name, delivery.Id, Address);
+                delivery.Message?.GetType().Name, delivery.Id, Address);
 
         // Always buffer to the main buffer - deferral logic will be handled in NotifyAsync
         // based on whether the message is actually targeted at this hub
-        buffer.Post(() => NotifyAsync(delivery, cancellationToken));
+        var posted = buffer.Post(() => NotifyAsync(delivery, cancellationToken));
+        MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} BUFFER.Post returned={posted}");
 
         return delivery.Forwarded();
     }

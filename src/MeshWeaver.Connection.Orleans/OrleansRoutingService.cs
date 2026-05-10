@@ -14,6 +14,33 @@ using Orleans.Streams;
 
 namespace MeshWeaver.Connection.Orleans;
 
+/// <summary>
+/// Direct-to-file Orleans-routing trace that bypasses ILogger. Mirror of
+/// MessageTrace in MeshWeaver.Messaging.Hub — same env-var gate
+/// (<c>MESHWEAVER_MSG_TRACE=1</c>) and same target file so the silo's
+/// routing handoffs interleave with the per-hub message-pipeline events.
+/// </summary>
+internal static class OrleansRouteTrace
+{
+    private static readonly bool Enabled =
+        Environment.GetEnvironmentVariable("MESHWEAVER_MSG_TRACE") is "1" or "true" or "True";
+    private static readonly string Path =
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "meshweaver-msg-trace.log");
+    private static readonly object Lock = new();
+
+    public static void Write(string line)
+    {
+        if (!Enabled) return;
+        try
+        {
+            lock (Lock)
+                System.IO.File.AppendAllText(Path,
+                    $"{DateTime.UtcNow:HH:mm:ss.fff} {line}{Environment.NewLine}");
+        }
+        catch { /* tracing must never throw */ }
+    }
+}
+
 public class OrleansRoutingService : IRoutingService, IDisposable
 {
     private readonly IGrainFactory grainFactory;
@@ -42,12 +69,16 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 return Observable.Return(delivery);
 
             var address = GetHostAddress(target);
+            OrleansRouteTrace.Write($"OrleansRoutingService.Deliver target={target} hostAddr={address} msg={delivery.Message?.GetType().Name} id={delivery.Id} streams.contains={streams.ContainsKey(address)}");
 
             // 1. Check registered local streams (portals, in-process clients).
             //    Bridge the AsyncDelivery callback (Task-shaped) into the chain
             //    via FromAsync — single-shot, no leak.
             if (streams.TryGetValue(address, out var callback))
+            {
+                OrleansRouteTrace.Write($"OrleansRoutingService.Deliver LOCAL_STREAM_HIT addr={address} id={delivery.Id}");
                 return Observable.FromAsync(ct => callback.Invoke(delivery, ct));
+            }
 
             // 2. Background mesh dispatch via the routing grain. Path resolution
             //    runs INSIDE the grain (silo-side) where the catalog is visible —
@@ -56,17 +87,25 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             //    chain. Tracked so Dispose can tear down outstanding work.
             if (!disposed)
             {
+                OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_TO_GRAIN addr={address} id={delivery.Id}");
                 var sub = new SingleAssignmentDisposable();
                 inFlight.Add(sub);
                 sub.Disposable = DispatchObservable(delivery, address)
                     .Catch<IMessageDelivery, Exception>(ex =>
                     {
                         logger.LogError(ex, "Failed to deliver to {Address}", address);
+                        OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_FAILED addr={address} id={delivery.Id} ex={ex.Message}");
                         SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}");
                         return Observable.Empty<IMessageDelivery>();
                     })
-                    .Finally(() => inFlight.Remove(sub))
-                    .Subscribe(_ => { }, ex => logger.LogError(ex, "Background dispatch faulted for {Address}", address));
+                    .Finally(() =>
+                    {
+                        OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_FINALLY addr={address} id={delivery.Id}");
+                        inFlight.Remove(sub);
+                    })
+                    .Subscribe(
+                        result => OrleansRouteTrace.Write($"OrleansRoutingService.Deliver DISPATCH_RESULT addr={address} id={delivery.Id} state={result.State}"),
+                        ex => logger.LogError(ex, "Background dispatch faulted for {Address}", address));
             }
 
             return Observable.Return(delivery.Forwarded(address));
@@ -190,6 +229,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     public IAsyncDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
+        OrleansRouteTrace.Write($"OrleansRoutingService.RegisterStream addr={address} streamName={address}");
 
         // Subscribe to the Orleans memory stream in the background. The returned
         // disposable holds the subscription Task; DisposeAsync awaits it so we
@@ -200,7 +240,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         var stream = GetStreamProvider(StreamProviders.Memory)
             .GetStream<IMessageDelivery>(address.ToString());
         var subscriptionTask = stream.SubscribeAsync((v, _) =>
-            callback.Invoke(v, CancellationToken.None));
+        {
+            OrleansRouteTrace.Write($"OrleansRoutingService.STREAM_CALLBACK addr={address} msg={v.Message?.GetType().Name} id={v.Id}");
+            return callback.Invoke(v, CancellationToken.None);
+        });
+        subscriptionTask.ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync FAULTED addr={address} ex={t.Exception?.InnerException?.Message}");
+            else
+                OrleansRouteTrace.Write($"OrleansRoutingService.SubscribeAsync OK addr={address}");
+        }, TaskScheduler.Default);
 
         return new AnonymousAsyncDisposable(async () =>
         {
