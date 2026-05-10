@@ -333,17 +333,21 @@ public class AdapterPersistenceService : IStorageService, IDisposable
             }, Scheduler.Default);
         });
 
-    /// <summary>Search delegated to the storage adapter when supported.
-    /// PostgreSQL backends route through <c>PostgreSqlMeshQuery</c>, which has a
-    /// SQL search path. The base adapter doesn't define a search method; if no
-    /// adapter-side search is wired up, callers must use IMeshQueryProvider's
-    /// secured query surface instead.</summary>
+    /// <summary>Substring match against name and content under
+    /// <paramref name="parentPath"/>. Walks the same descendant tree as
+    /// <see cref="GetDescendantsAsync"/> and filters in memory — fine for the
+    /// in-memory + file-system adapters tests use; PostgreSQL routes through
+    /// <c>PostgreSqlMeshQuery</c>'s SQL search path before reaching this.</summary>
     public async IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
     {
-        // No adapter-side search method on IStorageAdapter today; consumers
-        // route through IMeshQueryProvider.QueryAsync (Postgres push-down).
-        await Task.CompletedTask;
-        yield break;
+        await foreach (var node in GetDescendantsAsync(parentPath, options))
+        {
+            if (node.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) == true
+                || node.Content?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                yield return node;
+            }
+        }
     }
 
     public IObservable<bool> Exists(string path) =>
