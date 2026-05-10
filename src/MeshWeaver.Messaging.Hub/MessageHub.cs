@@ -41,33 +41,70 @@ public sealed class MessageHub : IMessageHub
     /// <summary>
     /// Cross-process dispose trace. Off by default — set <c>MESHWEAVER_DISPOSE_TRACE=1</c>
     /// to enable. When enabled, every phase boundary (Quiescing entry/exit,
-    /// DisposeHostedHubs entry/exit, ShutDown entry/exit) appends a single line
-    /// with timestamp, hub address, phase, and elapsed-ms; the developer can
-    /// <c>tail -f</c> the file to spot a stalled phase. Disabled by default
-    /// because the global file lock + per-call string formatting + AppendAllText
-    /// open/close serializes hub teardown — showed up at ~0.7% of test thread-time.
+    /// DisposeHostedHubs entry/exit, ShutDown entry/exit) is enqueued onto a
+    /// single bounded <see cref="System.Threading.Channels.Channel{T}"/> drained
+    /// by one writer task — the previous implementation took a global lock
+    /// per call and serialized hub teardown under load (~0.7% of test
+    /// thread-time). Drops the trace line silently when the channel is full
+    /// so a stalled writer can never delay dispose. <c>tail -f</c> the file
+    /// to spot a stalled phase.
     /// </summary>
     private static readonly bool DisposeTraceEnabled =
         Environment.GetEnvironmentVariable("MESHWEAVER_DISPOSE_TRACE") is "1" or "true" or "True";
     private static readonly string DisposeTraceLogPath =
         Path.Combine(Path.GetTempPath(), "meshweaver-dispose-trace.log");
-    private static readonly object DisposeTraceLogLock = new();
+
+    /// <summary>
+    /// Bounded async queue + single-writer drain task. Bounded depth means a
+    /// misbehaving disk (slow append, locked file) puts back-pressure on the
+    /// channel rather than serializing hub teardown via lock contention.
+    /// Drop-write on full so the trace stays best-effort.
+    /// </summary>
+    private static readonly System.Threading.Channels.Channel<string>? DisposeTraceChannel =
+        DisposeTraceEnabled
+            ? System.Threading.Channels.Channel.CreateBounded<string>(
+                new System.Threading.Channels.BoundedChannelOptions(4096)
+                {
+                    FullMode = System.Threading.Channels.BoundedChannelFullMode.DropWrite,
+                    SingleReader = true
+                })
+            : null;
+
+    static MessageHub()
+    {
+        if (DisposeTraceChannel is null) return;
+        var reader = DisposeTraceChannel.Reader;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (await reader.WaitToReadAsync())
+                {
+                    while (reader.TryRead(out var line))
+                    {
+                        try { File.AppendAllText(DisposeTraceLogPath, line + Environment.NewLine); }
+                        catch
+                        {
+                            // Tracing must never throw out of the writer; drop the line.
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Outer guard — channel completion is the only normal exit path.
+            }
+        });
+    }
 
     private static void DisposeTrace(Address address, string phase, long elapsedMs, string? extra = null)
     {
-        if (!DisposeTraceEnabled) return;
-        try
-        {
-            var line = extra is null
-                ? $"{DateTime.UtcNow:HH:mm:ss.fff} {address} {phase} elapsed={elapsedMs}ms"
-                : $"{DateTime.UtcNow:HH:mm:ss.fff} {address} {phase} elapsed={elapsedMs}ms {extra}";
-            lock (DisposeTraceLogLock)
-                File.AppendAllText(DisposeTraceLogPath, line + Environment.NewLine);
-        }
-        catch
-        {
-            // Tracing must never throw out of dispose.
-        }
+        if (DisposeTraceChannel is null) return;
+        var line = extra is null
+            ? $"{DateTime.UtcNow:HH:mm:ss.fff} {address} {phase} elapsed={elapsedMs}ms"
+            : $"{DateTime.UtcNow:HH:mm:ss.fff} {address} {phase} elapsed={elapsedMs}ms {extra}";
+        // Non-blocking: drops on full so a stuck writer never delays dispose.
+        DisposeTraceChannel.Writer.TryWrite(line);
     }
 
     private readonly ILogger logger;
@@ -122,7 +159,13 @@ public sealed class MessageHub : IMessageHub
     {
         messageService.Start();
         if (!Configuration.DeferredInitialization)
-            Post(new InitializeHubRequest());
+            // Self-post: stamp hub-self impersonation so the PostPipeline's
+            // AccessContext fail-closed check (sync/ + mesh hubs) doesn't drop
+            // the framework's own gate-opener. Without this, sync sub-hubs
+            // created by SynchronizationStream.GetHostedHub never open their
+            // gates, every SetCurrentRequest stays buffered, and tests that
+            // depend on synced-query subscriptions timeout.
+            Post(new InitializeHubRequest(), o => o.ImpersonateAsHub(Address));
     }
 
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
