@@ -18,7 +18,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// static-provider partitions (NodeType definitions, doc namespaces, test
 /// fixtures) through the same routing path as writable partitions, without
 /// mixing static-provider concerns into the writable persisters
-/// (<see cref="InMemoryPersistenceService"/>, file-system, PostgreSQL).
+/// (<see cref="AdapterPersistenceService"/>, file-system, PostgreSQL).
 /// See <c>Doc/Architecture/PartitionedPersistence.md</c> §"Where Partitions Come From".
 ///
 /// All write operations throw <see cref="System.NotSupportedException"/>; static

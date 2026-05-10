@@ -15,12 +15,20 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
 
     public IMessageHub? GetHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
     {
-        if (messageHubs.TryGetValue(address, out var hub))
+        if (messageHubs.TryGetValue(address, out var hub) && hub.Disposal is null)
             return hub;
         lock (locker)
         {
+            // Re-check inside the lock; also evict any hub that has begun
+            // disposal so a delete-then-recreate sequence at the same path
+            // gets a fresh hub instead of buffering messages into the
+            // shutting-down one (cause of GetDataRequest@workspace/Acme hangs
+            // in NodeCopyHelperTest.CopyNodeTree_OverwritesExistingWhenForced).
             if (messageHubs.TryGetValue(address, out hub))
-                return hub;
+            {
+                if (hub.Disposal is null) return hub;
+                messageHubs.TryRemove(address, out _);
+            }
 
             if (IsDisposing)
             {

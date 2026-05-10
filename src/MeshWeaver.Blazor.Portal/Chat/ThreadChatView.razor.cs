@@ -767,6 +767,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
+    /// <summary>
+    /// Esc on the input cancels the in-flight round (Claude.ai pattern).
+    /// The typed text is preserved in MessageText so the user can re-send
+    /// after the cancel completes — or just hit Send to queue it as the
+    /// next round (PendingUserMessages on the thread).
+    /// </summary>
+    private void OnInputKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && ThreadViewModel?.IsExecuting == true && !isCancelling)
+        {
+            CancelExecution();
+        }
+    }
+
     private void CancelExecution()
     {
         if (string.IsNullOrEmpty(threadPath) || isCancelling)

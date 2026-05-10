@@ -16,7 +16,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 
 /// <summary>
 /// In-memory implementation of IMeshService.
-/// Extracts query functionality from InMemoryPersistenceService for use as a standalone service.
+/// Extracts query functionality from AdapterPersistenceService for use as a standalone service.
 /// </summary>
 internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
 {

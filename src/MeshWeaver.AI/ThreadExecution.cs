@@ -690,17 +690,18 @@ public static class ThreadExecution
         }
         else
         {
-            PushToResponseMessage("Loading conversation history...", ImmutableList<ToolCallEntry>.Empty,
-                ImmutableList<NodeChangeEntry>.Empty, request.AgentName, request.ModelName,
-                status: ThreadMessageStatus.Streaming);
-            clientObs = LoadPriorUserMessagesFromMesh(parentHub, threadPath, request.UserMessageId, logger)
-                .Select(prior =>
-                {
-                    var c = new AgentChatClient(parentHub.ServiceProvider, prior);
-                    c.SetThreadId(threadPath);
-                    parentHub.Set(c);
-                    return c;
-                });
+            // 🚨 New threads start with empty conversation history — no
+            // bootstrap query needed. The per-round
+            // <see cref="LoadFullConversationHistoryFromMesh"/> below loads
+            // ALL prior cells (user + assistant) per round, so resume after
+            // restart still gets full context. Skipping the cache-miss
+            // bootstrap query takes ~2s off cold-start latency on a brand-
+            // new thread (formerly: "Loading conversation history..."
+            // placeholder + 10s-timeout IMeshQueryCore.ObserveQuery scan).
+            var c = new AgentChatClient(parentHub.ServiceProvider, priorMessages: null);
+            c.SetThreadId(threadPath);
+            parentHub.Set(c);
+            clientObs = Observable.Return(c);
         }
 
         var initSub = clientObs.Take(1).Subscribe(chatClient =>

@@ -64,7 +64,7 @@ public class LanguageModelSyncedQueryTest : MonolithMeshTestBase
             })
             .Build();
 
-        var persistence = new InMemoryPersistenceService();
+        var persistence = new AdapterPersistenceService();
 
         return builder
             .UseMonolithMesh()

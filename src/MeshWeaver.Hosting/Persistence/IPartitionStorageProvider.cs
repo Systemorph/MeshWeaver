@@ -76,7 +76,7 @@ public interface IPartitionStorageProvider
     /// Storage adapter backing every partition that resolves to this
     /// rule. The adapter may be shared across partition keys when the
     /// rule is a wildcard / prefix; in that case the routing layer
-    /// uses one <see cref="InMemoryPersistenceService"/> per first-
+    /// uses one <see cref="AdapterPersistenceService"/> per first-
     /// segment with the same shared adapter (mirrors how the legacy
     /// FileSystemPartitionedStoreFactory works).
     /// </summary>

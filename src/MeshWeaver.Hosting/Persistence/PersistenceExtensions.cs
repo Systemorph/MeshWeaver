@@ -172,7 +172,7 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Adds in-memory persistence (no file system backing) using a single
-    /// <see cref="InMemoryPersistenceService"/> singleton. Use this when the test
+    /// <see cref="AdapterPersistenceService"/> singleton. Use this when the test
     /// or app does not need <see cref="IPartitionStorageProvider"/> rules
     /// (e.g. <see cref="EmbeddedResourcePartition"/>) — those go through the
     /// routing core and require <see cref="AddPartitionedInMemoryPersistence(IServiceCollection)"/>.
@@ -181,12 +181,12 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
-        return services.AddCoreAndWrapperServices<InMemoryPersistenceService>();
+        return services.AddCoreAndWrapperServices<AdapterPersistenceService>();
     }
 
     /// <summary>
     /// Adds in-memory persistence using the partition-routing stack. Each
-    /// first-segment partition gets its own <see cref="InMemoryPersistenceService"/>
+    /// first-segment partition gets its own <see cref="AdapterPersistenceService"/>
     /// via <see cref="InMemoryPartitionedStoreFactory"/>; explicit
     /// <see cref="IPartitionStorageProvider"/> rules (e.g.
     /// <see cref="EmbeddedResourcePartitionStorageProvider"/> registered by
@@ -228,7 +228,7 @@ public static class PersistenceExtensions
     /// <param name="services">The service collection</param>
     /// <param name="instance">The pre-created persistence service instance</param>
     /// <returns>The service collection for chaining</returns>
-    public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, InMemoryPersistenceService instance)
+    public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, AdapterPersistenceService instance)
     {
         return services.AddPersistence(instance);
     }
@@ -315,7 +315,7 @@ public static class PersistenceExtensions
         services.AddSingleton(storageAdapter);
 
         // Register common services and wrapper services
-        return services.AddCoreAndWrapperServices<InMemoryPersistenceService>();
+        return services.AddCoreAndWrapperServices<AdapterPersistenceService>();
     }
 
     /// <summary>
@@ -517,6 +517,13 @@ public static class PersistenceExtensions
                 sp.GetService<MeshConfiguration>(),
                 sp.GetService<ILoggerFactory>()));
 
+        // Surface AddMeshNodes seed (held in MeshConfiguration.Nodes) as an
+        // IStaticNodeProvider. Without this bridge the seed nodes are invisible
+        // to the partition routing core's static-node fan-in — historically they
+        // lived in InMemoryPersistenceService._nodes, which the no-cache rewrite
+        // dropped. See MeshConfigurationStaticNodeProvider.cs.
+        services.AddSingleton<IStaticNodeProvider, MeshConfigurationStaticNodeProvider>();
+
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
@@ -579,6 +586,13 @@ public static class PersistenceExtensions
                 sp.GetService<ILoggerFactory>()));
         services.AddSingleton<IMeshQueryProvider>(sp =>
             sp.GetRequiredService<StaticNodeQueryProvider>());
+
+        // Surface AddMeshNodes seed (held in MeshConfiguration.Nodes) as an
+        // IStaticNodeProvider. Without this bridge the seed nodes are invisible
+        // to the persistence read path — historically they lived in
+        // InMemoryPersistenceService._nodes, which the no-cache rewrite dropped.
+        // See MeshConfigurationStaticNodeProvider.cs.
+        services.AddSingleton<IStaticNodeProvider, MeshConfigurationStaticNodeProvider>();
 
         // Register IVersionQuery for non-partitioned mode (uses FileSystemVersionStore if available)
         services.TryAddSingleton<IVersionQuery>(sp =>

@@ -244,14 +244,18 @@ else
             </div>
         }
 
-        @* Monaco editor for markdown input with completion *@
-        <div class="input-container" style="@(!submissionHandler.IsInputEnabled ? "display: none;" : "")">
+        @* Monaco editor for markdown input with completion. Stays visible during
+           execution (Claude.ai pattern) — typing while a round is in flight is
+           allowed; the SubmitMessageRequest gets queued via PendingUserMessages
+           and dispatches when the current round completes. Esc on the editor
+           cancels the in-flight round (CancelExecution); the typed text is
+           preserved for the next send. *@
+        <div class="input-container" @onkeydown="@OnInputKeyDown">
             <MonacoEditorView @ref="monacoEditor"
                               Value="@MessageText"
                               ValueChanged="@OnMessageTextChanged"
                               OnSubmit="SendMessage"
                               OnCompletionAccepted="OnCompletionItemAccepted"
-                              IsDisabled="@(!submissionHandler.IsInputEnabled)"
                               Placeholder="@placeholderText"
                               Height="80px"
                               MaxHeight="200px"
