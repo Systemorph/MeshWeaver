@@ -390,11 +390,17 @@ public class DelegationProductionSiloConfigurator : ISiloConfigurator, IHostConf
         hostBuilder.UseOrleansMeshServer()
             .ConfigurePortalMesh()
             .AddRowLevelSecurity()
-            .AddMeshNodes(
-                new MeshNode("TestUser", "User") { Name = "TestUser", NodeType = "User" })
-            .AddMeshNodes(TestUserAdminAccess())
             .ConfigureServices(services =>
-                services.AddSingleton<IChatClientFactory, DelegationTestAgentFactory>())
+            {
+                services.AddSingleton<IChatClientFactory, DelegationTestAgentFactory>();
+                // Tests target `new Address("TestUser")` directly — register
+                // OrleansTestSeedProvider so TestUser + access policy live at
+                // the root path. The legacy `User/TestUser` seeds (preserved
+                // below for any backward-compat consumers) don't match the
+                // root-level target the tests use.
+                services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
+                return services;
+            })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
