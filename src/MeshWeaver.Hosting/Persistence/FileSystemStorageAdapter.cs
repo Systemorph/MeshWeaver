@@ -674,8 +674,90 @@ public class FileSystemStorageAdapter : IStorageAdapter
             }
         }
 
+        // Case-insensitive fallback for case-sensitive filesystems (Linux CI).
+        // Path normalisation upstream uses OrdinalIgnoreCase keying (workspace,
+        // _lastSaved, NormalizePath) but the file system itself preserves the
+        // original case of saved files, so a read with different casing misses.
+        // Walk the parent directory and match by segment with OrdinalIgnoreCase.
+        var ciMatch = ResolveCaseInsensitive(segments);
+        if (ciMatch != null)
+        {
+            foreach (var ext in SupportedExtensions)
+            {
+                var filePath = ciMatch + ext;
+                if (File.Exists(filePath))
+                    return (filePath, ext);
+            }
+            if (Directory.Exists(ciMatch))
+            {
+                foreach (var ext in SupportedExtensions)
+                {
+                    var indexPath = Path.Combine(ciMatch, $"index{ext}");
+                    if (File.Exists(indexPath))
+                        return (indexPath, ext);
+                }
+            }
+        }
+
         // Return the JSON path as default (for writes)
         return (basePath + ".json", ".json");
+    }
+
+    /// <summary>
+    /// Resolves a segment list to a filesystem-path by matching each segment
+    /// against the parent directory's entries with <see cref="StringComparison.OrdinalIgnoreCase"/>.
+    /// Returns the resolved absolute base path (without extension) or null if
+    /// any segment doesn't match. On case-insensitive filesystems (Windows) this
+    /// is a no-op pass-through; on Linux it lets a read of "graph/org1" find a
+    /// file written as "Graph/ORG1".
+    /// </summary>
+    private string? ResolveCaseInsensitive(string[] segments)
+    {
+        var current = _baseDirectory;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var segment = segments[i];
+            var isLast = i == segments.Length - 1;
+            if (!Directory.Exists(current)) return null;
+
+            string? matched = null;
+            if (!isLast)
+            {
+                // Intermediate segment must match a subdirectory.
+                foreach (var dir in Directory.EnumerateDirectories(current))
+                {
+                    if (string.Equals(Path.GetFileName(dir), segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matched = dir;
+                        break;
+                    }
+                }
+                if (matched is null) return null;
+                current = matched;
+            }
+            else
+            {
+                // Last segment: match either a directory (for index lookups) or
+                // a file stem (any supported extension).
+                foreach (var dir in Directory.EnumerateDirectories(current))
+                {
+                    if (string.Equals(Path.GetFileName(dir), segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return dir;
+                    }
+                }
+                foreach (var file in Directory.EnumerateFiles(current))
+                {
+                    var stem = Path.GetFileNameWithoutExtension(file);
+                    if (string.Equals(stem, segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Path.Combine(current, stem);
+                    }
+                }
+                return null;
+            }
+        }
+        return current;
     }
 
     /// <summary>
