@@ -540,6 +540,14 @@ public class StreamingSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory, ToolCallingFakeChatClientFactory>();
+                // Tests target `new Address("TestUser")` directly — register
+                // OrleansTestSeedProvider so TestUser + its access policy are
+                // visible at the root path. Without this the path-resolver
+                // returns null and RoutingGrain replies with NotFound on every
+                // request, which now cleanly surfaces as
+                // DeliveryFailureException("No node found at 'TestUser'.")
+                // since the routing layer's NotFound dispatch was fixed.
+                services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
                 return services;
             })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());

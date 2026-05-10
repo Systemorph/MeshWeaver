@@ -173,6 +173,7 @@ public class ChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
+                services.AddSingleton<IStaticNodeProvider, OrleansTestSeedProvider>();
                 return services;
             })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
