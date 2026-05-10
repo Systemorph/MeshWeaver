@@ -47,7 +47,6 @@ public class AgentMarkdownParsingTest(ITestOutputHelper output) : MonolithMeshTe
         // Verify expected agents exist
         nodes.Should().Contain(n => n.Path == "Agent/Orchestrator", "Orchestrator agent should exist");
         nodes.Should().Contain(n => n.Path == "Agent/Worker", "Worker agent should exist");
-        nodes.Should().Contain(n => n.Path == "Agent/Planner", "Planner agent should exist");
         nodes.Should().Contain(n => n.Path == "Agent/Researcher", "Researcher agent should exist");
         nodes.Should().Contain(n => n.Path == "Agent/ToolsReference", "ToolsReference should exist");
     }

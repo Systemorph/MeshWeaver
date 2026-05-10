@@ -29,7 +29,7 @@ Markdown nodes support embedded layout areas, mermaid diagrams, MathJax, code bl
 
 ## AI-First Agent Framework
 
-AI agents are first-class citizens built on **Microsoft.Extensions.AI**. The built-in agent roster (Planner, Researcher, Navigator, Executor) collaborates through the message hub. **MeshPlugin** gives agents typed access to Get, Search, Create, Update, Delete, and NavigateTo operations across the entire mesh.
+AI agents are first-class citizens built on **Microsoft.Extensions.AI**. The built-in agent roster (Orchestrator, Researcher, Worker, Navigator) collaborates through the message hub. **MeshPlugin** gives agents typed access to Get, Search, Create, Update, Delete, and NavigateTo operations across the entire mesh.
 
 ## Access Control
 

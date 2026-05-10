@@ -48,7 +48,7 @@ Insurance/
   Claims/
     Agent/              <- Agents for this node
       Researcher
-      Planner
+      Worker
       ClaimsProcessor   <- Custom agent for claims
     Submissions/
       ...
@@ -63,14 +63,14 @@ When a task is invoked, MeshWeaver selects the **lowest-most agent** in the hier
 
 ```mermaid
 flowchart TB
-    U[User Request] --> P[Planner Agent<br/>Flagship Model]
-    P -->|Tasks| R[Researcher Agent<br/>Small LM]
-    P -->|Execute| E[Executor Agent]
-    P -->|Specialized| C[Custom Agent<br/>Domain-Specific]
-    R -->|Context| P
-    R -->|Data| E
-    E -->|Results| P
-    C -->|Results| P
+    U[User Request] --> O[Orchestrator Agent<br/>Standard Model]
+    O -->|Research| R[Researcher Agent<br/>Small LM]
+    O -->|Execute| W[Worker Agent]
+    O -->|Specialized| C[Custom Agent<br/>Domain-Specific]
+    R -->|Context| O
+    R -->|Data| W
+    W -->|Results| O
+    C -->|Results| O
     subgraph Mesh["Mesh Graph"]
         T[Task Descriptions]
         S[Schemas]
@@ -78,7 +78,7 @@ flowchart TB
         I[Instructions]
     end
     R <-->|Query| Mesh
-    E <-->|CRUD| Mesh
+    W <-->|CRUD| Mesh
     C <-->|Domain Ops| Mesh
 ```
 
@@ -86,9 +86,9 @@ flowchart TB
 
 | Agent | Model Size | Purpose |
 |-------|------------|----------|
-| **Planner** | Flagship (GPT-4, Claude) | Decomposes tasks, orchestrates workflow |
+| **Orchestrator** | Standard | Understands the situation, plans the work itself, dispatches execution |
 | **Researcher** | Small LM (GPT-3.5, Haiku) | Gathers context, searches data |
-| **Executor** | Medium | Performs CRUD operations, runs workflows |
+| **Worker** | Medium | Performs CRUD operations, runs the dispatched write steps |
 | **Custom** | Configurable | Domain-specific tasks (claims, underwriting, etc.) |
 
 You can define **custom agents** for specific tasks by creating Agent nodes in the mesh. These agents inherit from base agents but add domain-specific instructions, tools, and behaviors.

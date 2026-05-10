@@ -276,7 +276,7 @@ internal class DelegationTestAgentFactory(IMessageHub hub) : ChatClientAgentFact
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {
         // Default agent (Orchestrator) delegates; sub-agents return text
-        var isDefault = agentConfig.IsDefault || agentConfig.Id is "Orchestrator" or "Planner";
+        var isDefault = agentConfig.IsDefault || agentConfig.Id is "Orchestrator";
         return isDefault
             ? new DelegatingTestChatClient()
             : new SimpleTestChatClient("Sub-thread completed the research task successfully.");

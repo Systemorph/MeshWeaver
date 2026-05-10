@@ -232,8 +232,7 @@ internal class DelegationToolFakeChatClientFactory(IMessageHub hub) : ChatClient
         // Default / orchestrator-tier agents emit the delegate_to_agent function call;
         // child agents (Executor, etc.) just stream plain text.
         var isDefault = agentConfig.IsDefault
-            || agentConfig.Id == "Navigator"
-            || agentConfig.Id == "Planner";
+            || agentConfig.Id == "Navigator";
         return isDefault
             ? new DelegationToolFakeChatClient()
             : new FakeChatClient("Sub-thread response from delegated agent.");

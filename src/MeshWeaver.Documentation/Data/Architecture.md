@@ -65,7 +65,7 @@ UI is generated **where data lives**:
 
 AI agents are **first-class citizens** in the mesh:
 - Minimal system prompts - agents query for context
-- Multi-agent collaboration (Planner, Researcher, Executor)
+- Multi-agent collaboration (Orchestrator, Researcher, Worker)
 - MeshPlugin for mesh operations
 - MCP integration for external AI services
 

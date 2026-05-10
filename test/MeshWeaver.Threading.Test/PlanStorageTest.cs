@@ -21,7 +21,7 @@ namespace MeshWeaver.Threading.Test;
 /// <summary>
 /// Tests that plans are stored as Markdown nodes under the thread partition.
 /// The store_plan tool creates a node at {threadPath}/Plan with nodeType=Markdown.
-/// This mirrors Claude Code's plan mode: Planner (Opus) produces a plan,
+/// This mirrors Claude Code's plan mode: the Orchestrator produces a plan,
 /// stores it for reference, and the user approves before Worker executes.
 /// </summary>
 public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
