@@ -1,8 +1,10 @@
 using System;
+using System.Net.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Social;
 
@@ -42,38 +44,59 @@ public static class SocialExtensions
         // Platform publishers — gated by the presence of a client id so unconfigured
         // platforms don't end up in DI. Values come from user-secrets / env vars under
         // Social:LinkedIn:* and Social:Twitter:* (no entry in appsettings required).
+        //
+        // Lifetime: AddHttpClient<T> registers T as TRANSIENT by default. We want a
+        // single publisher instance per app, so we register the typed HttpClient (gives
+        // us factory-managed HttpClient lifetime + Polly extensibility), then register
+        // the publisher ITSELF as a singleton resolved lazily through the typed-client
+        // factory. The IPlatformPublisher alias points at the SAME singleton, so direct
+        // and via-interface resolution return the same instance.
+        var anyConfigured = false;
         var linkedInClientId = configuration["Social:LinkedIn:ClientId"];
         if (!string.IsNullOrEmpty(linkedInClientId))
         {
-            services.AddHttpClient<LinkedInPublisher>();
+            services.AddHttpClient(nameof(LinkedInPublisher));
             services.AddSingleton(new LinkedInOptions
             {
                 ClientId = linkedInClientId!,
                 ClientSecret = configuration["Social:LinkedIn:ClientSecret"] ?? ""
             });
+            services.AddSingleton(sp => new LinkedInPublisher(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(LinkedInPublisher)),
+                sp.GetRequiredService<LinkedInOptions>(),
+                sp.GetService<ILogger<LinkedInPublisher>>()));
             services.AddSingleton<IPlatformPublisher>(sp => sp.GetRequiredService<LinkedInPublisher>());
+            anyConfigured = true;
         }
 
         var xClientId = configuration["Social:Twitter:ClientId"];
         if (!string.IsNullOrEmpty(xClientId))
         {
-            services.AddHttpClient<XPublisher>();
+            services.AddHttpClient(nameof(XPublisher));
             services.AddSingleton(new XOptions
             {
                 ClientId = xClientId!,
                 ClientSecret = configuration["Social:Twitter:ClientSecret"] ?? ""
             });
+            services.AddSingleton(sp => new XPublisher(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(XPublisher)),
+                sp.GetRequiredService<XOptions>(),
+                sp.GetService<ILogger<XPublisher>>()));
             services.AddSingleton<IPlatformPublisher>(sp => sp.GetRequiredService<XPublisher>());
+            anyConfigured = true;
         }
 
-        // Hosted services. Each is optional in the sense that its dependencies
-        // (the three bridge interfaces) must be provided by the app; if any is
-        // missing at resolution time, DI throws at startup — which is the
-        // intended behavior: social publishing is all-or-nothing.
-        services.AddHostedService<ApprovalToPublishHandler>();
-        services.AddHostedService<ScheduledPostPublisher>();
-        services.AddHostedService<PostStatsRefresher>();
-        services.AddHostedService<PastPostIngestJob>();
+        // Hosted services run only when at least one platform is configured.
+        // Otherwise they would resolve zero IPlatformPublisher instances and
+        // either no-op forever (silent misconfiguration) or fault on missing
+        // bridge dependencies at the first tick.
+        if (anyConfigured)
+        {
+            services.AddHostedService<ApprovalToPublishHandler>();
+            services.AddHostedService<ScheduledPostPublisher>();
+            services.AddHostedService<PostStatsRefresher>();
+            services.AddHostedService<PastPostIngestJob>();
+        }
 
         return services;
     }

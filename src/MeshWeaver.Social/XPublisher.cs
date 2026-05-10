@@ -53,25 +53,72 @@ public sealed class XPublisher : IPlatformPublisher
         // Media support is follow-up once end-to-end text flow is verified.
         var body = new Dictionary<string, object> { ["text"] = request.Text };
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, new Uri(ApiBase, "2/tweets"))
+        // Retry once on 401 — the access token may have expired between
+        // EnsureFreshAsync and the actual API call (race window when TTL ends
+        // mid-publish). Refresh and reissue once.
+        var (resp, _) = await SendWith401RetryAsync(credential, ct, BuildRequest);
+        using (resp)
         {
-            Content = JsonContent.Create(body)
-        };
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var b = await resp.Content.ReadAsStringAsync(ct);
+                _logger?.LogWarning("X publish failed {Status}: {Body}", (int)resp.StatusCode, Truncate(b, 200));
+                return new PublishResult(null, null, DateTimeOffset.UtcNow, Error: $"X {(int)resp.StatusCode}: {b}");
+            }
 
-        using var resp = await _http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode)
-        {
-            var b = await resp.Content.ReadAsStringAsync(ct);
-            _logger?.LogWarning("X publish failed {Status}: {Body}", (int)resp.StatusCode, b);
-            return new PublishResult(null, null, DateTimeOffset.UtcNow, Error: $"X {(int)resp.StatusCode}: {b}");
+            // Defensive parse — on success we still occasionally see partial bodies
+            // (rate-limit warnings + degraded JSON shape). If the response shape is
+            // unexpected, fall back to "id unknown" — caller treats that as a publish
+            // that succeeded but whose URN couldn't be captured.
+            using var doc = await JsonDocument.ParseAsync(
+                await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            string? id = null;
+            if (doc.RootElement.TryGetProperty("data", out var dataEl)
+                && dataEl.TryGetProperty("id", out var idEl))
+                id = idEl.GetString();
+            if (id is null)
+                _logger?.LogWarning("X publish returned 2xx but no id in response — body shape unexpected");
+            var handle = (request.AuthorHandle ?? "").TrimStart('@');
+            var url = id is null || string.IsNullOrEmpty(handle)
+                ? null
+                : $"https://x.com/{Uri.EscapeDataString(handle)}/status/{id}";
+            return new PublishResult(id, url, DateTimeOffset.UtcNow);
         }
 
-        using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-        var id = doc.RootElement.GetProperty("data").GetProperty("id").GetString();
-        var handle = request.AuthorHandle.TrimStart('@');
-        var url = id is null ? null : $"https://x.com/{Uri.EscapeDataString(handle)}/status/{id}";
-        return new PublishResult(id, url, DateTimeOffset.UtcNow);
+        HttpRequestMessage BuildRequest(PlatformCredential cred)
+        {
+            var r = new HttpRequestMessage(HttpMethod.Post, new Uri(ApiBase, "2/tweets"))
+            {
+                Content = JsonContent.Create(body)
+            };
+            r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cred.AccessToken);
+            return r;
+        }
+    }
+
+    /// <summary>
+    /// Sends an HTTP request with the given credential and, if the response is
+    /// 401, refreshes the credential once and retries.
+    /// </summary>
+    private async Task<(HttpResponseMessage Response, PlatformCredential Credential)> SendWith401RetryAsync(
+        PlatformCredential credential,
+        CancellationToken ct,
+        Func<PlatformCredential, HttpRequestMessage> buildRequest)
+    {
+        using var firstReq = buildRequest(credential);
+        var resp = await _http.SendAsync(firstReq, ct);
+        if (resp.StatusCode != System.Net.HttpStatusCode.Unauthorized)
+            return (resp, credential);
+
+        resp.Dispose();
+        _logger?.LogInformation("X returned 401 — refreshing token and retrying once");
+        // Force-refresh: 401 means the token is genuinely stale even if the
+        // local clock disagrees with the issuer's expiry.
+        var stale = credential with { ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1) };
+        var refreshed = await EnsureFreshAsync(stale, ct);
+        using var retry = buildRequest(refreshed);
+        var retryResp = await _http.SendAsync(retry, ct);
+        return (retryResp, refreshed);
     }
 
     public async Task<PostStats> GetStatsAsync(string urn, PlatformCredential credential, CancellationToken ct)
@@ -234,6 +281,9 @@ public sealed class XPublisher : IPlatformPublisher
             AcquiredAt = DateTimeOffset.UtcNow
         };
     }
+
+    private static string Truncate(string? s, int max) =>
+        string.IsNullOrEmpty(s) ? "" : (s.Length <= max ? s : s[..max] + "…");
 }
 
 /// <summary>

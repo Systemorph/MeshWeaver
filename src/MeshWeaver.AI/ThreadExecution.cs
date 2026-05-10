@@ -170,12 +170,29 @@ public static class ThreadExecution
             if (threadNode?.Content is not Thread { IsExecuting: true } thread)
                 return;
 
-            // Don't recover fresh executions — WatchForExecution handles them.
-            // Only recover truly stale ones (started > 2 minutes ago or no timestamp).
-            if (thread.ExecutionStartedAt is { } startedAt &&
-                (DateTime.UtcNow - startedAt).TotalMinutes < 2)
+            // Don't recover threads that are still actively eligible for
+            // auto-execute by WatchForExecution. The two init handlers race
+            // on hub startup; recovery's job is to clean up state left over
+            // from an interrupted Task.Run on a previous activation, NOT to
+            // clobber a thread that's about to (re)start. WatchForExecution's
+            // entry condition is {IsExecuting=true, ActiveMessageId set,
+            // PendingUserMessage set}, so we use the same shape as the
+            // "owned by auto-execute" guard. Recovery still runs for the
+            // stale case (Task.Run died → no PendingUserMessage was ever set
+            // for this round, or the round already consumed it).
+            //
+            // The previous heuristic (started < 2 minutes ago → skip) is
+            // dropped because the "no time limits" rework
+            // (commit 6dc436bf5) explicitly said an in-flight execution can
+            // legitimately exceed any time window, and a long-running agent
+            // that crashed at minute 5 would otherwise stay IsExecuting=true
+            // forever.
+            if (thread.PendingUserMessage is { Length: > 0 }
+                && !string.IsNullOrEmpty(thread.ActiveMessageId))
             {
-                logger?.LogInformation("[ThreadExec] Recovery: skipping fresh execution on {ThreadPath} (started {StartedAt})", threadPath, startedAt);
+                logger?.LogInformation(
+                    "[ThreadExec] Recovery: skipping {ThreadPath} — auto-execute candidate (pending msg set)",
+                    threadPath);
                 return;
             }
 
@@ -238,21 +255,11 @@ public static class ThreadExecution
     }
 
     /// <summary>
-    /// On hub startup, check if this Thread has a PendingUserMessage.
-    /// If so, create message cells and start execution automatically.
-    /// This enables thread creation + execution in a single CreateNodeRequest.
-    /// </summary>
-    /// <summary>
-    /// Watches the workspace stream for IsExecuting=true with ActiveMessageId.
-    /// When detected, starts execution on the _Exec hosted hub.
-    /// This is the ONLY trigger for execution — state-driven, not command-driven.
-    /// GUI sets IsExecuting=true via SubmitMessageRequest → execution starts automatically.
-    /// </summary>
-    /// <summary>
-    /// Watches for auto-execute threads (created with BuildThreadWithMessages).
-    /// These threads have PendingUserMessage set at creation time (not via HandleSubmitMessage).
-    /// Creates message cells and starts execution on hub startup.
-    /// HandleSubmitMessage handles all client-initiated execution directly.
+    /// Startup auto-execute hook for threads created with <c>BuildThreadWithMessages</c>:
+    /// IsExecuting=true + PendingUserMessage set at creation time. Creates the user/response
+    /// cells and dispatches the same SubmitMessageRequest path the GUI uses, so a single
+    /// <c>CreateNodeRequest</c> can atomically create a thread AND start its first round.
+    /// HandleSubmitMessage handles all client-initiated execution after startup.
     /// </summary>
     private static void WatchForExecution(IMessageHub hub)
     {
@@ -394,6 +401,19 @@ public static class ThreadExecution
         var userMsgId = request.UserMessageId ?? Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = request.ResponseMessageId ?? Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{threadPath}/{responseMsgId}";
+
+        // 🚨 Pre-allocate the CancellationTokenSource HERE, before the
+        // SubmitMessageResponse is posted. ExecuteMessageAsync on the _Exec
+        // hub uses parentHub.Get<CancellationTokenSource>() (= this hub) and
+        // the CTS must be visible the moment IsExecuting flips to true so
+        // that an early CancelThreadStreamRequest (Stop button clicked
+        // immediately after Send) doesn't no-op against a null slot.
+        // Replacing any existing CTS so a fresh round always starts with
+        // a non-cancelled token.
+        var existingCts = hub.Get<CancellationTokenSource>();
+        existingCts?.Dispose();
+        var executionCts = new CancellationTokenSource();
+        hub.Set(executionCts);
 
         // Update Thread state. Set PendingUserMessage so WatchForExecution
         // creates cells when they don't exist (server flow, delegation flow).
@@ -843,8 +863,15 @@ public static class ThreadExecution
                 // DelayDeactivation keeps the grain alive while the thread pool task runs.
                 // BeginAsyncOperation signals the grain keep-alive timer.
                 // After await Task.Run(...), execution returns to the grain scheduler.
-                var executionCts = new CancellationTokenSource();
-                parentHub.Set(executionCts);
+                //
+                // Reuse the CancellationTokenSource HandleSubmitMessage stored on the
+                // parent hub. Storing it here would be too late — a Stop click between
+                // SubmitMessageResponse arriving at the GUI and us reaching this point
+                // would find a null CTS and silently no-op. If for some reason the slot
+                // is empty (auto-execute via WatchForExecution doesn't go through
+                // HandleSubmitMessage), allocate a fresh one as a safety net.
+                var executionCts = parentHub.Get<CancellationTokenSource>()
+                    ?? StoreNewCts(parentHub);
                 // Cancel Task.Run when the hub disposes (grain deactivation).
                 // Without this, OnDeactivateAsync waits up to 120s for the Task.Run
                 // that's stuck on an AI API call with no cancellation signal.
@@ -887,7 +914,7 @@ public static class ThreadExecution
                     // Keep the grain alive during the entire execution — including tool calls
                     // and delegations where the streaming loop is blocked.
                     using var heartbeatSubscription = parentHub.BeginAsyncOperation();
-                    var snapshots = new Subject<StreamingSnapshot>();
+                    using var snapshots = new Subject<StreamingSnapshot>();
                     using var pushSub = snapshots
                         .Sample(StreamingSampleInterval)
                         .Subscribe(s => PushToResponseMessage(
@@ -1098,15 +1125,10 @@ public static class ThreadExecution
     }
 
     /// <summary>
-    /// <summary>
-    /// Push streaming content via DataChangeRequest to the response message hub.
-    /// One-way message — the response hub updates its own local workspace.
-    /// No remote stream sync, no amplification storm.
-    /// </summary>
-    /// <summary>
     /// Notifies the parent thread that this child thread's execution completed.
-    /// The parent's delegation tool handler resolves its TaskCompletionSource.
-    /// Only posts if this thread IS a child (path has a parent response message segment).
+    /// The parent's delegation tool handler resolves its <c>TaskCompletionSource</c>
+    /// via the per-hub completion-callback registered by <see cref="HandleSubmitMessage"/>.
+    /// Only fires if a callback is present (i.e., this thread is a delegation child).
     /// </summary>
     private static void NotifyParentCompletion(
         IMessageHub hub, string threadPath, string responseText, bool success,
@@ -1188,6 +1210,13 @@ public static class ThreadExecution
         {
             return null;
         }
+    }
+
+    private static CancellationTokenSource StoreNewCts(IMessageHub hub)
+    {
+        var cts = new CancellationTokenSource();
+        hub.Set(cts);
+        return cts;
     }
 
     private static string? Truncate(string? value, int maxLength = 500)

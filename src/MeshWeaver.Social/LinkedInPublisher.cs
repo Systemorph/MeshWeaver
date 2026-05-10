@@ -57,10 +57,18 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         // Upload media first (LinkedIn requires a registerUpload → PUT binary flow before referencing in ugcPosts).
         // For the first cut we only support text + external image URL rendered as ARTICLE.
         // Full binary upload is a follow-up once auth + simple posting is verified end-to-end.
-        object media = request.MediaUrls.Count == 0
-            ? new { shareMediaCategory = "NONE" }
+        //
+        // Two concrete shapes (no `dynamic` peeking) — keeps the JSON body statically typed
+        // so a refactor here surfaces as a compile error instead of a RuntimeBinderException.
+        object shareContent = request.MediaUrls.Count == 0
+            ? new
+            {
+                shareCommentary = new { text = request.Text },
+                shareMediaCategory = "NONE"
+            }
             : new
             {
+                shareCommentary = new { text = request.Text },
                 shareMediaCategory = "ARTICLE",
                 media = request.MediaUrls.Select(url => new
                 {
@@ -75,14 +83,7 @@ public sealed class LinkedInPublisher : IPlatformPublisher
             lifecycleState = "PUBLISHED",
             specificContent = new Dictionary<string, object>
             {
-                ["com.linkedin.ugc.ShareContent"] = new
-                {
-                    shareCommentary = new { text = request.Text },
-                    shareMediaCategory = ((dynamic)media).shareMediaCategory,
-                    media = request.MediaUrls.Count == 0
-                        ? null
-                        : ((dynamic)media).media
-                }
+                ["com.linkedin.ugc.ShareContent"] = shareContent
             },
             visibility = new Dictionary<string, object>
             {
@@ -90,35 +91,76 @@ public sealed class LinkedInPublisher : IPlatformPublisher
             }
         };
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, new Uri(ApiBase, "v2/ugcPosts"))
+        // Retry once on 401: the access token may have expired between
+        // EnsureFreshAsync above and the actual API call (small race window
+        // when the token's TTL ends mid-publish). Refresh once and reissue.
+        var (resp, finalCredential) = await SendWith401RetryAsync(credential, ct, BuildRequest);
+        using (resp)
         {
-            Content = JsonContent.Create(body)
-        };
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
-        req.Headers.Add("X-Restli-Protocol-Version", "2.0.0");
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body2 = await resp.Content.ReadAsStringAsync(ct);
+                _logger?.LogWarning("LinkedIn publish failed {Status}: {Body}",
+                    (int)resp.StatusCode, Truncate(body2, 200));
+                return new PublishResult(null, null, DateTimeOffset.UtcNow,
+                    Error: $"LinkedIn {(int)resp.StatusCode}: {body2}");
+            }
 
-        using var resp = await _http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode)
-        {
-            var body2 = await resp.Content.ReadAsStringAsync(ct);
-            _logger?.LogWarning("LinkedIn publish failed {Status}: {Body}", (int)resp.StatusCode, body2);
-            return new PublishResult(null, null, DateTimeOffset.UtcNow,
-                Error: $"LinkedIn {(int)resp.StatusCode}: {body2}");
+            // LinkedIn returns the URN in the "x-restli-id" header or response body "id" field.
+            string? urn = null;
+            if (resp.Headers.TryGetValues("x-restli-id", out var ids))
+                urn = System.Linq.Enumerable.FirstOrDefault(ids);
+            if (urn is null)
+            {
+                using var doc = await JsonDocument.ParseAsync(
+                    await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+                if (doc.RootElement.TryGetProperty("id", out var idEl))
+                    urn = idEl.GetString();
+            }
+
+            var url = urn is null ? null : $"https://www.linkedin.com/feed/update/{urn}/";
+            return new PublishResult(urn, url, DateTimeOffset.UtcNow);
         }
 
-        // LinkedIn returns the URN in the "x-restli-id" header or response body "id" field.
-        string? urn = null;
-        if (resp.Headers.TryGetValues("x-restli-id", out var ids))
-            urn = System.Linq.Enumerable.FirstOrDefault(ids);
-        if (urn is null)
+        HttpRequestMessage BuildRequest(PlatformCredential cred)
         {
-            using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-            if (doc.RootElement.TryGetProperty("id", out var idEl))
-                urn = idEl.GetString();
+            var r = new HttpRequestMessage(HttpMethod.Post, new Uri(ApiBase, "v2/ugcPosts"))
+            {
+                Content = JsonContent.Create(body)
+            };
+            r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cred.AccessToken);
+            r.Headers.Add("X-Restli-Protocol-Version", "2.0.0");
+            return r;
         }
+    }
 
-        var url = urn is null ? null : $"https://www.linkedin.com/feed/update/{urn}/";
-        return new PublishResult(urn, url, DateTimeOffset.UtcNow);
+    /// <summary>
+    /// Sends an HTTP request with the given credential and, if the response is
+    /// 401, refreshes the credential once and retries. Returns the final
+    /// response (caller disposes) plus the credential that was used for it
+    /// — caller persists if it differs from the input.
+    /// </summary>
+    private async Task<(HttpResponseMessage Response, PlatformCredential Credential)> SendWith401RetryAsync(
+        PlatformCredential credential,
+        CancellationToken ct,
+        Func<PlatformCredential, HttpRequestMessage> buildRequest)
+    {
+        using var firstReq = buildRequest(credential);
+        var resp = await _http.SendAsync(firstReq, ct);
+        if (resp.StatusCode != HttpStatusCode.Unauthorized)
+            return (resp, credential);
+
+        resp.Dispose();
+        _logger?.LogInformation("LinkedIn returned 401 — refreshing token and retrying once");
+        // Force-refresh by zeroing the cached freshness so EnsureFreshAsync's
+        // skew-tolerant check ("expires in > 60s? skip refresh") doesn't
+        // short-circuit. We just got a 401 → token is genuinely stale even if
+        // the local clock disagrees.
+        var stale = credential with { ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1) };
+        var refreshed = await EnsureFreshAsync(stale, ct);
+        using var retry = buildRequest(refreshed);
+        var retryResp = await _http.SendAsync(retry, ct);
+        return (retryResp, refreshed);
     }
 
     public async Task<PostStats> GetStatsAsync(string urn, PlatformCredential credential, CancellationToken ct)
@@ -378,7 +420,8 @@ public sealed class LinkedInPublisher : IPlatformPublisher
         if (!resp.IsSuccessStatusCode)
         {
             var b = await resp.Content.ReadAsStringAsync(ct);
-            _logger?.LogWarning("LinkedIn token refresh failed {Status}: {Body}", (int)resp.StatusCode, b);
+            _logger?.LogWarning("LinkedIn token refresh failed {Status}: {Body}",
+                (int)resp.StatusCode, Truncate(b, 200));
             return credential; // caller will see 401 on next API call and surface the error
         }
 
@@ -395,6 +438,9 @@ public sealed class LinkedInPublisher : IPlatformPublisher
             AcquiredAt = DateTimeOffset.UtcNow
         };
     }
+
+    private static string Truncate(string? s, int max) =>
+        string.IsNullOrEmpty(s) ? "" : (s.Length <= max ? s : s[..max] + "…");
 }
 
 /// <summary>
