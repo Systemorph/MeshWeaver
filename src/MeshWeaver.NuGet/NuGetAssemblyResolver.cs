@@ -39,7 +39,16 @@ public sealed class NuGetAssemblyResolver(
 
         var framework = targetFramework ?? DefaultFramework;
         var key = BuildCacheKey(requested, framework);
-        return _cache.GetOrAdd(key, _ => ResolveCoreAsync(requested, framework, ct));
+        // Use CancellationToken.None on the shared task so a single caller's
+        // cancellation can't poison the resolution for everyone else; the
+        // per-caller `ct` projects through WaitAsync below.
+        var task = _cache.GetOrAdd(key, _ => ResolveCoreAsync(requested, framework, CancellationToken.None));
+        // Evict faulted/cancelled tasks BEFORE returning so a transient feed
+        // failure doesn't poison the cache for the lifetime of the resolver.
+        // The next caller retries from scratch.
+        if (task.IsCompleted && (task.IsFaulted || task.IsCanceled))
+            _cache.TryRemove(new KeyValuePair<string, Task<ResolvedPackageSet>>(key, task));
+        return ct.CanBeCanceled ? task.WaitAsync(ct) : task;
     }
 
     private async Task<ResolvedPackageSet> ResolveCoreAsync(
@@ -71,7 +80,15 @@ public sealed class NuGetAssemblyResolver(
         }
 
         var resolverContext = new PackageResolverContext(
-            dependencyBehavior: DependencyBehavior.Lowest,
+            // HighestMinor: pick the highest version that satisfies each
+            // constraint within the same major.minor as the target. For `#r`
+            // directives in user-authored code we want security fixes (patch
+            // bumps) to flow in transparently, while not silently jumping
+            // across minor or major boundaries that may carry breaking
+            // changes. `Lowest` (the previous default) pulled minimum-
+            // satisfying versions for transitives, which surfaced EOL/CVE
+            // releases when constraints used weak floors like `>= 1.0.0`.
+            dependencyBehavior: DependencyBehavior.HighestMinor,
             targetIds: targets.Select(t => t.Id),
             requiredPackageIds: Enumerable.Empty<string>(),
             packagesConfig: Enumerable.Empty<global::NuGet.Packaging.PackageReference>(),
@@ -180,6 +197,11 @@ public sealed class NuGetAssemblyResolver(
             return installedPath;
 
         // Try to hydrate from the persistent cache (e.g., Azure Blob) before hitting the feed.
+        // ⚠️ Hydrated content is trusted to match (id, versionString) — the cache
+        // implementation is responsible for keying its blobs correctly. If a
+        // poisoned cache (different package stored under wrong key) becomes a
+        // concern, INuGetPackageCache should evolve to expose a content-hash
+        // verification step here. See PR #95 review item #14.
         Directory.CreateDirectory(installedPath);
         if (await _packageCache.TryHydrateAsync(info.Id, versionString, installedPath, ct))
         {
