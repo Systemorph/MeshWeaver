@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -17,6 +18,15 @@ namespace MeshWeaver.Social;
 /// last <see cref="SocialOptions.StatsRefreshWindow"/>"); this service dispatches
 /// each to its platform publisher and applies the result via the bridge.
 ///
+/// Targets are processed in parallel (bounded by
+/// <see cref="SocialOptions.StatsRefreshDegreeOfParallelism"/>) so a slow API
+/// or large refresh window can't let a single tick overshoot the next interval.
+///
+/// Per-target failures are tracked and skipped for
+/// <see cref="SocialOptions.StatsRefreshFailureBackoff"/> after the most recent
+/// failure — keeps a degraded platform from generating thousands of repeat warnings
+/// every tick while the underlying issue is fixed.
+///
 /// Kept separate from <see cref="ScheduledPostPublisher"/> because stats-fetch
 /// cadence (30m default) is much coarser than publish cadence (60s default), and
 /// failures in stats fetch are non-fatal — we shouldn't retry aggressively.
@@ -28,6 +38,13 @@ public sealed class PostStatsRefresher : BackgroundService
     private readonly IApprovalPublishBridge _bridge;
     private readonly SocialOptions _options;
     private readonly ILogger<PostStatsRefresher>? _logger;
+
+    // Per-target last-failure timestamps. Targets that failed within
+    // SocialOptions.StatsRefreshFailureBackoff are skipped on subsequent ticks
+    // to avoid hammering a degraded platform with the same failing call every
+    // tick interval.
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _failureBackoff =
+        new(StringComparer.Ordinal);
 
     public PostStatsRefresher(
         IStatsRefreshSource source,
@@ -45,29 +62,27 @@ public sealed class PostStatsRefresher : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger?.LogInformation("PostStatsRefresher started (interval {Interval}, window {Window})",
-            _options.StatsTickInterval, _options.StatsRefreshWindow);
+        _logger?.LogInformation(
+            "PostStatsRefresher started (interval {Interval}, window {Window}, parallelism {Dop}, backoff {Backoff})",
+            _options.StatsTickInterval, _options.StatsRefreshWindow,
+            _options.StatsRefreshDegreeOfParallelism, _options.StatsRefreshFailureBackoff);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await foreach (var target in _source.GetDueRefreshesAsync(_options.StatsRefreshWindow, stoppingToken))
-                {
-                    var publisher = _publishers.FirstOrDefault(p =>
-                        string.Equals(p.Platform, target.Platform, StringComparison.OrdinalIgnoreCase));
-                    if (publisher is null) continue;
-
-                    try
+                // Materialise the due-refresh set first so we can drive
+                // Parallel.ForEachAsync with a known-size IAsyncEnumerable.
+                // The set is typically small (recent-window only).
+                var dop = Math.Max(1, _options.StatsRefreshDegreeOfParallelism);
+                await Parallel.ForEachAsync(
+                    _source.GetDueRefreshesAsync(_options.StatsRefreshWindow, stoppingToken),
+                    new ParallelOptions
                     {
-                        var stats = await publisher.GetStatsAsync(target.Urn, target.Credential, stoppingToken);
-                        await _bridge.ApplyStats(target.PostPath, stats).FirstAsync().ToTask(stoppingToken);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger?.LogWarning(ex, "Stats refresh failed for {PostPath}", target.PostPath);
-                    }
-                }
+                        MaxDegreeOfParallelism = dop,
+                        CancellationToken = stoppingToken
+                    },
+                    async (target, ct) => await ProcessTargetAsync(target, ct));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -76,6 +91,36 @@ public sealed class PostStatsRefresher : BackgroundService
 
             try { await Task.Delay(_options.StatsTickInterval, stoppingToken); }
             catch (OperationCanceledException) { break; }
+        }
+    }
+
+    private async ValueTask ProcessTargetAsync(StatsRefreshTarget target, CancellationToken ct)
+    {
+        // Per-target backoff: skip if last failure is within the backoff window.
+        var backoffKey = $"{target.Platform}|{target.PostPath}";
+        if (_failureBackoff.TryGetValue(backoffKey, out var lastFail)
+            && DateTimeOffset.UtcNow - lastFail < _options.StatsRefreshFailureBackoff)
+        {
+            return;
+        }
+
+        var publisher = _publishers.FirstOrDefault(p =>
+            string.Equals(p.Platform, target.Platform, StringComparison.OrdinalIgnoreCase));
+        if (publisher is null) return;
+
+        try
+        {
+            var stats = await publisher.GetStatsAsync(target.Urn, target.Credential, ct);
+            await _bridge.ApplyStats(target.PostPath, stats).FirstAsync().ToTask(ct);
+            // Success — clear any prior failure so the target rejoins normal cadence.
+            _failureBackoff.TryRemove(backoffKey, out _);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _failureBackoff[backoffKey] = DateTimeOffset.UtcNow;
+            _logger?.LogWarning(ex,
+                "Stats refresh failed for {PostPath} (next retry no sooner than {NextRetry:O})",
+                target.PostPath, DateTimeOffset.UtcNow + _options.StatsRefreshFailureBackoff);
         }
     }
 }

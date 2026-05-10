@@ -31,6 +31,24 @@ public sealed class SocialOptions
     public TimeSpan StatsRefreshWindow { get; set; } = TimeSpan.FromDays(30);
 
     /// <summary>
+    /// Max concurrent stats-refresh calls per tick. Default 8 — bounds the
+    /// per-tick wall-clock by roughly N×api-latency rather than serial sum.
+    /// Without this, a 30m tick processing 100 posts at 500 ms/call serially
+    /// would take 50 s — fine for that interval, but 4× as many posts and the
+    /// next tick is overshot. Bound it explicitly so the cadence stays stable.
+    /// </summary>
+    public int StatsRefreshDegreeOfParallelism { get; set; } = 8;
+
+    /// <summary>
+    /// After a stats-refresh failure for a specific (platform, postPath), skip
+    /// that target on subsequent ticks for this long. Default 15 m — long
+    /// enough to ride out a typical platform 5xx blip + retry cooldown,
+    /// short enough that a recovered target rejoins normal cadence within the
+    /// hour. Set to <see cref="TimeSpan.Zero"/> to disable backoff entirely.
+    /// </summary>
+    public TimeSpan StatsRefreshFailureBackoff { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>
     /// How often <see cref="PastPostIngestJob"/> fetches new historic posts from platforms.
     /// Default 24h — "historic" is for backfill + slow sync of posts made outside the mesh.
     /// </summary>
