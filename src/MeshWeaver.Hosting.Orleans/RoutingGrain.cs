@@ -102,16 +102,41 @@ internal class RoutingGrain(
                         ? $"No node found at '{addressPath}'."
                         : $"No node found at '{addressPath}'. Closest ancestor is '{resolution.Prefix}' (remainder='{resolution.Remainder}').";
                     logger.LogWarning("[ROUTE] NotFound: {FailureMessage}", failureMessage);
-                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND id={delivery.Id} addr={addressPath}");
-                    // Surface the failure back to the sender via memory stream
-                    // (the sender's hub handles DeliveryFailure as a normal response).
-                    var failStream = streamProvider.GetStream<IMessageDelivery>(delivery.Sender?.ToString() ?? addressPath);
-                    failStream.OnNextAsync(delivery.Failed(failureMessage))
-                        .ContinueWith(t =>
-                        {
-                            if (t.IsFaulted)
-                                logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver NotFound failure");
-                        }, TaskScheduler.Default);
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND id={delivery.Id} addr={addressPath} sender={delivery.Sender}");
+                    // Surface the failure back to the sender as a DeliveryFailure
+                    // MESSAGE (not just delivery.Failed(...)) — the sender's hub
+                    // matches the DeliveryFailure to its Observe(...) subject by
+                    // RequestId and fires OnError. Without this, the sender's
+                    // GetRemoteStream / hub.Observe spins on a never-emitting
+                    // observable until its caller-side timeout. Wraps the failure
+                    // as a fresh delivery targeted at the original sender, with
+                    // RequestId stamped from the failed request so the response
+                    // matches the right callback. Mirrors what the old return-
+                    // observable path did via OrleansRoutingService.SendDeliveryFailure.
+                    if (delivery.Sender != null)
+                    {
+                        var failureDelivery = new MessageDelivery<DeliveryFailure>(
+                            new DeliveryFailure(delivery, failureMessage)
+                            {
+                                ErrorType = ErrorType.NotFound
+                            },
+                            new PostOptions(address)
+                                .WithTarget(delivery.Sender)
+                                .WithProperty(PostOptions.RequestId, delivery.Id),
+                            System.Text.Json.JsonSerializerOptions.Default);
+                        var failStream = streamProvider.GetStream<IMessageDelivery>(delivery.Sender.ToString());
+                        failStream.OnNextAsync(failureDelivery)
+                            .ContinueWith(t =>
+                            {
+                                if (t.IsFaulted)
+                                {
+                                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND_DELIVER_FAIL id={delivery.Id} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
+                                    logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver NotFound failure to sender {Sender}", delivery.Sender);
+                                }
+                                else
+                                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND_DELIVER_OK id={delivery.Id} sender={delivery.Sender}");
+                            }, TaskScheduler.Default);
+                    }
                     return;
                 }
 
