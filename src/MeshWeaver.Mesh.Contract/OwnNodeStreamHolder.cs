@@ -10,7 +10,7 @@ namespace MeshWeaver.Mesh;
 /// duplicate persistence read on init. Stored in <see cref="MessageHubConfiguration"/>
 /// via type-keyed <c>config.Set(holder)</c>; consumed by MeshNodeTypeSource.
 /// </summary>
-public sealed record OwnNodeStreamHolder(IObservable<MeshNode> Stream);
+public sealed record OwnNodeStreamHolder(IObservable<MeshNode?> Stream);
 
 /// <summary>
 /// Extension to attach the routing-supplied own-MeshNode stream to a hub
@@ -18,11 +18,13 @@ public sealed record OwnNodeStreamHolder(IObservable<MeshNode> Stream);
 /// uses it as the source of truth — skipping the duplicate persistence read
 /// it would otherwise do, and propagating subsequent emissions from the
 /// routing layer (catalog stream / cluster sync) directly into the workspace.
+/// Items may be null when the routing layer signals "no node at this path
+/// right now" — MeshNodeTypeSource treats null emissions as a no-op seed.
 /// </summary>
 public static class OwnNodeStreamExtensions
 {
     public static MessageHubConfiguration WithOwnNodeStream(
         this MessageHubConfiguration config,
-        IObservable<MeshNode> ownNodeStream)
+        IObservable<MeshNode?> ownNodeStream)
         => config.Set(new OwnNodeStreamHolder(ownNodeStream));
 }

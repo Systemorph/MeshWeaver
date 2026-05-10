@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -30,15 +32,27 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private readonly string _hubPath;  // e.g., "graph/org1"
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
-    private readonly IObservable<MeshNode>? _ownNodeStream;
+    private readonly IObservable<MeshNode?>? _ownNodeStream;
     private InstanceCollection _lastSaved = new();
+
+    // Pending create / delete buffer. UpdateImpl enqueues here; a debounce
+    // timer drains via FlushPendingWrites every DebounceInterval. The dict
+    // collapses rapid retargets of the same path into the latest version,
+    // so we don't write the same row twice when the workspace pipeline
+    // fires UpdateImpl multiple times in quick succession.
+    private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(200);
+    private readonly ConcurrentDictionary<string, MeshNode> _pendingSaves = new();
+    private readonly ConcurrentBag<string> _pendingDeletes = new();
+    private Timer? _debounceTimer;
+    private readonly object _timerLock = new();
+    private readonly CompositeDisposable _pendingFlushSubscriptions = new();
 
     internal MeshNodeTypeSource(
         IWorkspace workspace,
         object dataSource,
         IStorageService? persistenceCore,
         string hubPath,
-        IObservable<MeshNode>? ownNodeStream = null)
+        IObservable<MeshNode?>? ownNodeStream = null)
         : base(workspace, dataSource)
     {
         _workspace = workspace;
@@ -61,6 +75,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
             TypeDefinition.CollectionName,
             new KeyFunction(o => ((MeshNode)o).Id, typeof(string)));
+
+        // Hub-teardown hook — awaits any pending flushes so a per-node hub
+        // disposing mid-write doesn't lose data. Without it, the next test
+        // (shared mesh, new path) could race the previous hub's in-flight
+        // SaveNode subscription and the persistence read could miss it.
+        workspace.Hub.RegisterForDisposal((IAsyncDisposable)new FlushOnDispose(this));
     }
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
@@ -112,19 +132,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             adds.Length, updates.Length, deletes.Length);
 
         var hubVersion = _workspace.Hub.Version;
-        var options = _workspace.Hub.JsonSerializerOptions;
 
-        // Creates: insta write through IStorageService — descendants and
-        // satellites depend on the parent existing, so we don't queue.
+        // Creates: enqueue for the debounce flush. Dict semantics collapse a
+        // burst of UpdateImpl emissions for the same path into a single
+        // SaveNode call — important when the workspace pipeline re-fires on
+        // each MeshNodeReference reducer notification.
         foreach (var node in adds)
         {
             var nodeWithVersion = node with { Version = hubVersion };
-            if (_persistenceCore is null)
-                continue;
-            _persistenceCore.SaveNode(nodeWithVersion, options).Subscribe(
-                _ => _logger?.LogDebug("MeshNodeTypeSource: Created {Path} (version={Version})",
-                    nodeWithVersion.Path, nodeWithVersion.Version),
-                ex => _logger?.LogError(ex, "MeshNodeTypeSource: CREATE FAILED for {Path}", nodeWithVersion.Path));
+            _pendingSaves[node.Path] = nodeWithVersion;
         }
 
         // Updates do NOT dispatch saves here — the persistence subscriber on
@@ -133,21 +149,130 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // The diff bookkeeping above keeps _lastSaved current so create/delete
         // detection on subsequent calls is accurate.
 
-        // Deletes: insta write — the per-node hub is the authoritative source,
-        // and the parent's children-list reads should see the absence
-        // immediately on next query.
+        // Deletes: same debounce queue. Path identity matches the saves dict,
+        // so a same-tick add-then-delete cancels the save (paths can't be in
+        // both buckets and survive).
         foreach (var node in deletes)
         {
-            if (string.IsNullOrEmpty(node.Path) || _persistenceCore is null)
-                continue;
-            var path = node.Path;
-            _persistenceCore.DeleteNode(path, recursive: false).Subscribe(
-                _ => _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", path),
-                ex => _logger?.LogError(ex, "MeshNodeTypeSource: DELETE FAILED for {Path}", path));
+            if (string.IsNullOrEmpty(node.Path)) continue;
+            _pendingDeletes.Add(node.Path);
         }
+
+        ResetDebounceTimer();
 
         _lastSaved = instances;
         return instances;
+    }
+
+    private void ResetDebounceTimer()
+    {
+        if (_persistenceCore is null) return;
+        lock (_timerLock)
+        {
+            _debounceTimer?.Dispose();
+            _debounceTimer = new Timer(_ =>
+            {
+                // Subscribe drives the flush — observable returns Unit when all
+                // ops have settled. Disposable retained so FlushOnDispose can
+                // wait on in-flight subscriptions during hub teardown.
+                var sub = FlushPendingWrites().Subscribe(_ => { }, _ => { });
+                _pendingFlushSubscriptions.Add(sub);
+            }, null, DebounceInterval, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    /// <summary>
+    /// Drains <see cref="_pendingSaves"/> and <see cref="_pendingDeletes"/> into
+    /// a composed IObservable&lt;Unit&gt; — each save/delete becomes one step
+    /// in a Concat chain that completes only after every op has acked. The
+    /// debounce timer subscribes for fire-and-forget; <see cref="FlushOnDispose"/>
+    /// awaits the same observable on hub teardown so no in-flight write is lost.
+    /// </summary>
+    private IObservable<System.Reactive.Unit> FlushPendingWrites()
+    {
+        if (_persistenceCore is null)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        var saves = new List<MeshNode>();
+        foreach (var key in _pendingSaves.Keys.ToArray())
+            if (_pendingSaves.TryRemove(key, out var node))
+                saves.Add(node);
+
+        var deletes = new List<string>();
+        while (_pendingDeletes.TryTake(out var path))
+            deletes.Add(path);
+
+        if (saves.Count == 0 && deletes.Count == 0)
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        _logger?.LogDebug("MeshNodeTypeSource: Flushing {Saves} saves, {Deletes} deletes for {HubPath}",
+            saves.Count, deletes.Count, _hubPath);
+
+        var options = _workspace.Hub.JsonSerializerOptions;
+        var saveOps = saves.Select(node =>
+            _persistenceCore.SaveNode(node, options)
+                .Select(_ =>
+                {
+                    _logger?.LogDebug("MeshNodeTypeSource: Saved {Path} (version={Version})",
+                        node.Path, node.Version);
+                    return System.Reactive.Unit.Default;
+                })
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    _logger?.LogError(ex, "MeshNodeTypeSource: SAVE FAILED for {Path} (version={Version})",
+                        node.Path, node.Version);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                }));
+
+        var deleteOps = deletes.Select(path =>
+            _persistenceCore.DeleteNode(path, recursive: false)
+                .Select(_ =>
+                {
+                    _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", path);
+                    return System.Reactive.Unit.Default;
+                })
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    _logger?.LogError(ex, "MeshNodeTypeSource: DELETE FAILED for {Path}", path);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                }));
+
+        return saveOps.Concat(deleteOps).Concat()
+            .DefaultIfEmpty(System.Reactive.Unit.Default)
+            .LastAsync();
+    }
+
+    /// <summary>
+    /// Hub-teardown adapter that runs <see cref="FlushPendingWrites"/> one last
+    /// time and waits for completion. Without this, a per-node hub disposing
+    /// mid-write loses the in-flight save — the next test reads the file
+    /// before it landed on disk and reports "node not found".
+    /// </summary>
+    private sealed class FlushOnDispose(MeshNodeTypeSource owner) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                lock (owner._timerLock)
+                {
+                    owner._debounceTimer?.Dispose();
+                    owner._debounceTimer = null;
+                }
+                await owner.FlushPendingWrites()
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .DefaultIfEmpty(System.Reactive.Unit.Default);
+            }
+            catch (Exception ex)
+            {
+                owner._logger?.LogWarning(ex,
+                    "MeshNodeTypeSource: final flush failed for {HubPath}", owner._hubPath);
+            }
+            finally
+            {
+                owner._pendingFlushSubscriptions.Dispose();
+            }
+        }
     }
 
     private InstanceCollection MergePartialUpdates(InstanceCollection instances)
@@ -209,6 +334,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken)
     {
+        // Single source of truth for the own MeshNode — MeshDataSource resolves
+        // it from the unified built-in → static → routing-stream → persistence
+        // chain. No fallback branch here: when MeshDataSource is asked for a
+        // built-in or static node it returns early with InitialData (never
+        // instantiates this type source); a writable per-node hub always gets a
+        // non-null ownNodeStream from the routing stream or persistence read.
         if (_ownNodeStream is not null)
         {
             return _ownNodeStream
@@ -216,13 +347,8 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 .Select(rawNode => BuildInstanceCollection(rawNode));
         }
 
-        if (_persistenceCore is not null)
-        {
-            return _persistenceCore.GetNode(_hubPath, _workspace.Hub.JsonSerializerOptions)
-                .Select(rawNode => BuildInstanceCollection(rawNode));
-        }
-
-        // No stream and no persistence — emit empty and open the gate so
+        // Defensive: someone constructed this type source without a stream
+        // (test fixtures, future caller). Emit empty and open the gate so
         // queued CreateNodeRequest / GetDataResponse traffic isn't held forever.
         _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
         return Observable.Return(_lastSaved);

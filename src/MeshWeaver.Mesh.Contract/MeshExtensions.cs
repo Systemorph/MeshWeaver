@@ -343,16 +343,23 @@ public static class MeshExtensions
                             // 5. Enrich (optional service). EnrichWithNodeType returns
                             //    IObservable<MeshNode> directly — no Observable.FromAsync
                             //    wrapper, no Task-await deadlock risk in the hub flow.
+                            logger.LogDebug("[CreateNode] step=enrich-start path={Path} nodeTypeService={HasService}",
+                                newNode.Path, hub.ServiceProvider.GetService<INodeTypeService>() != null);
                             var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
                             var enrichedObs = nodeTypeService != null
                                 ? nodeTypeService.EnrichWithNodeType(newNode)
+                                    .Do(_ => logger.LogDebug("[CreateNode] step=enrich-emit path={Path}", newNode.Path))
                                 : Observable.Return(newNode);
 
                             // 6. Persist.
                             return enrichedObs.SelectMany(enriched =>
                             {
+                                logger.LogDebug("[CreateNode] step=save-start path={Path} persistence={HasPersistence}",
+                                    enriched.Path, persistence != null);
                                 var saveObs = persistence != null
                                     ? persistence.SaveNode(enriched)
+                                        .Do(s => logger.LogDebug("[CreateNode] step=save-emit path={Path} version={Version}",
+                                            s.Path, s.Version))
                                     : Observable.Return(enriched);
                                 return saveObs.Select(saved => (mode: "create", node: saved));
                             });
@@ -417,6 +424,7 @@ public static class MeshExtensions
                     // waits forever. The node is already persisted — but if a post-creation
                     // handler errored, surface that as a Fail so the caller can react (don't
                     // silently lie with Ok).
+                    logger.LogDebug("[CreateNode] step=post-handlers-start path={Path}", resultNode.Path);
                     RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
                         .Subscribe(
                             _ => { },
@@ -431,8 +439,12 @@ public static class MeshExtensions
                                         NodeCreationRejectionReason.Unknown),
                                     o => o.ResponseFor(request));
                             },
-                            () => hub.Post(CreateNodeResponse.Ok(resultNode),
-                                o => o.ResponseFor(request)));
+                            () =>
+                            {
+                                logger.LogDebug("[CreateNode] step=post-handlers-done path={Path} — posting Ok", resultNode.Path);
+                                hub.Post(CreateNodeResponse.Ok(resultNode),
+                                    o => o.ResponseFor(request));
+                            });
                 },
                 ex =>
                 {
