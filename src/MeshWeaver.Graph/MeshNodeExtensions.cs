@@ -155,6 +155,31 @@ public static class MeshNodeExtensions
         IMessageDelivery<TrackActivityRequest> delivery)
     {
         var req = delivery.Message;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.ActivityTracking");
+
+        // Guard: userId must be the User MeshNode's Id (e.g. "alice"), not the
+        // email. UserContextMiddleware.TryLoadMeshUserAsync resolves email →
+        // username before posting, but the lookup can fail (User node missing,
+        // brand-new mesh, transient query error). An email-shaped userId would
+        // build an activity path containing '@', which the Address parser
+        // interprets as a hub-host separator — the resulting path is
+        // unaddressable and every routing attempt logs [ROUTE] NotFound until
+        // the request finally gives up. Better to skip with one warning than
+        // to spam the route layer with unresolvable paths.
+        if (string.IsNullOrEmpty(req.UserId)
+            || req.UserId.Contains('@')
+            || req.NodePath.Contains('@'))
+        {
+            logger?.LogWarning(
+                "TrackActivity skipped: userId={UserId} nodePath={NodePath} — " +
+                "expected username, got email/empty. UserContextMiddleware's " +
+                "email→username resolution failed upstream; tracking with this " +
+                "shape would build unaddressable paths.",
+                req.UserId, req.NodePath);
+            return delivery.Processed();
+        }
+
         var workspace = hub.GetWorkspace();
         var encodedPath = req.NodePath.Replace("/", "_");
         // Activity records live under {userId}/_UserActivity/{id} — every user
@@ -163,14 +188,34 @@ public static class MeshNodeExtensions
         var activityPath = $"{req.UserId}/_UserActivity/{encodedPath}";
         var now = DateTimeOffset.UtcNow;
 
+        logger?.LogDebug(
+            "TrackActivity ENTER: userId={UserId} activityPath={Path} type={ActivityType}",
+            req.UserId, activityPath, req.ActivityType);
+
         var stream = GetCachedActivityStream(workspace, activityPath);
 
         // Read latest from the cached RemoteStream → fold into new record → write.
-        // Take(1).Timeout: when the per-node hub isn't activated yet (first-ever
-        // track for this path) Subscribe never emits — TimeoutException → null,
-        // interpreted as "no record yet" so we route to CreateNode instead of Update.
+        // The probe's two miss-modes:
+        //   1. Per-node hub doesn't exist yet (first-ever track for this path):
+        //      routing returns DeliveryFailureException("No node found at ...")
+        //      almost immediately — the SubscribeRequest fails fast.
+        //   2. Hub exists but hasn't emitted Initial within 2 s: TimeoutException.
+        // Both mean "treat as first-time create". We catch any exception on the
+        // probe and route through to CreateNode.
+        //
+        // Known race: two concurrent tracks for the same path both see the
+        // miss probe and both attempt CreateNode → one wins, the other gets
+        // InvalidOperationException("Node already exists"). The CreateNode
+        // call below catches that race and falls through to a stream.Update
+        // so the second tracker's increment isn't lost.
         stream.Take(1).Timeout(TimeSpan.FromSeconds(2))
-            .Catch<MeshNode, TimeoutException>(_ => Observable.Return<MeshNode>(null!))
+            .Catch<MeshNode, Exception>(ex =>
+            {
+                logger?.LogDebug(ex,
+                    "TrackActivity probe miss for {Path} ({Kind}) — treating as first-time create.",
+                    activityPath, ex.GetType().Name);
+                return Observable.Return<MeshNode>(null!);
+            })
             .SelectMany(existing =>
             {
                 var existingRecord = existing?.Content as UserActivityRecord;
@@ -200,7 +245,12 @@ public static class MeshNodeExtensions
                 };
 
                 if (existing != null)
+                {
+                    logger?.LogDebug(
+                        "TrackActivity UPDATE: {Path} count={Count}",
+                        activityPath, record.AccessCount);
                     return stream.Update(_ => saveNode);
+                }
 
                 // First-time creation: per-node hub isn't activated yet, RemoteStream
                 // can't write. Fall through to IMeshService.CreateNode which routes via
@@ -208,21 +258,47 @@ public static class MeshNodeExtensions
                 // Update branch above and reuse the now-warm cached stream.
                 var meshService = hub.ServiceProvider.GetService<IMeshService>();
                 if (meshService != null)
-                    return meshService.CreateNode(saveNode);
+                {
+                    logger?.LogDebug(
+                        "TrackActivity CREATE: {Path}",
+                        activityPath);
+                    return meshService.CreateNode(saveNode)
+                        // Race coalesce: a concurrent track for the same path
+                        // beat us to CreateNode — fold our increment in via
+                        // Update on the now-warm stream instead of throwing.
+                        .Catch<MeshNode, InvalidOperationException>(ex =>
+                        {
+                            if (!IsAlreadyExistsRace(ex))
+                                return Observable.Throw<MeshNode>(ex);
+                            logger?.LogDebug(
+                                "TrackActivity CREATE→UPDATE race for {Path}: another concurrent track won; folding via Update.",
+                                activityPath);
+                            return stream.Update(_ => saveNode);
+                        });
+                }
 
                 var storage = hub.ServiceProvider.GetService<IStorageService>();
                 return storage?.SaveNode(saveNode, hub.JsonSerializerOptions)
                        ?? Observable.Empty<MeshNode>();
             })
             .Subscribe(
-                _ => { },
-                ex =>
-                {
-                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.ActivityTracking");
-                    logger?.LogError(ex, "Failed to track activity for user={UserId} path={Path}", req.UserId, req.NodePath);
-                });
+                _ => logger?.LogDebug(
+                    "TrackActivity DONE: {Path}", activityPath),
+                ex => logger?.LogError(ex,
+                    "Failed to track activity for user={UserId} path={Path}",
+                    req.UserId, req.NodePath));
         return delivery.Processed();
     }
+
+    /// <summary>
+    /// True for the specific "Node already exists" signal raised by
+    /// <c>MeshService.CreateNode</c> when persistence rejects a duplicate
+    /// path. Distinguishes the concurrent-track race from genuine
+    /// <see cref="InvalidOperationException"/>s (validation failures,
+    /// missing parent, etc.) which must still surface as errors.
+    /// </summary>
+    private static bool IsAlreadyExistsRace(InvalidOperationException ex)
+        => ex.Message.StartsWith("Node already exists:", StringComparison.Ordinal);
 
     public static ITypeRegistry WithGraphTypes(this ITypeRegistry typeRegistry)
     {

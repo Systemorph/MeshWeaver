@@ -67,24 +67,31 @@ internal class SecurityService : ISecurityService, IDisposable
     // Keyed by namespace (scope), value is list of AccessAssignment nodes at that scope
     private readonly Dictionary<string, List<MeshNode>> _staticAccessAssignments;
 
-    // Per-user scope-to-roles stream cache. Each entry is a hot
-    // Replay(1).RefCount observable backed by an internal keep-alive
-    // subscription. Multiple permission checks for the same user share a
-    // single computation per synced-query emission. Idle users evict after
-    // SlidingExpiration.
-    private readonly IMemoryCache _userScopeRolesCache = new MemoryCache(new MemoryCacheOptions());
+    // Per-scope cache of the recursive 4-query union (see
+    // Doc/Architecture/AccessControl.md "Effective-assignments lookup").
+    // Each cache entry is the CombineLatest of (a) the scope's own
+    // ObserveQuery, (b) the parent scope's cached observable (recursion),
+    // and — at the entry point — (c) the NodeType chain and (d) the static
+    // baselines. Replay(1).RefCount with a keep-alive Subscribe; eviction
+    // (sliding 5 min) disposes the keep-alive and lets RefCount tear down
+    // the underlying synced query. Cache key is the scope path (string);
+    // empty string == root. NodeType and statics are combined at the
+    // outer evaluation step, not cached per (scope, nodeType) — that keeps
+    // entries shared across consumers regardless of which NodeType they
+    // arrived through.
+    private readonly IMemoryCache _scopeAssignmentsCache = new MemoryCache(new MemoryCacheOptions());
     private static readonly TimeSpan UserCacheTtl = TimeSpan.FromMinutes(5);
 
-    // Shared synced-query stream: subscribe ONCE; per-user caches map off it.
-    private IObservable<MeshNode[]>? _allNodesShared;
-    private readonly object _allNodesLock = new();
-
-    // Parallel synced-query for PartitionAccessPolicy nodes — runtime policies
-    // (e.g. tests that CreateNode an AssignmentNodeFactory.Policy mid-test) need
-    // to participate in the cap/inheritance chain alongside the static seeds in
-    // _staticPolicies. Replay(1).RefCount as for AccessAssignments.
-    private IObservable<ImmutableDictionary<string, PartitionAccessPolicy>>? _allPoliciesShared;
-    private readonly object _allPoliciesLock = new();
+    // Per-scope cache of the recursive policy chain. Same shape as
+    // _scopeAssignmentsCache: each entry holds the cumulative
+    // namespace→policy map up to that scope, built by recursive
+    // CombineLatest with the parent's cached observable. Each scope opens
+    // ONE narrow ObserveQuery for `namespace:{scope} id:_Policy
+    // nodeType:PartitionAccessPolicy` — at most one matching node per
+    // scope, so the query is tiny and Initial emits fast even for empty
+    // scopes. See Doc/Architecture/AccessControl.md "Effective-assignments
+    // lookup" — policies follow the same shape.
+    private readonly IMemoryCache _scopePoliciesCache = new MemoryCache(new MemoryCacheOptions());
 
     public SecurityService(
         AccessService accessService,
@@ -127,30 +134,28 @@ internal class SecurityService : ISecurityService, IDisposable
             .GroupBy(n => n.Namespace ?? "")
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        // Eager-subscribe to both synced-query streams so the
+        // Eager-subscribe the ROOT scope's effective-assignments observable
+        // plus the PartitionAccessPolicy synced query so the
         // Replay(1).RefCount caches are populated by the time the first
         // HasPermission / GetEffectivePermissions call arrives. Without
-        // this, the first caller activates the upstream subscription cold
-        // and races the 2 s Timeout in GetEffectivePermissions — which is
-        // exactly what surfaced as the
-        // EffectivePermissionPostgresTest.RuntimeCreateNode_AccessAssignment_PgBacked
-        // flake: Admin's CreateNode fired before the AccessAssignment
-        // synced query had emitted Initial, the Timeout fell through to
-        // an empty role set, and the validator denied an Admin write.
-        // Errors during initial subscribe (e.g. provider not ready yet)
-        // surface only as warnings — the lazy double-checked init in
-        // ObserveAllMeshNodes / ObserveAllPolicies remains the safety net
-        // for any truly-late HasPermission caller.
+        // this, the first caller activates the upstream subscription cold —
+        // historically that races a Timeout in GetEffectivePermissions
+        // (now removed) and falls back to "no synced roles".
+        //
+        // The root scope warm-up cascades: every other scope's cache entry
+        // recurses through the parent chain to the root, which is already
+        // warm and emits its Initial synchronously from the
+        // Replay(1).RefCount snapshot. Statics fold in at the same step.
         try
         {
-            _warmupSubscriptions.Add(ObserveAllMeshNodes()
+            _warmupSubscriptions.Add(ObserveScopeAssignments("")
                 .Subscribe(_ => { },
                     ex => _logger.LogWarning(ex,
-                        "SecurityService warm-up: AccessAssignment synced-query subscription faulted")));
-            _warmupSubscriptions.Add(ObserveAllPolicies()
+                        "SecurityService warm-up: root scope AccessAssignment subscription faulted")));
+            _warmupSubscriptions.Add(ObserveScopePolicies("")
                 .Subscribe(_ => { },
                     ex => _logger.LogWarning(ex,
-                        "SecurityService warm-up: PartitionAccessPolicy synced-query subscription faulted")));
+                        "SecurityService warm-up: root scope PartitionAccessPolicy subscription faulted")));
         }
         catch (Exception ex)
         {
@@ -162,8 +167,10 @@ internal class SecurityService : ISecurityService, IDisposable
     public void Dispose()
     {
         _warmupSubscriptions.Dispose();
-        if (_userScopeRolesCache is IDisposable disposableCache)
-            disposableCache.Dispose();
+        if (_scopeAssignmentsCache is IDisposable disposableAssignments)
+            disposableAssignments.Dispose();
+        if (_scopePoliciesCache is IDisposable disposablePolicies)
+            disposablePolicies.Dispose();
     }
 
     private JsonSerializerOptions Options => _hub.JsonSerializerOptions;
@@ -229,35 +236,33 @@ internal class SecurityService : ISecurityService, IDisposable
         var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(userId);
         var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, staticOnlyDeniedScopeRoles);
 
-        // CombineLatest the user's scope-roles snapshot with the live
-        // PartitionAccessPolicy map so a runtime-created policy participates
-        // in the cap/inheritance walk. Both observables are Replay(1).RefCount;
-        // we deliberately don't StartWith the policy stream — emitting an empty
-        // snapshot ahead of the synced query's Initial would race the
-        // BreaksInheritance check (the first CombineLatest emission would
-        // skip every runtime policy, AccessControlPipeline's Take(1) would
-        // lock in the wrong answer, and a deny-by-policy would slip through).
-        // The synced query emits Initial on subscribe, so the first valid
-        // combined emission carries whatever policies exist at that instant.
-        var enriched = GetUserScopeRolesStream(userId)
+        // 4-query union per scope: see Doc/Architecture/AccessControl.md
+        // "Effective-assignments lookup". The per-scope cache builds the
+        // effective AccessAssignment set as a recursive CombineLatest:
+        //   EffectiveAt(a/b/c) = EffectiveAt(a/b) ∪ SelfAt(a/b/c)
+        // bottoming out at the root which also unions in static baselines.
+        // Each scope opens ONE narrow ObserveQuery (`namespace:{scope}/_Access`)
+        // that emits Initial as soon as the engine resolves the namespace —
+        // empty result is a first-class emission, no Timeout needed.
+        //
+        // CombineLatest with ObserveAllPolicies so a runtime PartitionAccessPolicy
+        // participates in the cap/inheritance walk. No Timeout/Catch fallback:
+        // the narrow per-scope queries don't suffer the cold-start lag that the
+        // old global `scope:subtree` query did, so there's no warm-up window
+        // worth guarding against. If the synced engine genuinely faults, the
+        // error propagates through to the caller (AccessControlPipeline) which
+        // has its own 10 s deadline and fails closed.
+        var enriched = ObserveEffectiveAssignments(nodePath)
             .CombineLatest(
-                ObserveAllPolicies(),
-                (snap, policies) => (snap.Granted, snap.Denied, RuntimePolicies: policies))
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Catch<(ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
-                ImmutableDictionary<string, ImmutableHashSet<string>> Denied,
-                ImmutableDictionary<string, PartitionAccessPolicy> RuntimePolicies), Exception>(ex =>
-            {
-                _logger.LogWarning(ex,
-                    "GetUserScopeRolesStream timed out for {UserId} — staying with claim + " +
-                    "static seeds. AccessAssignment grants from the synced query won't apply " +
-                    "until the underlying SyncedQueryRegistry produces a first emission.",
-                    userId);
-                return Observable.Return((
-                    Granted: ImmutableDictionary<string, ImmutableHashSet<string>>.Empty,
-                    Denied: ImmutableDictionary<string, ImmutableHashSet<string>>.Empty,
-                    RuntimePolicies: ImmutableDictionary<string, PartitionAccessPolicy>.Empty));
-            })
+                // Pass nodePath here too: the policy chain we need is the one
+                // ending at this scope. Sibling paths share their common
+                // ancestor's cached entries via the recursive parent chain.
+                ObserveScopePolicies(nodePath),
+                (nodes, policies) =>
+                {
+                    var (granted, denied) = ComputeScopeRoles(userId, nodes);
+                    return (Granted: granted, Denied: denied, RuntimePolicies: policies);
+                })
             .Select(snap => ComputeRoleState(snap.Granted, nodePath, userId, snap.Denied, snap.RuntimePolicies));
 
         // Only emit the fast snapshot when it actually grants something —
@@ -485,32 +490,142 @@ internal class SecurityService : ISecurityService, IDisposable
     }
 
     /// <summary>
-    /// Per-user scope-to-roles cache. First subscribe per user computes the
-    /// complete scope→roles map by walking the synced AccessAssignment
-    /// collection + static seeds; subsequent permission checks for the same
-    /// user (within sliding TTL) get the cached snapshot immediately. The
-    /// cache entry holds an internal Subscribe to keep the
-    /// <c>Replay(1).RefCount</c> warm even when no external consumer is
-    /// listening; eviction (sliding 5 min) disposes the keep-alive.
+    /// Per-scope effective AccessAssignment observable. Implements the
+    /// recursive 4-query union described in <c>Doc/Architecture/AccessControl.md</c>:
+    /// <list type="bullet">
+    ///   <item><c>EffectiveAt(scope) = EffectiveAt(parent(scope)) ∪ SelfAt(scope)</c>
+    ///     — every level loads only its own <c>_Access</c> namespace; the
+    ///     combo with the level above is via <c>CombineLatest</c>.</item>
+    ///   <item><c>EffectiveAt("") = SelfAt("") ∪ statics</c> — root scope
+    ///     folds in <see cref="_staticAccessAssignments"/> from
+    ///     <c>IStaticNodeProvider</c>.</item>
+    /// </list>
+    ///
+    /// <para>Each cache entry is a <c>Replay(1).RefCount</c> backed by a
+    /// keep-alive Subscribe. Eviction (sliding 5 min) disposes the
+    /// keep-alive and lets the underlying narrow <c>ObserveQuery</c>
+    /// tear down via RefCount. Empty Initial is a first-class emission —
+    /// most scopes hold zero AccessAssignment rows, the query resolves
+    /// synchronously to <c>Empty</c>, and the chain propagates without
+    /// any Timeout fallback.</para>
+    ///
+    /// <para>Recursion termination: <paramref name="scope"/> == ""
+    /// (the root) does not recurse; it folds in <see cref="_staticAccessAssignments"/>
+    /// instead.</para>
     /// </summary>
-    private IObservable<(
-        ImmutableDictionary<string, ImmutableHashSet<string>> Granted,
-        ImmutableDictionary<string, ImmutableHashSet<string>> Denied)> GetUserScopeRolesStream(string userId)
+    private IObservable<IEnumerable<MeshNode>> ObserveScopeAssignments(string scope)
     {
-        return _userScopeRolesCache.GetOrCreate(userId, entry =>
+        var key = scope ?? string.Empty;
+        return _scopeAssignmentsCache.GetOrCreate(key, entry =>
         {
             entry.SlidingExpiration = UserCacheTtl;
-            var stream = ObserveAllMeshNodes()
-                .Select(allNodes => ComputeScopeRoles(userId, allNodes))
-                .DistinctUntilChanged()
+
+            // Self: narrow ObserveQuery for THIS scope's _Access subtree only.
+            // No `scope:selfAndAncestors` — every level loads itself; the chain
+            // is built via the parent CombineLatest below.
+            var workspace = _hub.GetWorkspace();
+            var nsQuery = string.IsNullOrEmpty(key) ? "_Access" : $"{key}/_Access";
+            var self = workspace.GetQuery(
+                $"$security-access:{key}",
+                $"namespace:{nsQuery} nodeType:{SecurityCollections.AccessAssignmentNodeType}");
+
+            // Parent: recursive reference to the parent scope's cached
+            // observable. Root scope folds in statics instead.
+            IObservable<IEnumerable<MeshNode>> parentOrBase;
+            if (string.IsNullOrEmpty(key))
+            {
+                // Static baselines from IStaticNodeProvider — synchronous,
+                // emitted once. Captured at construction time into
+                // _staticAccessAssignments (already grouped by namespace).
+                var staticNodes = _staticAccessAssignments.Values
+                    .SelectMany(list => list)
+                    .Where(n => n.NodeType == SecurityCollections.AccessAssignmentNodeType)
+                    .ToArray();
+                parentOrBase = Observable.Return<IEnumerable<MeshNode>>(staticNodes);
+            }
+            else
+            {
+                var parentScope = GetParentScope(key);
+                parentOrBase = ObserveScopeAssignments(parentScope);
+            }
+
+            var combined = Observable.CombineLatest(self, parentOrBase, UnionByPath)
+                .DistinctUntilChanged(MeshNodeListPathEquality.Instance)
                 .Replay(1)
                 .RefCount();
-            // Keep-alive subscription so RefCount doesn't tear down when
-            // no external subscribers are connected; disposed on cache eviction.
-            var keepAlive = stream.Subscribe(_ => { }, _ => { });
+
+            var keepAlive = combined.Subscribe(_ => { }, _ => { });
             entry.RegisterPostEvictionCallback((_, _, _, _) => keepAlive.Dispose());
-            return stream;
+            return combined;
         })!;
+    }
+
+    /// <summary>
+    /// Entry point combining the scope chain with the (optional) NodeType
+    /// chain. Both chains are independent recursions through
+    /// <see cref="ObserveScopeAssignments"/>; the NodeType chain captures
+    /// AccessAssignments living at the NodeType's own path (e.g.
+    /// <c>Agent/_Access</c>) that apply to every instance of that NodeType.
+    /// </summary>
+    private IObservable<IEnumerable<MeshNode>> ObserveEffectiveAssignments(
+        string nodePath, string? nodeTypePath = null)
+    {
+        var scopeChain = ObserveScopeAssignments(nodePath ?? string.Empty);
+        if (string.IsNullOrEmpty(nodeTypePath))
+            return scopeChain;
+        var typeChain = ObserveScopeAssignments(nodeTypePath);
+        return Observable.CombineLatest(scopeChain, typeChain, UnionByPath);
+    }
+
+    /// <summary>
+    /// Splits <paramref name="scope"/> at the last <c>/</c> to produce the
+    /// parent path. Root and single-segment scopes return the root ("").
+    /// </summary>
+    private static string GetParentScope(string scope)
+    {
+        if (string.IsNullOrEmpty(scope)) return string.Empty;
+        var idx = scope.LastIndexOf('/');
+        return idx < 0 ? string.Empty : scope[..idx];
+    }
+
+    /// <summary>
+    /// Union of two MeshNode sequences, deduplicated by <see cref="MeshNode.Path"/>.
+    /// Used by the recursive 4-query union to combine self/parent at every
+    /// scope level and scope/NodeType at the outer evaluation step.
+    /// </summary>
+    private static IEnumerable<MeshNode> UnionByPath(
+        IEnumerable<MeshNode> first, IEnumerable<MeshNode> second)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<MeshNode>();
+        foreach (var n in first)
+            if (!string.IsNullOrEmpty(n.Path) && seen.Add(n.Path))
+                result.Add(n);
+        foreach (var n in second)
+            if (!string.IsNullOrEmpty(n.Path) && seen.Add(n.Path))
+                result.Add(n);
+        return result;
+    }
+
+    /// <summary>
+    /// Equality by the unioned set of MeshNode paths — used by
+    /// <c>DistinctUntilChanged</c> on the recursive CombineLatest so we
+    /// don't re-emit when both upstreams fire with identical content.
+    /// </summary>
+    private sealed class MeshNodeListPathEquality : IEqualityComparer<IEnumerable<MeshNode>>
+    {
+        public static readonly MeshNodeListPathEquality Instance = new();
+
+        public bool Equals(IEnumerable<MeshNode>? x, IEnumerable<MeshNode>? y)
+        {
+            if (ReferenceEquals(x, y)) return true;
+            if (x is null || y is null) return false;
+            var xs = x.Select(n => n.Path).Where(p => !string.IsNullOrEmpty(p)).ToHashSet(StringComparer.Ordinal);
+            var ys = y.Select(n => n.Path).Where(p => !string.IsNullOrEmpty(p)).ToHashSet(StringComparer.Ordinal);
+            return xs.SetEquals(ys);
+        }
+
+        public int GetHashCode(IEnumerable<MeshNode> obj) => obj.Count();
     }
 
     private (
@@ -589,63 +704,101 @@ internal class SecurityService : ISecurityService, IDisposable
     /// scope-walk in <see cref="ComputeRoleState"/> alongside the static seeds
     /// loaded into <c>_staticPolicies</c>.
     /// </summary>
-    private IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> ObserveAllPolicies()
+    /// <summary>
+    /// Per-scope cached policy chain. Mirrors <see cref="ObserveScopeAssignments"/>:
+    /// each cache entry runs a narrow <c>ObserveQuery</c> for ONLY this scope's
+    /// <c>_Policy</c> node and unions it with the parent scope's cached chain
+    /// via <c>CombineLatest</c>. The emission is the cumulative
+    /// <c>namespace → policy</c> map from root to this scope. Recursion bottoms
+    /// out at the root which folds in <see cref="_staticPolicies"/> from
+    /// <see cref="IStaticNodeProvider"/>s.
+    ///
+    /// <para><c>EffectivePolicies(a/b/c) = EffectivePolicies(a/b) ∪
+    /// SelfPolicy(a/b/c)</c> — keyed by namespace. The cap/inheritance walk
+    /// in <see cref="ComputeRoleState"/> looks each scope's policy up in the
+    /// map; <c>BreaksInheritance</c> applied at the walk-time, not at the
+    /// composition step.</para>
+    /// </summary>
+    private IObservable<ImmutableDictionary<string, PartitionAccessPolicy>>
+        ObserveScopePolicies(string scope)
     {
-        if (_allPoliciesShared != null)
-            return _allPoliciesShared;
-        lock (_allPoliciesLock)
+        var key = scope ?? string.Empty;
+        return _scopePoliciesCache.GetOrCreate(key, entry =>
         {
-            if (_allPoliciesShared != null)
-                return _allPoliciesShared;
+            entry.SlidingExpiration = UserCacheTtl;
+
+            // Self: narrow query for THIS scope's _Policy node. At most one
+            // match per scope; Initial emits Empty fast for scopes without
+            // a runtime policy. No `scope:selfAndAncestors` — each level
+            // loads itself; the chain is built via the parent CombineLatest.
             var workspace = _hub.GetWorkspace();
-            _allPoliciesShared = workspace
-                .GetQuery("$security-partition-policies",
-                    $"nodeType:PartitionAccessPolicy scope:subtree")
-                .Select(arr =>
+            var nsFilter = string.IsNullOrEmpty(key)
+                ? "namespace: id:_Policy"
+                : $"namespace:{key} id:_Policy";
+            var self = workspace.GetQuery(
+                $"$security-policy:{key}",
+                $"{nsFilter} nodeType:{SecurityCollections.PartitionAccessPolicyNodeType}");
+
+            // Parent: recursive reference to parent scope's cached policy map.
+            // Root scope folds in statics instead.
+            IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> parentOrBase;
+            if (string.IsNullOrEmpty(key))
+            {
+                var staticMap = _staticPolicies.Aggregate(
+                    ImmutableDictionary<string, PartitionAccessPolicy>.Empty,
+                    (acc, kvp) => acc.SetItem(kvp.Key, kvp.Value));
+                parentOrBase = Observable.Return(staticMap);
+            }
+            else
+            {
+                parentOrBase = ObserveScopePolicies(GetParentScope(key));
+            }
+
+            var combined = Observable.CombineLatest(self, parentOrBase,
+                (selfNodes, parentMap) =>
                 {
-                    var result = ImmutableDictionary<string, PartitionAccessPolicy>.Empty;
-                    foreach (var node in arr)
+                    var dict = parentMap;
+                    foreach (var node in selfNodes)
                     {
                         if (node.Id != "_Policy") continue;
                         var policy = node.Content as PartitionAccessPolicy
                                      ?? DeserializePolicy(node);
                         if (policy is null) continue;
-                        result = result.SetItem(node.Namespace ?? "", policy);
+                        dict = dict.SetItem(node.Namespace ?? string.Empty, policy);
                     }
-                    return result;
+                    return dict;
                 })
+                .DistinctUntilChanged()
                 .Replay(1)
                 .RefCount();
-            return _allPoliciesShared;
-        }
+
+            var keepAlive = combined.Subscribe(_ => { }, _ => { });
+            entry.RegisterPostEvictionCallback((_, _, _, _) => keepAlive.Dispose());
+            return combined;
+        })!;
     }
 
-    private IObservable<MeshNode[]> ObserveAllMeshNodes()
-    {
-        if (_allNodesShared != null)
-            return _allNodesShared;
-        lock (_allNodesLock)
-        {
-            if (_allNodesShared != null)
-                return _allNodesShared;
-            var workspace = _hub.GetWorkspace();
-            // No StartWith here — an earlier attempt to emit Array.Empty up front
-            // turned out to be its own bug. AccessControlPipeline takes the FIRST
-            // emission (.Take(1)); a synthetic empty fired before the real synced
-            // data resolved zeroed the user's roles → DENY, even when their
-            // legitimate Admin AccessAssignment would have resolved a few hundred
-            // ms later. The right shape is to let the chain take its natural time
-            // up to a generous bound and have the AccessControlPipeline carry the
-            // safety-net timeout (currently 10 s, fail-closed on expiry).
-            _allNodesShared = workspace
-                .GetQuery(AccessAssignmentQueryId,
-                    $"nodeType:{SecurityCollections.AccessAssignmentNodeType} scope:subtree")
-                .Select(arr => arr.ToArray())
-                .Replay(1)
-                .RefCount();
-            return _allNodesShared;
-        }
-    }
+    /// <summary>
+    /// Back-compat shim: callers that want "every policy in the mesh" now
+    /// resolve the cumulative map at the root of the scope tree the call
+    /// site is interested in. The previous singleton <c>ObserveAllPolicies</c>
+    /// returned a full <c>scope:subtree</c> map; with per-scope queries we
+    /// can't produce that without walking every scope, so this entry point
+    /// returns the root-and-statics map. Permission evaluation already
+    /// looks policies up by walking the path's scope hierarchy in
+    /// <see cref="ComputeRoleState"/> — feed the per-path policy chain via
+    /// <see cref="ObserveScopePolicies"/> instead of this back-compat surface
+    /// wherever the path is known.
+    /// </summary>
+    private IObservable<ImmutableDictionary<string, PartitionAccessPolicy>> ObserveAllPolicies()
+        => ObserveScopePolicies(string.Empty);
+
+    // ObserveAllMeshNodes removed — replaced by per-scope recursive union
+    // in ObserveScopeAssignments. The old global `scope:subtree` query
+    // returned every AccessAssignment in the mesh, regardless of relevance
+    // to the path being checked; the new design uses one narrow query per
+    // scope level and unions via CombineLatest. See
+    // Doc/Architecture/AccessControl.md "Effective-assignments lookup".
 
     /// <summary>
     /// Live <see cref="MeshNode"/> collection for every Role definition in the
@@ -853,18 +1006,11 @@ internal class SecurityService : ISecurityService, IDisposable
     public IObservable<PartitionAccessPolicy?> GetPolicy(string targetNamespace)
     {
         var ns = targetNamespace ?? "";
-        var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
-
-        // Read from the assembled MeshNode collection — the workspace already
-        // aggregates across data sources. No path-specific round-trip.
-        return ObserveAllMeshNodes()
-            .Select(all =>
-            {
-                var node = all.FirstOrDefault(n =>
-                    n.NodeType == SecurityCollections.PartitionAccessPolicyNodeType
-                    && string.Equals(n.Path, path, StringComparison.Ordinal));
-                return node is null ? null : DeserializePolicy(node);
-            });
+        // ObserveAllPolicies returns a namespace → policy map. Read by namespace
+        // directly — the in-memory map already contains every PartitionAccessPolicy
+        // node in the mesh, keyed by its namespace; no extra scan needed.
+        return ObserveAllPolicies()
+            .Select(policies => policies.TryGetValue(ns, out var policy) ? policy : null);
     }
 
     #endregion

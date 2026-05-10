@@ -36,6 +36,11 @@ that live elsewhere in the mesh:
 - **Aggregator hubs** can build cross-namespace dashboards by syncing the
   query result of `nodeType:Order status:Open` and rendering from the
   workspace stream.
+- **NodeTypes that ship system defaults plus mesh-level extensions**
+  (Agent, Model, Role) compose this with `IStaticNodeProvider` so the
+  built-ins appear in the synced collection on first subscribe and
+  user-created instances stream in via Added/Updated/Removed deltas.
+  See [Extensible Defaults](../Architecture/ExtensibleDefaults).
 
 Use it for one-shot reads (`hub.GetMeshNode`) or collections you only ever
 read once. For everything else — including collections you *write to* — the

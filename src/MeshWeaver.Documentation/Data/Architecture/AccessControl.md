@@ -276,6 +276,103 @@ post `CreateNodeRequest` / `UpdateNodeRequest` / `DeleteNodeRequest`
 through the hub's `IMessageHub` and surface the response as an
 observable.
 
+Roles and baseline AccessAssignments follow the [Extensible
+Defaults](ExtensibleDefaults) pattern — built-ins ship via
+`IStaticNodeProvider` (read-only `_Policy` at the root namespace),
+mesh-level extensions live as user-created MeshNodes, and both layers
+project into the hub's local synced collection via the same
+three-query union that Agent and Model use. The evaluator below reads
+from that collection — no per-process role cache, no `Timeout`
+fallback.
+
+## Effective-assignments lookup: the 4-query union
+
+For a permission check at scope `S` of a node whose NodeType is `T`,
+the effective AccessAssignment set is the **union** of four synced
+mesh-node queries, issued via a single `workspace.GetQuery(id,
+queries[])` call (same primitive `AgentPickerProjection` uses for
+agents and models — the engine unions across queries by `Path`):
+
+| # | Source | Query | Reactive empty? |
+|---|--------|-------|-----------------|
+| 1 | Self  | `namespace:{S}/_Access nodeType:AccessAssignment` | Yes — empty `Initial` is a valid value. |
+| 2 | Parent chain | `namespace:{parent(S)}/_Access scope:selfAndAncestors nodeType:AccessAssignment` | Yes |
+| 3 | NodeType chain | `namespace:{T}/_Access scope:selfAndAncestors nodeType:AccessAssignment` | Yes |
+| 4 | Static baselines | `namespace:_Access nodeType:AccessAssignment` | Yes — empty when no `IStaticNodeProvider` ships baselines. |
+
+The four sub-queries are independent synced subscriptions; the engine
+unions their result sets internally and emits one combined
+`IEnumerable<MeshNode>` snapshot. Each scope's combined observable is
+cached per `(S, T)` with sliding 5-minute TTL via
+`Replay(1).RefCount`, so consecutive checks under the same scope hit
+the cached snapshot synchronously.
+
+**Sparsity-friendly.** Every sub-query allows an empty result — a
+scope with no local `_Access` simply emits an empty Initial through
+`MeshQueryEngine` (no Postgres rows for that namespace prefix). The
+union still fires immediately, the closest-wins merge proceeds with
+"local = nothing, parent provides everything, statics provide
+baselines". No `Timeout` fallback needed.
+
+**Reactivity correct.** A future `CreateNode(AccessAssignment at
+acme/foo)` triggers an `Added` delta on sub-query (1); the union
+re-emits; the cached effective observable re-fires; descendants see
+the new effective on the next tick.
+
+**Why this beats the previous shape**: the old SecurityService kept a
+per-user `MemoryCache` over a single `scope:subtree` synced query and
+fell through a 2-second `Timeout()` whenever the upstream synced
+query's first emission lagged. In production, that fallback fired
+hundreds of times per chat-thread render — every cold scope, every
+new user, every cache eviction. The 4-query union shifts the cache
+key from *user* to *scope* (one cache entry per scope, shared across
+all users) and lets each sub-query emit an empty Initial fast,
+removing the warm-up window the timeout was guarding against.
+
+```csharp
+// Inside the global ISecurityService.
+private IObservable<IEnumerable<MeshNode>> ObserveEffectiveAssignments(
+    string scope, string? nodeTypePath)
+{
+    var key = (scope, nodeTypePath);
+    return _scopeCache.GetOrCreate(key, entry =>
+    {
+        entry.SlidingExpiration = TimeSpan.FromMinutes(5);
+        var parentScope = GetParent(scope);
+        var queries = new List<string>
+        {
+            // 1. self
+            $"namespace:{scope}/_Access nodeType:AccessAssignment",
+            // 4. static baselines (root)
+            "namespace:_Access nodeType:AccessAssignment",
+        };
+        // 2. parent chain
+        if (parentScope is not null)
+            queries.Add(
+                $"namespace:{parentScope}/_Access scope:selfAndAncestors " +
+                "nodeType:AccessAssignment");
+        // 3. NodeType chain
+        if (!string.IsNullOrEmpty(nodeTypePath))
+            queries.Add(
+                $"namespace:{nodeTypePath}/_Access scope:selfAndAncestors " +
+                "nodeType:AccessAssignment");
+
+        var observable = _workspace.GetQuery(
+                $"$access:{scope}@{nodeTypePath ?? ""}",
+                queries.ToArray())
+            .Replay(1).RefCount();
+        var keepAlive = observable.Subscribe(_ => { }, _ => { });
+        entry.RegisterPostEvictionCallback((_, _, _, _) => keepAlive.Dispose());
+        return observable;
+    })!;
+}
+```
+
+Closest-wins + deny + `BreaksInheritance` semantics still apply when
+the unioned MeshNode set is folded into per-user permissions — the
+fold walks the scope hierarchy in the projection, exactly as the
+existing `ComputeRoleState` does today; only the *source* changes.
+
 **No `Task` returns anywhere on the surface** — every method returns
 `IObservable<T>` (`Unit` for fire-and-forget writes). Bridging to
 `Task` from hub-reachable code is the canonical deadlock pattern (see
