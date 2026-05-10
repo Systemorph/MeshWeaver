@@ -140,26 +140,39 @@ public class IsExecutingLifecycleTest(ITestOutputHelper output) : MonolithMeshTe
             "execution must terminate cleanly, not stay running until the watchdog");
         doneState.ExecutionStartedAt.Should().BeNull("started-at is cleared on completion");
 
-        // 3) Response cell must hold the agent's REAL reply, not a placeholder.
-        //    "Allocating agent..." / "Generating response..." both indicate
-        //    the streaming pipeline never produced text. The Echo agent's
-        //    reply contains the literal "I received N messages" string.
+        // 3) Response cell must hold the agent's REAL reply on its FINAL emission.
+        //    Wait for ThreadMessage.CompletedAt to be set — ExecuteMessageAsync
+        //    only stamps that on the terminal PushToResponseMessage, so it's the
+        //    deterministic "streaming finished, text is final" signal. Beats
+        //    pattern-matching against "Allocating agent..." / "Generating
+        //    response..." placeholders, which is racy when the Echo agent
+        //    yields its single chunk faster than the placeholders flush.
+        //    The Echo reply contains the literal "I received N messages" string.
         var lastMsgId = doneState.Messages[^1];
         var responseStream = Mesh.GetWorkspace().GetMeshNodeStream($"{threadPath}/{lastMsgId}");
-        var responseText = await responseStream
-            .Select(n => (n.Content as ThreadMessage)?.Text)
-            .Where(t => !string.IsNullOrEmpty(t)
-                && !t.StartsWith("Allocating agent", StringComparison.Ordinal)
-                && !t.StartsWith("Generating response", StringComparison.Ordinal)
-                && !t.StartsWith("Loading conversation history", StringComparison.Ordinal))
+        var finalMessage = await responseStream
+            .Select(n => n.Content as ThreadMessage)
+            .Where(m => m is { CompletedAt: not null } && !string.IsNullOrEmpty(m.Text))
             .Take(1)
             .Timeout(10.Seconds())
             .ToTask(ct);
 
-        responseText.Should().Contain("I received",
+        finalMessage!.Text.Should().Contain("I received",
             "the Echo agent's streaming reply must reach the response cell — "
             + "if this fails with the placeholder, the streaming Task.Run hung "
             + "but the parent flipped IsExecuting=false anyway, masking a real bug.");
+
+        // 4) Final ThreadMessage.Status must be Completed. ExecuteMessageAsync
+        //    pushes one last buffered Streaming snapshot when its
+        //    Subject<StreamingSnapshot>.OnCompleted() flushes the Sample(100ms)
+        //    operator, immediately followed by a Completed push. Without the
+        //    terminal-status guard in PushToResponseMessage, the late Streaming
+        //    push could land AFTER the Completed one and flip the cell back to
+        //    "still running" until the next render. This is the regression test
+        //    for that race.
+        finalMessage.Status.Should().Be(ThreadMessageStatus.Completed,
+            "terminal-status guard must prevent a late Sample-flushed Streaming push "
+            + "from regressing the cell from Completed back to Streaming");
     }
 
     #region Echo IChatClient + factory (same shape as ChatHistoryTest)
