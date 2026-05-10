@@ -121,6 +121,36 @@ A discriminator-level ping-pong guard suppresses the `DeliveryFailure`
 response when the inbound `$type` itself was `DeliveryFailure` (both ends
 missing the type), so a misconfigured pair won't spin forever.
 
+### Watch for FQN vs short-name mismatches
+
+The wire `$type` discriminator must match the receiver's registered
+`typeName`. The polymorphic serializer picks the discriminator from the
+**sender's** `ITypeRegistry`:
+
+- If the sender registered `WithType(typeof(T), nameof(T))` → wire `$type`
+  is the short name (`"CancelThreadStreamResponse"`).
+- If the sender's registry lacks the type → falls back to `FullName`
+  (`"MeshWeaver.AI.CancelThreadStreamResponse"`) at serialize time.
+
+A receiver that registered `WithType(typeof(T), nameof(T))` only matches
+short names, so an FQN on the wire fails the lookup and produces a
+`DeliveryFailure` even though both sides "have" the type.
+
+**Triage with the file trace** (`MESHWEAVER_MSG_TRACE=1`,
+`%TEMP%/meshweaver-msg-trace.log`): the `NotifyAsync ENTER` line stamps
+`msg=...` with the JSON `$type` discriminator from `RawJson.Content`.
+If the field reads `msg=MeshWeaver.AI.CancelThreadStreamResponse` (FQN)
+instead of `msg=CancelThreadStreamResponse` (short), a sender along the
+hop didn't register `T` in its TypeRegistry — register on every hub the
+message transits, not just the originator and the final target.
+
+For test setup specifically: `MessageHubConfiguration.TypeRegistry` is
+mutable per call (`WithType` returns the same instance), so
+`configuration.TypeRegistry.AddAITypes();` (discarded return) is
+sufficient — but the call must reach **the configuration of every hub
+that serializes the message**, including hosted sub-hubs like
+`{path}/_Exec` and any cross-cutting `ConfigureDefaultNodeHub` chain.
+
 ## Common gotchas
 
 - **A handler that throws an exception that isn't caught reactively** (e.g. `workspace.GetStream<T>(reference)` where the reducer isn't registered → throws `InvalidOperationException("Failed to create stream")`) crashes the delivery pipeline. The exception is logged in the `MessageService` `An exception occurred …` line. The original caller does **not** receive a response and times out. Wrap the call or check upstream that the stream exists.

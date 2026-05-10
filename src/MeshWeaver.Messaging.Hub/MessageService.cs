@@ -287,9 +287,13 @@ public class MessageService : IMessageService
         // Per-message hot path. Lift the trace gate once at the top.
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
         var name = GetMessageType(delivery);
+        MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} NotifyAsync ENTER state={delivery.State}");
 
         if (delivery.State != MessageDeliveryState.Submitted)
+        {
+            MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} NotifyAsync EARLY_RETURN state={delivery.State}");
             return delivery;
+        }
 
         // For initialization messages, skip waiting for parent startup to avoid deadlocks
         // For all other messages, wait for parent to be ready before routing
