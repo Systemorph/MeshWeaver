@@ -10,6 +10,27 @@ using Orleans.Streams;
 
 namespace MeshWeaver.Hosting.Orleans;
 
+internal static class RoutingGrainTrace
+{
+    private static readonly bool Enabled =
+        Environment.GetEnvironmentVariable("MESHWEAVER_MSG_TRACE") is "1" or "true" or "True";
+    private static readonly string Path =
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "meshweaver-msg-trace.log");
+    private static readonly object Lock = new();
+
+    public static void Write(string line)
+    {
+        if (!Enabled) return;
+        try
+        {
+            lock (Lock)
+                System.IO.File.AppendAllText(Path,
+                    $"{DateTime.UtcNow:HH:mm:ss.fff} {line}{Environment.NewLine}");
+        }
+        catch { /* tracing must never throw */ }
+    }
+}
+
 [StatelessWorker(1)]
 internal class RoutingGrain(
     IPathResolver pathResolver,
@@ -22,6 +43,7 @@ internal class RoutingGrain(
 
         logger.LogDebug("[ROUTE] RouteMessage: {MessageType} → {Address}",
             delivery.Message.GetType().Name, addressPath);
+        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage ENTER target={delivery.Target} hostAddr={address} type={address.Type} msg={delivery.Message?.GetType().Name} id={delivery.Id}");
 
         // 🚨 Pre-capture grain services on the activation thread.
         // After the SelectMany hops to Scheduler.Default (because IPathResolver
@@ -33,17 +55,38 @@ internal class RoutingGrain(
         var streamProvider = this.GetStreamProvider(StreamProviders.Memory);
         var grainFactory = GrainFactory;
 
+        // 🚨 Fire-and-forget. Per AsynchronousCalls.md: never bridge an
+        // observable to Task in hub-reachable code with .FirstAsync().ToTask()
+        // — if the upstream chain ever fails to emit (path-resolver waiting
+        // on a slow catalog init, target grain stuck behind hub-readiness)
+        // the grain task hangs forever and Orleans' caller eventually times
+        // out with no diagnostic. Subscribe in the background, return
+        // Forwarded immediately — the actual delivery's success/failure is
+        // surfaced through the standard response/DeliveryFailure path on the
+        // sender's hub.
+
         // Portal/client hubs are not grains — deliver via Orleans memory stream directly.
+        // OnNextAsync MUST run inside the grain task scope (the stream provider
+        // is grain-scheduler-bound); fire-and-forget would lose the message.
         if (address.Type == AddressExtensions.PortalType || address.Type == "client")
         {
             logger.LogDebug("[ROUTE] {Address} is portal/client → memory stream", addressPath);
+            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM addr={addressPath} id={delivery.Id} streamName={addressPath}");
             var s = streamProvider.GetStream<IMessageDelivery>(addressPath);
             return s.OnNextAsync(delivery)
-                .ContinueWith(_ => delivery.Forwarded(address));
+                .ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_FAULT id={delivery.Id} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
+                    else
+                        RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_OK id={delivery.Id}");
+                    return delivery.Forwarded(address);
+                }, TaskScheduler.Default);
         }
 
-        return pathResolver.ResolvePath(addressPath)
-            .SelectMany(resolution =>
+        pathResolver.ResolvePath(addressPath)
+            .Take(1)
+            .Subscribe(resolution =>
             {
                 var grainKey = resolution?.Prefix ?? addressPath;
 
@@ -57,28 +100,39 @@ internal class RoutingGrain(
                         ? $"No node found at '{addressPath}'."
                         : $"No node found at '{addressPath}'. Closest ancestor is '{resolution.Prefix}' (remainder='{resolution.Remainder}').";
                     logger.LogWarning("[ROUTE] NotFound: {FailureMessage}", failureMessage);
-                    return Observable.Return(delivery.Failed(failureMessage));
+                    // Surface the failure back to the sender via memory stream
+                    // (the sender's hub handles DeliveryFailure as a normal response).
+                    var failStream = streamProvider.GetStream<IMessageDelivery>(delivery.Sender?.ToString() ?? addressPath);
+                    failStream.OnNextAsync(delivery.Failed(failureMessage))
+                        .ContinueWith(t =>
+                        {
+                            if (t.IsFaulted)
+                                logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver NotFound failure");
+                        }, TaskScheduler.Default);
+                    return;
                 }
 
                 logger.LogDebug("[ROUTE] Delivering {MessageType} to grain {GrainKey}", delivery.Message.GetType().Name, grainKey);
-                // Use pre-captured grainFactory so this lambda can run on Scheduler.Default
-                // (where the path-resolver observable schedules its emissions) without
-                // touching the Grain instance from a non-activation thread.
                 var grain = grainFactory.GetGrain<IMessageHubGrain>(grainKey);
-                return Observable.FromAsync(() => grain.DeliverMessage(delivery))
-                    .Do(result => logger.LogDebug("[ROUTE] Grain {GrainKey} returned state={State} for {MessageType}",
-                        grainKey, result.State, delivery.Message.GetType().Name))
-                    .Catch<IMessageDelivery, Exception>(ex =>
+                grain.DeliverMessage(delivery).ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
                     {
-                        logger.LogWarning(ex, "[ROUTE] Grain {GrainKey} threw for {MessageType} → stream fallback",
+                        logger.LogWarning(t.Exception, "[ROUTE] Grain {GrainKey} threw for {MessageType} → stream fallback",
                             grainKey, delivery.Message.GetType().Name);
                         var stream = streamProvider.GetStream<IMessageDelivery>(addressPath);
-                        return Observable.FromAsync(() => stream.OnNextAsync(delivery))
-                            .Select(_ => delivery.Forwarded(address));
-                    });
-            })
-            .FirstAsync()
-            .ToTask();
+                        stream.OnNextAsync(delivery).ContinueWith(_ => { }, TaskScheduler.Default);
+                    }
+                    else if (t.IsCompletedSuccessfully)
+                    {
+                        logger.LogDebug("[ROUTE] Grain {GrainKey} returned state={State} for {MessageType}",
+                            grainKey, t.Result.State, delivery.Message.GetType().Name);
+                    }
+                }, TaskScheduler.Default);
+            },
+            ex => logger.LogWarning(ex, "[ROUTE] Path resolution failed for {Address}", addressPath));
+
+        return Task.FromResult(delivery.Forwarded(address));
     }
 
     internal static Address GetHostAddress(Address address)

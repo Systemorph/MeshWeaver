@@ -786,6 +786,7 @@ public sealed class MessageHub : IMessageHub
         if (traceEnabled)
             logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 messageTypeName, Address, delivery.Id);
+        MessageTrace.Write($"hub={Address} msg={delivery.Message?.GetType().Name} id={delivery.Id} HUB.DeliverMessage ENTER state={delivery.State}");
 
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
         var result = messageService.RouteMessageAsync(ret, default);
@@ -793,6 +794,7 @@ public sealed class MessageHub : IMessageHub
         if (traceEnabled)
             logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
                 messageTypeName, Address, delivery.Id, result.State);
+        MessageTrace.Write($"hub={Address} msg={delivery.Message?.GetType().Name} id={delivery.Id} HUB.DeliverMessage EXIT state={result.State}");
         return result;
     }
 
