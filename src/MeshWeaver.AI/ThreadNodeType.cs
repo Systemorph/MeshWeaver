@@ -196,10 +196,23 @@ public static class ThreadNodeType
             IsSatelliteType = true,
             ExcludeFromContext = ImmutableHashSet.Create("search"),
             AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
-            HubConfiguration = config => config
-                .AddThreadLayoutAreas()
-                .AddThreadExecution()
-                .AddMeshDataSource(source => source
-                    .WithContentType<Thread>())
+            // Register AI types DIRECTLY on the per-thread hub config — not just
+            // via ConfigureDefaultNodeHub. The polymorphic resolver discriminator
+            // is picked from the SENDING hub's TypeRegistry; if Thread NodeType's
+            // HubConfiguration runs in isolation (a test or host that didn't wire
+            // ConfigureDefaultNodeHub), unregistered types fall back to FullName
+            // on the wire and the receiver (whose registry has the short name)
+            // can't resolve $type → DeliveryFailure on every response.
+            // See Doc/Architecture/DebuggingMessageFlow.md "Watch for FQN vs
+            // short-name mismatches".
+            HubConfiguration = config =>
+            {
+                config.TypeRegistry.AddAITypes();
+                return config
+                    .AddThreadLayoutAreas()
+                    .AddThreadExecution()
+                    .AddMeshDataSource(source => source
+                        .WithContentType<Thread>());
+            }
         };
 }
