@@ -41,6 +41,11 @@ public static class TestUsers
     /// </summary>
     public static MeshNode[] SampleUsers() =>
     [
+        // TestUser is the default test-circuit identity (TestUsers.TestUser), so its
+        // own User MeshNode must exist — AgentChatClient.LoadContextNode("User/TestUser")
+        // warned "Failed to load context node" when it wasn't seeded, and downstream
+        // chat flows that read ContextPath proceeded with a null Node.
+        new("TestUser", "User") { Name = "TestUser", NodeType = "User" },
         new("Roland", "User") { Name = "Roland", NodeType = "User" },
         new("Samuel", "User") { Name = "Samuel", NodeType = "User" },
         new("Alice", "User") { Name = "Alice", NodeType = "User" },
