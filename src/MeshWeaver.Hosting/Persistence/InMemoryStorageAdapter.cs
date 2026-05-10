@@ -69,15 +69,40 @@ internal sealed class InMemoryStorageAdapter : IStorageAdapter
             ? 1
             : normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).Length + 1;
 
-        var children = _nodes.Keys
-            .Where(k => string.IsNullOrEmpty(prefix)
-                ? !k.Contains('/')
-                : k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                  && k.Split('/', StringSplitOptions.RemoveEmptyEntries).Length == expectedDepth)
-            .ToList();
+        var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 🚨 DirectoryPaths must include any intermediate prefix that has at
+        // least one descendant node — a stored node at depth N≥expectedDepth+1
+        // implies a "directory" at the expectedDepth level even if no node
+        // lives there (e.g. SaveNode(\"org/acme/project/web\") doesn't store
+        // \"org/acme/project\" but WalkDescendants must recurse into it to find
+        // \"web\"/\"mobile\"). Without this, GetDescendants returns empty for
+        // any tree whose structure has \"directory\" levels.
+        var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var k in _nodes.Keys)
+        {
+            if (!string.IsNullOrEmpty(prefix) && !k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (string.IsNullOrEmpty(prefix) && k.Contains('/'))
+            {
+                // root level: path with '/' — top segment is a directory
+                directoryPaths.Add(k.Split('/', 2)[0]);
+                continue;
+            }
+            var segments = k.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == expectedDepth)
+                nodePaths.Add(k);
+            else if (segments.Length > expectedDepth)
+            {
+                // intermediate segment at expectedDepth becomes a directory entry
+                var dirPath = string.Join("/", segments.Take(expectedDepth));
+                if (!_nodes.ContainsKey(dirPath))
+                    directoryPaths.Add(dirPath);
+            }
+        }
 
         return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(
-            (children, Enumerable.Empty<string>()));
+            (nodePaths, directoryPaths));
     }
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
