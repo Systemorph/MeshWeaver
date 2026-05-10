@@ -139,7 +139,15 @@ internal class MonolithRoutingService(
 
                 try
                 {
-                    var createdHub = Mesh.GetHostedHub(address, enriched.HubConfiguration!);
+                    // Pass the resolved node back into the hub config as the
+                    // routing-supplied own-node observable so MeshDataSource can
+                    // seed the workspace from it without issuing a duplicate
+                    // persistence read on init. One-shot is fine on Monolith —
+                    // cross-hub MeshNode updates flow through IDataChangeNotifier
+                    // / IMeshChangeFeed already.
+                    var ownStream = Observable.Return(enriched);
+                    var createdHub = Mesh.GetHostedHub(address, c =>
+                        enriched.HubConfiguration!(c.WithOwnNodeStream(ownStream)));
                     logger.LogDebug("[ROUTE-CREATE] GetHostedHub returned {HubAddr} for {Address}",
                         createdHub?.Address.ToString() ?? "(null)", address);
 

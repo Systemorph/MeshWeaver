@@ -62,53 +62,43 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         logger.LogInformation("[ACTIVATE] Grain {StreamId} activating", streamId);
 
         // 1. Static/config nodes: synchronous lookup, no grain round-trip.
-        var staticNode = TryResolveStaticNode(addressPath);
-        if (staticNode is { HubConfiguration: not null })
-        {
-            logger.LogInformation("[ACTIVATE] Grain {StreamId}: static node found, completing activation", streamId);
-            CompleteActivation(streamId, address, grainScheduler, staticNode);
-            return Task.CompletedTask;
-        }
-
-        logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, reading from catalog", streamId);
-
         // 2. Persisted nodes: read directly from MeshCatalog (persistence layer) without
         //    going through the stream cache. streamCache.GetStream(addressPath) routes a
         //    SubscribeRequest back through RoutingGrain → this same grain → awaits _hubReady
         //    → deadlock. catalog.GetNodeForRouting reads from DB/static providers directly.
-        var catalog = meshHub.ServiceProvider.GetService<MeshCatalog>();
-        var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
-
-        var sourceStream = catalog != null
-            ? catalog.GetNodeForRouting(address)
-                .Where(n => n != null)
-                .Select(n => n!)
-            : streamCache.GetStream(addressPath);
+        //
+        // Both paths funnel through ResolveHubConfigurationObservable so the
+        // DefaultNodeHubConfiguration overlay (API tokens settings tab, AI types,
+        // threads layout, heartbeat, content collections, …) reaches every per-node
+        // hub. Previously this method short-circuited for static nodes and for
+        // persisted instances whose NodeType template carried HubConfiguration —
+        // those branches set node.HubConfiguration directly and skipped the factory,
+        // silently dropping the default overlay. Symptom: API Tokens tab missing
+        // from /rbuergi/Settings, chat-from-user-page hangs because AI types not
+        // registered on the user hub. The single funnel below is the fix.
+        var staticNode = TryResolveStaticNode(addressPath);
+        IObservable<MeshNode> sourceStream;
+        if (staticNode is { HubConfiguration: not null })
+        {
+            logger.LogInformation("[ACTIVATE] Grain {StreamId}: static node found", streamId);
+            sourceStream = Observable.Return(staticNode);
+        }
+        else
+        {
+            logger.LogInformation("[ACTIVATE] Grain {StreamId}: no static node with HubConfig, reading from catalog", streamId);
+            var catalog = meshHub.ServiceProvider.GetService<MeshCatalog>();
+            sourceStream = catalog != null
+                ? catalog.GetNodeForRouting(address)
+                    .Where(n => n != null)
+                    .Select(n => n!)
+                : streamCache.GetStream(addressPath);
+        }
 
         _activationSubscription = sourceStream
             .SelectMany(node =>
             {
-                logger.LogInformation("[ACTIVATE] Grain {StreamId}: catalog emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
+                logger.LogInformation("[ACTIVATE] Grain {StreamId}: source emitted node={Path} NodeType={NodeType} hasHubConfig={HasConfig}",
                     streamId, node.Path, node.NodeType ?? "(null)", node.HubConfiguration != null);
-
-                // Resolve HubConfiguration: instance node without config → look up NodeType.
-                if (node.HubConfiguration is not null)
-                    return Observable.Return(node);
-
-                if (!string.IsNullOrEmpty(node.NodeType)
-                    && meshConfig is not null
-                    && meshConfig.Nodes.TryGetValue(node.NodeType, out var ntNode)
-                    && ntNode.HubConfiguration is not null)
-                {
-                    logger.LogInformation("[ACTIVATE] Grain {StreamId}: resolved HubConfig from NodeType={NodeType}", streamId, node.NodeType);
-                    return Observable.Return(node with
-                    {
-                        HubConfiguration = ntNode.HubConfiguration,
-                        AssemblyLocation = ntNode.AssemblyLocation ?? node.AssemblyLocation
-                    });
-                }
-
-                // Dynamic compiled NodeType: delegate to factory.
                 return ResolveHubConfigurationObservable(node);
             })
             .Where(node => node.HubConfiguration is not null)
@@ -116,8 +106,11 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             .Subscribe(
                 node =>
                 {
-                    logger.LogInformation("[ACTIVATE] Grain {StreamId}: completing activation from catalog", streamId);
-                    CompleteActivation(streamId, address, grainScheduler, node);
+                    logger.LogInformation("[ACTIVATE] Grain {StreamId}: completing activation", streamId);
+                    // Pass the source stream to the hub so MeshNodeTypeSource can
+                    // seed the workspace from it (and follow subsequent emissions)
+                    // instead of issuing a duplicate persistence read on init.
+                    CompleteActivation(streamId, address, grainScheduler, node, sourceStream);
                 },
                 ex =>
                 {
@@ -167,7 +160,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// subscription's onNext (or directly for static nodes). Idempotent via
     /// <see cref="TaskCompletionSource.TrySetResult"/> guards.
     /// </summary>
-    private void CompleteActivation(string streamId, Address address, TaskScheduler grainScheduler, MeshNode node)
+    private void CompleteActivation(
+        string streamId,
+        Address address,
+        TaskScheduler grainScheduler,
+        MeshNode node,
+        IObservable<MeshNode>? ownNodeStream = null)
     {
         if (_hubReady.Task.IsCompleted) return;
 
@@ -184,10 +182,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             }
 
             var hub = meshHub.GetHostedHub(address, config =>
-                node.HubConfiguration(config)
+            {
+                if (ownNodeStream is not null)
+                    config = config.WithOwnNodeStream(ownNodeStream);
+                return node.HubConfiguration(config)
                     .WithTaskScheduler(grainScheduler)
                     .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
-                    .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation)))!;
+                    .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation));
+            })!;
 
             hub.RegisterForDisposal(_ => DeactivateOnIdle());
             _hubReady.TrySetResult(hub);

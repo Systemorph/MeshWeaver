@@ -933,9 +933,23 @@ The rule applies symmetrically:
 - **HTTP / CLI endpoints** that render once and close are one-shot — `DataChangeRequest` on writes, `QueryAsync` on reads.
 - **Handlers that persist a side-effect** (activity log, version write, audit) use `DataChangeRequest` — no live observer to keep alive.
 
+### MeshNode write semantics: routing-supplied stream + sample-debounced save
+
+Per-node hubs now follow this split:
+
+| Operation | Path | Where it lives |
+|---|---|---|
+| **Read own MeshNode** (init + live updates) | Routing-supplied `IObservable<MeshNode>` (catalog stream / `Observable.Return(node)` on Monolith) attached via `config.WithOwnNodeStream(...)`. `DistinctUntilChanged().Replay(1).RefCount()` filters echoes; emissions seed the workspace and push subsequent updates without a duplicate persistence read | `MessageHubGrain.OnActivateAsync` / `MonolithRoutingService.CreateHub` plumb the stream into `MeshNodeTypeSource` |
+| **Update own MeshNode** (editor-style writes) | Subscribe to `workspace.GetMeshNodeStream()`, `DistinctUntilChanged(n => n.Version)` to drop routing-stream echoes, `Sample(200ms)` to coalesce bursts, post `SaveMeshNodeRequest` per emission. Handler subscribes to `IStorageService.SaveNode` (already async at the storage adapter) | `MeshDataSource.SubscribeToOwnDeletion` registers the persistence sampler at hub init |
+| **Create / Delete own MeshNode** | Direct `IStorageService.SaveNode` / `DeleteNode` from inside `MeshNodeTypeSource.UpdateImpl` — insta write, no debounce | Adds and deletes are infrequent and ordering matters |
+
+The per-node hub does NOT keep a debounce buffer, a flush-on-dispose, or a Task-bridged save loop. Updates ride a single subscription on the workspace's MeshNode stream; the actor inbox serialises `SaveMeshNodeRequest` per node.
+
+The classic "loop" risk — routing stream emits an external update → workspace emits → save subscriber posts → save handler writes → persistence emits → routing stream re-emits — is broken twice: `DistinctUntilChanged()` upstream of the workspace drops same-Version repeats, and `DistinctUntilChanged(n => n.Version)` on the save subscription suppresses the same Version landing on the persistence side again.
+
 ### Persistence belongs in MeshDataSource init — nowhere else
 
-`IMeshStorage` is loaded **once**, during `MeshDataSource` initialization, to populate the workspace. After init, the workspace is the source of truth. Every read/write goes through reactive streams. **No handler ever calls `persistence.GetNodeAsync` or `persistence.SaveNode`** — not even as a fallback, not even as a one-liner.
+`IMeshStorage` is loaded **once**, during `MeshDataSource` initialization, to populate the workspace. After init, the workspace is the source of truth. Every read/write goes through reactive streams. **No handler ever calls `persistence.GetNodeAsync` or `persistence.SaveNode`** — not even as a fallback, not even as a one-liner. (The two sanctioned exceptions are the `SaveMeshNodeRequest` handler and the create/delete branches in `MeshNodeTypeSource.UpdateImpl`, described in the table above — both run inside the per-node hub at write time, not in application handlers.)
 
 The wrong patterns (every line is a deadlock or a stale-content bug):
 

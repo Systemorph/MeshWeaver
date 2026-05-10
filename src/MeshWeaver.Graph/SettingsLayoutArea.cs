@@ -378,15 +378,16 @@ public static class SettingsLayoutArea
     private static UiControl BuildSection(string title, UiControl content)
     {
         return Controls.Stack
+            .WithWidth("100%")
             .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; overflow: hidden; margin-bottom: 8px;")
             .WithView(Controls.Html(
                 $"<div style=\"padding: 10px 16px; background: var(--neutral-layer-2); font-weight: 600; font-size: 0.9rem; border-bottom: 1px solid var(--neutral-stroke-rest);\">{System.Web.HttpUtility.HtmlEncode(title)}</div>"))
-            .WithView(Controls.Stack.WithStyle("padding: 16px; gap: 12px;").WithView(content));
+            .WithView(Controls.Stack.WithWidth("100%").WithStyle("padding: 16px; gap: 12px;").WithView(content));
     }
 
     private static UiControl BuildIdentitySection(MeshNodeMetadata meta)
     {
-        var grid = Controls.Stack.WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
+        var grid = Controls.Stack.WithWidth("100%").WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
         grid = AddReadOnlyField(grid, "Id", meta.Id);
         grid = AddReadOnlyField(grid, "Namespace", meta.Namespace);
         grid = AddReadOnlyField(grid, "Node Type", meta.NodeType);
@@ -405,17 +406,18 @@ public static class SettingsLayoutArea
     private static UiControl BuildDisplaySection(LayoutAreaHost host, string dataId)
     {
         var dataPointer = LayoutAreaReference.GetDataPointer(dataId);
-        var stack = Controls.Stack.WithStyle("gap: 16px;");
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
 
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Name"))
         {
             Label = "Name",
             Immediate = true,
             DataContext = dataPointer
-        });
+        }.WithWidth("100%"));
 
         // Description + Generate button on its own row, matching the icon layout below.
         stack = stack.WithView(Controls.Stack
+            .WithWidth("100%")
             .WithStyle("gap: 8px;")
             .WithView(Controls.Html("<label style=\"font-weight: 500; font-size: 0.85rem;\">Description</label>"))
             .WithView(new MarkdownEditorControl
@@ -424,8 +426,9 @@ public static class SettingsLayoutArea
                 Height = "300px",
                 Placeholder = "Long-form description. Seeds AI Name/Id/Icon generation and appears in detail views.",
                 DataContext = dataPointer
-            })
+            }.WithStyle("width: 100%;"))
             .WithView(Controls.Stack
+                .WithWidth("100%")
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(8)
                 .WithStyle("justify-content: flex-end;")
@@ -439,7 +442,7 @@ public static class SettingsLayoutArea
             Label = "Category",
             Immediate = true,
             DataContext = dataPointer
-        });
+        }.WithWidth("100%"));
 
         stack = stack.WithView(BuildIconPicker(host, dataId));
 
@@ -448,7 +451,7 @@ public static class SettingsLayoutArea
             Label = "Order",
             Immediate = true,
             DataContext = dataPointer
-        });
+        }.WithWidth("100%"));
 
         return stack;
     }
@@ -460,13 +463,14 @@ public static class SettingsLayoutArea
         var editableCollection = collections.FirstOrDefault(c => c.IsEditable);
         var metadataPointer = LayoutAreaReference.GetDataPointer(metadataDataId);
 
-        var section = Controls.Stack.WithStyle("gap: 8px;");
+        var section = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
         section = section.WithView(Controls.Html(
             "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
 
         // Live preview + Regenerate button — mirrors the Create form's layout so the
         // two surfaces feel consistent.
         section = section.WithView(Controls.Stack
+            .WithWidth("100%")
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("align-items: center;")
@@ -489,7 +493,7 @@ public static class SettingsLayoutArea
             Placeholder = "content:logo.png, /static/…, data:image/svg+xml;… or an absolute URL",
             Immediate = true,
             DataContext = metadataPointer
-        });
+        }.WithWidth("100%"));
 
         // Quick-pick row — after uploading a file via the browser below, type its name here
         // and click "Use as Icon". Writes "content:<filename>" which resolves to the node's
@@ -500,6 +504,7 @@ public static class SettingsLayoutArea
             host.UpdateData(quickPickDataId, new Dictionary<string, object?> { ["fileName"] = "" });
 
             section = section.WithView(Controls.Stack
+                .WithWidth("100%")
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(8)
                 .WithStyle("align-items: flex-end;")
@@ -677,7 +682,7 @@ public static class SettingsLayoutArea
 
     private static UiControl BuildTimestampsSection(MeshNodeMetadata meta)
     {
-        var grid = Controls.Stack.WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
+        var grid = Controls.Stack.WithWidth("100%").WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
         grid = AddReadOnlyField(grid, "Created",
             meta.CreatedDate == default ? "—" : meta.CreatedDate.ToString("yyyy-MM-dd HH:mm:ss zzz"));
         grid = AddReadOnlyField(grid, "Last Modified",
