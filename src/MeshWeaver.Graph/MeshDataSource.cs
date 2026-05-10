@@ -180,9 +180,63 @@ public static class MeshDataSourceExtensions
             .WithHandler<GetCompilationPathRequest>(NodeTypeContractHandler.Handle)
             .WithHandler<CreateReleaseRequest>(HandleCreateRelease)
             .WithHandler<RunTestsRequest>(HandleRunTests)
+            // Persistence I/O handlers: MeshNodeTypeSource posts these instead of
+            // calling IStorageService directly from the workspace update pipeline.
+            // Routing them through the hub's actor inbox serialises writes per node
+            // and keeps the data source pure — no debounce buffer, no FlushOnDispose,
+            // no IStorageService dependency in the type source itself.
+            .WithHandler<SaveMeshNodeRequest>(HandleSaveMeshNode)
+            .WithHandler<DeleteMeshNodeRequest>(HandleDeleteMeshNode)
             // Post-load INodeValidator-Read hook for MeshNodeReference reads.
             .AddDeliveryPipeline(AddReadValidatorPipeline)
             .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
+    }
+
+    /// <summary>
+    /// Per-node hub handler for <see cref="SaveMeshNodeRequest"/>: writes the
+    /// supplied <see cref="MeshNode"/> through <see cref="IStorageService.SaveNode"/>.
+    /// Fire-and-forget Subscribe — the hub's inbox serialises requests so writes
+    /// for the same path arrive in order; failures log and drop. Posted from
+    /// <c>MeshNodeTypeSource.UpdateImpl</c> on every workspace change.
+    /// </summary>
+    private static IMessageDelivery HandleSaveMeshNode(
+        IMessageHub hub, IMessageDelivery<SaveMeshNodeRequest> request)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageService>();
+        if (persistence is null)
+            return request.Processed();
+
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
+        var node = request.Message.Node;
+        persistence.SaveNode(node, hub.JsonSerializerOptions)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex, "SaveMeshNode failed for {Path} (version={Version})",
+                    node.Path, node.Version));
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Per-node hub handler for <see cref="DeleteMeshNodeRequest"/>: removes the
+    /// node at the supplied path through <see cref="IStorageService.DeleteNode"/>.
+    /// Fire-and-forget; failures log and drop.
+    /// </summary>
+    private static IMessageDelivery HandleDeleteMeshNode(
+        IMessageHub hub, IMessageDelivery<DeleteMeshNodeRequest> request)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageService>();
+        if (persistence is null)
+            return request.Processed();
+
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.DeleteMeshNodeHandler");
+        var path = request.Message.Path;
+        persistence.DeleteNode(path, request.Message.Recursive)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex, "DeleteMeshNode failed for {Path}", path));
+        return request.Processed();
     }
 
     /// <summary>
@@ -432,6 +486,11 @@ public static class MeshDataSourceExtensions
         }
     }
 
+    /// <summary>200 ms <see cref="Observable.Sample{TSource}(IObservable{TSource}, TimeSpan)"/>
+    /// window for the persistence subscriber on the own-MeshNode stream:
+    /// rapid editor-style updates collapse to one save per window, latest wins.</summary>
+    private static readonly TimeSpan SaveSampleInterval = TimeSpan.FromMilliseconds(200);
+
     private static void SubscribeToOwnDeletion(IMessageHub hub)
     {
         var cache = hub.ServiceProvider.GetService<OwnNodeCache>();
@@ -439,14 +498,34 @@ public static class MeshDataSourceExtensions
             return;
 
         // Long-standing subscription to the own-node reducer: every new emission
-        // updates the cache. No Take(1); the cache stays current for the hub's
-        // entire lifetime, so the read pipeline can read it synchronously.
+        // updates the cache and feeds the persistence sampler. No Take(1); the
+        // cache stays current for the hub's entire lifetime, so the read
+        // pipeline can read it synchronously.
         try
         {
             var workspace = hub.GetWorkspace();
-            var nodeSub = workspace.GetMeshNodeStream()
+            var ownStream = workspace.GetMeshNodeStream();
+
+            var nodeSub = ownStream
                 .Subscribe(node => cache.Current = node, _ => { });
             hub.RegisterForDisposal(nodeSub);
+
+            // Persistence sampler: posts SaveMeshNodeRequest to the per-node
+            // hub at most every SaveSampleInterval, with the latest version of
+            // the own MeshNode. The handler subscribes to IStorageService.SaveNode
+            // (already async at the storage adapter); this pipeline never blocks.
+            // DistinctUntilChanged() uses MeshNode's record value-equality so
+            // routing-stream echoes (same content) are dropped while genuine
+            // edits (changed Name / Content / etc.) pass through even when
+            // Version is unchanged — the workspace doesn't auto-bump Version
+            // on every UpdateImpl, so a Version-only key would silently drop
+            // edits that didn't go through a Version-bumping write path.
+            var saveSub = ownStream
+                .Where(n => n != null)
+                .DistinctUntilChanged()
+                .Sample(SaveSampleInterval)
+                .Subscribe(node => hub.Post(new SaveMeshNodeRequest(node)));
+            hub.RegisterForDisposal(saveSub);
         }
         catch
         {
@@ -974,6 +1053,13 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
         _logger?.LogInformation("[DIAG-MeshDataSource] WithMeshNodes hubPath='{HubPath}'", _hubPath);
 
+        // Routing layer (MessageHubGrain / MonolithRoutingService) already loaded
+        // the node when resolving the address — and on Orleans it carries a live
+        // catalog stream that emits subsequent updates. Prefer that over a
+        // duplicate persistence read here. MeshNodeTypeSource consumes the stream
+        // for both the initial seed AND ongoing pushes into the workspace.
+        var ownStream = Workspace.Hub.Configuration.Get<OwnNodeStreamHolder>()?.Stream;
+
         // Check if this hub path corresponds to a built-in node (registered via AddMeshNodes).
         // Built-in nodes (NodeType, Markdown, Agent, etc.) are pre-loaded — no persistence needed.
         var meshConfig = Workspace.Hub.ServiceProvider.GetService<MeshConfiguration>();
@@ -1009,8 +1095,12 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         }
 
         return WithTypeSource(typeof(MeshNode),
-                new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath)
+                new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath, ownStream)
                     .WithKey(n => n.Id));
+        // Note: persistence ref is still passed because creates+deletes go
+        // straight to disk (insta write); only updates ride the Sample(200ms)
+        // queue → SaveMeshNodeRequest. See Doc/Architecture/AsynchronousCalls.md
+        // "MeshNode write semantics" for the split.
     }
 
 

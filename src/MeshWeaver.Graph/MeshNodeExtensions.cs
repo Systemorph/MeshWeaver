@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
@@ -10,6 +11,7 @@ using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -130,16 +132,30 @@ public static class MeshNodeExtensions
             .WithHandler<TrackActivityRequest>(HandleTrackActivity);
     }
 
+    // Per-workspace cache of activity stream handles. The handle (and its underlying
+    // RemoteStream subscription) stays warm for ActivityStreamCacheTtl after each touch
+    // — repeat tracks for the same activity path skip the per-node-hub cold-subscribe
+    // round-trip. Keyed by IWorkspace via ConditionalWeakTable so caches GC with their
+    // workspace and we don't pin dead hubs in long-lived test processes.
+    private static readonly ConditionalWeakTable<IWorkspace, IMemoryCache> _activityStreamCaches = new();
+    private static readonly TimeSpan ActivityStreamCacheTtl = TimeSpan.FromMinutes(5);
+
+    private static MeshNodeStreamHandle GetCachedActivityStream(IWorkspace workspace, string path)
+    {
+        var cache = _activityStreamCaches.GetValue(workspace, _ => new MemoryCache(new MemoryCacheOptions()));
+        return cache.GetOrCreate(path, entry =>
+        {
+            entry.SlidingExpiration = ActivityStreamCacheTtl;
+            return workspace.GetMeshNodeStream(path);
+        })!;
+    }
+
     private static IMessageDelivery HandleTrackActivity(
         IMessageHub hub,
         IMessageDelivery<TrackActivityRequest> delivery)
     {
         var req = delivery.Message;
-        var storage = hub.ServiceProvider.GetService<IStorageService>();
-        if (storage == null)
-            return delivery.Processed();
-
-        var options = hub.JsonSerializerOptions;
+        var workspace = hub.GetWorkspace();
         var encodedPath = req.NodePath.Replace("/", "_");
         // Activity records live under {userId}/_UserActivity/{id} — every user
         // owns a top-level partition named after their userId, and the
@@ -147,9 +163,14 @@ public static class MeshNodeExtensions
         var activityPath = $"{req.UserId}/_UserActivity/{encodedPath}";
         var now = DateTimeOffset.UtcNow;
 
-        // Reactive chain: read existing → fold into new record → save. No await,
-        // no Task; the chain is fire-and-forget via Subscribe (errors logged).
-        storage.GetNode(activityPath, options)
+        var stream = GetCachedActivityStream(workspace, activityPath);
+
+        // Read latest from the cached RemoteStream → fold into new record → write.
+        // Take(1).Timeout: when the per-node hub isn't activated yet (first-ever
+        // track for this path) Subscribe never emits — TimeoutException → null,
+        // interpreted as "no record yet" so we route to CreateNode instead of Update.
+        stream.Take(1).Timeout(TimeSpan.FromSeconds(2))
+            .Catch<MeshNode, TimeoutException>(_ => Observable.Return<MeshNode>(null!))
             .SelectMany(existing =>
             {
                 var existingRecord = existing?.Content as UserActivityRecord;
@@ -177,10 +198,21 @@ public static class MeshNodeExtensions
                     State = MeshNodeState.Active,
                     Content = record
                 };
-                // IStorageService.SaveNode is now IObservable end-to-end. Compose
-                // directly — the Task→Observable bridge sits inside the implementation
-                // at the IStorageAdapter leaf (Scheduler.Default).
-                return storage.SaveNode(saveNode, options);
+
+                if (existing != null)
+                    return stream.Update(_ => saveNode);
+
+                // First-time creation: per-node hub isn't activated yet, RemoteStream
+                // can't write. Fall through to IMeshService.CreateNode which routes via
+                // CreateNodeRequest and activates the hub. Subsequent tracks land in the
+                // Update branch above and reuse the now-warm cached stream.
+                var meshService = hub.ServiceProvider.GetService<IMeshService>();
+                if (meshService != null)
+                    return meshService.CreateNode(saveNode);
+
+                var storage = hub.ServiceProvider.GetService<IStorageService>();
+                return storage?.SaveNode(saveNode, hub.JsonSerializerOptions)
+                       ?? Observable.Empty<MeshNode>();
             })
             .Subscribe(
                 _ => { },
