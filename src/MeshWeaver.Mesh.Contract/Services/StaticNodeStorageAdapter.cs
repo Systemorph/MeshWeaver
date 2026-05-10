@@ -1,10 +1,7 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
-using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 
-namespace MeshWeaver.Hosting.Persistence;
+namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Read-only <see cref="IStorageAdapter"/> backed by a fixed list of
@@ -55,21 +52,37 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
     public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
         string? parentPath, CancellationToken ct = default)
     {
-        var prefix = string.IsNullOrEmpty(Norm(parentPath))
-            ? ""
-            : Norm(parentPath) + "/";
-        var children = _nodes.Keys
-            .Where(k =>
+        var normalized = Norm(parentPath);
+        var prefix = string.IsNullOrEmpty(normalized) ? "" : normalized + "/";
+        var expectedDepth = string.IsNullOrEmpty(normalized)
+            ? 1
+            : normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).Length + 1;
+
+        var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var k in _nodes.Keys)
+        {
+            if (!string.IsNullOrEmpty(prefix) && !k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (string.IsNullOrEmpty(prefix) && k.Contains('/'))
             {
-                if (string.IsNullOrEmpty(prefix))
-                    return !k.Contains('/');
-                if (!k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
-                var remainder = k[prefix.Length..];
-                return !remainder.Contains('/');
-            })
-            .ToList();
+                directoryPaths.Add(k.Split('/', 2)[0]);
+                continue;
+            }
+            var segments = k.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == expectedDepth)
+                nodePaths.Add(k);
+            else if (segments.Length > expectedDepth)
+            {
+                var dirPath = string.Join("/", segments.Take(expectedDepth));
+                if (!_nodes.ContainsKey(dirPath))
+                    directoryPaths.Add(dirPath);
+            }
+        }
+
         return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(
-            (children, Enumerable.Empty<string>()));
+            (nodePaths, directoryPaths));
     }
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)

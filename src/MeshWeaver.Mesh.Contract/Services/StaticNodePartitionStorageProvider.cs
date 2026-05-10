@@ -1,8 +1,6 @@
 using System.Collections.Immutable;
-using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 
-namespace MeshWeaver.Hosting.Persistence;
+namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// First-match-wins partition rule that pins one or more namespaces to an

@@ -1,8 +1,6 @@
 using System.Collections.Immutable;
-using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 
-namespace MeshWeaver.Hosting.Persistence;
+namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Well-known partition-context identifiers. Identical vocabulary to
@@ -43,18 +41,23 @@ public static class PartitionContexts
 ///
 /// <para><b>Why first-match-wins.</b> The earlier model used
 /// <see cref="PartitionDefinition.DataSource"/> string discriminators
-/// inside <c>RoutingPersistenceServiceCore.InitializeAsync</c> to pick
-/// between static / writable / etc. That branched on string equality
-/// and special-cased <c>"static"</c>; adding a new backend forced
-/// editing the routing core. Sequential rules let new backends plug
-/// in by registering a provider with their match predicate — the
-/// routing core stays generic.</para>
+/// inside the routing core to pick between static / writable / etc.
+/// That branched on string equality and special-cased <c>"static"</c>;
+/// adding a new backend forced editing the routing core. Sequential
+/// rules let new backends plug in by registering a provider with their
+/// match predicate — the routing core stays generic.</para>
 ///
 /// <para><b>What providers must NOT do.</b> Resolve
 /// <c>IMessageHub</c> or <c>IMeshQueryCore</c>. Providers are
 /// constructed during persistence init, before / during the singleton
 /// <c>IMessageHub</c> factory runs. Re-entering that factory caused
 /// the stack-overflow that motivated this redesign.</para>
+///
+/// <para>This contract lives in <see cref="MeshWeaver.Mesh.Services"/>
+/// (not <c>MeshWeaver.Hosting.Persistence</c>) so node-type registration
+/// chains in <c>MeshWeaver.AI</c> / <c>MeshWeaver.Graph</c> can register
+/// a partition provider directly without taking a transitive dep on
+/// <c>MeshWeaver.Hosting</c>.</para>
 /// </summary>
 public interface IPartitionStorageProvider
 {
@@ -76,8 +79,8 @@ public interface IPartitionStorageProvider
     /// Storage adapter backing every partition that resolves to this
     /// rule. The adapter may be shared across partition keys when the
     /// rule is a wildcard / prefix; in that case the routing layer
-    /// uses one <see cref="AdapterPersistenceService"/> per first-
-    /// segment with the same shared adapter (mirrors how the legacy
+    /// uses one <c>AdapterPersistenceService</c> per first-segment
+    /// with the same shared adapter (mirrors how the legacy
     /// FileSystemPartitionedStoreFactory works).
     /// </summary>
     IStorageAdapter Adapter { get; }
