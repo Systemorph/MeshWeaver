@@ -497,15 +497,20 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     /// <summary>
     /// Multi-query UNION variant of <see cref="QueryNodesAsync(ParsedQuery, JsonSerializerOptions, string?, string?, string?, IReadOnlyCollection{string}?, CancellationToken)"/>.
     /// Generates one SELECT per parsed query (with disjoint <c>@qI_*</c> parameter names),
-    /// joins them with <c>UNION</c> (Postgres dedupes by row across the union),
-    /// and executes the result as a single command — one round-trip, server-side
-    /// dedup-by-Path. Used by SyncedQueryMeshNodes via
-    /// <see cref="MeshQueryRequest.FromQueries"/>.
+    /// joins them with <c>UNION ALL</c>, and wraps the result in a
+    /// <c>SELECT DISTINCT ON (path)</c> so dedup is path-keyed — not row-keyed
+    /// like a plain <c>UNION</c> would be. Two queries that match the same
+    /// MeshNode but observe slightly-different metadata (concurrent writer
+    /// touching <c>last_modified</c> mid-query) collapse to ONE row, with
+    /// the most recently modified version winning the tie-break.
+    ///
+    /// Single round-trip, server-side dedup. Used by SyncedQueryMeshNodes
+    /// via <see cref="MeshQueryRequest.FromQueries"/>.
     ///
     /// <para>Each parsed query is run through the existing single-query SQL
     /// generator + scope-clause logic; the only new work is param-name
-    /// disambiguation by query index, so behaviour stays bug-compatible with
-    /// the single-query path.</para>
+    /// disambiguation by query index (single regex pass — see comment below
+    /// for why this can't be a sequence of <c>string.Replace</c> calls).</para>
     /// </summary>
     public async IAsyncEnumerable<MeshNode> QueryNodesAsync(
         IReadOnlyList<ParsedQuery> queries,
@@ -532,27 +537,38 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         {
             var (perSql, perParams) = BuildSingleQuerySql(
                 queries[qi], options, userId, basePath, activityUserId, excludedNodeTypes);
-            // Disambiguate param names across the union: rename every @xxx token
-            // in BOTH the SQL string and the parameters dict to @qI_xxx so each
-            // SELECT's bindings stay disjoint.
+            // Disambiguate param names across the union: rename every @<name> token
+            // referenced in this per-query SQL to @qI_<name>. We use a single regex
+            // pass keyed on the param-name word boundary so we don't mangle adjacent
+            // tokens. A naive sequence of `string.Replace` calls is order-dependent:
+            // with params @p and @p1, replacing @p first inside an already-rewritten
+            // @q0_p1 would mangle it into @q0_q0_p1. Regex.Replace also gates on
+            // `perParams.ContainsKey` so we don't accidentally rewrite @-sigils that
+            // appear inside string literals or JSONB path expressions.
             var prefix = $"q{qi}_";
-            var renamedSql = perSql;
-            var renamedParams = new Dictionary<string, object>(perParams.Count, StringComparer.Ordinal);
+            var renamedSql = System.Text.RegularExpressions.Regex.Replace(
+                perSql,
+                @"@([A-Za-z_]\w*)",
+                m => perParams.ContainsKey("@" + m.Groups[1].Value)
+                    ? "@" + prefix + m.Groups[1].Value
+                    : m.Value);
             foreach (var (k, v) in perParams)
-            {
-                var newKey = "@" + prefix + k.TrimStart('@');
-                renamedSql = renamedSql.Replace(k, newKey);
-                renamedParams[newKey] = v;
-            }
+                unionedParams["@" + prefix + k.TrimStart('@')] = v;
             unionedSelects.Add($"({renamedSql})");
-            foreach (var (k, v) in renamedParams)
-                unionedParams[k] = v;
         }
 
-        // UNION (not UNION ALL) so Postgres dedupes the row stream — same path
-        // emitted by two queries collapses to one row, matching the engine's
-        // path-keyed dictionary fold.
-        var sql = string.Join(" UNION ", unionedSelects);
+        // UNION ALL preserves both branches' rows; DISTINCT ON (namespace, id)
+        // collapses duplicates by node identity with last_modified DESC as the
+        // tie-breaker (newest version wins). MeshNode.Path = namespace + '/' + id,
+        // so (namespace, id) is the path-keyed dedup column set — the SELECTs
+        // don't project a literal `path` column. Plain `UNION` would dedup full
+        // rows only: two queries observing the same node at slightly different
+        // last_modified would BOTH appear, defeating the "one row per path"
+        // contract.
+        var unionAllInner = string.Join(" UNION ALL ", unionedSelects);
+        var sql =
+            $"SELECT DISTINCT ON (namespace, id) * FROM ({unionAllInner}) AS unioned " +
+            "ORDER BY namespace, id, last_modified DESC";
 
         if (_logger?.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug) == true)
         {

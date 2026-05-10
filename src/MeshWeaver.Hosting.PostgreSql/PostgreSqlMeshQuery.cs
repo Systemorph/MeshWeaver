@@ -181,9 +181,13 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         ParsedQuery? firstParsed = null;
         for (var qi = 0; qi < queries.Count; qi++)
         {
+            // No per-query Limit injection — applying request.Limit to query #0
+            // only made the union iteration-order dependent (query #0 hits its
+            // limit before yielding its most relevant rows; queries #1+ then
+            // contribute everything past it). Limit is enforced post-union
+            // below via MinLimit so a request-level cap can't be circumvented
+            // and a query-string `limit:N` still wins when smaller.
             var pq = _parser.Parse(queries[qi]);
-            if (qi == 0 && request.Limit.HasValue)
-                pq = pq with { Limit = request.Limit };
             pq = StripTypeFilter(pq);
 
             var effectivePath = pq.Path;
@@ -210,6 +214,11 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
 
         var skip = request.Skip ?? 0;
         var count = 0;
+        // Effective limit = min of request-level cap and the FIRST query's
+        // explicit `limit:N`. Smaller wins so a request-level cap can't be
+        // bypassed by a higher in-query limit, and an explicit in-query limit
+        // still applies when no request cap is set.
+        var effectiveLimit = MinLimit(request.Limit, firstParsed.Limit);
         var effectiveUserId = GetEffectiveUserId(request);
         await foreach (var node in _adapter.QueryNodesAsync(
             parsedList, options, effectiveUserId, activityUserId: activityUserId,
@@ -223,10 +232,19 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
                 ? ParsedQuery.ProjectToSelect(node, firstParsed.Select)
                 : node;
             count++;
-            if (firstParsed.Limit.HasValue && count >= firstParsed.Limit.Value)
+            if (effectiveLimit.HasValue && count >= effectiveLimit.Value)
                 yield break;
         }
     }
+
+    private static int? MinLimit(int? a, int? b) =>
+        (a, b) switch
+        {
+            (null, null) => null,
+            (null, var v) => v,
+            (var v, null) => v,
+            ({ } x, { } y) => Math.Min(x, y)
+        };
 
     public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
@@ -357,17 +375,29 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         // the grain's single-threaded scheduler.
         return Observable.Create<QueryResultChange<T>>(observer =>
         {
-            var parsedQuery = _parser.Parse(request.Query);
-
-            var effectivePath = parsedQuery.Path;
-            var effectiveScope = parsedQuery.Scope;
-            if (string.IsNullOrEmpty(effectivePath))
+            // Multi-query union: parse EVERY query and OR-join their (basePath, scope)
+            // change-notifier filters. Without this, only query #0's path/scope drives
+            // delta refresh — matches against query #1+ silently never trigger a re-run.
+            // The Initial snapshot itself uses request.Queries via QueryAsync, but the
+            // change-detection layer must observe the union of all branches' shapes.
+            var effectiveQueries = request.EffectiveQueries;
+            var parsedFilters = new List<(string BasePath, QueryScope Scope)>(effectiveQueries.Count);
+            ParsedQuery firstParsed = null!;
+            for (var qi = 0; qi < effectiveQueries.Count; qi++)
             {
-                effectivePath = request.DefaultPath ?? "";
-                if (parsedQuery.Scope == QueryScope.Exact)
-                    effectiveScope = QueryScope.Children;
+                var pq = _parser.Parse(effectiveQueries[qi]);
+                var effectivePath = pq.Path;
+                var effectiveScope = pq.Scope;
+                if (string.IsNullOrEmpty(effectivePath))
+                {
+                    effectivePath = request.DefaultPath ?? "";
+                    if (pq.Scope == QueryScope.Exact)
+                        effectiveScope = QueryScope.Children;
+                }
+                var normalizedBasePath = effectivePath?.Trim('/') ?? "";
+                parsedFilters.Add((normalizedBasePath, effectiveScope));
+                if (qi == 0) firstParsed = pq;
             }
-            var normalizedBasePath = effectivePath?.Trim('/') ?? "";
 
             var currentItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
             var disposables = new CompositeDisposable();
@@ -397,7 +427,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
                         disposables.Add(changeBuffer);
                         disposables.Add(
                             _changeNotifier
-                                .Where(n => PathMatcher.ShouldNotify(n.Path, normalizedBasePath, effectiveScope))
+                                .Where(n => parsedFilters.Any(f =>
+                                    PathMatcher.ShouldNotify(n.Path, f.BasePath, f.Scope)))
                                 .Subscribe(changeBuffer));
                         disposables.Add(
                             changeBuffer
@@ -406,7 +437,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
                                 .Subscribe(batch =>
                                     disposables.Add(
                                         RunQuery().Subscribe(
-                                            newResults => ProcessBatch(batch, newResults, currentItems, parsedQuery, observer),
+                                            newResults => ProcessBatch(batch, newResults, currentItems, firstParsed, observer),
                                             ex => observer.OnError(ex)))));
                     }
 
@@ -414,7 +445,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
                     {
                         ChangeType = QueryChangeType.Initial,
                         Items = initialItems,
-                        Query = parsedQuery,
+                        Query = firstParsed,
                         Version = Interlocked.Increment(ref _version),
                         Timestamp = DateTimeOffset.UtcNow
                     });
