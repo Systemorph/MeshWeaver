@@ -109,10 +109,23 @@ public static class NodeCopyHelper
                         // present. Skipping the existence check would either error on a
                         // non-existent target (delete fails NotFound) or require a broad
                         // catch that would also swallow auth failures — both undesirable.
+                        //
+                        // 🚨 After Delete, the per-node hub at newPath enters disposal
+                        // limbo. A naïve Delete→Create chain races with the hub teardown
+                        // — the subsequent GetMeshNode then hits the disposing hub and
+                        // returns null. Poll GetMeshNode until it returns null (delete
+                        // fully propagated) before issuing the Create, with a short
+                        // timeout to prevent indefinite hangs if propagation stalls.
                         return hub.GetMeshNode(newPath, TimeSpan.FromSeconds(5))
                             .SelectMany(existing => existing == null
                                 ? create
-                                : nodeFactory.DeleteNode(newPath).SelectMany(_ => create));
+                                : nodeFactory.DeleteNode(newPath).SelectMany(_ =>
+                                    Observable.Interval(TimeSpan.FromMilliseconds(100))
+                                        .SelectMany(_ => hub.GetMeshNode(newPath, TimeSpan.FromSeconds(1)))
+                                        .Where(n => n == null)
+                                        .Take(1)
+                                        .Timeout(TimeSpan.FromSeconds(10), Observable.Return<MeshNode?>(null))
+                                        .SelectMany(_ => create)));
                     }
 
                     // Existence-check via one-shot GetDataRequest. Routing returns
