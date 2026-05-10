@@ -117,20 +117,25 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var (matched, parsedQuery, basePath) = await CollectMatchedAsync(
+        var (matched, parsedQuery, basePaths) = await CollectMatchedAsync(
             request, options, useSecurityFilter: true, ct);
 
         // For source:activity, filter to nodes that actually have _activity children.
-        // Scan all descendants for Activity satellite nodes and collect their MainNode paths.
+        // Scan EVERY query's basePath for Activity satellite nodes and union their
+        // MainNode paths so multi-query unions don't filter queries #2+ against
+        // query #0's subtree only.
         if (parsedQuery.Source == QuerySource.Activity && matched.Count > 0)
         {
             var activityMainPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            await foreach (var actNode in persistence.GetAllDescendantsAsync(basePath, options)
-                .WithCancellation(ct))
+            foreach (var bp in basePaths)
             {
-                if (actNode.NodeType == ActivityNodeType.NodeType
-                    && !string.IsNullOrEmpty(actNode.MainNode))
-                    activityMainPaths.Add(actNode.MainNode);
+                await foreach (var actNode in persistence.GetAllDescendantsAsync(bp, options)
+                    .WithCancellation(ct))
+                {
+                    if (actNode.NodeType == ActivityNodeType.NodeType
+                        && !string.IsNullOrEmpty(actNode.MainNode))
+                        activityMainPaths.Add(actNode.MainNode);
+                }
             }
             matched = matched
                 .Where(n => n is MeshNode mn && activityMainPaths.Contains(mn.Path ?? ""))
@@ -146,7 +151,10 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
         }
 
-        // Apply skip/limit and project
+        // Apply skip/limit and project. The effective limit is the FIRST query's
+        // explicit `limit:N` override (if any) AND/OR request.Limit — whichever
+        // is smaller wins, so callers can't escape a request-level cap.
+        var effectiveLimit = MinLimit(request.Limit, parsedQuery.Limit);
         int skipped = 0;
         int yielded = 0;
         foreach (var node in sorted)
@@ -162,11 +170,20 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 : node;
 
             yielded++;
-            if (parsedQuery.Limit.HasValue && parsedQuery.Limit.Value > 0
-                && yielded >= parsedQuery.Limit.Value)
+            if (effectiveLimit.HasValue && effectiveLimit.Value > 0
+                && yielded >= effectiveLimit.Value)
                 yield break;
         }
     }
+
+    private static int? MinLimit(int? a, int? b) =>
+        (a, b) switch
+        {
+            (null, null) => null,
+            (null, var v) => v,
+            (var v, null) => v,
+            ({ } x, { } y) => Math.Min(x, y)
+        };
 
     /// <summary>
     /// Core query without access control — used by IMeshQueryCore for infrastructure.
@@ -177,18 +194,21 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var (matched, parsedQuery, basePath) = await CollectMatchedAsync(
+        var (matched, parsedQuery, basePaths) = await CollectMatchedAsync(
             request, options, useSecurityFilter: false, ct);
 
         if (parsedQuery.Source == QuerySource.Activity && matched.Count > 0)
         {
             var activityMainPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            await foreach (var actNode in persistence.GetAllDescendantsAsync(basePath, options)
-                .WithCancellation(ct))
+            foreach (var bp in basePaths)
             {
-                if (actNode.NodeType == ActivityNodeType.NodeType
-                    && !string.IsNullOrEmpty(actNode.MainNode))
-                    activityMainPaths.Add(actNode.MainNode);
+                await foreach (var actNode in persistence.GetAllDescendantsAsync(bp, options)
+                    .WithCancellation(ct))
+                {
+                    if (actNode.NodeType == ActivityNodeType.NodeType
+                        && !string.IsNullOrEmpty(actNode.MainNode))
+                        activityMainPaths.Add(actNode.MainNode);
+                }
             }
             matched = matched
                 .Where(n => n is MeshNode mn && activityMainPaths.Contains(mn.Path ?? ""))
@@ -203,6 +223,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
         }
 
+        var effectiveLimit = MinLimit(request.Limit, parsedQuery.Limit);
         int skipped = 0, yielded = 0;
         foreach (var node in sorted)
         {
@@ -214,8 +235,8 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 : node;
 
             yielded++;
-            if (parsedQuery.Limit.HasValue && parsedQuery.Limit.Value > 0
-                && yielded >= parsedQuery.Limit.Value)
+            if (effectiveLimit.HasValue && effectiveLimit.Value > 0
+                && yielded >= effectiveLimit.Value)
                 yield break;
         }
     }
@@ -224,10 +245,17 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
     /// Shared collector: iterates <see cref="MeshQueryRequest.EffectiveQueries"/>,
     /// runs <see cref="FindMatchingNodesAsync"/> per query, and unions hits by
     /// <see cref="MeshNode.Path"/>. Returns the matched nodes plus the FIRST
-    /// query's parsed form + base path (used by the post-filter / sort blocks
-    /// in the public callers).
+    /// query's parsed form + the union of every query's base path (used by
+    /// the post-filter / sort blocks in the public callers).
+    /// <para>
+    /// <see cref="MeshQueryRequest.Limit"/> is intentionally NOT pushed into
+    /// any per-query parse: doing so on query #0 only made the union
+    /// iteration-order dependent (query #0 might hit its limit before yielding
+    /// its most relevant rows, while queries #1+ contributed everything past
+    /// it). The Limit is enforced post-union in the public callers instead.
+    /// </para>
     /// </summary>
-    private async Task<(List<object> Matched, ParsedQuery FirstParsed, string FirstBasePath)>
+    private async Task<(List<object> Matched, ParsedQuery FirstParsed, IReadOnlyList<string> BasePaths)>
         CollectMatchedAsync(
             MeshQueryRequest request,
             JsonSerializerOptions options,
@@ -242,23 +270,21 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         var seenRefs = new HashSet<object>(ReferenceEqualityComparer.Instance);
 
         ParsedQuery? firstParsed = null;
-        string firstBasePath = "";
+        var basePaths = new List<string>(effectiveQueries.Count);
 
         for (var qi = 0; qi < effectiveQueries.Count; qi++)
         {
             var parsedQuery = _parser.Parse(effectiveQueries[qi]);
-            if (qi == 0 && request.Limit.HasValue)
-                parsedQuery = parsedQuery with { Limit = request.Limit };
             if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
                 parsedQuery = parsedQuery with { IsMain = true };
 
             var (basePath, effectiveScope) = ResolvePathAndScope(parsedQuery, request);
             var context = request.Context ?? parsedQuery.Context;
+            basePaths.Add(basePath);
 
             if (qi == 0)
             {
                 firstParsed = parsedQuery;
-                firstBasePath = basePath;
             }
 
             await foreach (var node in FindMatchingNodesAsync(
@@ -283,7 +309,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         }
 
         var matched = matchedByPath.Values.Cast<object>().Concat(nonNodeMatched).ToList();
-        return (matched, firstParsed ?? _parser.Parse(""), firstBasePath);
+        return (matched, firstParsed ?? _parser.Parse(""), basePaths);
     }
 
     /// <summary>
