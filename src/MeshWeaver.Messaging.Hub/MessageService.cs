@@ -10,6 +10,34 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
+/// <summary>
+/// Direct-to-file diagnostic trace that bypasses the ILogger pipeline. Use
+/// when chasing a hang where the logger config can't reach the silo (Orleans
+/// TestCluster) and you need to see what the framework's message-pipeline
+/// is doing. Disabled unless <c>MESHWEAVER_MSG_TRACE=1</c>. Path:
+/// <c>%TEMP%/meshweaver-msg-trace.log</c>.
+/// </summary>
+internal static class MessageTrace
+{
+    private static readonly bool Enabled =
+        Environment.GetEnvironmentVariable("MESHWEAVER_MSG_TRACE") is "1" or "true" or "True";
+    private static readonly string Path =
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "meshweaver-msg-trace.log");
+    private static readonly object Lock = new();
+
+    public static void Write(string line)
+    {
+        if (!Enabled) return;
+        try
+        {
+            lock (Lock)
+                System.IO.File.AppendAllText(Path,
+                    $"{DateTime.UtcNow:HH:mm:ss.fff} {line}{Environment.NewLine}");
+        }
+        catch { /* tracing must never throw */ }
+    }
+}
+
 public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
@@ -314,11 +342,13 @@ public class MessageService : IMessageService
             logger.LogTrace(
                 "MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
                 name, Address, delivery.Id, delivery.State);
+        MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} routed state={delivery.State} isOnTarget={isOnTarget}");
 
         if (isOnTarget)
         {
             // Check if we need to defer this message - must check inside lock to avoid race with OpenGate
             bool shouldDefer = !gates.IsEmpty;
+            MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} onTarget gates.IsEmpty={gates.IsEmpty} shouldDefer={shouldDefer}");
             if (shouldDefer)
             {
                 // System messages must never be deferred — they are critical for the
@@ -374,6 +404,7 @@ public class MessageService : IMessageService
                         {
                             logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
                                 delivery.Message.GetType().Name, delivery.Id, Address);
+                            MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DEFERRED gates=[{string.Join(",", gates.Keys)}]");
                             deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
                             return delivery.Forwarded();
                         }
@@ -501,7 +532,9 @@ public class MessageService : IMessageService
                     // ShutdownRequest uses CancellationToken.None so disposal can't be cancelled
                     // by CancelExecution() — other handlers CAN be cancelled to unblock the pipeline
                     var token = delivery.Message is ShutdownRequest ? CancellationToken.None : cancellationTokenSource.Token;
+                    MessageTrace.Write($"hub={Address} msg={messageTypeName} id={delivery.Id} HandleMessageAsync ENTER");
                     delivery = await hub.HandleMessageAsync(delivery, token);
+                    MessageTrace.Write($"hub={Address} msg={messageTypeName} id={delivery.Id} HandleMessageAsync EXIT state={delivery.State}");
                     // Compare target without Host since Host tracks routing path
                     var ignoredTargetWithoutHost = delivery.Target is not null ? delivery.Target with { Host = null } : null;
                     if (!isDisposing && delivery is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
