@@ -50,10 +50,18 @@ public class MeshQuery
         var channel = Channel.CreateUnbounded<object>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
 
+        // Scoped query → only providers whose Matches() predicate accepts
+        // the query's namespace candidates. Unscoped → fan to all. Extract
+        // once here so every provider's predicate is a cheap HashSet lookup.
+        var queryNamespaces = MergeQueryNamespaces(parsedQuery);
+        var participating = queryNamespaces.Count == 0
+            ? providers
+            : providers.Where(p => p.Matches(queryNamespaces)).ToList();
+
         _ = FanOutProvidersAsync();
         async Task FanOutProvidersAsync()
         {
-            await Task.WhenAll(providers.Select(async provider =>
+            await Task.WhenAll(participating.Select(async provider =>
             {
                 try
                 {
@@ -84,6 +92,27 @@ public class MeshQuery
 
         await foreach (var item in channel.Reader.ReadAllAsync(CancellationToken.None))
             yield return item;
+    }
+
+    /// <summary>
+    /// Pre-extracts the partition candidates a query targets — union of
+    /// <c>namespace:</c> condition values and the first segment of
+    /// <see cref="ParsedQuery.Path"/>. Computed once per query and passed
+    /// to every <see cref="IMeshQueryProvider.Matches"/> call.
+    /// </summary>
+    internal static IReadOnlyList<string> MergeQueryNamespaces(ParsedQuery parsed)
+    {
+        var fromFilter = parsed.ExtractNamespaces();
+        if (string.IsNullOrEmpty(parsed.Path))
+            return fromFilter;
+        var firstSegment = parsed.Path.Split('/', 2)[0];
+        if (fromFilter.Count == 0)
+            return new[] { firstSegment };
+        var combined = new List<string>(fromFilter.Count + 1);
+        combined.AddRange(fromFilter);
+        if (!combined.Contains(firstSegment, StringComparer.OrdinalIgnoreCase))
+            combined.Add(firstSegment);
+        return combined;
     }
 
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(

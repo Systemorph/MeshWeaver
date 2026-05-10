@@ -25,6 +25,10 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
 {
     private readonly ImmutableDictionary<string, MeshNode> _nodes;
 
+    /// <summary>
+    /// Wraps <paramref name="nodes"/> in an immutable, path-keyed lookup. Duplicate
+    /// paths are deduped to the last entry (caller wins).
+    /// </summary>
     public StaticNodeStorageAdapter(IEnumerable<MeshNode> nodes)
     {
         _nodes = nodes
@@ -35,20 +39,24 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
 
+    /// <inheritdoc/>
     public Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
         _nodes.TryGetValue(Norm(path), out var node);
         return Task.FromResult<MeshNode?>(node);
     }
 
+    /// <inheritdoc/>
     public Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
         => throw new NotSupportedException(
             $"StaticNodeStorageAdapter is read-only; cannot write '{node.Path}'.");
 
+    /// <inheritdoc/>
     public Task DeleteAsync(string path, CancellationToken ct = default)
         => throw new NotSupportedException(
             $"StaticNodeStorageAdapter is read-only; cannot delete '{path}'.");
 
+    /// <inheritdoc/>
     public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
         string? parentPath, CancellationToken ct = default)
     {
@@ -85,9 +93,11 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
             (nodePaths, directoryPaths));
     }
 
+    /// <inheritdoc/>
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
         => Task.FromResult(_nodes.ContainsKey(Norm(path)));
 
+    /// <inheritdoc/>
     public Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
         string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
     {
@@ -106,6 +116,7 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
     }
 
 #pragma warning disable CS1998
+    /// <inheritdoc/>
     public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
         string nodePath, string? subPath, JsonSerializerOptions options,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
@@ -115,13 +126,16 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
     }
 #pragma warning restore CS1998
 
+    /// <inheritdoc/>
     public Task SavePartitionObjectsAsync(string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
         => throw new NotSupportedException("StaticNodeStorageAdapter is read-only.");
 
+    /// <inheritdoc/>
     public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
         => throw new NotSupportedException("StaticNodeStorageAdapter is read-only.");
 
+    /// <inheritdoc/>
     public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
         string nodePath, string? subPath = null, CancellationToken ct = default)
         => Task.FromResult<DateTimeOffset?>(null);

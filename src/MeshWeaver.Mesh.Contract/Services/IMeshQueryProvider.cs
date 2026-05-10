@@ -25,6 +25,27 @@ public interface IMeshQueryProvider
     string Name => GetType().FullName ?? GetType().Name;
 
     /// <summary>
+    /// Predicate the top-level aggregator uses to decide whether to fan a
+    /// <em>scoped</em> query out to this provider. It is consulted only
+    /// when the query targets a specific partition — i.e.,
+    /// <paramref name="queryNamespaces"/> is non-empty. Unscoped queries
+    /// (no <c>namespace:</c> condition and no <c>path:</c> filter) fan
+    /// to every provider unconditionally, so providers never need a
+    /// "match-all" branch here.
+    ///
+    /// <para>The aggregator pre-extracts namespace candidates once per
+    /// query (union of <see cref="ParsedQuery.ExtractNamespaces"/> and
+    /// the first segment of <see cref="ParsedQuery.Path"/>) so every
+    /// provider's predicate is a cheap O(k·m) set lookup against fields
+    /// it stored at construction — no re-parsing per provider per query.</para>
+    ///
+    /// <para>Each provider compares against namespaces it owns (static
+    /// providers) or excludes (storage providers that back the writable
+    /// mesh and want to defer static partition reads).</para>
+    /// </summary>
+    bool Matches(IReadOnlyList<string> queryNamespaces);
+
+    /// <summary>
     /// Query nodes and partition objects with full-text search, filtering, and scoping.
     /// Uses GitHub-style query syntax (e.g., "nodeType:Story status:Open laptop").
     /// </summary>

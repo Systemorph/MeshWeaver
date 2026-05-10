@@ -15,6 +15,37 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// </summary>
 public class StaticNodeQueryProvider : IMeshQueryProvider
 {
+    /// <summary>
+    /// Default <see cref="Matches"/> predicate: union of the providers' static
+    /// node first-segments + the seed nodes' first-segments. Computed once at
+    /// registration time so the resulting lambda is closed over the
+    /// partition set (data-driven, no hard-coded namespace list).
+    ///
+    /// <para>Accepts the query when any of the pre-extracted
+    /// <paramref name="queryNamespaces"/> is in our segment set. Unscoped
+    /// queries are pre-filtered by the aggregator (every provider
+    /// participates) so this predicate is only consulted for scoped ones.</para>
+    /// </summary>
+    public static Func<IReadOnlyList<string>, bool> BuildDefaultMatches(
+        IEnumerable<IStaticNodeProvider> providers,
+        MeshConfiguration? meshConfiguration)
+    {
+        var firstSegments = providers
+            .SelectMany(p => p.GetStaticNodes())
+            .Concat(meshConfiguration?.Nodes.Values ?? Enumerable.Empty<MeshNode>())
+            .Select(n => n.Path)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Select(p => p!.Split('/', 2)[0])
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return queryNamespaces =>
+        {
+            for (var i = 0; i < queryNamespaces.Count; i++)
+                if (firstSegments.Contains(queryNamespaces[i]))
+                    return true;
+            return false;
+        };
+    }
+
     // Provider nodes (from IStaticNodeProvider) — global, no path/scope check
     private readonly MeshNode[] _providerNodes;
     // Config nodes (from MeshConfiguration.Nodes) — respect path/scope/context
@@ -27,13 +58,23 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     private readonly QueryEvaluator _evaluator = new();
     private readonly Microsoft.Extensions.Logging.ILogger? _logger;
 
+    // Caller-supplied predicate — keeps partition routing data-driven (the
+    // registration site declares which namespaces this provider owns, via a
+    // lambda or the partition registry) rather than hard-coded here.
+    private readonly Func<IReadOnlyList<string>, bool> _matches;
+
+    /// <inheritdoc/>
+    public bool Matches(IReadOnlyList<string> queryNamespaces) => _matches(queryNamespaces);
+
     public StaticNodeQueryProvider(
         IEnumerable<IStaticNodeProvider> providers,
+        Func<IReadOnlyList<string>, bool> matches,
         MeshConfiguration? meshConfiguration = null,
         Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
     {
         _meshConfiguration = meshConfiguration;
         _logger = loggerFactory?.CreateLogger<StaticNodeQueryProvider>();
+        _matches = matches;
 
         var providerList = providers as IList<IStaticNodeProvider> ?? providers.ToList();
         _providerNodes = providerList.SelectMany(p => p.GetStaticNodes()).ToArray();

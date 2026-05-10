@@ -51,7 +51,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     // before the next test starts; later tests inherit a polluted streams entry
     // and the streamed text never reaches the assertions. Mirrors the pattern
     // OrleansHostedHubRoutingTest uses (client/hostedhubrouting-{caller}-{guid}).
-    private new async Task<IMessageHub> GetClientAsync([CallerMemberName] string? name = null)
+    private async Task<IMessageHub> GetUniqueClientAsync([CallerMemberName] string? name = null)
         => await base.GetClientAsync($"streaming-{name}-{Guid.NewGuid():N}", "TestUser");
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
@@ -75,7 +75,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     public async Task ResponseText_StreamsToMessageNode()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = await GetUniqueClientAsync();
 
         // Create thread
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Streaming text test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
@@ -132,7 +132,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     public async Task DelegationFlow_SubThreadStreamsText_ParentCompletes()
     {
         var ct = new CancellationTokenSource(100.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = await GetUniqueClientAsync();
 
         // Create thread
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")), o => o.WithTarget(new Address(ContextPath))).FirstAsync().ToTask(ct);
@@ -256,7 +256,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     public async Task Delegation_ParentShowsToolCall_SubThreadStreamsText_LiveUpdate()
     {
         var ct = new CancellationTokenSource(25.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = await GetUniqueClientAsync();
         var workspace = client.GetWorkspace();
 
         // 1. Create thread
@@ -337,7 +337,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     public async Task LayoutArea_ReceivesUpdateThreadMessageContent_ViaLayoutStream()
     {
         var ct = new CancellationTokenSource(50.Seconds()).Token;
-        var client = await GetClientAsync();
+        var client = await GetUniqueClientAsync();
         var workspace = client.GetWorkspace();
 
         // 1. Create thread + submit message

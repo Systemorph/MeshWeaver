@@ -60,6 +60,38 @@ public record ParsedQuery(
     };
 
     /// <summary>
+    /// Extracts every value from <c>namespace:X</c> conditions in the filter.
+    /// Used by the top-level aggregator to dispatch a query to the set of
+    /// providers whose <c>Matches</c> predicate accepts any of these
+    /// namespaces. Empty when the query has no namespace constraint
+    /// (broadcast to all providers).
+    /// </summary>
+    public IReadOnlyList<string> ExtractNamespaces()
+    {
+        if (Filter == null) return Array.Empty<string>();
+        var collected = new List<string>();
+        ExtractNamespacesFromNode(Filter, collected);
+        return collected;
+    }
+
+    private static void ExtractNamespacesFromNode(QueryNode node, List<string> collected)
+    {
+        switch (node)
+        {
+            case QueryComparison c when c.Condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase)
+                && c.Condition.Operator == QueryOperator.Equal:
+                collected.AddRange(c.Condition.Values);
+                break;
+            case QueryAnd and:
+                foreach (var child in and.Children) ExtractNamespacesFromNode(child, collected);
+                break;
+            case QueryOr or:
+                foreach (var child in or.Children) ExtractNamespacesFromNode(child, collected);
+                break;
+        }
+    }
+
+    /// <summary>
     /// Projects an item down to only the requested properties.
     /// Returns a dictionary with the selected property names and their values.
     /// </summary>

@@ -71,13 +71,16 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
 
 
+    private readonly HashSet<string> _excludedNamespaces;
+
     public RoutingMeshQueryProvider(
         RoutingPersistenceServiceCore router,
         MeshConfiguration? meshConfig = null,
         ICrossSchemaQueryProvider? crossSchemaProvider = null,
         AccessService? accessService = null,
         IDataChangeNotifier? changeNotifier = null,
-        ILogger<RoutingMeshQueryProvider>? logger = null)
+        ILogger<RoutingMeshQueryProvider>? logger = null,
+        IEnumerable<string>? excludedNamespaces = null)
     {
         _router = router;
         _meshConfig = meshConfig;
@@ -85,6 +88,19 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         _accessService = accessService;
         _changeNotifier = changeNotifier;
         _logger = logger;
+        _excludedNamespaces = (excludedNamespaces ?? Enumerable.Empty<string>())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <inheritdoc/>
+    public bool Matches(IReadOnlyList<string> queryNamespaces)
+    {
+        // Static partitions (Agent, Model, …) are served by StaticNodeQueryProvider —
+        // the routing core has no rows for them; don't waste a fan-out.
+        for (var i = 0; i < queryNamespaces.Count; i++)
+            if (!_excludedNamespaces.Contains(queryNamespaces[i]))
+                return true;
+        return false;
     }
 
     private string GetEffectiveUserId()
