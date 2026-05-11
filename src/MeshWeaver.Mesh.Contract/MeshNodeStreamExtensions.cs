@@ -210,43 +210,105 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var remoteStream = _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(_path!), new MeshNodeReference());
 
+            // Wait for the per-node hub's initial SubscribeResponse before
+            // issuing the Update — racing the Update against the handshake
+            // delivers a null current to the lambda and propagates the
+            // cryptic "node not in persistence" error. The proper shape is:
+            //
+            //   1. Subscribe to the remote stream.
+            //   2. Wait for first non-null state (initial frame from owner) — this
+            //      is the moment ISynchronizationStream<MeshNode>.Current
+            //      transitions from null to the persisted node value.
+            //   3. Issue Update at that point; the handler then sees a
+            //      non-null Current and applies the patch.
+            //   4. Read the post-update node off the next emission past the
+            //      baseline version, complete the outer observable.
+            //
+            // A 30s outer timeout bounds the wait so a missing per-node hub
+            // (NodeType has no HubConfiguration / routing doesn't resolve)
+            // throws a TimeoutException with the path embedded — proper
+            // diagnostic, no silent null.
             long? baseline = null;
-            var sub = remoteStream.Subscribe(change =>
-            {
-                if (baseline is null)
+            bool updateIssued = false;
+            var sub = remoteStream
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Subscribe(change =>
                 {
-                    baseline = change.Version;
-                    return;
-                }
-                if (change.Version <= baseline.Value) return;
-                if (change.Value is { } node)
-                {
-                    observer.OnNext(node);
-                    observer.OnCompleted();
-                }
-            }, observer.OnError);
+                    if (!updateIssued)
+                    {
+                        // Wait for first non-null initial state — that's
+                        // when the per-node hub has delivered the persisted
+                        // node value via SubscribeResponse and SetCurrent
+                        // has populated Current.
+                        if (change.Value is null)
+                            return;
+                        baseline = change.Version;
+                        updateIssued = true;
 
-            try
-            {
-                // ISynchronizationStream<MeshNode>.Update routes the patch to the owning
-                // per-node hub via PatchDataChangeRequest. The reducer's first emission
-                // past baseline carries the post-update node back to the subscriber above.
-                remoteStream.Update(current =>
+                        try
+                        {
+                            // ISynchronizationStream<MeshNode>.Update routes the patch to the owning
+                            // per-node hub via PatchDataChangeRequest. The reducer's first emission
+                            // past baseline carries the post-update node back to the subscriber above.
+                            remoteStream.Update(current =>
+                            {
+                                if (current is null)
+                                {
+                                    // Defensive: by construction this shouldn't fire (we waited
+                                    // for non-null state above), but a race could in principle
+                                    // wipe Current between the SubscribeResponse and this
+                                    // continuation. Surface a precise diagnostic — never silent.
+                                    throw new InvalidOperationException(
+                                        $"Race: Current became null between SubscribeResponse and Update for '{_path}'. " +
+                                        "The synchronization stream's Current was non-null when Update was issued, but " +
+                                        "the handler observed null — likely a concurrent dispose or a reset event. " +
+                                        "Re-issue the Update or investigate why the stream was reset mid-write.");
+                                }
+                                var updated = update(current);
+                                return new ChangeItem<MeshNode>(
+                                    updated,
+                                    remoteStream.StreamId,
+                                    remoteStream.Hub.Version);
+                            }, observer.OnError);
+                        }
+                        catch (Exception ex)
+                        {
+                            observer.OnError(ex);
+                        }
+                        return;
+                    }
+
+                    // Update was issued — wait for post-update emission past baseline.
+                    if (baseline is null || change.Version <= baseline.Value) return;
+                    if (change.Value is { } node)
+                    {
+                        observer.OnNext(node);
+                        observer.OnCompleted();
+                    }
+                }, ex =>
                 {
-                    if (current is null)
-                        throw new InvalidOperationException(
-                            $"MeshNode at '{_path}' not visible on the remote stream — has the per-node hub activated?");
-                    var updated = update(current);
-                    return new ChangeItem<MeshNode>(
-                        updated,
-                        remoteStream.StreamId,
-                        remoteStream.Hub.Version);
-                }, observer.OnError);
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
-            }
+                    // Timeout-wrapped: a TimeoutException here means we never got
+                    // an initial state. The per-node hub either didn't activate,
+                    // didn't load the node from persistence, or doesn't have a
+                    // MeshNodeReference reducer. Repackage with the path so the
+                    // diagnostic is actionable from the log alone.
+                    if (ex is TimeoutException && !updateIssued)
+                    {
+                        observer.OnError(new TimeoutException(
+                            $"Update aborted: no initial state arrived for '{_path}' within 30s. " +
+                            "Likely causes — (1) RLS silently rejected the prior CreateNode (check the response's " +
+                            "Success/Error fields, not just the awaited result), (2) the path is misspelled / points " +
+                            "at a namespace no NodeType claims, (3) the node was deleted between create and update, or " +
+                            "(4) the per-node hub activated but its MeshDataSource didn't load the node from persistence " +
+                            "(verify the HubConfiguration calls AddMeshDataSource and the routing resolves a HubConfiguration " +
+                            "for this NodeType). Confirm persistence state with " +
+                            $"`mcp__memex__get @{_path}` before retrying."));
+                    }
+                    else
+                    {
+                        observer.OnError(ex);
+                    }
+                });
 
             return sub;
         });

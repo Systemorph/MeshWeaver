@@ -45,7 +45,7 @@ public class ApiTokenViaCreateNodeTest(ITestOutputHelper output) : MonolithMeshT
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     private ApiTokenService GetApiTokenService() =>
-        new(MeshService, MeshService, Mesh,
+        new(MeshService, Mesh,
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>());
 
     [Fact]

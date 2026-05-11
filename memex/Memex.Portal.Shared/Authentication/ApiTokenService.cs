@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -15,10 +16,22 @@ namespace Memex.Portal.Shared.Authentication;
 
 /// <summary>
 /// Service for creating, validating, and revoking API tokens.
-/// Tokens are stored as MeshNodes with nodeType "ApiToken".
-/// Raw tokens are never persisted — only their SHA-256 hash.
+/// Tokens are stored as MeshNodes with nodeType "ApiToken". Raw tokens
+/// are never persisted — only their SHA-256 hash.
+///
+/// <para>
+/// 🚨 No async / Task / FromAsync / await anywhere in this file. Every
+/// reachable method returns <see cref="IObservable{T}"/> and the chain
+/// stays observable end-to-end. Reads of known paths go through
+/// <c>hub.GetMeshNode(path)</c> (one-shot) or
+/// <c>workspace.GetMeshNodeStream(path)</c> (live); listings go through
+/// <c>workspace.GetQuery(id, queries...)</c> (synced + path-keyed dedup).
+/// QueryAsync / <see cref="IAsyncEnumerable{T}"/> iteration is forbidden
+/// in this file per <c>Doc/Architecture/AsynchronousCalls.md</c> and
+/// <c>Doc/Architecture/SyncedMeshNodeQueries.md</c>.
+/// </para>
 /// </summary>
-internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery, IMessageHub hub, ILogger<ApiTokenService> logger)
+internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogger<ApiTokenService> logger)
 {
     private const string TokenPrefix = "mw_";
     private const int TokenByteLength = 32;
@@ -40,27 +53,10 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var hash = HashToken(rawToken);
         var hashPrefix = hash[..12];
 
-        // Capture the caller's roles for the issued token. The previous shape
-        // read AccessContext.Roles from the cookie/OAuth principal — but
-        // Microsoft OAuth doesn't populate ClaimTypes.Role for personal
-        // accounts by default, so the captured set was empty for most users
-        // and the resulting API token couldn't do anything. Read the user's
-        // self-scope AccessAssignment instead — that's the source-of-truth
-        // for "what roles does rbuergi have on User/rbuergi". The assignment
-        // sits at User/{userId}/_Access/{userId}_Access (per
-        // SecurityCollections convention). Stamped at validation time onto
-        // AccessContext.Roles so SecurityService.GetEffectivePermissions
-        // resolves them via the claim-based role path on per-node hubs (where
-        // the synced AccessAssignment query is intentionally not registered —
-        // SecurityServiceExtensions:44-50, recursion avoidance). Empty if no
-        // self-scope assignment exists; the token still gets ObjectId so
-        // self-owned reads still work, but writes will deny — which is the
-        // correct outcome (a user with no role grants no role to their token).
-        // Per-user content lives in the user's own partition (Repair v10): paths
-        // like rbuergi/ApiToken/{hashPrefix}, NOT User/rbuergi/ApiToken/{hashPrefix}.
-        // The dedicated `apitoken` partition still holds the central index node
-        // (see indexNode below) — token validation reads the index first then
-        // dereferences into the user's own partition.
+        // Per-user partition layout (Repair v10): tokens live at
+        // {userId}/ApiToken/{hashPrefix}, NOT under User/{userId}/ApiToken.
+        // The global ApiToken/{hashPrefix} index entry routes incoming
+        // bearer tokens to the right user-scoped node at validation time.
         var userTokenNamespace = $"{userId}/{ApiTokenNamespace}";
         var assignmentPath = $"{userId}/_Access/{userId}_Access";
 
@@ -108,23 +104,11 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
 
                     // Index writes require System identity — the global ApiToken/
                     // namespace is a separately-gated partition for security
-                    // infrastructure that ordinary users don't have Create on. The
-                    // previous shape
-                    //     using (accessService.SwitchAccessContext(System))
-                    //         indexObs = nodeFactory.CreateNode(indexNode);
-                    // looked right but was broken: MeshService.CreateNode is
-                    // Observable.Defer whose CaptureContext() runs at SUBSCRIBE
-                    // time. The using-block disposed synchronously, so by the time
-                    // SelectMany below subscribes, the System context had already
-                    // been reverted — the deferred CaptureContext returned the
-                    // user's context and CreateNodeRequest went out under user
-                    // identity → "Create permission required for node
-                    // 'ApiToken/{hashPrefix}'".
-                    //
-                    // Fix: move the SwitchAccessContext INSIDE Observable.Defer
-                    // and tie its lifetime to the inner observable via .Finally so
-                    // the System context is active during CaptureContext but
-                    // reverted promptly when the create completes.
+                    // infrastructure that ordinary users don't have Create on.
+                    // See git history on this file for the SwitchAccessContext-
+                    // outside-Defer bug that this lambda layout fixes (System
+                    // context must be active during CaptureContext at Subscribe
+                    // time, not when the outer using-block returned).
                     IObservable<MeshNode> indexObs;
                     if (accessService != null)
                     {
@@ -150,67 +134,57 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
 
     /// <summary>
     /// Reads the user's self-scope <see cref="AccessAssignment"/> at
-    /// <c>User/{userId}/_Access/{userId}_Access</c> and emits the (non-denied)
-    /// role IDs assigned there. Read is performed under System identity so
-    /// it succeeds regardless of whether the calling user has Read on
-    /// AccessAssignments. Emits an empty array when the assignment doesn't
-    /// exist or the read fails — token creation continues with no captured
-    /// roles, which is the correct outcome for a user with no role grants
-    /// (the issued token has identity but no permissions).
+    /// <c>{userId}/_Access/{userId}_Access</c> and emits the (non-denied)
+    /// role IDs assigned there. Pure observable composition — one-shot
+    /// <see cref="MeshNodeStreamExtensions.GetMeshNode"/> under System
+    /// identity, then <c>.Select</c>. Emits an empty array on missing
+    /// assignment or read failure (the issued token still has identity
+    /// but no role grants — correct outcome).
     /// </summary>
     private IObservable<IReadOnlyCollection<string>> ResolveSelfScopeRoles(string assignmentPath)
     {
-        return Observable.FromAsync(async () =>
-        {
-            try
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+        // Observable.Using ties the AsyncLocal System scope's lifetime to
+        // the Subscribe of the inner observable, not to the lambda body's
+        // return — same shape used by ApiTokenNodeType.HandleValidateToken
+        // for the same reason (Defer-style subscribe-time capture).
+        var readUnderSystem = accessService != null
+            ? Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.GetMeshNode(assignmentPath, TimeSpan.FromSeconds(5)))
+            : hub.GetMeshNode(assignmentPath, TimeSpan.FromSeconds(5));
+
+        return readUnderSystem
+            .Select(node =>
             {
-                await foreach (var node in QueryAsSystemAsync($"path:{assignmentPath}"))
-                {
-                    AccessAssignment? assignment = node.Content as AccessAssignment;
-                    if (assignment == null && node.Content is System.Text.Json.JsonElement je)
-                    {
-                        try
-                        {
-                            assignment = System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(
-                                je.GetRawText(), hub.JsonSerializerOptions);
-                        }
-                        catch { /* fall through */ }
-                    }
-                    if (assignment == null) continue;
-                    var roles = assignment.Roles
-                        .Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role))
-                        .Select(r => r.Role)
-                        .Distinct()
-                        .ToArray();
-                    return (IReadOnlyCollection<string>)roles;
-                }
-            }
-            catch (Exception ex)
+                var assignment = node?.Content as AccessAssignment ?? ExtractAccessAssignment(node);
+                if (assignment is null)
+                    return (IReadOnlyCollection<string>)Array.Empty<string>();
+                return assignment.Roles
+                    .Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role))
+                    .Select(r => r.Role)
+                    .Distinct()
+                    .ToArray();
+            })
+            .Catch<IReadOnlyCollection<string>, Exception>(ex =>
             {
                 logger.LogWarning(ex,
                     "Failed to resolve self-scope roles from {Path} for token creation; continuing with empty role set",
                     assignmentPath);
-            }
-            return (IReadOnlyCollection<string>)Array.Empty<string>();
-        });
+                return Observable.Return<IReadOnlyCollection<string>>(Array.Empty<string>());
+            });
     }
 
-
     /// <summary>
-    /// Queries nodes using the system identity to bypass access control.
-    /// ApiTokenService is infrastructure code that needs unrestricted read access.
-    /// </summary>
-    private IAsyncEnumerable<MeshNode> QueryAsSystemAsync(string query, CancellationToken ct = default)
-        => meshQuery.QueryAsync<MeshNode>(
-            MeshQueryRequest.FromQuery(query, WellKnownUsers.System), ct: ct);
-
-    /// <summary>
-    /// Reactive token validation — synchronous method returning <see cref="IObservable{T}"/>.
-    /// The Task-returning <c>await ValidateTokenAsync</c> shape deadlocks when invoked from
-    /// hub-reachable code (the <see cref="IAsyncEnumerable{T}"/> iteration flows through a
-    /// hub round-trip; awaiting it captures the dispatch SyncContext and blocks the action
-    /// block waiting for itself). Returning <see cref="IObservable{T}"/> lets callers compose
-    /// without bridging back to <see cref="Task"/> mid-flow. See CLAUDE.md "NOTHING ASYNC EVER".
+    /// Reactive token validation. Reads index node at
+    /// <c>ApiToken/{hashPrefix}</c> via <c>hub.GetMeshNode</c> (one-shot,
+    /// authoritative — never <c>QueryAsync</c> for a known path per
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>); when the index
+    /// points at a user-scoped token, follows the pointer with a second
+    /// one-shot read. The chain is fully observable — no
+    /// <c>FromAsync</c>, no <c>FirstOrDefaultAsync.AsTask()</c>, no
+    /// <c>await</c>.
     /// </summary>
     public IObservable<ApiToken?> ValidateToken(string rawToken)
     {
@@ -221,8 +195,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var hashPrefix = hash[..12];
         var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
 
-        return Observable.FromAsync(() => QueryAsSystemAsync($"path:{indexPath}")
-                .FirstOrDefaultAsync().AsTask())
+        return ReadAsSystem(indexPath)
             .SelectMany(indexNode =>
             {
                 if (indexNode == null)
@@ -233,17 +206,27 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
                 {
                     if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
                         return Observable.Return<(MeshNode? node, ApiToken? token)>((null, null));
-                    return Observable.FromAsync(() =>
-                            QueryAsSystemAsync($"path:{index.TokenPath}")
-                                .FirstOrDefaultAsync().AsTask())
-                        .Select(tn => (node: tn,
+                    return ReadAsSystem(index.TokenPath)
+                        .Select(tn => (
+                            node: tn,
                             token: (tn?.Content as ApiToken) ?? ExtractApiToken(tn)));
                 }
-                // Legacy format: full ApiToken at index path
-                return Observable.Return((node: (MeshNode?)indexNode,
+                // Legacy format: full ApiToken at index path.
+                return Observable.Return((
+                    node: (MeshNode?)indexNode,
                     token: (indexNode.Content as ApiToken) ?? ExtractApiToken(indexNode)));
             })
             .Select(t => FinalizeToken(t.node, t.token, hash, hashPrefix));
+    }
+
+    private IObservable<MeshNode?> ReadAsSystem(string path)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService != null
+            ? Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(5)))
+            : hub.GetMeshNode(path, TimeSpan.FromSeconds(5));
     }
 
     private ApiToken? FinalizeToken(MeshNode? tokenNode, ApiToken? apiToken, string hash, string hashPrefix)
@@ -263,7 +246,11 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             return null;
         }
 
-        // Update LastUsedAt via remote stream (fire-and-forget, non-critical).
+        // Update LastUsedAt via the canonical workspace remote stream —
+        // fire-and-forget (non-critical telemetry). Subscribe is mandatory
+        // because Update is cold; the empty error handler keeps the cold
+        // observable's GC-time fire-and-forget warning quiet on writes
+        // that hit a deleted node.
         if (tokenNode != null)
         {
             hub.GetWorkspace()
@@ -276,96 +263,137 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
     }
 
     /// <summary>
-    /// Reactive token revocation — marks the token as revoked via
-    /// <see cref="IMeshService.UpdateNode"/> and removes the index pointer.
-    /// ApiToken nodes don't have a per-node hub activated, so the lookup goes through
-    /// the mesh-level read-side index (system identity); <c>hub.GetMeshNode</c> would
-    /// hang waiting for a route to a non-activatable address.
+    /// Reactive token revocation. Writes the IsRevoked flag through
+    /// <c>workspace.GetMeshNodeStream(path).Update(...)</c> — the
+    /// canonical remote-stream write per
+    /// <c>Doc/Architecture/AsynchronousCalls.md</c>. No
+    /// <see cref="UpdateNodeRequest"/> forwarding (the previous shape
+    /// timed out in distributed deployments when the per-node hub's
+    /// forwarded request didn't get a response within ~30s).
+    ///
+    /// <para>The global index entry is hard-deleted as a fire-and-forget
+    /// side effect — the index miss is a defense-in-depth gate on top of
+    /// the authoritative <c>IsRevoked</c> flag, not a primary requirement
+    /// for the revoke to be effective.</para>
     /// </summary>
-    public IObservable<bool> RevokeToken(string tokenNodePath) =>
-        Observable.FromAsync(() => meshQuery.QueryAsync<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{tokenNodePath}", WellKnownUsers.System))
-            .FirstOrDefaultAsync().AsTask())
-            .SelectMany(node =>
+    public IObservable<bool> RevokeToken(string tokenNodePath)
+    {
+        var workspace = hub.GetWorkspace();
+        var indexPath = DeriveIndexPath(tokenNodePath);
+
+        // Fire-and-forget delete of the global index entry. Subscribe is
+        // mandatory (the IObservable is cold) — the empty error handler
+        // is intentional: a missing index entry is fine here (token was
+        // already revoked / index never created).
+        if (indexPath != null && indexPath != tokenNodePath)
+            nodeFactory.DeleteNode(indexPath).Subscribe(_ => { }, _ => { });
+
+        logger.LogInformation("Revoking API token at {Path}", tokenNodePath);
+
+        return workspace.GetMeshNodeStream(tokenNodePath)
+            .Update(current =>
             {
-                var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
-                if (node == null || apiToken == null)
-                    return Observable.Return(false);
-
-                var revoked = apiToken with { IsRevoked = true };
-                var updatedNode = node with { Content = revoked };
-
-                // Delete index entry if distinct from the main node.
-                if (apiToken.TokenHash.Length >= 12)
-                {
-                    var hashPrefix = apiToken.TokenHash[..12];
-                    var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
-                    if (tokenNodePath != indexPath)
-                        nodeFactory.DeleteNode(indexPath).Subscribe(_ => { }, _ => { });
-                }
-
-                logger.LogInformation("Revoking API token at {Path}", tokenNodePath);
-                return nodeFactory.UpdateNode(updatedNode).Select(_ => true);
+                var token = current.Content as ApiToken ?? ExtractApiToken(current);
+                if (token == null) return current;
+                return current with { Content = token with { IsRevoked = true } };
+            })
+            .Select(_ => true)
+            .Catch<bool, Exception>(ex =>
+            {
+                logger.LogWarning(ex, "RevokeToken failed for {Path}", tokenNodePath);
+                return Observable.Return(false);
             });
+    }
 
     /// <summary>
-    /// Reactive hard-delete — removes both the primary token node and its index entry.
-    /// Same rationale as <see cref="RevokeToken"/>: ApiToken nodes have no per-node
-    /// hub, so we use the mesh-level read-side index for the lookup.
+    /// Reactive hard-delete. Removes the user-scoped token node and the
+    /// global index entry (fire-and-forget). The user-scoped delete goes
+    /// through <see cref="IMeshService.DeleteNode"/>; this is the
+    /// authoritative removal and the only outcome the caller observes.
     /// </summary>
-    public IObservable<bool> DeleteToken(string tokenNodePath) =>
-        Observable.FromAsync(() => meshQuery.QueryAsync<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{tokenNodePath}", WellKnownUsers.System))
-            .FirstOrDefaultAsync().AsTask())
-            .SelectMany(node =>
-            {
-                // Path doesn't resolve to a node → nothing to delete; return false.
-                // Calling nodeFactory.DeleteNode on a nonexistent path throws
-                // InvalidOperationException("Node not found: …") in MeshService.cs.
-                // The contract here is the same as RevokeToken: false for absent.
-                if (node is null)
-                    return Observable.Return(false);
-
-                var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
-                var hashPrefix = apiToken?.TokenHash is { Length: >= 12 } h ? h[..12] : null;
-
-                if (!string.IsNullOrEmpty(hashPrefix))
-                {
-                    var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
-                    if (indexPath != tokenNodePath)
-                        nodeFactory.DeleteNode(indexPath).Subscribe(_ => { }, _ => { });
-                }
-
-                logger.LogInformation("Deleting API token at {Path}", tokenNodePath);
-                return nodeFactory.DeleteNode(tokenNodePath);
-            });
-
-    public IObservable<IReadOnlyList<ApiTokenInfo>> GetTokensForUser(string userId) =>
-        Observable.FromAsync(() => FetchTokensAsync(userId));
-
-    private async Task<IReadOnlyList<ApiTokenInfo>> FetchTokensAsync(string userId)
+    public IObservable<bool> DeleteToken(string tokenNodePath)
     {
-        var tokens = new List<ApiTokenInfo>();
+        var indexPath = DeriveIndexPath(tokenNodePath);
 
+        if (indexPath != null && indexPath != tokenNodePath)
+            nodeFactory.DeleteNode(indexPath).Subscribe(_ => { }, _ => { });
+
+        logger.LogInformation("Deleting API token at {Path}", tokenNodePath);
+
+        return nodeFactory.DeleteNode(tokenNodePath)
+            .Select(_ => true)
+            .Catch<bool, Exception>(ex =>
+            {
+                logger.LogWarning(ex, "DeleteToken failed for {Path}", tokenNodePath);
+                return Observable.Return(false);
+            });
+    }
+
+    /// <summary>
+    /// Live list of the user's tokens via the canonical synced query
+    /// (<c>workspace.GetQuery</c>). The synced query gives us path-keyed
+    /// dedup across the user-scope and legacy global namespaces,
+    /// all-Initial gating, and provider fan-out — see
+    /// <c>Doc/Architecture/SyncedMeshNodeQueries.md</c>. The cache id is
+    /// per-user so re-mounts (settings tab re-render) reuse the upstream
+    /// subscription instead of cycling Initial waves.
+    /// </summary>
+    public IObservable<IReadOnlyList<ApiTokenInfo>> GetTokensForUser(string userId)
+    {
+        var workspace = hub.GetWorkspace();
         var userTokenNamespace = $"{userId}/{ApiTokenNamespace}";
-        await foreach (var node in QueryAsSystemAsync($"namespace:{userTokenNamespace} nodeType:{NodeTypeApiToken}"))
-        {
-            var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
-            if (apiToken == null) continue;
-            tokens.Add(ToInfo(node, apiToken));
-        }
 
-        // Fallback: legacy tokens at top-level ApiToken namespace
-        await foreach (var node in QueryAsSystemAsync($"namespace:{ApiTokenNamespace} nodeType:{NodeTypeApiToken}"))
-        {
-            var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
-            if (apiToken == null || apiToken.UserId != userId) continue;
-            var hashPrefix = apiToken.TokenHash.Length >= 8 ? apiToken.TokenHash[..8] : apiToken.TokenHash;
-            if (tokens.Any(t => t.HashPrefix == hashPrefix)) continue;
-            tokens.Add(ToInfo(node, apiToken));
-        }
+        return workspace.GetQuery(
+                $"api-tokens:{userId}",
+                $"namespace:{userTokenNamespace} nodeType:{NodeTypeApiToken}",
+                // Legacy fallback: tokens at the global ApiToken namespace
+                // that pre-date the per-user partition migration. Filtered
+                // by UserId in the projection below — the synced query
+                // can't express that predicate, so we over-fetch globally
+                // and prune.
+                $"namespace:{ApiTokenNamespace} nodeType:{NodeTypeApiToken}")
+            .Select(snapshot =>
+            {
+                var tokens = new List<ApiTokenInfo>();
+                var seenPrefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        return tokens;
+                foreach (var node in snapshot)
+                {
+                    if (node.Path is null) continue;
+                    var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
+                    if (apiToken == null) continue;
+
+                    // Legacy nodes in the global namespace must match the
+                    // calling userId; per-user-partition nodes are scoped
+                    // by namespace and don't need this filter, but the
+                    // check is cheap and unifies the projection.
+                    if (apiToken.UserId != userId) continue;
+
+                    var hashPrefix = apiToken.TokenHash.Length >= 8
+                        ? apiToken.TokenHash[..8]
+                        : apiToken.TokenHash;
+                    if (!seenPrefixes.Add(hashPrefix)) continue;
+
+                    tokens.Add(ToInfo(node, apiToken));
+                }
+                return (IReadOnlyList<ApiTokenInfo>)tokens;
+            });
+    }
+
+    /// <summary>
+    /// Derives the global <c>ApiToken/{hashPrefix}</c> index path from a
+    /// user-scoped token node path. <see cref="CreateToken"/> sets the
+    /// node Id to the 12-char hash prefix, so the last path segment is
+    /// reliably the prefix used to build the index entry. Returns null
+    /// for malformed paths (no slash, trailing slash).
+    /// </summary>
+    private static string? DeriveIndexPath(string tokenNodePath)
+    {
+        if (string.IsNullOrEmpty(tokenNodePath)) return null;
+        var lastSlash = tokenNodePath.LastIndexOf('/');
+        if (lastSlash < 0 || lastSlash >= tokenNodePath.Length - 1) return null;
+        var hashPrefix = tokenNodePath[(lastSlash + 1)..];
+        return $"{ApiTokenNamespace}/{hashPrefix}";
     }
 
     private static ApiTokenInfo ToInfo(MeshNode node, ApiToken apiToken) => new()
@@ -413,6 +441,24 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
                     new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 // Distinguish from legacy ApiToken: index has TokenPath, ApiToken does not
                 return !string.IsNullOrEmpty(index?.TokenPath) ? index : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private AccessAssignment? ExtractAccessAssignment(MeshNode? node)
+    {
+        if (node?.Content is AccessAssignment direct) return direct;
+        if (node?.Content is System.Text.Json.JsonElement jsonElement)
+        {
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(
+                    jsonElement.GetRawText(), hub.JsonSerializerOptions);
             }
             catch
             {

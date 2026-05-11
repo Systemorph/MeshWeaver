@@ -36,7 +36,6 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         services.AddSingleton<OAuthCodeStore>();
         services.AddSingleton(new ApiTokenService(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
-            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()));
         var provider = services.BuildServiceProvider();

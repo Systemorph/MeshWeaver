@@ -27,7 +27,6 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     private ApiTokenService GetService() =>
         new(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
-            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
         );

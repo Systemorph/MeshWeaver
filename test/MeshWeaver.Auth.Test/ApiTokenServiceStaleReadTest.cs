@@ -40,7 +40,6 @@ public class ApiTokenServiceStaleReadTest(ITestOutputHelper output) : MonolithMe
     private ApiTokenService GetService() =>
         new(
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
-            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
         );
