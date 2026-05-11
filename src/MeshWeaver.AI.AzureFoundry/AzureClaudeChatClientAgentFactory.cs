@@ -116,6 +116,8 @@ public class AzureClaudeChatClientAgentFactory(
         modelDefinitionsById.TryGetValue(modelName, out var modelDef);
         var endpoint = modelDef?.Endpoint ?? configuration.Endpoint;
         var apiKey = modelDef?.ApiKeySecretRef ?? configuration.ApiKey;
+        var endpointSource = modelDef?.Endpoint != null ? "model-node" : "IOptions";
+        var apiKeySource = modelDef?.ApiKeySecretRef != null ? "model-node" : "IOptions";
 
         if (string.IsNullOrEmpty(endpoint))
             throw new InvalidOperationException(
@@ -125,9 +127,16 @@ public class AzureClaudeChatClientAgentFactory(
             throw new InvalidOperationException(
                 $"ApiKey is missing for model '{modelName}'. Set it on the Model MeshNode (ModelDefinition.ApiKeySecretRef) or in Anthropic:ApiKey config.");
 
-        logger.LogDebug(
-            "Creating Azure Claude chat client for agent {AgentName} using model {ModelName} at endpoint {Endpoint} (source: {Source})",
-            agentConfig.Id, modelName, endpoint, modelDef?.Endpoint != null ? "model node" : "IOptions");
+        // Information-level so a 401 in prod can be correlated to the exact
+        // (endpoint, key-source, key-fingerprint) tuple the request used. The
+        // first 8 chars of a SHA-256 over the key is enough to disambiguate
+        // "stale stamped key from startup" vs "live config key" without
+        // exposing the key itself. ApiKeySecretRef is misnamed — the code
+        // uses it as the literal key — so a wrong/rotated value on a Model
+        // node propagates silently until this log shows the mismatch.
+        logger.LogInformation(
+            "[AzureClaude] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} (endpointSource={EndpointSource}, apiKeySource={ApiKeySource}, apiKeyFp={ApiKeyFingerprint})",
+            agentConfig.Id, modelName, endpoint, endpointSource, apiKeySource, Fingerprint(apiKey));
 
         try
         {
@@ -139,5 +148,20 @@ public class AzureClaudeChatClientAgentFactory(
             throw new InvalidOperationException(
                 $"Failed to create Azure Claude chat client for agent {agentConfig.Id}: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// 8-char SHA-256-hex prefix of <paramref name="value"/>. Used in logs to
+    /// disambiguate "which key was actually used" without ever logging the
+    /// key itself. Two requests using the same key produce the same
+    /// fingerprint; a stale Model-node-stamped key vs a fresh config key
+    /// shows up as a fingerprint mismatch.
+    /// </summary>
+    private static string Fingerprint(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "(empty)";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+        return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 }

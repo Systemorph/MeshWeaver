@@ -64,9 +64,13 @@ public class AzureFoundryChatClientAgentFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("At least one model must be configured in AzureFoundryConfiguration.Models");
 
+        // Information-level so 401s from the inference endpoint correlate
+        // to the exact (endpoint, key-fingerprint) tuple. Fingerprint is a
+        // SHA-256 prefix — never the key itself. Confirms whether the live
+        // ApiKey in config is what's being sent on the wire.
         logger.LogInformation(
-            "Creating Azure Foundry chat client for agent {AgentName} using model {ModelName}",
-            agentConfig.Id, modelName);
+            "[AzureFoundry] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} apiKeyFp={ApiKeyFingerprint}",
+            agentConfig.Id, modelName, configuration.Endpoint, Fingerprint(configuration.ApiKey));
 
         try
         {
@@ -76,10 +80,6 @@ public class AzureFoundryChatClientAgentFactory(
 
             IChatClient chatClient = client.AsIChatClient(modelName);
 
-            logger.LogInformation(
-                "Successfully configured Azure Foundry chat client for agent {AgentName} with endpoint {Endpoint} and model {ModelName}",
-                agentConfig.Id, configuration.Endpoint, modelName);
-
             return chatClient;
         }
         catch (Exception ex)
@@ -88,5 +88,17 @@ public class AzureFoundryChatClientAgentFactory(
             throw new InvalidOperationException(
                 $"Failed to create Azure Foundry chat client for agent {agentConfig.Id}: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// 8-char SHA-256-hex prefix of <paramref name="value"/>. Used in logs to
+    /// disambiguate "which key was actually used" without exposing the key.
+    /// </summary>
+    private static string Fingerprint(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "(empty)";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+        return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 }

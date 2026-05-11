@@ -179,6 +179,71 @@ public class FooSyncedQueryTest : MonolithMeshTestBase
 }
 ```
 
+## Wiring a settings tab / list view (the API-token pattern)
+
+When you build a settings tab that lists MeshNodes the user can act on
+(API tokens, access assignments, threads, etc.), the canonical shape is
+**synced query for the list, no refresh trigger**:
+
+```csharp
+// ❌ WRONG — refresh-counter pattern. Every revoke / delete writes a
+//   tick into a data stream so the view re-queries QueryAsync. Stale
+//   for ~50–200ms after each write; spurious empty flashes on Initial.
+const string tokenListRefreshId = "apiTokenListRefresh";
+host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
+stack = stack.WithView((h, _) =>
+    h.Stream.GetDataStream<long>(tokenListRefreshId)
+        .SelectMany(_ => tokenService.GetTokensForUser(userId)));   // re-fires QueryAsync each tick
+
+// ✅ RIGHT — bind directly to the synced query. New tokens appear on
+//   CreateNode commit, revokes flip rows when IsRevoked changes,
+//   deletes drop rows on DeleteNode commit. No refresh plumbing.
+stack = stack.WithView((h, _) =>
+    tokenService.GetTokensForUser(userId)                            // wraps workspace.GetQuery internally
+        .Select(tokens => BuildTokenList(tokens)));
+```
+
+Inside the service, `GetTokensForUser` returns the synced collection:
+
+```csharp
+public IObservable<IReadOnlyList<ApiTokenInfo>> GetTokensForUser(string userId)
+    => workspace.GetQuery(
+        $"api-tokens:{userId}",                                       // stable cache key
+        $"namespace:{userId}/ApiToken nodeType:ApiToken",
+        $"namespace:ApiToken nodeType:ApiToken")                      // legacy fallback
+       .Select(snapshot => ProjectToInfo(snapshot, userId));
+```
+
+**Why this matters for cross-hub writes too:** subscribing to the synced
+query is what registers the result-set paths in the workspace's live
+synced-query set. That set is the lookup table the workspace's
+`MeshNodeReference` reducer uses when a caller does
+`workspace.GetMeshNodeStream(remote_path).Update(...)`. Without an
+active synced subscription that includes the path, the Update opens a
+fresh `GetRemoteStream` subscription that races the SubscribeResponse —
+the lambda fires with `current=null` before the per-node hub's initial
+frame arrives.
+
+In a UI that renders the list before exposing per-row buttons, the
+synced subscription is established by the time the user clicks Revoke
+and the Update succeeds. **In tests / one-shot scripts that skip the
+list render**, you must pre-warm the synced query explicitly:
+
+```csharp
+// Test setup mirroring UI lifecycle
+await service.GetTokensForUser(userId)
+    .Where(list => list.Any(t => t.NodePath == newPath))
+    .Take(1)
+    .ToTask(ct);   // synced subscription now registers newPath in the workspace
+
+var outcome = await service.RevokeToken(newPath);   // GetMeshNodeStream(newPath).Update resolves correctly
+```
+
+`MeshNodeStreamHandle.Update` (since this fix) waits up to 30s for the
+initial frame and throws a precise `TimeoutException` with the path
+embedded if it never arrives — but the fast / correct path is to have
+the synced query active.
+
 ## What NOT to do
 
 ```csharp

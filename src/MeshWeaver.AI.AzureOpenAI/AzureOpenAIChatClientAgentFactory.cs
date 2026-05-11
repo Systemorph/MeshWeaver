@@ -57,6 +57,13 @@ public class AzureOpenAIChatClientAgentFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("No model configured for Azure OpenAI");
 
+        // Information-level so 401s from the OpenAI endpoint correlate to
+        // the (endpoint, key-fingerprint) tuple. Fingerprint is a SHA-256
+        // prefix — never the key itself.
+        logger.LogInformation(
+            "[AzureOpenAI] Creating chat client agent={AgentName} model={ModelName} endpoint={Endpoint} apiKeyFp={ApiKeyFingerprint}",
+            agentConfig.Id, modelName, credentials.Endpoint, Fingerprint(credentials.ApiKey));
+
         // Create Azure OpenAI client and get chat client
         var azureClient = new AzureOpenAIClient(
             new Uri(credentials.Endpoint),
@@ -71,5 +78,17 @@ public class AzureOpenAIChatClientAgentFactory(
         IChatClient chatClient = openAIChatClient.AsIChatClient();
 
         return chatClient;
+    }
+
+    /// <summary>
+    /// 8-char SHA-256-hex prefix of <paramref name="value"/>. Used in logs to
+    /// disambiguate "which key was actually used" without exposing the key.
+    /// </summary>
+    private static string Fingerprint(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "(empty)";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+        return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 }

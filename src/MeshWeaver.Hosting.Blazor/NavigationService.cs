@@ -314,6 +314,25 @@ internal class NavigationService : INavigationService
         // round-trip is a deadlock surface; see Doc/Architecture/AsynchronousCalls.md).
         LoadNodeWithPreRenderedHtml(resolution).Subscribe(node =>
         {
+            // Satellite redirect: areas like Settings, Threads, Comments are
+            // management views over the MAIN node. Landing on a satellite (a
+            // thread, comment, approval, etc.) and asking for one of these
+            // areas is always a mistake — the satellite has no AccessControl
+            // tab, no Threads list of its own, etc. Rewrite the URL to the
+            // main node's same area with replace=true so the back button
+            // doesn't trap the user in a redirect loop.
+            if (node != null
+                && !string.IsNullOrEmpty(node.MainNode)
+                && node.MainNode != node.Path
+                && IsMainNodeOnlyArea(area))
+            {
+                var newUrl = $"/{node.MainNode}/{area}";
+                if (!string.IsNullOrEmpty(id))
+                    newUrl += $"/{id}";
+                _navigationManager.NavigateTo(newUrl, forceLoad: false, replace: true);
+                return;
+            }
+
             IsResolving = false;
 
             var context = new NavigationContext
@@ -339,6 +358,24 @@ internal class NavigationService : INavigationService
                 _ = LoadCreatableTypesAsync(currentNodePath);
         });
     }
+
+    /// <summary>
+    /// Areas that operate on the MAIN node, never on a satellite. When a satellite
+    /// path is followed by one of these as the remainder area, NavigationService
+    /// rewrites the URL to <c>{MainNode}/{area}</c>. Kept here (not in a config
+    /// object) because the set is universal — every node type that registers these
+    /// areas registers them with main-node semantics.
+    /// </summary>
+    private static bool IsMainNodeOnlyArea(string? area) =>
+        area is "Settings"
+            or "Threads"
+            or "Comments"
+            or "AccessControl"
+            or "Files"
+            or "NodeTypes"
+            or "Groups"
+            or "EffectiveAccess"
+            or "Versions";
 
     /// <summary>
     /// Loads the MeshNode for the resolved address. If the node has MarkdownContent
