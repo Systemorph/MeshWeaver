@@ -92,21 +92,31 @@ public static class PermissionTestExtensions
         => (await hub.GetPermissionAsync(path, userId, ct)).HasFlag(permission);
 
     /// <summary>
-    /// Stream-based wait that succeeds the first time
-    /// <paramref name="userId"/> has <paramref name="permission"/> on
-    /// <paramref name="path"/>. Subscribes to the live
-    /// <c>GetEffectivePermissions</c> stream so we react to the synced
-    /// AccessAssignment query's NEXT emission — no polling, no
-    /// <c>Task.Delay</c>. Throws <see cref="TimeoutException"/> if the
+    /// Wait until <paramref name="userId"/> has <paramref name="permission"/>
+    /// on <paramref name="path"/>. Re-subscribes to
+    /// <c>GetEffectivePermissions</c> via <see cref="Observable.Interval"/>
+    /// (no <c>Task.Delay</c>) — each tick gets a fresh emission of the
+    /// per-scope synced AccessAssignment cache, so a new satellite landing
+    /// at the partition surfaces on the next tick. A single long-lived
+    /// subscription doesn't work: the cross-partition synced query path
+    /// emits via the mesh-query aggregator and doesn't always re-push to
+    /// held subscribers on slow CI, so we replicate the polling shape via
+    /// observables instead. Throws <see cref="TimeoutException"/> if the
     /// permission never arrives within <paramref name="timeout"/>.
     /// </summary>
-    public static Task WaitForPermissionAsync(
+    public static async Task WaitForPermissionAsync(
         this IMessageHub hub, string path, string userId, Permission permission,
         CancellationToken ct = default,
         TimeSpan? timeout = null)
-        => hub.GetPermissionAsync(
-            path, userId,
-            until: p => p.HasFlag(permission),
-            ct: ct,
-            timeout: timeout);
+    {
+        var sec = hub.ServiceProvider.GetRequiredService<ISecurityService>();
+        var t = timeout ?? TimeSpan.FromSeconds(40);
+        await Observable.Interval(TimeSpan.FromMilliseconds(200))
+            .StartWith(-1L)
+            .SelectMany(_ => sec.GetEffectivePermissions(path, userId).Take(1))
+            .Where(p => p.HasFlag(permission))
+            .Timeout(t)
+            .FirstAsync()
+            .ToTask(ct);
+    }
 }
