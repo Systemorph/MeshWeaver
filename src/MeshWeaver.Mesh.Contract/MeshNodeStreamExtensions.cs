@@ -263,6 +263,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // ISynchronizationStream<MeshNode>.Update routes the patch to the owning
                             // per-node hub via PatchDataChangeRequest. The reducer's first emission
                             // past baseline carries the post-update node back to the subscriber above.
+                            //
+                            // No-op handling: when update(current).Equals(current), SyncStream's
+                            // SetCurrent short-circuits (no OnNext) — we'd hang forever waiting for
+                            // a post-update emission that never fires. Detect that here, emit the
+                            // unchanged node back synchronously, and return null so SetCurrent
+                            // skips cleanly.
                             remoteStream.Update(current =>
                             {
                                 if (current is null)
@@ -278,6 +284,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         "Re-issue the Update or investigate why the stream was reset mid-write.");
                                 }
                                 var updated = update(current);
+                                if (Equals(updated, current))
+                                {
+                                    diagLogger?.LogDebug(
+                                        "[UpdateRemote] NO-OP hub={Hub} target={Path} — lambda returned unchanged value; completing inline",
+                                        _workspace.Hub.Address, _path);
+                                    observer.OnNext(current);
+                                    observer.OnCompleted();
+                                    return null;
+                                }
                                 return new ChangeItem<MeshNode>(
                                     updated,
                                     remoteStream.StreamId,
