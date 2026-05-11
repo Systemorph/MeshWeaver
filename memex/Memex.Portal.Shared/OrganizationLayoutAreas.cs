@@ -50,33 +50,17 @@ public static class OrganizationLayoutAreas
         var orgPath = node?.Path ?? host.Hub.Address.ToString();
         var orgName = org?.Name ?? node?.Name ?? orgPath;
 
-        // Outer shell — flex column that fills the main area; inner content scrolls,
-        // chat input sticks to the bottom.
         var shell = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden;");
+            .WithStyle($"height: 100%; overflow-y: auto; {ThinScrollbar}");
 
-        // Header (logo + name + stats) — non-scrolling
         shell = shell.WithView(BuildHeader(org, node, orgName));
+        shell = shell.WithView(BuildBodyContent(org, node));
 
-        // Scrollable body
-        var body = Controls.Stack
-            .WithStyle($"flex: 1; min-height: 0; overflow-y: auto; {ThinScrollbar}");
-
-        // Welcome / body text
-        body = body.WithView(BuildBodyContent(org, node));
-
-        // Systemorph-specific highlights — marketing stories, social posts, events
         if (IsSystemorph(orgPath))
-            body = body.WithView(BuildSystemorphHighlights(orgPath));
-
-        // Dashboard grid: threads, items, activity feed
-        body = body.WithView(BuildDashboardGrid(orgPath));
-
-        shell = shell.WithView(body);
-
-        // Chat invite pinned to the bottom
-        shell = shell.WithView(BuildChatSection(orgPath, orgName));
+            shell = shell.WithView(BuildSystemorphHighlights(orgPath));
+        else
+            shell = shell.WithView(BuildDashboardGrid(orgPath));
 
         return shell;
     }
@@ -218,66 +202,110 @@ public static class OrganizationLayoutAreas
     }
 
     /// <summary>
-    /// Systemorph-specific highlight strip — links to Marketing stories, Social Posts, and Events.
-    /// Rendered above the generic dashboard for the Systemorph organization only.
+    /// Systemorph-specific highlight strip — Featured Stories grid, embedded Event Calendar,
+    /// and a Post Pipeline of Social Media posts. Each section uses rich Thumbnail layout areas
+    /// where available so cards have visual punch instead of plain icon+name rows.
     /// </summary>
     private static UiControl BuildSystemorphHighlights(string orgPath)
     {
-        var grid = Controls.LayoutGrid
-            .WithStyle($"{ContentMaxWidth} padding-top: 24px; gap: 24px; width: 100%;");
+        var stack = Controls.Stack
+            .WithStyle($"{ContentMaxWidth} padding-top: 24px; padding-bottom: 24px; gap: 32px; width: 100%;");
 
-        // Marketing stories — long-form markdown pages under Systemorph/Marketing
-        grid = grid.WithView(Controls.MeshSearch
-            .WithTitle("Marketing Stories")
-            .WithHiddenQuery($"namespace:{orgPath}/Marketing nodeType:Markdown scope:children sort:LastModified-desc")
+        stack = stack.WithView(BuildFeaturedStories(orgPath));
+        stack = stack.WithView(BuildEventCalendar(orgPath));
+        stack = stack.WithView(BuildPostShowcase(orgPath));
+
+        return stack;
+    }
+
+    /// <summary>
+    /// Featured Marketing Stories — Markdown children of the Story series hub at {orgPath}/Story.
+    /// </summary>
+    private static UiControl BuildFeaturedStories(string orgPath)
+    {
+        var heading = Controls.Html(
+            $"<div style=\"display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--neutral-stroke-rest);\">" +
+            $"<h2 style=\"margin:0;font-size:1.35rem;\">✦ Featured Stories</h2>" +
+            $"<a href=\"/{orgPath}/Story\" style=\"color:var(--accent-foreground-rest);text-decoration:none;font-size:0.9rem;\">See all →</a>" +
+            $"</div>");
+
+        var grid = Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{orgPath}/Story scope:children nodeType:Markdown sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithMaxColumns(3)
-            .WithItemLimit(9)
-            .WithMaxRows(3)
-            .WithReactiveMode(true)
-            .WithShowAllHref($"/{orgPath}/Marketing"),
-            skin => skin.WithXs(12).WithSm(6));
-
-        // Social posts — scheduled/published Post nodes under Systemorph/Marketing/Posts
-        grid = grid.WithView(Controls.MeshSearch
-            .WithTitle("Social Media")
-            .WithHiddenQuery($"namespace:{orgPath}/Marketing/Posts scope:subtree sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(3)
-            .WithItemLimit(9)
-            .WithMaxRows(3)
-            .WithReactiveMode(true)
-            .WithShowAllHref($"/{orgPath}/Marketing/Posts")
-            .WithCreateNodeType($"{orgPath}/Marketing/Post")
-            .WithCreateNamespace($"{orgPath}/Marketing/Posts"),
-            skin => skin.WithXs(12).WithSm(6));
-
-        // Events — dedicated namespace for event pages. Creatable Markdown pages.
-        grid = grid.WithView(Controls.MeshSearch
-            .WithTitle("Events")
-            .WithHiddenQuery($"namespace:{orgPath}/Events scope:subtree sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(3)
-            .WithItemLimit(9)
+            .WithItemLimit(6)
             .WithMaxRows(2)
-            .WithReactiveMode(true)
-            .WithShowAllHref($"/{orgPath}/Events")
-            .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString($"{orgPath}/Events")}"),
-            skin => skin.WithXs(12));
+            .WithReactiveMode(true);
 
-        return grid;
+        return Controls.Stack
+            .WithStyle("gap: 12px; width: 100%;")
+            .WithView(heading)
+            .WithView(grid);
+    }
+
+    /// <summary>
+    /// Embed the existing EventCalendar Overview from {orgPath}/Events so the month grid
+    /// shows inline on the organization page. Single source of truth — same widget the
+    /// dedicated calendar page uses.
+    /// </summary>
+    private static UiControl BuildEventCalendar(string orgPath)
+    {
+        var eventsPath = $"{orgPath}/Events";
+
+        var heading = Controls.Html(
+            $"<div style=\"display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--neutral-stroke-rest);\">" +
+            $"<h2 style=\"margin:0;font-size:1.35rem;\">📅 Upcoming Events</h2>" +
+            $"<a href=\"/{eventsPath}\" style=\"color:var(--accent-foreground-rest);text-decoration:none;font-size:0.9rem;\">Open calendar →</a>" +
+            $"</div>");
+
+        var calendar = new LayoutAreaControl(eventsPath, new LayoutAreaReference("Overview"))
+            .WithShowProgress(false)
+            .WithStyle("width: 100%;");
+
+        return Controls.Stack
+            .WithStyle("gap: 12px; width: 100%;")
+            .WithView(heading)
+            .WithView(calendar);
+    }
+
+    /// <summary>
+    /// Social Media post pipeline — all Posts under {orgPath}/SocialMedia rendered as
+    /// LinkedIn-style preview cards (PostThumbnail layout area). Status pills on each card
+    /// distinguish Draft / Scheduled / Published at a glance.
+    /// </summary>
+    private static UiControl BuildPostShowcase(string orgPath)
+    {
+        var socialPath = $"{orgPath}/SocialMedia";
+
+        var heading = Controls.Html(
+            $"<div style=\"display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--neutral-stroke-rest);\">" +
+            $"<h2 style=\"margin:0;font-size:1.35rem;\">📱 Social Media</h2>" +
+            $"<a href=\"/{socialPath}\" style=\"color:var(--accent-foreground-rest);text-decoration:none;font-size:0.9rem;\">See all →</a>" +
+            $"</div>");
+
+        var posts = Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{socialPath} nodeType:{orgPath}/Post scope:subtree sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemArea("Thumbnail")
+            .WithMaxColumns(2)
+            .WithItemLimit(12)
+            .WithMaxRows(6)
+            .WithReactiveMode(true)
+            .WithCreateNodeType($"{orgPath}/Post")
+            .WithCreateNamespace(socialPath);
+
+        return Controls.Stack
+            .WithStyle("gap: 12px; width: 100%;")
+            .WithView(heading)
+            .WithView(posts);
     }
 
     /// <summary>
@@ -358,33 +386,6 @@ public static class OrganizationLayoutAreas
             .WithItemLimit(20)
             .WithMaxRows(4)
             .WithReactiveMode(true);
-    }
-
-    /// <summary>
-    /// Chat input pinned to the bottom with an invitation to start content creation
-    /// with the in-product assistant.
-    /// </summary>
-    private static UiControl BuildChatSection(string orgPath, string orgName)
-    {
-        var section = Controls.Stack
-            .WithStyle($"flex-shrink: 0; width: 100%; padding: 8px 0 12px 0; border-top: 1px solid var(--neutral-stroke-rest); background: var(--neutral-layer-1);");
-
-        var inner = Controls.Stack
-            .WithStyle($"{ContentMaxWidth} display: flex; flex-direction: column; gap: 6px;");
-
-        inner = inner.WithView(Controls.Html(
-            $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">" +
-            $"Ask <strong>{System.Web.HttpUtility.HtmlEncode(orgName)}</strong> a question, or describe a page, post, or doc and the assistant will draft it for you." +
-            "</div>"));
-
-        inner = inner.WithView(new ThreadChatControl()
-            .WithInitialContext(orgPath)
-            .WithInitialContextDisplayName(orgName)
-            .WithHideEmptyState()
-            .WithStyle("width: 100%;"));
-
-        section = section.WithView(inner);
-        return section;
     }
 
     private static bool IsSystemorph(string orgPath) =>
