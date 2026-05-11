@@ -670,24 +670,21 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new CreateNodeRequest(activeNode),
                 o => o.WithTarget(nodeAddress));
 
-            // Step 4: Wait for node to become Active using reactive query
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
-
-            await meshQuery
-                .ObserveQuery<MeshNode>(query)
-                .SelectMany(change => change.Items)
-                .Where(node => node.State == MeshNodeState.Active)
+            // Step 4-5: Wait for node to become Active via the authoritative
+            // per-node hub stream (GetMeshNodeStream), then read the same
+            // emission for content verification. Using QueryAsync here would
+            // be eventually consistent — it hits the lagged read-side index,
+            // so the Transient→Active confirmation can race the query (see
+            // Doc/Architecture/CqrsAndContentAccess.md and the
+            // `cqrs_no_query_for_content` memory). One subscription, one
+            // .Where(Active), one Timeout.
+            var workspace = client.GetWorkspace();
+            var retrievedNode = await workspace.GetMeshNodeStream(nodePath)
+                .Where(n => n != null && n.State == MeshNodeState.Active)
                 .Timeout(TimeSpan.FromSeconds(10))
-                .FirstAsync();
-            Output.WriteLine("Node confirmed as Active.");
-
-            // Step 5: Verify node was created correctly using IMeshService.QueryAsync
-            var retrievedNode = await meshQuery.QueryAsync<MeshNode>(
-                    MeshQueryRequest.FromQuery($"path:{nodePath}"), null, TestContext.Current.CancellationToken)
-                .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-
-            Output.WriteLine($"QueryAsync result received.");
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            Output.WriteLine("Node confirmed as Active (via GetMeshNodeStream).");
 
             // Step 6: Verify the retrieved node has the correct data
             retrievedNode.Should().NotBeNull("Node should be retrievable via QueryAsync");

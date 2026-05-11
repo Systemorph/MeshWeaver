@@ -1,3 +1,18 @@
+/* Fill the parent (e.g. a Splitter pane) and let the menu list scroll
+   internally instead of clipping when there are many items. */
+.navmenu {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.sitenav {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+
 .navbar-toggler {
     background-color: rgba(255, 255, 255, 0.1);
 }
@@ -43,6 +58,27 @@
 .nav-item ::deep a.active {
     background-color: rgba(255,255,255,0.25);
     color: white;
+}
+
+/* Highlight the currently selected NavLink (set via NavLinkControl.WithIsActive)
+   so users see which menu item corresponds to the visible content. */
+.sitenav ::deep .fluent-nav-link.active,
+.sitenav ::deep a.fluent-nav-link.active {
+    background-color: var(--neutral-fill-stealth-hover);
+    color: var(--accent-foreground-rest);
+    font-weight: 600;
+    position: relative;
+}
+
+.sitenav ::deep .fluent-nav-link.active::before {
+    content: "";
+    position: absolute;
+    width: 3px;
+    height: 60%;
+    top: 20%;
+    left: 0;
+    background-color: var(--accent-fill-rest);
+    border-radius: 2px;
 }
 
 .nav-item ::deep a:hover {

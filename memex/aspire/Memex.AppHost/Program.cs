@@ -80,6 +80,11 @@ var googleClientId = builder.AddParameter("google-client-id", value: "", secret:
 // portal — the AzureClaude factory then errors with "Endpoint is missing
 // for model 'X'" even when user-secrets has Parameters:anthropic-endpoint set.
 var anthropicEndpoint = builder.AddParameter("anthropic-endpoint", secret: false);
+// azure-foundry-endpoint is OPTIONAL — defaulted in appsettings.json to the
+// shared s-meshweaver `/models` path. user-secrets / env vars / deployment
+// state files all override (standard IConfiguration order). The appsettings
+// default avoids the `value: ""` trap above by going through the normal config
+// pipeline instead of short-circuiting Aspire's parameter resolution.
 var azureFoundryEndpoint = builder.AddParameter("azure-foundry-endpoint", secret: false);
 
 // Model-tier mappings: agents declare ModelTier ("heavy" / "standard" /

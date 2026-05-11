@@ -21,3 +21,9 @@
 ::deep .dropdown-menu .menu-item-link:active {
     background-color: var(--neutral-fill-stealth-active);
 }
+
+::deep .dropdown-menu .menu-item-link.active {
+    background-color: var(--neutral-fill-stealth-hover);
+    color: var(--accent-foreground-rest);
+    font-weight: 600;
+}

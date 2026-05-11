@@ -70,7 +70,7 @@ public static class SettingsLayoutArea
         var settingsPage = Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
-                BuildNavMenu(node, hubAddress, hubPath, items),
+                BuildNavMenu(node, hubAddress, hubPath, items, tabId),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
@@ -94,7 +94,8 @@ public static class SettingsLayoutArea
         MeshNode? node,
         object hubAddress,
         string hubPath,
-        IReadOnlyList<SettingsMenuItemDefinition> items)
+        IReadOnlyList<SettingsMenuItemDefinition> items,
+        string selectedTab)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
@@ -123,7 +124,8 @@ public static class SettingsLayoutArea
             {
                 var item = topLevel[topIdx++];
                 var href = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = item.Id }.ToHref(hubAddress);
-                navMenu = navMenu.WithView(new NavLinkControl(item.Label, item.Icon, href));
+                navMenu = navMenu.WithView(new NavLinkControl(item.Label, item.Icon, href)
+                    .WithIsActive(item.Id == selectedTab));
             }
             else if (grpIdx < grouped.Count)
             {
@@ -137,7 +139,8 @@ public static class SettingsLayoutArea
                 foreach (var item in group.OrderBy(i => i.Order))
                 {
                     var href = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = item.Id }.ToHref(hubAddress);
-                    navGroup = navGroup.WithView(new NavLinkControl(item.Label, item.Icon, href));
+                    navGroup = navGroup.WithView(new NavLinkControl(item.Label, item.Icon, href)
+                        .WithIsActive(item.Id == selectedTab));
                 }
 
                 navMenu = navMenu.WithNavGroup(navGroup);

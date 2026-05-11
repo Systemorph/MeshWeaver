@@ -105,6 +105,14 @@ public record NavLinkControl(object? Title, object? Icon, object? Url) : UiContr
     public NavLinkControl WithHref(object href) => This with { Url = href };
 
     public NavLinkControl WithIcon(object icon) => This with { Icon = icon };
+
+    /// <summary>
+    /// Marks the link as the currently selected menu item. The view adds an
+    /// "active" CSS class so users can see where they are.
+    /// </summary>
+    public object? IsActive { get; init; }
+
+    public NavLinkControl WithIsActive(object isActive) => This with { IsActive = isActive };
 }
 
 public record NavGroupControl(object Title) : ContainerControl<NavGroupControl, NavGroupSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new(Title))

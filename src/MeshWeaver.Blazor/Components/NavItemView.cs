@@ -13,6 +13,7 @@ public abstract class NavItemView<TViewModel, TView> : BlazorView<TViewModel, TV
     protected string? Href { get; set; }
     protected string? Title { get; set; }
     protected Icon? Icon { get; set; }
+    protected bool IsActive { get; set; }
 
     /// <summary>
     /// Cascading parameter indicating whether this component is rendered inside a dropdown menu.
@@ -30,6 +31,8 @@ public abstract class NavItemView<TViewModel, TView> : BlazorView<TViewModel, TV
             DataBind(ViewModel.Title, x => x.Title);
             DataBind(ViewModel.Url, x => x.Href);
             DataBind(ViewModel.Icon, x => x.Icon);
+            if (ViewModel is NavLinkControl link)
+                DataBind(link.IsActive, x => x.IsActive);
         }
     }
 
