@@ -123,14 +123,16 @@ IResourceBuilder<ParameterResource>? embeddingKey = string.IsNullOrEmpty(embeddi
 IResourceBuilder<ParameterResource>? googleClientSecret = string.IsNullOrEmpty(googleClientSecretValue)
     ? null : builder.AddParameter("google-client-secret", secret: true);
 
-// Social publishing — LinkedIn OAuth app used for publishing posts on behalf
-// of the signed-in user. Client Id is public (shown on the consent screen URL)
-// so it's inlined. The secret is wrapped as an AddParameter so Aspire resolves
-// it at deploy time from user-secrets / GitHub Actions secrets and projects it
-// into the container as a proper secret reference — a plain
-// `builder.Configuration[...]` read was silently losing the value in prod
-// (the env var was shipped empty and LinkedIn rejected token exchange with
-// "client_secret missing").
+// LinkedIn OAuth app — serves both sign-in (Sign In with LinkedIn using
+// OpenID Connect) and publishing posts on behalf of the signed-in user.
+// The same app id is projected as `Authentication__LinkedIn__ClientId` for
+// the auth pipeline and as `Social__LinkedIn__ClientId` for publishing.
+// Client Id is public (shown on the consent screen URL) so it's inlined.
+// The secret is wrapped as an AddParameter so Aspire resolves it at deploy
+// time from user-secrets / GitHub Actions secrets and projects it into the
+// container as a proper secret reference — a plain `builder.Configuration[...]`
+// read was silently losing the value in prod (the env var was shipped empty
+// and LinkedIn rejected token exchange with "client_secret missing").
 //   dotnet user-secrets set "Parameters:linkedin-client-secret" "<value>" --project memex/aspire/Memex.AppHost
 const string LinkedInClientId = "780dsuvyxglmc4";
 IResourceBuilder<ParameterResource>? linkedinClientSecret = string.IsNullOrEmpty(linkedinClientSecretValue)
@@ -237,6 +239,7 @@ var portal = builder
     .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
     .WithEnvironment("Authentication__Google__ClientId", googleClientId)
+    .WithEnvironment("Authentication__LinkedIn__ClientId", LinkedInClientId)
     // NuGet cache for #r "nuget:..." directives (in-process restore via MeshWeaver.NuGet).
     .WithEnvironment("NUGET_PACKAGES", "/tmp/nuget-cache")
     // Wait for dependencies
@@ -268,6 +271,8 @@ if (googleClientSecret is not null)
     portal.WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret);
 if (linkedinClientSecret is not null)
 {
+    // Same secret powers both sign-in and publishing flows.
+    portal.WithEnvironment("Authentication__LinkedIn__ClientSecret", linkedinClientSecret);
     portal.WithEnvironment("Social__LinkedIn__ClientId", LinkedInClientId);
     portal.WithEnvironment("Social__LinkedIn__ClientSecret", linkedinClientSecret);
 }

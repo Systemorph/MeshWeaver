@@ -1,22 +1,27 @@
 @using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
 @using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Mesh.Services
+@using Microsoft.AspNetCore.Components.Authorization
 
 <FluentMenu Open="@IsOpen" Anchored="false" Style="grid-area: nav-menu; height: auto; max-height: 80vh; width: 100%;">
     <div style="padding: 8px;">
         <FluentSearch Placeholder="Search..." @bind-Value="searchQuery"
             @onkeydown="HandleSearchKeyDown" Style="width: 100%;" />
     </div>
-    <FluentDivider />
-    <FluentMenuItem OnClick="@HandleCreateClick">
-        <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Slot="start" />
-        Create New...
-    </FluentMenuItem>
-    <FluentDivider />
-    <FluentMenuItem OnClick="@HandleSettingsClick">
-        <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Slot="start" />
-        Settings
-    </FluentMenuItem>
+    <AuthorizeView>
+        <Authorized>
+            <FluentDivider />
+            <FluentMenuItem OnClick="@HandleCreateClick">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Slot="start" />
+                Create New...
+            </FluentMenuItem>
+            <FluentDivider />
+            <FluentMenuItem OnClick="@HandleSettingsClick">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Slot="start" />
+                Settings
+            </FluentMenuItem>
+        </Authorized>
+    </AuthorizeView>
 </FluentMenu>
 
 @code {

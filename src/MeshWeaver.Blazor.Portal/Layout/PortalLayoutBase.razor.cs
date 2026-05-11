@@ -12,6 +12,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Layout;
@@ -25,6 +26,14 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
     [Inject] protected IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
     [Inject] protected IPathResolver PathResolver { get; set; } = null!;
+
+    [CascadingParameter]
+    protected Task<AuthenticationState>? AuthStateTask { get; set; }
+
+    // Tracks whether the current circuit's user is signed in. Side panel content
+    // (ThreadChatView / LayoutAreaView) accesses the workspace and throws for
+    // anonymous users — so we hide it when not authenticated.
+    private bool isAuthenticated;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% side panel)
     private string MainPaneSize => SidePanelState.Width.HasValue ? $"{100 - SidePanelState.Width.Value}%" : "75%";
@@ -97,8 +106,22 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         await base.OnInitializedAsync();
         await NavigationService.InitializeAsync();
-        // Only resolve side panel content if already visible — defer until opened otherwise
-        if (SidePanelState.IsVisible)
+
+        // Snapshot auth state. If the user signed out (or arrived anonymous) with a
+        // previously-persisted IsVisible=true, force the panel closed before any
+        // child component subscribes to a workspace it can't access.
+        if (AuthStateTask is not null)
+        {
+            var authState = await AuthStateTask;
+            isAuthenticated = authState.User?.Identity?.IsAuthenticated == true;
+        }
+        if (!isAuthenticated && SidePanelState.IsVisible)
+        {
+            SidePanelState.SetVisible(false);
+        }
+
+        // Only resolve side panel content if visible AND authenticated.
+        if (isAuthenticated && SidePanelState.IsVisible)
             ResolveSidePanelContent();
     }
 
@@ -264,8 +287,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             var saved = await jsModule!.InvokeAsync<SidePanelState?>("loadSidePanelState");
             if (saved != null)
             {
+                // Anonymous circuits must never restore a visible panel — workspace
+                // access fails for them and the panel children throw on render.
+                if (!isAuthenticated && saved.IsVisible)
+                    saved = saved with { IsVisible = false };
                 SidePanelState.State = saved;
-                ResolveSidePanelContent();
+                if (isAuthenticated)
+                    ResolveSidePanelContent();
                 StateHasChanged();
             }
         }
@@ -349,7 +377,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
 
-    public bool IsSidePanelVisible => SidePanelState.IsVisible;
+    // Side panel is gated on auth — anonymous users see neither toggle nor pane.
+    public bool IsSidePanelVisible => isAuthenticated && SidePanelState.IsVisible;
     protected SidePanelPosition SidePanelPositionValue => SidePanelState.Position;
 
     public async Task ToggleSidePanel()

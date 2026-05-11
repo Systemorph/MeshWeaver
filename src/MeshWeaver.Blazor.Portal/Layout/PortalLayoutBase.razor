@@ -1,4 +1,5 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@using Microsoft.AspNetCore.Components.Authorization
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
 
@@ -21,100 +22,111 @@
                 <div class="search-container">
                     <SearchBar />
                 </div>
-                @* Node menu (Cube icon) — per-node operations *@
-                <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
-                    @if (!string.IsNullOrEmpty(CurrentNodeName))
-                    {
-                        <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
-                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                    }
-                    @foreach (var menuItem in FlattenMenuItems(GetNodeMenuItems()))
-                    {
-                        var item = menuItem;
-                        @if (item.Area == "_separator")
-                        {
-                            <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                        }
-                        else
-                        {
-                            <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
-                                @if (!string.IsNullOrEmpty(item.Icon))
+                @* Authenticated-only menus — Node/Mesh/Settings/Chat require a hub
+                   workspace, which isn't available to anonymous users. Wrapping in
+                   AuthorizeView prevents both render-time and click-time errors. *@
+                <AuthorizeView>
+                    <Authorized>
+                        @* Node menu (Cube icon) — per-node operations *@
+                        <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
+                            @if (!string.IsNullOrEmpty(CurrentNodeName))
+                            {
+                                <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
+                                <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                            }
+                            @foreach (var menuItem in FlattenMenuItems(GetNodeMenuItems()))
+                            {
+                                var item = menuItem;
+                                @if (item.Area == "_separator")
                                 {
-                                    if (IsEmoji(item.Icon))
-                                    {
-                                        <span style="margin-right: 8px;">@item.Icon</span>
-                                    }
-                                    else
-                                    {
-                                        <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
-                                    }
+                                    <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
                                 }
-                                @item.Label
-                            </FluentMenuItem>
-                        }
-                    }
-                </FluentMenu>
-                <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                    Title="Node menu" aria-label="Node menu"
-                    OnClick="@ToggleNodeMenu">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Cube())" Color="Color.FillInverse" />
-                </FluentButton>
-
-                @* Mesh menu — mesh-level operations (Create, Import, Export) *@
-                <FluentMenu Anchor="mesh-menu-anchor" Open="@isMeshMenuOpen" OpenChanged="@OnMeshMenuOpenChanged">
-                    @if (!string.IsNullOrEmpty(CurrentNodeName))
-                    {
-                        <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
-                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                    }
-                    @foreach (var menuItem in FlattenMenuItems(GetMeshMenuItems()))
-                    {
-                        var item = menuItem;
-                        @if (item.Area == "_separator")
-                        {
-                            <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                        }
-                        else
-                        {
-                            <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
-                                @if (!string.IsNullOrEmpty(item.Icon))
+                                else
                                 {
-                                    if (IsEmoji(item.Icon))
-                                    {
-                                        <span style="margin-right: 8px;">@item.Icon</span>
-                                    }
-                                    else
-                                    {
-                                        <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
-                                    }
+                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                        @if (!string.IsNullOrEmpty(item.Icon))
+                                        {
+                                            if (IsEmoji(item.Icon))
+                                            {
+                                                <span style="margin-right: 8px;">@item.Icon</span>
+                                            }
+                                            else
+                                            {
+                                                <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                            }
+                                        }
+                                        @item.Label
+                                    </FluentMenuItem>
                                 }
-                                @item.Label
-                            </FluentMenuItem>
-                        }
-                    }
-                </FluentMenu>
-                <FluentButton Id="mesh-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                    Title="Mesh menu" aria-label="Mesh menu"
-                    OnClick="@ToggleMeshMenu">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Grid())" Color="Color.FillInverse" />
-                </FluentButton>
+                            }
+                        </FluentMenu>
+                        <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                            Title="Node menu" aria-label="Node menu"
+                            OnClick="@ToggleNodeMenu">
+                            <FluentIcon Value="@(new Icons.Regular.Size20.Cube())" Color="Color.FillInverse" />
+                        </FluentButton>
 
-                @* Settings — direct navigation *@
-                <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
-                    Title="Settings" aria-label="Settings"
-                    OnClick="@NavigateToSettings">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.FillInverse" />
-                </FluentButton>
+                        @* Mesh menu — mesh-level operations (Create, Import, Export) *@
+                        <FluentMenu Anchor="mesh-menu-anchor" Open="@isMeshMenuOpen" OpenChanged="@OnMeshMenuOpenChanged">
+                            @if (!string.IsNullOrEmpty(CurrentNodeName))
+                            {
+                                <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
+                                <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                            }
+                            @foreach (var menuItem in FlattenMenuItems(GetMeshMenuItems()))
+                            {
+                                var item = menuItem;
+                                @if (item.Area == "_separator")
+                                {
+                                    <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                                }
+                                else
+                                {
+                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                        @if (!string.IsNullOrEmpty(item.Icon))
+                                        {
+                                            if (IsEmoji(item.Icon))
+                                            {
+                                                <span style="margin-right: 8px;">@item.Icon</span>
+                                            }
+                                            else
+                                            {
+                                                <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                            }
+                                        }
+                                        @item.Label
+                                    </FluentMenuItem>
+                                }
+                            }
+                        </FluentMenu>
+                        <FluentButton Id="mesh-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                            Title="Mesh menu" aria-label="Mesh menu"
+                            OnClick="@ToggleMeshMenu">
+                            <FluentIcon Value="@(new Icons.Regular.Size20.Grid())" Color="Color.FillInverse" />
+                        </FluentButton>
+
+                        @* Settings — direct navigation *@
+                        <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                            Title="Settings" aria-label="Settings"
+                            OnClick="@NavigateToSettings">
+                            <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.FillInverse" />
+                        </FluentButton>
+                    </Authorized>
+                </AuthorizeView>
                 @HeaderLinks
             </div>
             <div class="notifications">
                 <NotificationCenter />
             </div>
-            <div class="side-panel-toggle">
-                <FluentButton BackgroundColor="transparent" OnClick="ToggleSidePanel" Title="Chat">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
-                </FluentButton>
-            </div>
+            <AuthorizeView>
+                <Authorized>
+                    <div class="side-panel-toggle">
+                        <FluentButton BackgroundColor="transparent" OnClick="ToggleSidePanel" Title="Chat">
+                            <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
+                        </FluentButton>
+                    </div>
+                </Authorized>
+            </AuthorizeView>
             <UserProfile />
         </FluentHeader>
 
