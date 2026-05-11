@@ -206,23 +206,21 @@
 .thread-chat-selectors {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     padding: 4px 2px 6px 2px;
-    flex-wrap: wrap;
     min-width: 0;
 }
 
-/* SimpleDropdown root has `width: 100%` so it fills its container in
-   form layouts. Inside the flex selectors row that means each dropdown
-   takes the whole row and they stack. Pin a comfortable min-width so the
-   trigger isn't squashed, and lift the max-width so long agent / model
-   names ("Description Writer", "claude-sonnet-4-6") aren't truncated to
-   ellipsis after one or two chars. */
+/* Each dropdown shares the row equally and shrinks below content width so
+   Agent + Model always fit on a single line. SimpleDropdown's inner
+   `.simple-dropdown-text` already has text-overflow: ellipsis, so long
+   names ("Description Writer", "claude-sonnet-4-6") truncate cleanly
+   when the chat dock narrows. Max-width caps the spread on wide layouts
+   so the row doesn't look stretched. */
 .thread-chat-selectors ::deep .simple-dropdown {
-    width: auto;
-    flex: 0 0 auto;
-    min-width: 220px;
-    max-width: 360px;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 240px;
 }
 
 .thread-chat-selectors .simple-dropdown-item-path,
