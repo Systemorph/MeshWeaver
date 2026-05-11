@@ -132,6 +132,57 @@ non-stale view of the node.
 > **Summary in one line:** `Query` gives you paths and shells; `GetMeshNodeStream`
 > gives you live content. There is no third channel.
 
+### No "pedestrian queries" — use synced queries
+
+If a component needs to **react** to a set of MeshNodes (a list, a filter, a
+catalog, a picker, a compiler input set), do **not** call
+`meshService.QueryAsync` / `IMeshQueryCore.ObserveQuery` directly. Use the
+synced-query pattern from [Synced Mesh Node Queries](SyncedMeshNodeQueries.md):
+
+```csharp
+IObservable<IReadOnlyList<MeshNode>> stream = workspace.GetQuery(
+    "stable-cache-id",
+    "namespace:Agent nodeType:Agent",
+    "namespace:Model nodeType:LanguageModel");
+
+stream.Subscribe(snapshot => …);
+```
+
+This is the **only** way to consume a live MeshNode collection. It gives
+you, all for free:
+
+- Path-keyed dedup across queries.
+- All-Initial gating (no empty-flash before the slowest provider settles).
+- Provider fan-out (static-node providers **and** storage providers).
+  Direct `IMeshQueryCore.ObserveQuery` skips static providers — symptom:
+  "empty Agent dropdown even though MCP `nodeType:Agent` returns 9 entries".
+- `Replay(1).RefCount()` upstream sharing — one upstream subscription, many subscribers.
+- Hub-level delete fast-path so the view drops the row the moment the
+  owning hub publishes a delete.
+
+A direct `meshService.QueryAsync` / `mesh.ObserveQuery<MeshNode>` call from
+application code is a **pedestrian query** and is almost always wrong:
+either you don't need a live subscription (one-shot — use
+`GetMeshNodeStream` per path), or you do (use `workspace.GetQuery`).
+
+The *only* legitimate uses of `IMeshQueryCore.ObserveQuery` are inside the
+synced-query implementation itself and inside the query engine. Everything
+user-facing — UI lists, pickers, settings tabs, compiler inputs, recursive
+operation enumeration — goes through `workspace.GetQuery`.
+
+**Canonical patterns to copy** (read these before writing your own):
+
+| Use case | File |
+|---|---|
+| API tokens list | `ApiTokenService.GetTokensForUser` — `workspace.GetQuery($"api-tokens:{userId}", …)` |
+| Chat agents + models | `AgentChatClient.Initialize` — `workspace.GetQuery("agents-and-models", …)` |
+| Access control list | `AccessControlLayoutArea` — `workspace.GetQuery($"access:{nodePath}", …)` |
+
+If you find yourself reading `MeshNode.Content` out of a one-shot
+`meshService.QueryAsync` to render a UI or feed a compiler, you're at the
+wrong layer. Wrap the query in `workspace.GetQuery` and subscribe — the
+recompile / re-render fires automatically when the underlying nodes change.
+
 ## One-shot reads (`GetDataRequest` + `Observe`)
 
 The canonical pattern for "give me this node's current MeshNode":
