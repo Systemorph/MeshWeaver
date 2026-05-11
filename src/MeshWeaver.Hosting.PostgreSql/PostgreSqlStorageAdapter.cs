@@ -1,4 +1,6 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Reactive;
+using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -74,7 +76,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return (ns, id);
     }
 
-    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+
+    private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(path);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -97,7 +102,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return ReadMeshNode(reader, options);
     }
 
-    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
+
+    private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
         var ns = node.Namespace ?? "";
 
@@ -155,7 +163,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task DeleteAsync(string path, CancellationToken ct = default)
+    public IObservable<string> Delete(string path)
+        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return path; });
+
+    private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(path);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -172,9 +183,12 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct));
+
+    private async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsyncCore(
         string? parentPath,
-        CancellationToken ct = default)
+        CancellationToken ct)
     {
         var normalizedParent = NormalizePath(parentPath);
 
@@ -196,7 +210,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return (paths, Enumerable.Empty<string>());
     }
 
-    public async Task<bool> ExistsAsync(string path, CancellationToken ct = default)
+    public IObservable<bool> Exists(string path)
+        => Observable.FromAsync(ct => ExistsAsyncCore(path, ct));
+
+    private async Task<bool> ExistsAsyncCore(string path, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(path);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -214,8 +231,12 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return await reader.ReadAsync(ct);
     }
 
-    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
-        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct));
+
+    private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsyncCore(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(fullPath);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -243,11 +264,18 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     #region Partition Storage
 
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
-        string nodePath,
-        string? subPath,
-        JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
+    public IObservable<object> GetPartitionObjects(
+        string nodePath, string? subPath, JsonSerializerOptions options)
+        => Observable.Create<object>(async (observer, ct) =>
+        {
+            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+                observer.OnNext(obj);
+            observer.OnCompleted();
+        });
+
+    private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
+        string nodePath, string? subPath, JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
@@ -281,7 +309,11 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public async Task SavePartitionObjectsAsync(
+    public IObservable<Unit> SavePartitionObjects(
+        string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
+
+    private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
@@ -290,7 +322,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
-        await DeletePartitionObjectsAsync(nodePath, subPath, ct);
+        await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct);
 
         foreach (var obj in objects)
         {
@@ -318,7 +350,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public async Task DeletePartitionObjectsAsync(
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
+
+    private async Task DeletePartitionObjectsAsyncCore(
         string nodePath,
         string? subPath = null,
         CancellationToken ct = default)
@@ -333,7 +368,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
+
+    private async Task<DateTimeOffset?> GetPartitionMaxTimestampAsyncCore(
         string nodePath,
         string? subPath = null,
         CancellationToken ct = default)
@@ -353,7 +391,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return null;
     }
 
-    public async Task<IEnumerable<string>> ListPartitionSubPathsAsync(string nodePath, CancellationToken ct = default)
+    public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
+        => Observable.FromAsync(ct => ListPartitionSubPathsAsyncCore(nodePath, ct));
+
+    private async Task<IEnumerable<string>> ListPartitionSubPathsAsyncCore(string nodePath, CancellationToken ct)
     {
         var prefix = NormalizePath(nodePath) + "/";
 

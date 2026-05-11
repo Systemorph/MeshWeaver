@@ -44,12 +44,10 @@ public class CosmosStorageAdapterFactory(
                 "Register via Aspire (AddAzureCosmosDatabase + AddKeyedContainer), " +
                 "or set CosmosStorageOptions.ConnectionString.");
 
-        var typeRegistry = serviceProvider.GetService<ITypeRegistry>();
-        var jsonOptions = StorageImporter.CreateFullImportOptions(typeRegistry);
-        var cosmosClient = new CosmosClient(connectionString, new CosmosClientOptions
-        {
-            UseSystemTextJsonSerializerWithOptions = jsonOptions
-        });
+        // StorageImporter.CreateFullImportOptions was deleted in the persistence-cull.
+        // Cosmos SDK will use its default System.Text.Json configuration; type
+        // polymorphism via $type lives in the MeshNode contract itself.
+        var cosmosClient = new CosmosClient(connectionString);
 
         var database = cosmosClient.GetDatabase(opts.DatabaseName);
         return new CosmosStorageAdapter(

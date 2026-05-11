@@ -117,74 +117,12 @@
 
     private void ExportAndDownloadAsync()
     {
-        if (string.IsNullOrEmpty(SourcePath)) return;
-
-        IsExporting = true;
-        ExportError = null;
-        ExportDone = false;
-        ProgressMessage = "Exporting nodes...";
-        StateHasChanged();
-
-        var exportService = Hub.ServiceProvider.GetRequiredService<IMeshExportService>();
-        var tempDir = Path.Combine(Path.GetTempPath(), $"meshexport_{Guid.NewGuid():N}");
-        IReadOnlySet<string>? excluded = ExcludedSatellites.Count > 0 ? ExcludedSatellites : null;
-
-        // Subscribe — no await on hub-touching observable. Continuation handles ZIP + JS download.
-        exportService.ExportToDirectory(SourcePath, tempDir, excluded)
-            .Take(1)
-            .Subscribe(
-                result => _ = InvokeAsync(() => OnExportCompletedAsync(result, tempDir)),
-                ex => _ = InvokeAsync(() => OnExportFailed(ex.Message, tempDir)));
-    }
-
-    private async Task OnExportCompletedAsync(ExportResult result, string tempDir)
-    {
-        try
-        {
-            if (!result.Success)
-            {
-                ExportError = result.Error;
-                IsExporting = false;
-                StateHasChanged();
-                return;
-            }
-
-            NodesExported = result.NodesExported;
-            ProgressMessage = $"Zipping {NodesExported} nodes...";
-            StateHasChanged();
-
-            using var memoryStream = new MemoryStream();
-            ZipFile.CreateFromDirectory(tempDir, memoryStream, CompressionLevel.Optimal, includeBaseDirectory: false);
-            memoryStream.Position = 0;
-
-            var nodeId = SourcePath!.Split('/').LastOrDefault() ?? "export";
-            var fileName = $"{nodeId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
-
-            using var streamRef = new DotNetStreamReference(memoryStream);
-            await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", fileName, streamRef);
-
-            IsExporting = false;
-            ExportDone = true;
-        }
-        catch (Exception ex)
-        {
-            ExportError = $"Export failed: {ex.Message}";
-            IsExporting = false;
-        }
-        finally
-        {
-            if (tempDir != null && Directory.Exists(tempDir))
-                try { Directory.Delete(tempDir, recursive: true); } catch { }
-            StateHasChanged();
-        }
-    }
-
-    private void OnExportFailed(string message, string tempDir)
-    {
-        ExportError = $"Export failed: {message}";
+        // IMeshExportService was deleted in the persistence-cull (2026-05-12).
+        // Export will be rewired via per-node CreateNodeRequest fan-out + ZIP
+        // assembly as a follow-up.
+        ExportError = "Export is being rewired (persistence-cull migration, 2026-05-12). " +
+                      "The low-level IMeshExportService surface was removed; no replacement wired up yet.";
         IsExporting = false;
-        if (tempDir != null && Directory.Exists(tempDir))
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
         StateHasChanged();
     }
 

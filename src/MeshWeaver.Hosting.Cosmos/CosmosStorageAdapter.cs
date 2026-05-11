@@ -181,8 +181,20 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     private async Task<bool> ExistsAsyncCore(string path, CancellationToken ct)
     {
-        var node = await ReadAsync(path, new JsonSerializerOptions(), ct);
-        return node != null;
+        var normalizedPath = NormalizePath(path);
+        if (string.IsNullOrEmpty(normalizedPath)) return false;
+        var lastSlash = normalizedPath.LastIndexOf('/');
+        var ns = lastSlash > 0 ? normalizedPath[..lastSlash] : "";
+        var id = lastSlash > 0 ? normalizedPath[(lastSlash + 1)..] : normalizedPath;
+        try
+        {
+            await _nodesContainer.ReadItemAsync<MeshNode>(id, new PartitionKey(ns), cancellationToken: ct);
+            return true;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return false;
+        }
     }
 
     #region Partition Storage
@@ -234,7 +246,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
         // Delete existing objects first
-        await DeletePartitionObjectsAsync(nodePath, subPath, ct);
+        await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct);
 
         // Insert new objects
         foreach (var obj in objects)
@@ -335,7 +347,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     public async IAsyncEnumerable<MeshNode> QueryNodesAsync(
         ParsedQuery query,
         string? basePath = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query);
 
@@ -403,7 +415,7 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         string? namespacePath = null,
         int topK = 10,
         string embeddingField = "embedding",
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var (sql, parameters) = _sqlGenerator.GenerateVectorSearchQuery(
             filter,

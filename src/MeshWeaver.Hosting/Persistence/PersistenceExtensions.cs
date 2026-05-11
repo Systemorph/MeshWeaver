@@ -54,14 +54,11 @@ public static class PersistenceExtensions
     public static TBuilder RegisterMeshQueryCoreOnMeshHub<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder
     {
-        // Register the cross-instance mirror handler on the mesh hub.
-        // Any caller (UI click, MCP tool, hub message) posts a MirrorRequest
-        // at this address and the handler runs StorageImporter against the
-        // remote portal. See Doc/Architecture/CrossInstanceMirror.md.
-        // (IMeshQueryCore registration moved to the root container —
-        // see AddCoreAndWrapperServices / AddPartitionedCoreAndWrapperServices.)
-        return (TBuilder)builder
-            .ConfigureHub(config => config.AddMirrorHandler());
+        // IMeshQueryCore registration moved to the root container — see
+        // AddCoreAndWrapperServices / AddPartitionedCoreAndWrapperServices.
+        // The cross-instance mirror handler was deleted in the persistence-cull
+        // (2026-05-12); the new shape will fan out CreateNodeRequest per node.
+        return builder;
     }
 
     /// <summary>
@@ -474,8 +471,6 @@ public static class PersistenceExtensions
         services.AddMeshCatalog();
 
         // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
-        services.TryAddScoped<IMeshImportService, MeshImportService>();
-        services.TryAddScoped<IMeshExportService, MeshExportService>();
 
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
@@ -533,8 +528,6 @@ public static class PersistenceExtensions
 
         services.AddMeshCatalog();
 
-        services.TryAddScoped<IMeshImportService, MeshImportService>();
-        services.TryAddScoped<IMeshExportService, MeshExportService>();
 
         services.AddScoped<IMeshService>(sp =>
             new MeshService(

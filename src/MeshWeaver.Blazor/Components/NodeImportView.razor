@@ -170,30 +170,12 @@
                 StateHasChanged();
             }
 
-            // Call import service
-            var importService = Hub.ServiceProvider.GetService<IMeshImportService>();
-            if (importService == null)
-            {
-                ErrorMessage = "Import service is not available.";
-                IsImporting = false;
-                return;
-            }
-
-            ImportResult = await importService.ImportNodesAsync(
-                tempDir,
-                TargetPath,
-                ForceReimport,
-                removeMissing: RemoveMissing,
-                onProgress: (nodes, partitions, currentPath) =>
-                {
-                    ProgressPercent = Math.Min(60 + (nodes + partitions) % 40, 99);
-                    ProgressMessage = $"Importing... {nodes} nodes ({currentPath})";
-                    InvokeAsync(StateHasChanged);
-                },
-                ct: CancellationToken.None);
-
-            ProgressPercent = 100;
-            ProgressMessage = "Done!";
+            // IMeshImportService was deleted in the persistence-cull (2026-05-12).
+            // Import will be rewired as per-node CreateNodeRequest fan-out as a follow-up.
+            ErrorMessage = "Import is being rewired (persistence-cull migration, 2026-05-12). " +
+                           "The low-level IMeshImportService surface was removed; no replacement wired up yet.";
+            IsImporting = false;
+            return;
         }
         catch (InvalidDataException)
         {
