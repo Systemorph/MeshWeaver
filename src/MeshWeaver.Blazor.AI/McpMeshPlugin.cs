@@ -2,13 +2,8 @@ using System.ComponentModel;
 using System.Net;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
-using System.Security.Claims;
 using System.Text.Json;
 using MeshWeaver.AI;
-using MeshWeaver.ContentCollections;
-using MeshWeaver.Data;
-using MeshWeaver.Hosting.Persistence.Http;
-using MeshWeaver.Kernel;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
@@ -73,7 +68,6 @@ public class McpMeshPlugin
             ?? requestUrl
             ?? string.Empty;
         rootHub = hub;
-        var routingService = hub.ServiceProvider.GetRequiredService<IRoutingService>();
 
         // The session hub IS the MCP-side actor: registered with the routing
         // service so responses route back via the standard portal/* path.
@@ -82,79 +76,11 @@ public class McpMeshPlugin
         // (see ActivityNodeType.HubConfiguration + AddKernelSubHubHandlers).
         // Replies route through the standard MeshNode chain to portal/mcp-…
         // — same routing every other MCP tool already uses (Get, Search, …).
-        sessionHub = ResolveSessionHub(hub, httpContextAccessor?.HttpContext, routingService, logger);
+        // SessionHubResolver is shared with the REST endpoint module so both
+        // transports get identical routing semantics.
+        sessionHub = SessionHubResolver.ResolveSessionHub(hub, httpContextAccessor?.HttpContext, "mcp", logger);
 
         ops = new MeshOperations(sessionHub);
-    }
-
-    private static IMessageHub ResolveSessionHub(
-        IMessageHub rootHub, HttpContext? ctx, IRoutingService routingService, ILogger logger)
-    {
-        var sessionId = ResolveSessionId(ctx);
-        if (sessionId is null)
-        {
-            logger.LogWarning(
-                "No MCP session id resolvable from request — falling back to root hub. "
-                + "Some routing rules (kernel dispatch, etc.) will not fire.");
-            return rootHub;
-        }
-
-        var address = AddressExtensions.CreatePortalAddress("mcp-" + sessionId);
-        logger.LogInformation("Materialising MCP session hub at {Address}", address);
-
-        // RegisterStream registers the session hub with the routing service
-        // so every MCP-bound response (Get / Search / Patch / ExecuteScript / …)
-        // routes back to this stream. No kernel route rule — kernel work runs
-        // inside the Activity MeshNode hub (per node), not here.
-        //
-        // AddData() registers the data plugin so the hub has its own IWorkspace.
-        // MeshOperations.Compile uses hub.GetWorkspace() to subscribe to a
-        // NodeType's MeshNode stream and Update its compilationStatus → Pending
-        // (the canonical write path that doesn't require Update permission on
-        // the cross-partition NodeType row). Without AddData IWorkspace can't
-        // activate and Compile fails with "An exception was thrown while
-        // activating MeshWeaver.Data.IWorkspace".
-        return rootHub.GetHostedHub(
-            address,
-            sessionConfig => sessionConfig
-                .AddData()
-                .WithInitialization(hub =>
-                    hub.RegisterForDisposal(routingService.RegisterStream(hub))),
-            HostedHubCreation.Always)
-            ?? throw new InvalidOperationException(
-                $"Failed to materialise MCP session hub at {address}.");
-    }
-
-    private static string? ResolveSessionId(HttpContext? ctx)
-    {
-        if (ctx is null) return null;
-
-        // Prefer the standard MCP protocol header. Clients (Claude Desktop,
-        // Claude Code, etc.) set this per connection.
-        var protocolSession = ctx.Request.Headers["Mcp-Session-Id"].FirstOrDefault();
-
-        // Scope within the authenticated caller so two different users can't
-        // collide on a chosen Mcp-Session-Id. Fall through oid → sub → name.
-        var callerId = ctx.User?.FindFirst("oid")?.Value
-                    ?? ctx.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                    ?? ctx.User?.FindFirst(ClaimTypes.Email)?.Value
-                    ?? ctx.User?.Identity?.Name;
-
-        if (!string.IsNullOrEmpty(callerId) && !string.IsNullOrEmpty(protocolSession))
-            return $"{Sanitize(callerId)}-{Sanitize(protocolSession)}";
-        if (!string.IsNullOrEmpty(callerId))
-            return Sanitize(callerId);
-        if (!string.IsNullOrEmpty(protocolSession))
-            return $"anon-{Sanitize(protocolSession)}";
-        return null;
-    }
-
-    private static string Sanitize(string s)
-    {
-        // Address segments must be safe — strip characters that break hosted-hub
-        // grain key lookup. Keep alphanumerics, '-', '_'; replace everything else.
-        var chars = s.Select(c => char.IsLetterOrDigit(c) || c == '-' || c == '_' ? c : '-').ToArray();
-        return new string(chars);
     }
 
     [McpServerTool]
@@ -199,114 +125,13 @@ The target collection must exist on the node and be editable (`IsEditable=true`)
     public Task<string> Upload(
         [Description(@"Target path including collection + filename, e.g. '@Systemorph/content/logo.png' or '@Doc/Architecture/content/diagrams/flow.svg'. The path is parsed as {nodePath}/{collection}/{filePath}.")] string path,
         [Description("File content as base64-encoded bytes (no data:URI prefix; just the raw base64 payload).")] string base64Content)
-        => UploadInternal(path, base64Content).FirstAsync().ToTask();
-
-    private IObservable<string> UploadInternal(string path, string base64Content)
     {
-        logger.LogInformation("MCP Upload path={Path} bytes={Bytes}", path, base64Content?.Length ?? 0);
-
-        if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return("Error: path is required.");
         if (string.IsNullOrEmpty(base64Content))
-            return Observable.Return("Error: base64Content is required.");
-
-        var resolvedPath = MeshOperations.ResolvePath(path).TrimStart('/');
-        if (string.IsNullOrWhiteSpace(resolvedPath))
-            return Observable.Return("Error: path is required.");
-
+            return Task.FromResult("Error: base64Content is required.");
         byte[] bytes;
-        try
-        {
-            bytes = Convert.FromBase64String(base64Content);
-        }
-        catch (FormatException ex)
-        {
-            return Observable.Return($"Error: invalid base64 content: {ex.Message}");
-        }
-
-        var pathResolver = rootHub.ServiceProvider.GetRequiredService<IPathResolver>();
-        return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
-        {
-            if (resolution == null)
-                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
-            if (string.IsNullOrEmpty(resolution.Remainder))
-                return Observable.Return("Error: path must include '{collection}/{filePath}' after the node path (e.g. 'Systemorph/content/logo.png').");
-
-            var remainderParts = resolution.Remainder.Split('/');
-            if (remainderParts.Length < 2)
-                return Observable.Return($"Error: expected '{{collection}}/{{filePath}}' in remainder '{resolution.Remainder}'.");
-
-            var collectionName = remainderParts[0];
-            var filePath = string.Join("/", remainderParts.Skip(1));
-            if (string.IsNullOrEmpty(Path.GetFileName(filePath)))
-                return Observable.Return($"Error: missing filename in path '{filePath}'.");
-
-            var targetAddress = (Address)resolution.Prefix;
-            var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
-
-            // Ask the owning node hub for its collection config — exact same mechanism
-            // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
-            return sessionHub.Observe(
-                new GetDataRequest(new ContentCollectionReference([collectionName])),
-                o => o.WithTarget(targetAddress))
-                .Take(1)
-                .Select(collectionResponse =>
-                {
-                    IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch
-                    {
-                        GetDataResponse { Data: JsonElement je } => je.EnumerateArray()
-                            .Select(e => new ContentCollectionConfig
-                            {
-                                Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
-                                SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
-                                BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null,
-                                IsEditable = !e.TryGetProperty("isEditable", out var editProp) || editProp.ValueKind != JsonValueKind.False,
-                            })
-                            .ToArray(),
-                        GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
-                        _ => null
-                    };
-                    var sourceConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
-                    if (sourceConfig == null) return (ContentCollectionConfig?)null;
-                    return sourceConfig with { Name = qualifiedCollectionName, Address = targetAddress };
-                })
-                .SelectMany(collectionConfig =>
-                {
-                    if (collectionConfig == null)
-                        return Observable.Return($"Error: collection '{collectionName}' not found on '{resolution.Prefix}'.");
-                    if (!collectionConfig.IsEditable)
-                        return Observable.Return($"Error: collection '{collectionName}' on '{resolution.Prefix}' is read-only.");
-
-                    var contentService = rootHub.ServiceProvider.GetService<IContentService>();
-                    if (contentService == null)
-                        return Observable.Return("Error: content service not configured on the root hub.");
-
-                    contentService.AddConfiguration(collectionConfig);
-                    return Observable.FromAsync(async () =>
-                    {
-                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, CancellationToken.None);
-                        if (collection == null)
-                            return $"Error: failed to initialize collection '{qualifiedCollectionName}'.";
-
-                        var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
-                        var fileName = Path.GetFileName(filePath);
-                        using var ms = new MemoryStream(bytes);
-                        await collection.SaveFileAsync(dir, fileName, ms);
-
-                        return JsonSerializer.Serialize(new
-                        {
-                            status = "Uploaded",
-                            path = $"{resolution.Prefix}/{collectionName}/{filePath}",
-                            bytes = bytes.Length,
-                        }, sessionHub.JsonSerializerOptions);
-                    });
-                });
-        })
-        .Catch((Exception ex) =>
-        {
-            logger.LogWarning(ex, "Upload failed for {Path}", path);
-            return Observable.Return($"Error: {ex.Message}");
-        });
+        try { bytes = Convert.FromBase64String(base64Content); }
+        catch (FormatException ex) { return Task.FromResult($"Error: invalid base64 content: {ex.Message}"); }
+        return ops.Upload(path, bytes).FirstAsync().ToTask();
     }
 
     [McpServerTool]

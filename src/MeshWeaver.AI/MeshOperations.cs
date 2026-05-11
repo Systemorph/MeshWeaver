@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.IO;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -6,6 +7,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Domain;
@@ -940,6 +942,113 @@ public class MeshOperations
         }
 
         return json;
+    }
+
+    /// <summary>
+    /// Writes raw bytes into a content collection on the node addressed by <paramref name="path"/>.
+    /// Transport-agnostic: callers (MCP base64, REST multipart, CLI HTTP) decode at the boundary
+    /// and hand off the <paramref name="bytes"/> here.
+    ///
+    /// <para>Path shape: <c>{nodePath}/{collection}/{filePath}</c> — e.g. <c>Systemorph/content/logo.png</c>
+    /// or <c>Doc/Architecture/content/diagrams/flow.svg</c>. The collection must exist on the node
+    /// and be <c>IsEditable = true</c>.</para>
+    ///
+    /// <para>Returns a JSON string <c>{"status":"Uploaded","path":"…","bytes":N}</c> on success, or an
+    /// <c>"Error: …"</c> string on any validation/resolution failure (mirrors the other tool methods).</para>
+    /// </summary>
+    public IObservable<string> Upload(string path, byte[] bytes)
+    {
+        logger.LogInformation("Upload path={Path} bytes={Bytes}", path, bytes?.Length ?? 0);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required.");
+        if (bytes is null || bytes.Length == 0)
+            return Observable.Return("Error: content is required.");
+
+        var resolvedPath = ResolvePath(path).TrimStart('/');
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return("Error: path is required.");
+
+        var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
+        {
+            if (resolution == null)
+                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+            if (string.IsNullOrEmpty(resolution.Remainder))
+                return Observable.Return("Error: path must include '{collection}/{filePath}' after the node path (e.g. 'Systemorph/content/logo.png').");
+
+            var remainderParts = resolution.Remainder.Split('/');
+            if (remainderParts.Length < 2)
+                return Observable.Return($"Error: expected '{{collection}}/{{filePath}}' in remainder '{resolution.Remainder}'.");
+
+            var collectionName = remainderParts[0];
+            var filePath = string.Join("/", remainderParts.Skip(1));
+            if (string.IsNullOrEmpty(Path.GetFileName(filePath)))
+                return Observable.Return($"Error: missing filename in path '{filePath}'.");
+
+            var targetAddress = (Address)resolution.Prefix;
+            var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
+
+            // Ask the owning node hub for its collection config — exact same mechanism
+            // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
+            return hub.Observe(
+                new GetDataRequest(new ContentCollectionReference([collectionName])),
+                o => o.WithTarget(targetAddress))
+                .Take(1)
+                .Select(collectionResponse =>
+                {
+                    // Deserialize via the hub's JSON options so the naming policy (camelCase)
+                    // and all fields — including IsEditable — round-trip correctly. The
+                    // manual TryGetProperty form this replaced silently dropped IsEditable
+                    // for read-only collections, letting writes through.
+                    IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch
+                    {
+                        GetDataResponse { Data: JsonElement je } =>
+                            JsonSerializer.Deserialize<ContentCollectionConfig[]>(je, hub.JsonSerializerOptions),
+                        GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
+                        _ => null
+                    };
+                    var sourceConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
+                    if (sourceConfig == null) return (ContentCollectionConfig?)null;
+                    return sourceConfig with { Name = qualifiedCollectionName, Address = targetAddress };
+                })
+                .SelectMany(collectionConfig =>
+                {
+                    if (collectionConfig == null)
+                        return Observable.Return($"Error: collection '{collectionName}' not found on '{resolution.Prefix}'.");
+                    if (!collectionConfig.IsEditable)
+                        return Observable.Return($"Error: collection '{collectionName}' on '{resolution.Prefix}' is read-only.");
+
+                    var contentService = hub.ServiceProvider.GetService<IContentService>();
+                    if (contentService == null)
+                        return Observable.Return("Error: content service not configured on the hub.");
+
+                    contentService.AddConfiguration(collectionConfig);
+                    return Observable.FromAsync(async () =>
+                    {
+                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, CancellationToken.None);
+                        if (collection == null)
+                            return $"Error: failed to initialize collection '{qualifiedCollectionName}'.";
+
+                        var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
+                        var fileName = Path.GetFileName(filePath);
+                        using var ms = new MemoryStream(bytes);
+                        await collection.SaveFileAsync(dir, fileName, ms);
+
+                        return JsonSerializer.Serialize(new
+                        {
+                            status = "Uploaded",
+                            path = $"{resolution.Prefix}/{collectionName}/{filePath}",
+                            bytes = bytes.Length,
+                        }, hub.JsonSerializerOptions);
+                    });
+                });
+        })
+        .Catch((Exception ex) =>
+        {
+            logger.LogWarning(ex, "Upload failed for {Path}", path);
+            return Observable.Return($"Error: {ex.Message}");
+        });
     }
 
     public IObservable<string> Delete(string paths)

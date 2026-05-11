@@ -1,4 +1,5 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
+using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
@@ -234,6 +235,10 @@ public static class MemexConfiguration
         // proper 401 + WWW-Authenticate on anonymous requests so MCP clients can
         // discover the auth server.
         services.AddMcpAuthentication();
+
+        // REST surface for the mesh — same Bearer-token policy as MCP, lifts the
+        // multipart upload size cap. See MeshApiEndpoints.
+        services.AddMeshApi();
     }
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
@@ -488,6 +493,10 @@ public static class MemexConfiguration
 
         // Map MCP endpoint
         app.MapMeshMcp();
+
+        // REST surface that mirrors MCP — POST /api/mesh/* (1:1 with MCP tools).
+        // Same Bearer auth policy as /mcp; multipart upload at /api/mesh/upload.
+        app.MapMeshApi();
 
         app.MapMeshWeaver();
 
