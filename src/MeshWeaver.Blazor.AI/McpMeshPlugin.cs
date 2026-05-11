@@ -5,6 +5,7 @@ using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence.Http;
 using MeshWeaver.Kernel;
@@ -42,6 +43,7 @@ namespace MeshWeaver.Blazor.AI;
 public class McpMeshPlugin
 {
     private readonly MeshOperations ops;
+    private readonly IMessageHub rootHub;
     private readonly IMessageHub sessionHub;
     private readonly ILogger<McpMeshPlugin> logger;
     private readonly string baseUrl;
@@ -70,6 +72,7 @@ public class McpMeshPlugin
         baseUrl = config?.Value.BaseUrl
             ?? requestUrl
             ?? string.Empty;
+        rootHub = hub;
         var routingService = hub.ServiceProvider.GetRequiredService<IRoutingService>();
 
         // The session hub IS the MCP-side actor: registered with the routing
@@ -182,6 +185,129 @@ Legacy colon form `path/prefix:value` still works for backward compatibility.")]
   @Cornerstone/schema/TypeName                  (schema)
   @Cornerstone/model/                           (full model)")] string path)
         => ops.Get(path).FirstAsync().ToTask();
+
+    [McpServerTool]
+    [Description(@"Uploads raw file bytes into a node's content collection — the write-side mirror of `Get` for content-collection files. Use this to attach images, documents, or any binary asset to a node (e.g. an organisation logo or an Excel input file for a script).
+
+Path shapes (must include a collection segment + filename):
+  • `@Node/Path/content/file.ext`            — write into the default 'content' collection
+  • `@Node/Path/content/subfolder/file.ext`  — nested path within the collection
+  • `@Node/Path/{collection}/file.ext`       — write into a named collection (e.g. 'Files/', 'assets/')
+
+The target collection must exist on the node and be editable (`IsEditable=true`). Returns JSON like
+`{""status"":""Uploaded"",""path"":""Systemorph/content/logo.png"",""bytes"":4958}` on success, or an `Error: …` string otherwise.")]
+    public Task<string> Upload(
+        [Description(@"Target path including collection + filename, e.g. '@Systemorph/content/logo.png' or '@Doc/Architecture/content/diagrams/flow.svg'. The path is parsed as {nodePath}/{collection}/{filePath}.")] string path,
+        [Description("File content as base64-encoded bytes (no data:URI prefix; just the raw base64 payload).")] string base64Content)
+        => UploadInternal(path, base64Content).FirstAsync().ToTask();
+
+    private IObservable<string> UploadInternal(string path, string base64Content)
+    {
+        logger.LogInformation("MCP Upload path={Path} bytes={Bytes}", path, base64Content?.Length ?? 0);
+
+        if (string.IsNullOrWhiteSpace(path))
+            return Observable.Return("Error: path is required.");
+        if (string.IsNullOrEmpty(base64Content))
+            return Observable.Return("Error: base64Content is required.");
+
+        var resolvedPath = MeshOperations.ResolvePath(path).TrimStart('/');
+        if (string.IsNullOrWhiteSpace(resolvedPath))
+            return Observable.Return("Error: path is required.");
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(base64Content);
+        }
+        catch (FormatException ex)
+        {
+            return Observable.Return($"Error: invalid base64 content: {ex.Message}");
+        }
+
+        var pathResolver = rootHub.ServiceProvider.GetRequiredService<IPathResolver>();
+        return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
+        {
+            if (resolution == null)
+                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+            if (string.IsNullOrEmpty(resolution.Remainder))
+                return Observable.Return("Error: path must include '{collection}/{filePath}' after the node path (e.g. 'Systemorph/content/logo.png').");
+
+            var remainderParts = resolution.Remainder.Split('/');
+            if (remainderParts.Length < 2)
+                return Observable.Return($"Error: expected '{{collection}}/{{filePath}}' in remainder '{resolution.Remainder}'.");
+
+            var collectionName = remainderParts[0];
+            var filePath = string.Join("/", remainderParts.Skip(1));
+            if (string.IsNullOrEmpty(Path.GetFileName(filePath)))
+                return Observable.Return($"Error: missing filename in path '{filePath}'.");
+
+            var targetAddress = (Address)resolution.Prefix;
+            var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
+
+            // Ask the owning node hub for its collection config — exact same mechanism
+            // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
+            return sessionHub.Observe(
+                new GetDataRequest(new ContentCollectionReference([collectionName])),
+                o => o.WithTarget(targetAddress))
+                .Take(1)
+                .Select(collectionResponse =>
+                {
+                    IReadOnlyCollection<ContentCollectionConfig>? configs = collectionResponse?.Message switch
+                    {
+                        GetDataResponse { Data: JsonElement je } => je.EnumerateArray()
+                            .Select(e => new ContentCollectionConfig
+                            {
+                                Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
+                                SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
+                                BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null,
+                                IsEditable = !e.TryGetProperty("isEditable", out var editProp) || editProp.ValueKind != JsonValueKind.False,
+                            })
+                            .ToArray(),
+                        GetDataResponse { Data: IReadOnlyCollection<ContentCollectionConfig> direct } => direct,
+                        _ => null
+                    };
+                    var sourceConfig = configs?.FirstOrDefault(c => c.Name == collectionName);
+                    if (sourceConfig == null) return (ContentCollectionConfig?)null;
+                    return sourceConfig with { Name = qualifiedCollectionName, Address = targetAddress };
+                })
+                .SelectMany(collectionConfig =>
+                {
+                    if (collectionConfig == null)
+                        return Observable.Return($"Error: collection '{collectionName}' not found on '{resolution.Prefix}'.");
+                    if (!collectionConfig.IsEditable)
+                        return Observable.Return($"Error: collection '{collectionName}' on '{resolution.Prefix}' is read-only.");
+
+                    var contentService = rootHub.ServiceProvider.GetService<IContentService>();
+                    if (contentService == null)
+                        return Observable.Return("Error: content service not configured on the root hub.");
+
+                    contentService.AddConfiguration(collectionConfig);
+                    return Observable.FromAsync(async () =>
+                    {
+                        var collection = await contentService.GetCollectionAsync(qualifiedCollectionName, CancellationToken.None);
+                        if (collection == null)
+                            return $"Error: failed to initialize collection '{qualifiedCollectionName}'.";
+
+                        var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
+                        var fileName = Path.GetFileName(filePath);
+                        using var ms = new MemoryStream(bytes);
+                        await collection.SaveFileAsync(dir, fileName, ms);
+
+                        return JsonSerializer.Serialize(new
+                        {
+                            status = "Uploaded",
+                            path = $"{resolution.Prefix}/{collectionName}/{filePath}",
+                            bytes = bytes.Length,
+                        }, sessionHub.JsonSerializerOptions);
+                    });
+                });
+        })
+        .Catch((Exception ex) =>
+        {
+            logger.LogWarning(ex, "Upload failed for {Path}", path);
+            return Observable.Return($"Error: {ex.Message}");
+        });
+    }
 
     [McpServerTool]
     [Description("Searches the mesh using GitHub-style query syntax. Returns up to 50 matching nodes.")]
