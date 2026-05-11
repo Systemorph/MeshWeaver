@@ -30,7 +30,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <para>API: <see cref="IObservable{T}"/> end-to-end (no <c>Task&lt;T&gt;</c>,
 /// no <c>.ToTask()</c>). Composes with <c>SelectMany</c>/<c>Subscribe</c>.</para>
 /// </summary>
-internal class RoutingPersistenceServiceCore
+internal class RoutingPersistenceServiceCore : IStorageAdapter
 {
     private readonly IPartitionedStoreFactory _factory;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -291,4 +291,60 @@ internal class RoutingPersistenceServiceCore
     }
 
     private static string NormalizePath(string? path) => path?.Trim('/') ?? "";
+
+    // ── IStorageAdapter — routes every operation to the per-partition adapter. ──
+
+    /// <inheritdoc />
+    public IObservable<MeshNode?> Read(string path, System.Text.Json.JsonSerializerOptions options)
+        => Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+            .SelectMany(_ => TryGetAdapter(path)?.Read(path, options) ?? Observable.Return<MeshNode?>(null));
+
+    /// <inheritdoc />
+    public IObservable<MeshNode> Write(MeshNode node, System.Text.Json.JsonSerializerOptions options)
+        => Save(node, options);
+
+    /// <inheritdoc />
+    IObservable<string> IStorageAdapter.Delete(string path)
+        => Delete(path);
+
+    /// <inheritdoc />
+    public IObservable<bool> Exists(string path)
+        => Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+            .SelectMany(_ => TryGetAdapter(path)?.Exists(path) ?? Observable.Return(false));
+
+    /// <inheritdoc />
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, System.Text.Json.JsonSerializerOptions options)
+        => TryGetAdapter(fullPath)?.FindBestPrefixMatch(fullPath, options)
+            ?? Observable.Return<(MeshNode?, int)>((null, 0));
+
+    /// <inheritdoc />
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => TryGetAdapter(parentPath)?.ListChildPaths(parentPath)
+            ?? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+
+    /// <inheritdoc />
+    public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
+        => TryGetAdapter(nodePath)?.ListPartitionSubPaths(nodePath)
+            ?? Observable.Return(Enumerable.Empty<string>());
+
+    /// <inheritdoc />
+    public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, System.Text.Json.JsonSerializerOptions options)
+        => TryGetAdapter(nodePath)?.GetPartitionObjects(nodePath, subPath, options)
+            ?? Observable.Empty<object>();
+
+    /// <inheritdoc />
+    public IObservable<Unit> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, System.Text.Json.JsonSerializerOptions options)
+        => TryGetAdapter(nodePath)?.SavePartitionObjects(nodePath, subPath, objects, options)
+            ?? Observable.Return(Unit.Default);
+
+    /// <inheritdoc />
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => TryGetAdapter(nodePath)?.DeletePartitionObjects(nodePath, subPath)
+            ?? Observable.Return(Unit.Default);
+
+    /// <inheritdoc />
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => TryGetAdapter(nodePath)?.GetPartitionMaxTimestamp(nodePath, subPath)
+            ?? Observable.Return<DateTimeOffset?>(null);
 }

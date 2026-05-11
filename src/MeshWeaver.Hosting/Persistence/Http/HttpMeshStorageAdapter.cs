@@ -31,16 +31,16 @@ public sealed class HttpMeshStorageAdapter : IStorageAdapter
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => _client.Get(path);
 
-    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
-        // Upsert: probe existence then Create or Update; map to Unit.
+    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+        // Upsert: probe existence then Create or Update; emit the written node.
         => _client.Get(node.Path)
             .SelectMany(existing => existing is null
                 ? _client.Create(node)
                 : _client.Update(node))
-            .Select(_ => Unit.Default);
+            .Select(_ => node);
 
-    public IObservable<Unit> Delete(string path)
-        => _client.Delete(path).Select(_ => Unit.Default);
+    public IObservable<string> Delete(string path)
+        => _client.Delete(path).Select(_ => path);
 
     public IObservable<bool> Exists(string path)
         => _client.Get(path).Select(n => n is not null);

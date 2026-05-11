@@ -38,7 +38,7 @@ internal sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage
             return Observable.Return<MeshNode?>(node);
         });
 
-    public override IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
+    public override IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
             if (!string.IsNullOrEmpty(node.Path))
@@ -47,14 +47,14 @@ internal sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage
                 _logger?.LogDebug("[InMemoryAdapter#{Id:X}] Write {Path} (count={Count})",
                     GetHashCode(), Norm(node.Path), _nodes.Count);
             }
-            return Observable.Return(Unit.Default);
+            return Observable.Return(node);
         });
 
-    public override IObservable<Unit> Delete(string path)
+    public override IObservable<string> Delete(string path)
         => Observable.Defer(() =>
         {
             _nodes.TryRemove(Norm(path), out _);
-            return Observable.Return(Unit.Default);
+            return Observable.Return(path);
         });
 
     public override IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>

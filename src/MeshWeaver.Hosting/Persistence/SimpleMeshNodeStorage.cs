@@ -40,10 +40,10 @@ public abstract class SimpleMeshNodeStorage : IStorageAdapter
     public abstract IObservable<MeshNode?> Read(string path, JsonSerializerOptions options);
 
     /// <inheritdoc />
-    public abstract IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options);
+    public abstract IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options);
 
     /// <inheritdoc />
-    public abstract IObservable<Unit> Delete(string path);
+    public abstract IObservable<string> Delete(string path);
 
     /// <inheritdoc />
     public abstract IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath);

@@ -23,7 +23,7 @@ public static class ActivityTrackingExtensions
 
     /// <summary>
     /// Adds activity tracking via ActivityLogBundler which persists bundled activity logs
-    /// directly to IMeshStorage (bypassing message handlers to avoid infinite loops).
+    /// directly to IStorageAdapter (bypassing message handlers to avoid infinite loops).
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
@@ -32,9 +32,9 @@ public static class ActivityTrackingExtensions
             services.AddScoped<ActivityLogBundler>(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
-                // Use IMeshStorage directly — NOT IMeshNodePersistence which routes through
+                // Use IStorageAdapter directly — NOT IMeshNodePersistence which routes through
                 // handlers and would trigger activity tracking again (infinite loop).
-                var persistence = sp.GetRequiredService<IMeshStorage>();
+                var persistence = sp.GetRequiredService<IStorageAdapter>();
                 return new ActivityLogBundler(hub, log =>
                 {
                     // Skip activity tracking for satellite node hubs.
@@ -51,7 +51,7 @@ public static class ActivityTrackingExtensions
                     // The callback is sync so onFlush can drop the deferred Subscribe; any
                     // hub-touching work happens off the bundler's timer thread.
                     var hubNodeObs = log.HubPath != null
-                        ? persistence.GetNode(log.HubPath).Take(1)
+                        ? persistence.Read(log.HubPath, hub.JsonSerializerOptions).Take(1)
                         : Observable.Return<MeshNode?>(null);
 
                     hubNodeObs
@@ -67,7 +67,7 @@ public static class ActivityTrackingExtensions
                                 State = MeshNodeState.Active,
                                 Content = log
                             };
-                            return persistence.SaveNode(node);
+                            return persistence.Write(node, hub.JsonSerializerOptions);
                         })
                         .Subscribe(
                             _ => { },

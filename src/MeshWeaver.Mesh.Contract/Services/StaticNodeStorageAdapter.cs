@@ -50,13 +50,13 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
         });
 
     /// <inheritdoc/>
-    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.Throw<Unit>(new NotSupportedException(
+    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.Throw<MeshNode>(new NotSupportedException(
             $"StaticNodeStorageAdapter is read-only; cannot write '{node.Path}'."));
 
     /// <inheritdoc/>
-    public IObservable<Unit> Delete(string path)
-        => Observable.Throw<Unit>(new NotSupportedException(
+    public IObservable<string> Delete(string path)
+        => Observable.Throw<string>(new NotSupportedException(
             $"StaticNodeStorageAdapter is read-only; cannot delete '{path}'."));
 
     /// <inheritdoc/>

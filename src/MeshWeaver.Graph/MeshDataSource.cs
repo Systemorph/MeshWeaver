@@ -181,10 +181,10 @@ public static class MeshDataSourceExtensions
             .WithHandler<CreateReleaseRequest>(HandleCreateRelease)
             .WithHandler<RunTestsRequest>(HandleRunTests)
             // Persistence I/O handlers: MeshNodeTypeSource posts these instead of
-            // calling IStorageService directly from the workspace update pipeline.
+            // calling IStorageAdapter directly from the workspace update pipeline.
             // Routing them through the hub's actor inbox serialises writes per node
             // and keeps the data source pure — no debounce buffer, no FlushOnDispose,
-            // no IStorageService dependency in the type source itself.
+            // no IStorageAdapter dependency in the type source itself.
             .WithHandler<SaveMeshNodeRequest>(HandleSaveMeshNode)
             .WithHandler<DeleteMeshNodeRequest>(HandleDeleteMeshNode)
             // Post-load INodeValidator-Read hook for MeshNodeReference reads.
@@ -194,7 +194,7 @@ public static class MeshDataSourceExtensions
 
     /// <summary>
     /// Per-node hub handler for <see cref="SaveMeshNodeRequest"/>: writes the
-    /// supplied <see cref="MeshNode"/> through <see cref="IStorageService.SaveNode"/>.
+    /// supplied <see cref="MeshNode"/> through <see cref="IStorageAdapter.SaveNode"/>.
     /// Fire-and-forget Subscribe — the hub's inbox serialises requests so writes
     /// for the same path arrive in order; failures log and drop. Posted from
     /// <c>MeshNodeTypeSource.UpdateImpl</c> on every workspace change.
@@ -202,7 +202,7 @@ public static class MeshDataSourceExtensions
     private static IMessageDelivery HandleSaveMeshNode(
         IMessageHub hub, IMessageDelivery<SaveMeshNodeRequest> request)
     {
-        var persistence = hub.ServiceProvider.GetService<IStorageService>();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
             return request.Processed();
 
@@ -211,7 +211,7 @@ public static class MeshDataSourceExtensions
         var node = request.Message.Node;
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
             node.Path, node.Version);
-        persistence.SaveNode(node, hub.JsonSerializerOptions)
+        persistence.Write(node, hub.JsonSerializerOptions)
             .Subscribe(
                 saved => logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
                     saved.Path, saved.Version),
@@ -222,20 +222,20 @@ public static class MeshDataSourceExtensions
 
     /// <summary>
     /// Per-node hub handler for <see cref="DeleteMeshNodeRequest"/>: removes the
-    /// node at the supplied path through <see cref="IStorageService.DeleteNode"/>.
+    /// node at the supplied path through <see cref="IStorageAdapter.DeleteNode"/>.
     /// Fire-and-forget; failures log and drop.
     /// </summary>
     private static IMessageDelivery HandleDeleteMeshNode(
         IMessageHub hub, IMessageDelivery<DeleteMeshNodeRequest> request)
     {
-        var persistence = hub.ServiceProvider.GetService<IStorageService>();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
             return request.Processed();
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DeleteMeshNodeHandler");
         var path = request.Message.Path;
-        persistence.DeleteNode(path, request.Message.Recursive)
+        persistence.Delete(path)
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex, "DeleteMeshNode failed for {Path}", path));
@@ -515,7 +515,7 @@ public static class MeshDataSourceExtensions
 
             // Persistence sampler: posts SaveMeshNodeRequest to the per-node
             // hub at most every SaveSampleInterval, with the latest version of
-            // the own MeshNode. The handler subscribes to IStorageService.SaveNode
+            // the own MeshNode. The handler subscribes to IStorageAdapter.SaveNode
             // (already async at the storage adapter); this pipeline never blocks.
             // DistinctUntilChanged() uses MeshNode's record value-equality so
             // routing-stream echoes (same content) are dropped while genuine
@@ -576,7 +576,7 @@ public static class MeshDataSourceExtensions
             return request;
 
         var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-        var persistenceCore = hub.ServiceProvider.GetService<IStorageService>();
+        var persistenceCore = hub.ServiceProvider.GetService<IStorageAdapter>();
         // Address.Path (segments only) — ToString() on hosted hubs adds "~<host>",
         // which never matches persistence keys / NodeTypeService paths (segment-only).
         var hubPath = hub.Address.Path;
@@ -584,7 +584,7 @@ public static class MeshDataSourceExtensions
         if (nodeTypeService == null || persistenceCore == null)
             return request;
 
-        persistenceCore.GetNode(hubPath, hub.JsonSerializerOptions)
+        persistenceCore.Read(hubPath, hub.JsonSerializerOptions)
             .SelectMany(node =>
             {
                 // Only handle NodeType nodes — for everything else, let the default
@@ -1015,7 +1015,7 @@ public static class MeshDataSourceExtensions
 /// </summary>
 public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 {
-    private readonly IStorageService? _persistenceCore;
+    private readonly IStorageAdapter? _persistenceCore;
     private readonly string _hubPath;
     private readonly ILogger? _logger;
 
@@ -1028,7 +1028,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
-        _persistenceCore = workspace.Hub.ServiceProvider.GetService<IStorageService>();
+        _persistenceCore = workspace.Hub.ServiceProvider.GetService<IStorageAdapter>();
         // Use Address.Path (segments only) — ToString() on a hosted address (Orleans
         // per-node grain hubs) appends "~<host>" (e.g. ".../msg1-assistant~mesh/<guid>"),
         // which never matches static-node Paths or persistence keys (both segment-only).

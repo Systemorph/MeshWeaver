@@ -25,7 +25,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 {
     private readonly IMessageHub hub;
     private readonly IEnumerable<IMeshQueryProvider> queryProviders;
-    private readonly IMeshStorage meshStorage;
+    private readonly IStorageAdapter meshStorage;
     private readonly ILogger<NodeTypeService> logger;
     private readonly MeshNodeCompilationService? compilationService;
     private readonly MeshConfiguration meshConfiguration;
@@ -82,7 +82,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         IMessageHub hub,
         IEnumerable<IMeshQueryProvider> queryProviders,
         MeshConfiguration meshConfiguration,
-        IMeshStorage meshStorage,
+        IStorageAdapter meshStorage,
         ILogger<NodeTypeService> logger,
         ICompilationCacheService cacheService,
         IOptions<CompilationCacheOptions> cacheOptions,
@@ -282,7 +282,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// <see cref="IObservable{T}"/>; callers must <c>.Subscribe(...)</c>, not <c>await</c>.
     /// </summary>
     public IObservable<string> GetAssemblyPath(string nodeTypePath) =>
-        meshStorage.GetNode(nodeTypePath)
+        meshStorage.Read(nodeTypePath, hub.JsonSerializerOptions)
             .SelectMany(node =>
             {
                 if (node is null)
@@ -971,7 +971,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// If the list is null or empty, defaults to <c>"{nodeTypePath}/Source"</c>.
     /// Query-syntax decoration like <c>scope:subtree</c> and <c>nodeType:Code</c> is
     /// stripped — this helper is only concerned with the path segment, since we feed
-    /// <see cref="IMeshStorage.GetDescendantsAsync"/> below.
+    /// <see cref="IStorageAdapter.GetDescendantsAsync"/> below.
     /// </summary>
     private static IReadOnlyList<string> ResolveSourcePaths(
         IReadOnlyList<string>? sources,
@@ -1021,11 +1021,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private async Task<(NodeTypeRelease? Release, MeshNode? Node)> GatherInputsAsync(string nodeTypePath, CancellationToken ct)
     {
-        // Use IMeshStorage directly to bypass routing/hub creation.
+        // Use IStorageAdapter directly to bypass routing/hub creation.
         // This avoids the circular dependency: compilation → routing → hub creation → needs compilation.
 
         // Get the node directly from persistence (no routing)
-        var node = await meshStorage.GetNode(nodeTypePath).FirstAsync().ToTask(ct);
+        var node = await meshStorage.Read(nodeTypePath, hub.JsonSerializerOptions).FirstAsync().ToTask(ct);
         if (node == null)
         {
             var msg = $"NodeType definition not found at path '{nodeTypePath}'. Check that the NodeType node exists in persistence or a static node provider.";
@@ -1049,7 +1049,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // `MeshNode.Content` off a query row (stale by definition; see
         // `Doc/Architecture/CqrsAndContentAccess.md` → "Select only what you need").
         // For each discovered Code path we then fetch the live single node via
-        // `meshStorage.GetNode(path)` to read `CodeConfiguration.Code`.
+        // `meshStorage.Read(path, hub.JsonSerializerOptions)` to read `CodeConfiguration.Code`.
         var codeFiles = new List<string>();
         var codeFilePaths = new List<string>();
         var seenCodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1078,7 +1078,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         foreach (var sourcePath in sourcePaths)
         {
             // Path-exact fetch first (handles `path:X` / `@X` pointing at a single Code node).
-            var single = await meshStorage.GetNode(sourcePath).FirstAsync().ToTask(ct);
+            var single = await meshStorage.Read(sourcePath, hub.JsonSerializerOptions).FirstAsync().ToTask(ct);
             if (single != null) AddIfCodeNode(single);
         }
 
@@ -1089,7 +1089,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         foreach (var p in shellPaths)
         {
             if (!seenCodePaths.Add(p)) continue;
-            var live = await meshStorage.GetNode(p).FirstAsync().ToTask(ct);
+            var live = await meshStorage.Read(p, hub.JsonSerializerOptions).FirstAsync().ToTask(ct);
             if (live != null) AddIfCodeNode(live, skipDedup: true);
         }
 

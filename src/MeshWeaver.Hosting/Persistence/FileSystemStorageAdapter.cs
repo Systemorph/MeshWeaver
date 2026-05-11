@@ -124,8 +124,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return Unit.Default; });
+    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -181,8 +181,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
         CleanupOtherExtensions(node.Path, extension);
     }
 
-    public IObservable<Unit> Delete(string path)
-        => Observable.Defer(() => { DeleteCore(path); return Observable.Return(Unit.Default); });
+    public IObservable<string> Delete(string path)
+        => Observable.Defer(() => { DeleteCore(path); return Observable.Return(path); });
 
     private void DeleteCore(string path)
     {

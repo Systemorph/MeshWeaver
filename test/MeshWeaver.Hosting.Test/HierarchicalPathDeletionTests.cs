@@ -67,16 +67,16 @@ public class HierarchicalPathDeletionTests
             }
         }
 
-        public IObservable<Unit> Delete(string path) => Observable.Defer(() =>
+        public IObservable<string> Delete(string path) => Observable.Defer(() =>
         {
             lock (_gate) _started.Add(path);
 
             if (_failPaths.Contains(path))
-                return Observable.Throw<Unit>(new InvalidOperationException($"primed failure for '{path}'"));
+                return Observable.Throw<string>(new InvalidOperationException($"primed failure for '{path}'"));
 
             var emission = _gated && _gates.TryGetValue(path, out var subject)
-                ? subject.AsObservable()
-                : Observable.Return(Unit.Default);
+                ? subject.Select(_ => path)
+                : Observable.Return(path);
 
             return emission.Do(_ =>
             {

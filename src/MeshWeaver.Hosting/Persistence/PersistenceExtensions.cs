@@ -113,7 +113,7 @@ public static class PersistenceExtensions
         });
 
         // Register common services and wrapper services
-        return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+        return services.AddCoreAndWrapperServices();
     }
 
     /// <summary>
@@ -181,7 +181,7 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
-        return services.AddCoreAndWrapperServices<AdapterPersistenceService>();
+        return services.AddCoreAndWrapperServices();
     }
 
     /// <summary>
@@ -221,17 +221,11 @@ public static class PersistenceExtensions
         return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
-    /// <summary>
-    /// Adds an existing in-memory persistence service instance.
-    /// Useful for tests that need to seed data before the hub is initialized.
-    /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <param name="instance">The pre-created persistence service instance</param>
-    /// <returns>The service collection for chaining</returns>
-    public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, AdapterPersistenceService instance)
-    {
-        return services.AddPersistence(instance);
-    }
+    // AddInMemoryPersistence(IServiceCollection, AdapterPersistenceService) deleted
+    // in the persistence-cull (2026-05-12) — AdapterPersistenceService is gone.
+    // Tests that need a pre-seeded in-memory adapter should call
+    // `services.AddSingleton<IStorageAdapter>(new InMemoryStorageAdapter())` then
+    // `services.AddCoreAndWrapperServices()`.
 
     /// <summary>
     /// Adds file system persistence that reads directly from disk.
@@ -249,7 +243,7 @@ public static class PersistenceExtensions
         services.AddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier));
 
         // Register common services and wrapper services
-        return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+        return services.AddCoreAndWrapperServices();
     }
 
     /// <summary>
@@ -266,7 +260,7 @@ public static class PersistenceExtensions
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
-            return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+            return services.AddCoreAndWrapperServices();
         });
         return builder.RegisterMeshQueryCoreOnMeshHub();
     }
@@ -315,74 +309,12 @@ public static class PersistenceExtensions
         services.AddSingleton(storageAdapter);
 
         // Register common services and wrapper services
-        return services.AddCoreAndWrapperServices<AdapterPersistenceService>();
+        return services.AddCoreAndWrapperServices();
     }
 
-    /// <summary>
-    /// Adds a custom persistence core service.
-    /// </summary>
-    /// <param name="services">The service collection</param>
-    /// <param name="persistenceServiceCore">The custom persistence core service</param>
-    /// <returns>The service collection for chaining</returns>
-    internal static IServiceCollection AddPersistence(this IServiceCollection services, IStorageService persistenceServiceCore)
-    {
-        // Register the data change notifier as singleton
-        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
-        // Core services remain singletons (for shared caches)
-        services.AddSingleton(persistenceServiceCore);
-        services.TryAddSingleton<MeshQueryEngine>();
-        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<MeshQueryEngine>());
-
-        // IMeshQueryCore — root-container registration; child hub scopes
-        // inherit via Autofac. Static-node providers fold into the core via
-        // its constructor.
-        services.TryAddSingleton<IMeshQueryCore>(sp =>
-            sp.GetRequiredService<MeshQueryEngine>());
-
-        // Static node provider — IMeshQueryProvider for IMeshService fan-out.
-        // (Synced queries no longer use a separate marker; static nodes flow
-        // through MeshQueryEngine directly via its constructor.)
-        services.AddSingleton<StaticNodeQueryProvider>(sp =>
-        {
-            var providers = sp.GetServices<IStaticNodeProvider>();
-            var config = sp.GetService<MeshConfiguration>();
-            return new StaticNodeQueryProvider(
-                providers,
-                StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
-                config,
-                sp.GetService<ILoggerFactory>());
-        });
-        services.AddSingleton<IMeshQueryProvider>(sp =>
-            sp.GetRequiredService<StaticNodeQueryProvider>());
-
-        // Register MeshCatalog and its interfaces
-        services.AddMeshCatalog();
-
-        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
-        services.TryAddScoped<IMeshImportService, MeshImportService>();
-        services.TryAddScoped<IMeshExportService, MeshExportService>();
-
-        // Wrapper services are scoped (per hub)
-        services.AddScoped<IMeshStorage, PersistenceService>();
-        services.AddScoped<IMeshService>(sp =>
-            new MeshService(
-                sp.GetServices<IMeshQueryProvider>(),
-                sp.GetRequiredService<IMessageHub>()));
-        services.TryAddScoped<UserAccessiblePartitionsCache>(sp =>
-            new UserAccessiblePartitionsCache(
-                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
-                sp.GetService<ICrossSchemaQueryProvider>(),
-                sp.GetService<ILogger<UserAccessiblePartitionsCache>>()));
-        services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
-            new ChatCompletionOrchestrator(
-                sp.GetRequiredService<IMeshService>(),
-                sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<UserAccessiblePartitionsCache>(),
-                sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
-
-        return services;
-    }
+    // AddPersistence(IServiceCollection, IStorageService) deleted in the cull —
+    // IStorageService is gone. Callers register an IStorageAdapter directly
+    // and call AddCoreAndWrapperServices().
 
     /// <summary>
     /// Adds partitioned file system persistence where each top-level path segment
@@ -471,7 +403,11 @@ public static class PersistenceExtensions
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetServices<IPartitionStorageProvider>()));
-        services.AddSingleton<IStorageService>(sp =>
+        // RoutingPersistenceServiceCore is also the IStorageAdapter for
+        // partition-routing reads/writes — registered as singleton so
+        // hub handlers, NodeTypeService, MeshCatalog, etc. all get the
+        // path-aware router.
+        services.AddSingleton<IStorageAdapter>(sp =>
             sp.GetRequiredService<RoutingPersistenceServiceCore>());
 
         // Register the routing query provider.
@@ -541,8 +477,6 @@ public static class PersistenceExtensions
         services.TryAddScoped<IMeshImportService, MeshImportService>();
         services.TryAddScoped<IMeshExportService, MeshExportService>();
 
-        // Wrapper services are scoped (per hub)
-        services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
@@ -568,27 +502,13 @@ public static class PersistenceExtensions
     /// <summary>
     /// Helper method to register common services and wrapper services.
     /// </summary>
-    private static IServiceCollection AddCoreAndWrapperServices<TPersistenceCore>(this IServiceCollection services)
-        where TPersistenceCore : class, IStorageService
+    private static IServiceCollection AddCoreAndWrapperServices(this IServiceCollection services)
     {
-        // Register the data change notifier as singleton (use TryAdd to avoid duplicates)
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
-        // Register in-memory activity store as default (PostgreSQL overrides with its own)
-
-        // Core services remain singletons (for shared caches)
-        services.AddSingleton<IStorageService, TPersistenceCore>();
         services.TryAddSingleton<MeshQueryEngine>();
         services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<MeshQueryEngine>());
+        services.TryAddSingleton<IMeshQueryCore>(sp => sp.GetRequiredService<MeshQueryEngine>());
 
-        // IMeshQueryCore — unsecured query surface used by SyncedQueryMeshNodes.
-        // Root-container registration so every hub (mesh, per-node, hosted
-        // sub-hubs) inherits via Autofac child-scope resolution. Static-node
-        // providers fold into the core via its constructor.
-        services.TryAddSingleton<IMeshQueryCore>(sp =>
-            sp.GetRequiredService<MeshQueryEngine>());
-
-        // Static node provider — IMeshQueryProvider for IMeshService fan-out.
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
         {
             var providers = sp.GetServices<IStaticNodeProvider>();
@@ -599,17 +519,10 @@ public static class PersistenceExtensions
                 config,
                 sp.GetService<ILoggerFactory>());
         });
-        services.AddSingleton<IMeshQueryProvider>(sp =>
-            sp.GetRequiredService<StaticNodeQueryProvider>());
+        services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StaticNodeQueryProvider>());
 
-        // Surface AddMeshNodes seed (held in MeshConfiguration.Nodes) as an
-        // IStaticNodeProvider. Without this bridge the seed nodes are invisible
-        // to the persistence read path — historically they lived in
-        // InMemoryPersistenceService._nodes, which the no-cache rewrite dropped.
-        // See MeshConfigurationStaticNodeProvider.cs.
         services.AddSingleton<IStaticNodeProvider, MeshConfigurationStaticNodeProvider>();
 
-        // Register IVersionQuery for non-partitioned mode (uses FileSystemVersionStore if available)
         services.TryAddSingleton<IVersionQuery>(sp =>
         {
             var adapter = sp.GetService<IStorageAdapter>();
@@ -618,15 +531,11 @@ public static class PersistenceExtensions
             return new NoOpVersionQuery();
         });
 
-        // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
-        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
         services.TryAddScoped<IMeshImportService, MeshImportService>();
         services.TryAddScoped<IMeshExportService, MeshExportService>();
 
-        // Wrapper services are scoped (per hub)
-        services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),

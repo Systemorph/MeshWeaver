@@ -128,14 +128,14 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Resolves @@path references in code content by fetching the referenced
-    /// node's CodeConfiguration via <see cref="IMeshStorage"/> directly. Used by
+    /// node's CodeConfiguration via <see cref="IStorageAdapter"/> directly. Used by
     /// <c>NodeTypeService</c> during compilation to bypass routing and avoid
     /// circular hub creation. Resolution is transitive: if a resolved include
     /// itself contains @@references, those are resolved too.
     /// For the production reactive path, see <see cref="ResolveCodeIncludes"/>.
     /// </summary>
     internal async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshStorage meshStorage, CancellationToken ct)
+        string code, IStorageAdapter meshStorage, CancellationToken ct)
     {
         var resolved = new HashSet<string>();
         return await ResolveCodeIncludesAsync(code, meshStorage, resolved, ct);
@@ -184,7 +184,7 @@ internal class MeshNodeCompilationService(
     }
 
     private async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshStorage meshStorage, HashSet<string> resolved, CancellationToken ct)
+        string code, IStorageAdapter meshStorage, HashSet<string> resolved, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
             return code;
@@ -203,8 +203,8 @@ internal class MeshNodeCompilationService(
                 continue;
             }
 
-            // Use IMeshStorage directly to bypass routing
-            var referencedNode = await meshStorage.GetNode(path).FirstAsync().ToTask(ct);
+            // Use IStorageAdapter directly to bypass routing
+            var referencedNode = await meshStorage.Read(path, hub.JsonSerializerOptions).FirstAsync().ToTask(ct);
             string? resolvedCode = null;
             if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
             {

@@ -55,7 +55,7 @@ public static class HierarchicalPathDeletion
     public static IObservable<IReadOnlyList<string>> DeleteSubtree(
         string rootPath,
         IEnumerable<string> descendantPaths,
-        Func<string, IObservable<Unit>> deleteOne)
+        Func<string, IObservable<string>> deleteOne)
     {
         var paths = descendantPaths
             .Where(p => !string.IsNullOrEmpty(p))
@@ -67,21 +67,17 @@ public static class HierarchicalPathDeletion
             .Select(_ => (IReadOnlyList<string>)deleted.ToImmutable())
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
-                // Attach the partial deletion list so callers writing activity
-                // logs can record which paths were affected before the failure.
                 ex.Data["DeletedPaths"] = (IReadOnlyList<string>)deleted.ToImmutable();
                 return Observable.Throw<IReadOnlyList<string>>(ex);
             });
     }
 
-    private static IObservable<Unit> DeleteSubtreeImpl(
+    private static IObservable<string> DeleteSubtreeImpl(
         string nodePath,
         ImmutableHashSet<string> allPaths,
-        Func<string, IObservable<Unit>> deleteOne,
+        Func<string, IObservable<string>> deleteOne,
         ImmutableList<string>.Builder deleted)
     {
-        // Immediate children of `nodePath` in the path set — paths that
-        // start with `nodePath + "/"` AND have no further '/' past that prefix.
         var prefix = nodePath + "/";
         var children = allPaths
             .Where(p => p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
@@ -89,17 +85,16 @@ public static class HierarchicalPathDeletion
             .ToImmutableList();
 
         var childOps = children.Count == 0
-            ? Observable.Return(Unit.Default)
+            ? Observable.Return(string.Empty)
             : Observable
                 .Merge(children.Select(c =>
                     DeleteSubtreeImpl(c, allPaths, deleteOne, deleted)))
-                .Count()
-                .Select(_ => Unit.Default);
+                .LastOrDefaultAsync();
 
         return childOps.SelectMany(_ => deleteOne(nodePath)
-            .Do(_ =>
+            .Do(deletedPath =>
             {
-                lock (deleted) deleted.Add(nodePath);
+                lock (deleted) deleted.Add(deletedPath);
             }));
     }
 }

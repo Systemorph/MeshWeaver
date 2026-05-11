@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -191,7 +193,7 @@ public class FileSystemChangeWatcher : IDisposable
         switch (changeType)
         {
             case WatcherChangeTypes.Created:
-                var createdNode = await _storageAdapter.ReadAsync(path, JsonOptions);
+                var createdNode = await _storageAdapter.Read(path, JsonOptions).FirstAsync().ToTask();
                 if (createdNode != null)
                 {
                     _changeNotifier.NotifyChange(DataChangeNotification.Created(normalizedPath, createdNode));
@@ -199,7 +201,7 @@ public class FileSystemChangeWatcher : IDisposable
                 break;
 
             case WatcherChangeTypes.Changed:
-                var updatedNode = await _storageAdapter.ReadAsync(path, JsonOptions);
+                var updatedNode = await _storageAdapter.Read(path, JsonOptions).FirstAsync().ToTask();
                 if (updatedNode != null)
                 {
                     _changeNotifier.NotifyChange(DataChangeNotification.Updated(normalizedPath, updatedNode));

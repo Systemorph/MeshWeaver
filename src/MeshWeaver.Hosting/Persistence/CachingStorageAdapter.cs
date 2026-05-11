@@ -196,20 +196,20 @@ public class CachingStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
+    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
         return innerAdapter.Write(node, options)
-            .Do(_ => RefreshCacheForPath(node.Path));
+            .Do(written => RefreshCacheForPath(written.Path));
     }
 
-    public IObservable<Unit> Delete(string path)
+    public IObservable<string> Delete(string path)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
         return innerAdapter.Delete(path)
-            .Do(_ =>
+            .Do(deletedPath =>
             {
-                var normalizedPath = path.Trim('/');
+                var normalizedPath = deletedPath.Trim('/');
                 foreach (var ext in SupportedExtensions)
                 {
                     var segments = normalizedPath.Split('/');

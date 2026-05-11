@@ -79,7 +79,7 @@ internal static class NodeTypeContractHandler
                 // per-node hub, so cross-hub routing via hub.GetMeshNode(...) returns
                 // null fast (DeliveryFailure NotFound). The release IS in
                 // persistence, owned by this NodeType hub's partition, so go to
-                // IStorageService directly. Sanctioned because the Release nodes
+                // IStorageAdapter directly. Sanctioned because the Release nodes
                 // satellite has no live hub to read from.
                 if (!string.IsNullOrEmpty(def.RequestedReleasePath))
                 {
@@ -87,17 +87,17 @@ internal static class NodeTypeContractHandler
                     logger?.LogDebug(
                         "GetCompilationPathRequest at {HubPath}: resolving pinned release {ReleasePath}.",
                         hubPath, requestedReleasePath);
-                    var storage = hub.ServiceProvider.GetService<IStorageService>();
+                    var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
                     if (storage is null)
                     {
                         logger?.LogWarning(
-                            "GetCompilationPathRequest at {HubPath}: no IStorageService — cannot resolve pinned release {ReleasePath}.",
+                            "GetCompilationPathRequest at {HubPath}: no IStorageAdapter — cannot resolve pinned release {ReleasePath}.",
                             hubPath, requestedReleasePath);
                         return Observable.Return<GetCompilationPathResponse?>(Fail(
                             null,
                             $"Pinned release '{requestedReleasePath}' for '{hubPath}' could not be resolved."));
                     }
-                    return storage.GetNode(requestedReleasePath, hub.JsonSerializerOptions)
+                    return storage.Read(requestedReleasePath, hub.JsonSerializerOptions)
                         .SelectMany(releaseNode =>
                         {
                             if (releaseNode?.Content is NodeTypeRelease release
