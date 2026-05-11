@@ -1,0 +1,67 @@
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using Microsoft.Extensions.Configuration;
+
+namespace Memex.Portal.Shared.Authentication;
+
+/// <summary>
+/// Seeds root-scope <see cref="AccessAssignment"/> nodes that grant the <c>Admin</c>
+/// role to each user listed under <c>Auth:GlobalAdmins</c> in configuration.
+///
+/// <para>Background: <c>SecurityService.GetEffectiveRoles</c> walks scopes from root
+/// down and accumulates role assignments. Without a root-scope AccessAssignment
+/// granting Admin, a configured Microsoft Entra ID user has zero roles on the
+/// root scope, which surfaces as <c>"lacks Read permission on 'Organization'"</c>
+/// when navigating to the NodeType detail page (and equivalent denials on
+/// cross-partition operations like creating a new Organization).</para>
+///
+/// <para>The test base ships an equivalent seed via
+/// <c>TestUsers.PublicAdminAccess()</c> — production needs the same shape,
+/// driven by config instead of hardcoded so each deployment can declare its own
+/// admin list. See <c>Doc/Architecture/AccessControl.md</c> for the role
+/// accumulation rules and <c>src/MeshWeaver.Mesh.Contract/Security/AccessAssignment.cs</c>
+/// for the schema.</para>
+/// </summary>
+public static class GlobalAdminSeed
+{
+    private const string ConfigSection = "Auth:GlobalAdmins";
+
+    /// <summary>
+    /// Builds AccessAssignment MeshNodes for every user id in
+    /// <c>Auth:GlobalAdmins</c>. Returns an empty array when the section is
+    /// missing or empty — safe to chain via <c>builder.AddMeshNodes(...)</c>
+    /// in environments that have no admins configured.
+    /// </summary>
+    public static MeshNode[] Build(IConfiguration configuration)
+    {
+        var ids = configuration.GetSection(ConfigSection).Get<string[]>()
+                  ?? [];
+        if (ids.Length == 0)
+            return [];
+
+        var nodes = new MeshNode[ids.Length];
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var userId = ids[i].Trim();
+            var assignment = new AccessAssignment
+            {
+                AccessObject = userId,
+                DisplayName = userId,
+                Roles = [new RoleAssignment { Role = "Admin" }],
+            };
+            // Root-scope assignments live at namespace "_Access" with id
+            // "{userId}_Access" → path "_Access/{userId}_Access".
+            // SecurityService.Consume maps this to scope = "" (global).
+            // Namespace "" would put them at path "{userId}_Access" with no
+            // scope mapping. See TestUsers.CreateAccessNode for the same shape.
+            nodes[i] = new MeshNode(userId + "_Access", "_Access")
+            {
+                NodeType = "AccessAssignment",
+                Name = $"{userId} — Admin",
+                Content = assignment,
+                MainNode = "",
+            };
+        }
+        return nodes;
+    }
+}
