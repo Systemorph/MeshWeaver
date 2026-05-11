@@ -813,6 +813,20 @@ public class AgentChatClient : IAgentChat
                                 AuthorName = currentAgentName ?? "Assistant"
                             };
                         }
+                        else if (content is FunctionResultContent functionResult)
+                        {
+                            // Previously dropped: handoff path forwarded FunctionCallContent
+                            // but never the matching FunctionResultContent, so tool calls
+                            // made by a handoff target stayed "pending" forever in
+                            // ThreadExecution.toolCallLog — visible to the user as a tool
+                            // call with no result. Forward results too.
+                            logger.LogInformation("Agent {AgentName} received result from tool: {CallId}",
+                                currentAgentName, functionResult.CallId);
+                            yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                            {
+                                AuthorName = currentAgentName ?? "Assistant"
+                            };
+                        }
                         else if (content is UsageContent)
                         {
                             yield return new ChatResponseUpdate(ChatRole.Assistant, [content])

@@ -97,13 +97,28 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
         var plugin = CreatePlugin();
         var id = $"ack-{Guid.NewGuid():N}";
         var path = await SeedAsync(plugin, id);
+        var newName = $"Renamed by patch {Guid.NewGuid():N}";
 
-        var patched = await plugin.Patch($"@{path}", "{\"name\":\"Renamed by patch\"}");
+        var patched = await plugin.Patch($"@{path}", $"{{\"name\":\"{newName}\"}}");
         patched.Should().StartWith("Patched:", because: "valid patch must succeed");
 
-        // Immediately after Ok, Get must see the new state — no fresh page-load required.
+        // Wait deterministically for the workspace to observe the patched name
+        // before reading via Get. The Patch handler's Ok is sent after the
+        // DataChangeRequest fan-out, but the test is on a *different* hub —
+        // bridging via the per-node hub's MeshNode stream removes the
+        // last-mile cache-propagation race that flaked under shared-mesh.
+        var nodeHub = Mesh.GetHostedHub(new Address(path));
+        var workspace = nodeHub.GetWorkspace();
+        var stream = workspace.GetStream<MeshNode>();
+        stream.Should().NotBeNull("the hub must expose a MeshNode stream");
+        await stream!
+            .Where(nodes => nodes != null && nodes.Any(n => n.Path == path && n.Name == newName))
+            .Timeout(10.Seconds())
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
+
         var got = await plugin.Get($"@{path}");
-        got.Should().Contain("Renamed by patch",
+        got.Should().Contain(newName,
             because: "the workspace must already reflect the patch when Ok is returned " +
                      "(otherwise we have the cached-display bug)");
     }

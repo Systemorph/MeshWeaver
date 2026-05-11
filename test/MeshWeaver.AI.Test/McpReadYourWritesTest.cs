@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
@@ -324,16 +325,27 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         var activityPath = dispatched.RootElement.GetProperty("activityPath").GetString();
         activityPath.Should().NotBeNull();
 
-        // Allow a short window for any background activity creation; assert
-        // the activity was NEVER created for a non-executable node.
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        // Negative observation via the workspace stream — if an activity is
+        // ever created at activityPath, the per-node hub's MeshNode stream
+        // emits within ms. Subscribe with .Take(1).Timeout(1s) and treat the
+        // TimeoutException as the success signal (no activity created).
+        // Replaces Task.Delay-then-query: deterministic, no fixed sleep.
         MeshNode? activityNode = null;
-        await foreach (var node in meshService
-            .QueryAsync<MeshNode>($"path:{activityPath}", ct: TestContext.Current.CancellationToken))
+        try
         {
-            activityNode = node;
-            break;
+            activityNode = await Mesh.GetWorkspace()
+                .GetMeshNodeStream(activityPath!)
+                .Where(n => n != null)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(2))
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
         }
+        catch (TimeoutException)
+        {
+            // Expected: nothing was created, the stream never emitted.
+        }
+
         activityNode.Should().BeNull(
             "non-executable Code nodes must NOT spawn an ActivityLog — the " +
             "per-node hub's IsExecutable=false gate must reject before activity creation.");

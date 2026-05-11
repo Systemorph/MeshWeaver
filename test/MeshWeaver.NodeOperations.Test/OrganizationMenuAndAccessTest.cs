@@ -51,24 +51,15 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         var created = await NodeFactory.CreateNode(orgNode);
         created.Should().NotBeNull();
 
-        // Check effective permissions for the creator (admin user from TestBase).
-        // The OrganizationNodeType.PostCreationHandler creates an AccessAssignment
-        // satellite that grants Admin to the creator. SecurityService's synced
-        // query over AccessAssignment indexes the new satellite asynchronously —
-        // locally this completes within the implicit test-startup window, CI
-        // (Linux runners, cold-disk reads) is slower and the first
-        // GetPermissionAsync call returns Permission.None before the scan
-        // catches up. Poll over a short window so the test isn't flaky.
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        Permission permissions = Permission.None;
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (DateTime.UtcNow < deadline)
-        {
-            permissions = await Mesh.GetPermissionAsync(
-                orgId, TestUsers.Admin.ObjectId, TestTimeout);
-            if (permissions.HasFlag(Permission.Read)) break;
-            await Task.Delay(200, TestTimeout);
-        }
+        // Subscribe to the live GetEffectivePermissions stream and wait for
+        // the first emission that includes Read — no polling, no Task.Delay.
+        // The synced AccessAssignment query re-emits as the new satellite
+        // lands; .Where(p => p.HasFlag(Read)).Timeout(...) absorbs the index
+        // propagation lag deterministically.
+        var permissions = await Mesh.GetPermissionAsync(
+            orgId, TestUsers.Admin.ObjectId,
+            until: p => p.HasFlag(Permission.Read),
+            ct: TestTimeout);
 
         Output.WriteLine($"Effective permissions on {orgId}: {permissions}");
 
@@ -102,19 +93,11 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         };
         await NodeFactory.CreateNode(orgNode);
 
-        // Verify the creator has Admin permissions (PostCreationHandler creates
-        // AccessAssignment). Poll for index propagation — same CI-only init
-        // race as AdminCreator_HasFullPermissions above.
-        var creatorCheck = false;
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        while (DateTime.UtcNow < deadline)
-        {
-            creatorCheck = await Mesh.HasPermissionAsync(
-                orgId, creatorId, Permission.Update, TestTimeout);
-            if (creatorCheck) break;
-            await Task.Delay(200, TestTimeout);
-        }
-        creatorCheck.Should().BeTrue("PostCreationHandler should grant Admin role to creator");
+        // Wait via the live GetEffectivePermissions stream — Update flag
+        // implies AccessAssignment satellite has been observed by the synced
+        // query (Admin role grants Update). Same CI-only init race as
+        // AdminCreator_HasFullPermissions above; deterministic via .Where.
+        await Mesh.WaitForPermissionAsync(orgId, creatorId, Permission.Update, TestTimeout);
 
         // Now check that a NON-admin user without claim-based roles has NO permissions
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

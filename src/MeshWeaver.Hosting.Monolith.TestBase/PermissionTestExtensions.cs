@@ -45,14 +45,15 @@ public static class PermissionTestExtensions
     /// (debounced). Subscribers see every emission as the cache updates;
     /// the first one matching <paramref name="until"/> wins.</para>
     ///
-    /// <para>Bounded by a 5-second wall clock so a test that incorrectly
-    /// expects a permission that will never arrive fails loudly with a
-    /// <see cref="TimeoutException"/> rather than hanging.</para>
+    /// <para>Bounded by <paramref name="timeout"/> (default 30 s) so a test
+    /// that incorrectly expects a permission that will never arrive fails
+    /// loudly with a <see cref="TimeoutException"/> rather than hanging.</para>
     /// </summary>
     public static async Task<Permission> GetPermissionAsync(
         this IMessageHub hub, string path, string userId,
         Func<Permission, bool>? until,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        TimeSpan? timeout = null)
     {
         // SecurityService.GetEffectivePermissions takes the userId explicitly,
         // so we don't need to mutate AccessService.CircuitContext for the
@@ -63,10 +64,23 @@ public static class PermissionTestExtensions
         // DevLogin admin context the test had set, and the delete failed
         // with "Delete permission denied".
         var sec = hub.ServiceProvider.GetRequiredService<ISecurityService>();
-        var stream = sec.GetEffectivePermissions(path, userId);
-        if (until != null)
-            stream = stream.Where(until).Timeout(TimeSpan.FromSeconds(5));
-        return await stream.FirstAsync().ToTask(ct);
+        if (until == null)
+            return await sec.GetEffectivePermissions(path, userId).FirstAsync().ToTask(ct);
+
+        // Wait for the predicate to match. SecurityService.GetEffectivePermissions
+        // is a hot observable backed by per-scope synced AccessAssignment
+        // queries with Replay(1).RefCount(); long-lived subscribers see runtime
+        // satellites surface as the synced query re-emits. Plain
+        // .Where(until).Timeout(...).FirstAsync() is the canonical pattern —
+        // no polling, no Task.Delay. Timeout(60s) gives the synced query
+        // headroom on slow CI before failing the test with TimeoutException
+        // rather than hanging.
+        var t = timeout ?? TimeSpan.FromSeconds(60);
+        return await sec.GetEffectivePermissions(path, userId)
+            .Where(until)
+            .Timeout(t)
+            .FirstAsync()
+            .ToTask(ct);
     }
 
     /// <summary>
@@ -76,4 +90,23 @@ public static class PermissionTestExtensions
     public static async Task<bool> HasPermissionAsync(
         this IMessageHub hub, string path, string userId, Permission permission, CancellationToken ct = default)
         => (await hub.GetPermissionAsync(path, userId, ct)).HasFlag(permission);
+
+    /// <summary>
+    /// Stream-based wait that succeeds the first time
+    /// <paramref name="userId"/> has <paramref name="permission"/> on
+    /// <paramref name="path"/>. Subscribes to the live
+    /// <c>GetEffectivePermissions</c> stream so we react to the synced
+    /// AccessAssignment query's NEXT emission — no polling, no
+    /// <c>Task.Delay</c>. Throws <see cref="TimeoutException"/> if the
+    /// permission never arrives within <paramref name="timeout"/>.
+    /// </summary>
+    public static Task WaitForPermissionAsync(
+        this IMessageHub hub, string path, string userId, Permission permission,
+        CancellationToken ct = default,
+        TimeSpan? timeout = null)
+        => hub.GetPermissionAsync(
+            path, userId,
+            until: p => p.HasFlag(permission),
+            ct: ct,
+            timeout: timeout);
 }

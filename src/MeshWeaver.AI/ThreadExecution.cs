@@ -851,7 +851,13 @@ public static class ThreadExecution
                             status);
                     }
                 };
-                client.ForwardToolCall = entry => { toolCallLog = toolCallLog.Add(entry); };
+                // Don't subscribe ForwardToolCall to add to toolCallLog: the streaming
+                // FunctionCallContent branch below already adds an entry for every tool
+                // call, and FunctionInvokingChatClient yields FCC outward. Subscribing
+                // here as well would add a SECOND entry per invocation — the
+                // FunctionResultContent handler only replaces the first match by name,
+                // leaving the second as a permanent "pending" entry (the "dropped tool
+                // call" user-visible symptom).
 
                 var agentDisplayName = request.AgentName ?? "Agent";
 
