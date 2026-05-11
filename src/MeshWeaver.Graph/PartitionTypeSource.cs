@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
@@ -17,7 +18,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource<T>> where T : class
 {
-    private readonly IStorageService _persistenceCore;
+    private readonly IStorageAdapter _persistenceCore;
     private readonly string _partitionPath;
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
@@ -32,7 +33,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
     /// <param name="hubPath">The hub's path (e.g., "Type/Organizations").</param>
     /// <param name="subPartition">The relative sub-partition name (e.g., "Source"). If null, uses hubPath directly.</param>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
-    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IStorageService persistenceCore, string hubPath, string? subPartition = null, string? collectionName = null)
+    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IStorageAdapter persistenceCore, string hubPath, string? subPartition = null, string? collectionName = null)
         : base(workspace, dataSource)
     {
         _workspace = workspace;
@@ -96,14 +97,14 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         }
 
         // Note: Delete of partition objects is not yet supported
-        // If needed, we could add DeletePartitionObjectAsync to IMeshStorage
+        // If needed, we could add DeletePartitionObjectAsync to IStorageAdapter
 
         _lastSaved = instances;
         return instances;
     }
 
     /// <summary>
-    /// <c>IStorageService.GetPartitionObjectsAsync</c> is a pure DB hit (file system /
+    /// <c>IStorageAdapter.GetPartitionObjectsAsync</c> is a pure DB hit (file system /
     /// SQL / in-memory dictionary) — no hub round-trip — so wrapping with
     /// <see cref="Observable.FromAsync{TResult}(Func{System.Threading.CancellationToken,Task{TResult}})"/>
     /// is sanctioned per <c>Doc/Architecture/AsynchronousCalls.md</c>. The framework
@@ -112,25 +113,20 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
     protected override IObservable<InstanceCollection> Initialize(
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken)
-        => Observable.FromAsync(async ct =>
+        => Observable.Defer(() =>
         {
             _logger?.LogDebug("PartitionTypeSource<{Type}>.Initialize: Loading from partition {PartitionPath}",
                 typeof(T).Name, _partitionPath);
 
-            var items = new List<T>();
-
-            await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(_partitionPath, null, _workspace.Hub.JsonSerializerOptions).WithCancellation(ct))
-            {
-                if (obj is T typedObj)
+            return _persistenceCore.GetPartitionObjects(_partitionPath, null, _workspace.Hub.JsonSerializerOptions)
+                .OfType<T>()
+                .ToArray()
+                .Select(items =>
                 {
-                    items.Add(typedObj);
-                }
-            }
-
-            _logger?.LogDebug("PartitionTypeSource<{Type}>.Initialize: Loaded {Count} items from {PartitionPath}",
-                typeof(T).Name, items.Count, _partitionPath);
-
-            _lastSaved = new InstanceCollection(items.Cast<object>(), TypeDefinition.GetKey);
-            return _lastSaved;
+                    _logger?.LogDebug("PartitionTypeSource<{Type}>.Initialize: Loaded {Count} items from {PartitionPath}",
+                        typeof(T).Name, items.Length, _partitionPath);
+                    _lastSaved = new InstanceCollection(items.Cast<object>(), TypeDefinition.GetKey);
+                    return _lastSaved;
+                });
         });
 }

@@ -277,8 +277,8 @@ public static class MeshNodeExtensions
                         });
                 }
 
-                var storage = hub.ServiceProvider.GetService<IStorageService>();
-                return storage?.SaveNode(saveNode, hub.JsonSerializerOptions)
+                var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+                return storage?.Write(saveNode, hub.JsonSerializerOptions)
                        ?? Observable.Empty<MeshNode>();
             })
             .Subscribe(

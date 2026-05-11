@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 /// TypeSource for MeshNode that bridges a routing-supplied own-node observable
 /// into the workspace and dispatches workspace writes:
 /// <list type="bullet">
-///   <item><b>Adds (create) and Deletes</b> go straight to <see cref="IStorageService"/>
+///   <item><b>Adds (create) and Deletes</b> go straight to <see cref="IStorageAdapter"/>
 ///   — insta write, no queue. These are infrequent and ordering matters
 ///   (descendants must see parent state immediately).</item>
 ///   <item><b>Updates</b> are dispatched through the per-node hub's actor inbox
@@ -28,7 +28,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSource>
 {
-    private readonly IStorageService? _persistenceCore;
+    private readonly IStorageAdapter? _persistenceCore;
     private readonly string _hubPath;  // e.g., "graph/org1"
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
@@ -50,7 +50,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     internal MeshNodeTypeSource(
         IWorkspace workspace,
         object dataSource,
-        IStorageService? persistenceCore,
+        IStorageAdapter? persistenceCore,
         string hubPath,
         IObservable<MeshNode?>? ownNodeStream = null)
         : base(workspace, dataSource)
@@ -210,11 +210,11 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         var options = _workspace.Hub.JsonSerializerOptions;
         var saveOps = saves.Select(node =>
-            _persistenceCore.SaveNode(node, options)
-                .Select(_ =>
+            _persistenceCore.Write(node, options)
+                .Select(saved =>
                 {
                     _logger?.LogDebug("MeshNodeTypeSource: Saved {Path} (version={Version})",
-                        node.Path, node.Version);
+                        saved.Path, saved.Version);
                     return System.Reactive.Unit.Default;
                 })
                 .Catch<System.Reactive.Unit, Exception>(ex =>
@@ -225,10 +225,10 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 }));
 
         var deleteOps = deletes.Select(path =>
-            _persistenceCore.DeleteNode(path, recursive: false)
-                .Select(_ =>
+            _persistenceCore.Delete(path)
+                .Select(deleted =>
                 {
-                    _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", path);
+                    _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", deleted);
                     return System.Reactive.Unit.Default;
                 })
                 .Catch<System.Reactive.Unit, Exception>(ex =>
@@ -347,7 +347,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         if (_persistenceCore is not null)
         {
-            return _persistenceCore.GetNode(_hubPath, _workspace.Hub.JsonSerializerOptions)
+            return _persistenceCore.Read(_hubPath, _workspace.Hub.JsonSerializerOptions)
                 .Select(rawNode => BuildInstanceCollection(rawNode));
         }
 

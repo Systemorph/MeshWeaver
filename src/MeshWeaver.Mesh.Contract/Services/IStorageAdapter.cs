@@ -21,11 +21,11 @@ public interface IStorageAdapter
     /// <summary>Reads a node from storage. Emits the node (or null) and completes.</summary>
     IObservable<MeshNode?> Read(string path, JsonSerializerOptions options);
 
-    /// <summary>Writes a node to storage. Emits once and completes.</summary>
-    IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options);
+    /// <summary>Writes a node to storage and emits the written node.</summary>
+    IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options);
 
-    /// <summary>Deletes a node from storage. Emits once and completes.</summary>
-    IObservable<Unit> Delete(string path);
+    /// <summary>Deletes a node from storage and emits the deleted path.</summary>
+    IObservable<string> Delete(string path);
 
     /// <summary>
     /// Lists child paths under a parent path.

@@ -1,3 +1,4 @@
+using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
@@ -133,7 +134,7 @@ internal sealed class MirrorOperations
         {
             var path = queue.Dequeue();
             ct.ThrowIfCancellationRequested();
-            var (nodePaths, dirPaths) = await adapter.ListChildPathsAsync(path, ct).ConfigureAwait(false);
+            var (nodePaths, dirPaths) = await adapter.ListChildPaths(path).FirstAsync().ToTask(ct).ConfigureAwait(false);
             foreach (var nodePath in nodePaths)
             {
                 collected.Add(nodePath);

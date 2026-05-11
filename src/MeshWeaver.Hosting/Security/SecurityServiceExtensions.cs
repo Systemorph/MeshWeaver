@@ -18,10 +18,10 @@ public static class SecurityServiceExtensions
     /// <summary>
     /// Adds Row-Level Security services to the mesh.
     /// This includes:
-    /// - ISecurityService for permission evaluation (uses unsecured IStorageService directly)
+    /// - ISecurityService for permission evaluation (uses unsecured IStorageAdapter directly)
     /// - RlsNodeValidator for enforcing permissions on CRUD operations
     /// - AccessControlPipeline for checking RequiresPermissionAttribute on incoming messages
-    /// - PersistenceService handles secure query filtering via ISecurityService (implements IMeshStorage)
+    /// - PersistenceService handles secure query filtering via ISecurityService (implements IStorageAdapter)
     ///
     /// Storage structure:
     /// - Access/ - Global roles (Admin with null namespace) and custom role definitions

@@ -98,8 +98,8 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return Unit.Default; });
+    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return node; });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -113,8 +113,8 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
             cancellationToken: ct);
     }
 
-    public IObservable<Unit> Delete(string path)
-        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return Unit.Default; });
+    public IObservable<string> Delete(string path)
+        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return path; });
 
     private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {

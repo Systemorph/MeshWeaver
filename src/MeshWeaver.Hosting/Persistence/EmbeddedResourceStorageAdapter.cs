@@ -176,15 +176,15 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
+    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
             // Mutate the in-memory overlay only — embedded resources stay immutable.
             _writeOverlay[node.Path.Trim('/')] = node;
-            return Observable.Return(Unit.Default);
+            return Observable.Return(node);
         });
 
-    public IObservable<Unit> Delete(string path)
+    public IObservable<string> Delete(string path)
         => Observable.Defer(() =>
         {
             var normalized = path.Trim('/');
@@ -192,7 +192,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
             // entry stops resolving — this matches FileSystem adapter semantics where
             // a delete is observable as "no node at path".
             _writeOverlay[normalized] = null;
-            return Observable.Return(Unit.Default);
+            return Observable.Return(path);
         });
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)

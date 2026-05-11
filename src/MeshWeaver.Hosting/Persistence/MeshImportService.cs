@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Diagnostics;
 using System.Text.Json;
 using MeshWeaver.ContentCollections;
@@ -246,13 +248,13 @@ public class MeshImportService : IMeshImportService
         List<MeshNode> nodes,
         CancellationToken ct)
     {
-        var (nodePaths, directoryPaths) = await source.ListChildPathsAsync(parentPath, ct);
+        var (nodePaths, directoryPaths) = await source.ListChildPaths(parentPath).FirstAsync().ToTask(ct);
 
         foreach (var nodePath in nodePaths)
         {
             ct.ThrowIfCancellationRequested();
             var normalizedPath = nodePath.Replace('\\', '/');
-            var node = await source.ReadAsync(normalizedPath, jsonOptions, ct);
+            var node = await source.Read(normalizedPath, jsonOptions).FirstAsync().ToTask(ct);
             if (node != null)
                 nodes.Add(node);
 

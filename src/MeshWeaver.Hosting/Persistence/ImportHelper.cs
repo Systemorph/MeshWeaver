@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -38,7 +40,7 @@ public static class ImportHelper
         // Idempotency check
         if (!force)
         {
-            var (nodePaths, _) = await target.ListChildPathsAsync(null, ct);
+            var (nodePaths, _) = await target.ListChildPaths(null).FirstAsync().ToTask(ct);
             if (nodePaths.Any())
             {
                 logger.LogInformation("Target storage already contains data. Use force=true to re-import.");

@@ -173,7 +173,7 @@ public static class MeshExtensions
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
         var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
 
         if (catalog == null)
         {
@@ -220,7 +220,7 @@ public static class MeshExtensions
         //    then fall back to the in-memory config. persistence.GetNode is already
         //    IObservable so we don't need to wrap it in Observable.FromAsync.
         var existingObs = persistence != null
-            ? persistence.GetNode(node.Path)
+            ? persistence.Read(node.Path, hub.JsonSerializerOptions)
             : Observable.Return<MeshNode?>(null);
 
         existingObs
@@ -246,7 +246,7 @@ public static class MeshExtensions
                             Content = node.Content ?? existingNode.Content
                         };
                         var saveObs = persistence != null
-                            ? persistence.SaveNode(confirmedNode)
+                            ? persistence.Write(confirmedNode, hub.JsonSerializerOptions)
                             : Observable.Return(confirmedNode);
                         return saveObs.Select(savedConfirmed => (mode: "confirm", node: savedConfirmed));
                     }
@@ -357,7 +357,7 @@ public static class MeshExtensions
                                 logger.LogDebug("[CreateNode] step=save-start path={Path} persistence={HasPersistence}",
                                     enriched.Path, persistence != null);
                                 var saveObs = persistence != null
-                                    ? persistence.SaveNode(enriched)
+                                    ? persistence.Write(enriched, hub.JsonSerializerOptions)
                                         .Do(s => logger.LogDebug("[CreateNode] step=save-emit path={Path} version={Version}",
                                             s.Path, s.Version))
                                     : Observable.Return(enriched);
@@ -489,7 +489,7 @@ public static class MeshExtensions
     /// Central delete orchestrator. Four phases:
     /// <list type="number">
     /// <item><description><b>Collect.</b> Root + (recursive) descendants via
-    /// <see cref="IMeshStorage"/> (storage adapter — no workspace/type-source detour).</description></item>
+    /// <see cref="IStorageAdapter"/> (storage adapter — no workspace/type-source detour).</description></item>
     /// <item><description><b>Permission.</b> Check <see cref="Permission.Delete"/> for
     /// every path via <see cref="ISecurityService"/>. Any denial fails the whole op
     /// with the full list of denied paths in the <see cref="ActivityLog"/>.</description></item>
@@ -499,7 +499,7 @@ public static class MeshExtensions
     /// cross-hub validation can additionally post <see cref="ValidateDeleteRequest"/>
     /// — there's a default handler registered by <see cref="WithNodeOperationHandlers"/>
     /// on every hub that opts in.</description></item>
-    /// <item><description><b>Commit.</b> Bulk-delete via <see cref="IStorageService"/>
+    /// <item><description><b>Commit.</b> Bulk-delete via <see cref="IStorageAdapter"/>
     /// directly, bottom-up. Publish change events. Reply + DisposeRequest(s) from the
     /// mesh hub so FIFO guarantees the caller sees the Ok before the deleted hubs tear
     /// down.</description></item>
@@ -511,8 +511,8 @@ public static class MeshExtensions
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
         var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
-        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
-        var storage = hub.ServiceProvider.GetRequiredService<IStorageService>();
+        var persistence = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var securityService = hub.ServiceProvider.GetService<ISecurityService>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
@@ -773,7 +773,7 @@ public static class MeshExtensions
     /// <summary>
     /// Bottom-up traversal of the path set via <see cref="HierarchicalPathDeletion"/>.
     /// <para>
-    /// <b>Root path:</b> deleted via local <see cref="IStorageService.DeleteNode"/>
+    /// <b>Root path:</b> deleted via local <see cref="IStorageAdapter.Delete"/>
     /// — already validated by the calling handler before fan-out. This avoids
     /// self-recursion that would arise if we posted <see cref="DeleteNodeRequest"/>
     /// at our own address (the same handler would re-enter).
@@ -791,7 +791,7 @@ public static class MeshExtensions
     /// </summary>
     private static IObservable<IReadOnlyList<string>> FanOutDeleteSubtree(
         IMessageHub meshHub,
-        IStorageService storage,
+        IStorageAdapter storage,
         string rootPath,
         ImmutableHashSet<string> descendantPaths,
         DeleteNodeRequest baseRequest,
@@ -808,12 +808,8 @@ public static class MeshExtensions
                     // Root: delete locally via storage — already validated by the
                     // calling handler. Avoids re-entering this same handler via
                     // hub.Observe (which would cause an infinite request loop).
-                    logger.LogDebug("[DeleteNode] storage.DeleteNode (root) {Path}", path);
-                    return storage.DeleteNode(path, recursive: false)
-                        .IgnoreElements()
-                        .Select(_ => System.Reactive.Unit.Default)
-                        .Concat(Observable.Return(System.Reactive.Unit.Default))
-                        .Take(1);
+                    logger.LogDebug("[DeleteNode] storage.Delete (root) {Path}", path);
+                    return storage.Delete(path);
                 }
 
                 // Descendant: fan-out via per-node hub. The leaf hub re-enters
@@ -829,11 +825,11 @@ public static class MeshExtensions
                         {
                             if (resp.Log?.Messages is { Count: > 0 } msgs)
                                 lock (collectedMessages) collectedMessages.AddRange(msgs);
-                            return Observable.Return(System.Reactive.Unit.Default);
+                            return Observable.Return(path);
                         }
                         var failResp = delivery.Message as DeleteNodeResponse;
                         var reason = failResp?.Error ?? "Unknown error";
-                        return Observable.Throw<System.Reactive.Unit>(new InvalidOperationException(
+                        return Observable.Throw<string>(new InvalidOperationException(
                             $"Delete failed for '{path}': {reason}"));
                     });
             });
@@ -876,7 +872,7 @@ public static class MeshExtensions
 
     /// <summary>
     /// Default handler for <see cref="ValidateDeleteRequest"/>. Fetches the target node
-    /// (via <see cref="IMeshStorage"/>), runs the hub's registered
+    /// (via <see cref="IStorageAdapter"/>), runs the hub's registered
     /// <see cref="INodeValidator"/> chain for <see cref="NodeOperation.Delete"/>, and
     /// returns the first validator failure as an Error (empty Warnings in the default
     /// implementation — custom hubs can override this handler to emit Warnings).
@@ -886,11 +882,11 @@ public static class MeshExtensions
         IMessageDelivery<ValidateDeleteRequest> request)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
-        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+        var persistence = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
         var path = request.Message.Path;
 
-        var existingNodeObs = persistence.GetNode(path);
+        var existingNodeObs = persistence.Read(path, hub.JsonSerializerOptions);
 
         // Running validators against a fabricated DeleteNodeRequest keeps
         // RunDeletionValidatorsObs unchanged — every validator sees the same inputs it
@@ -977,7 +973,7 @@ public static class MeshExtensions
     /// an observable that emits no values and completes once all handlers have run.
     /// Failures from individual handlers are logged but never break the chain — they
     /// surface as <c>OnNext(false)</c> elements that the caller can ignore. Additional
-    /// nodes from each handler are persisted via <c>IMeshStorage</c> wrapped in
+    /// nodes from each handler are persisted via <c>IStorageAdapter</c> wrapped in
     /// <c>Observable.FromAsync</c>; no <c>await</c> in handler code itself.
     /// </summary>
     private static IObservable<System.Reactive.Unit> RunPostCreationHandlersObs(
@@ -989,7 +985,7 @@ public static class MeshExtensions
         if (string.IsNullOrEmpty(node.NodeType))
             return Observable.Empty<System.Reactive.Unit>();
 
-        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>()
             .Where(h => h.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -1029,7 +1025,7 @@ public static class MeshExtensions
                     return handleObs;
 
                 var saveExtras = additional
-                    .Select(extra => persistence.SaveNode(extra with { State = MeshNodeState.Active })
+                    .Select(extra => persistence.Write(extra with { State = MeshNodeState.Active }, hub.JsonSerializerOptions)
                         .Do(saved =>
                         {
                             hub.Post(DataChangeRequest.Update([saved]),
@@ -1404,11 +1400,11 @@ public static class MeshExtensions
                     // (caught by VersionQuery_GetVersionBeforeAsync_FindsPreChangeState
                     // — the second of two back-to-back UpdateNodes occasionally
                     // returned Success before its WriteVersion file landed on disk).
-                    var updatePersistence = hub.ServiceProvider.GetService<IMeshStorage>();
+                    var updatePersistence = hub.ServiceProvider.GetService<IStorageAdapter>();
                     var updateChangeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
                     if (updatePersistence != null)
                     {
-                        updatePersistence.SaveNode(nodeToSave)
+                        updatePersistence.Write(nodeToSave, hub.JsonSerializerOptions)
                             .Subscribe(
                                 saved =>
                                 {

@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 ﻿using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -171,14 +173,14 @@ public class StorageImporter
         Action<int, int, string>? onProgress,
         CancellationToken ct)
     {
-        var (nodePaths, directoryPaths) = await _source.ListChildPathsAsync(parentPath, ct);
+        var (nodePaths, directoryPaths) = await _source.ListChildPaths(parentPath).FirstAsync().ToTask(ct);
 
         foreach (var nodePath in nodePaths)
         {
             MeshWeaver.Mesh.MeshNode? node = null;
             try
             {
-                node = await _source.ReadAsync(nodePath, options, ct);
+                node = await _source.Read(nodePath, options).FirstAsync().ToTask(ct);
             }
             catch (Exception ex)
             {
@@ -198,7 +200,7 @@ public class StorageImporter
 
                 try
                 {
-                    await _target.WriteAsync(node, options, ct);
+                    await _target.Write(node, options).FirstAsync().ToTask(ct);
                 }
                 catch (Exception ex)
                 {
@@ -214,7 +216,7 @@ public class StorageImporter
 
                 if (importPartitions)
                 {
-                    var subPaths = await _source.ListPartitionSubPathsAsync(nodePath, ct);
+                    var subPaths = await _source.ListPartitionSubPaths(nodePath).FirstAsync().ToTask(ct);
 
                     // Determine which partition sub-paths also appear as child directories;
                     // those will be traversed recursively as child directories, so skip
@@ -222,7 +224,7 @@ public class StorageImporter
                     HashSet<string>? childDirNames = null;
                     if (subPaths.Any())
                     {
-                        var (childNodePaths, childDirPaths) = await _source.ListChildPathsAsync(nodePath, ct);
+                        var (childNodePaths, childDirPaths) = await _source.ListChildPaths(nodePath).FirstAsync().ToTask(ct);
                         childDirNames = new HashSet<string>(
                             childNodePaths.Concat(childDirPaths).Select(cd => cd[(cd.LastIndexOf('/') + 1)..]),
                             StringComparer.OrdinalIgnoreCase);
@@ -236,14 +238,14 @@ public class StorageImporter
                         try
                         {
                             var objects = new List<object>();
-                            await foreach (var obj in _source.GetPartitionObjectsAsync(nodePath, subPath, options, ct))
+                            await foreach (var obj in _source.GetPartitionObjects(nodePath, subPath, options).ToAsyncEnumerable().WithCancellation(ct))
                             {
                                 objects.Add(obj);
                             }
 
                             if (objects.Count > 0)
                             {
-                                await _target.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
+                                await _target.SavePartitionObjects(nodePath, subPath, objects, options).FirstAsync().ToTask(ct);
                                 _partitionCount++;
                                 _logger?.LogDebug("Imported partition {NodePath}/{SubPath} ({Count} objects)",
                                     nodePath, subPath, objects.Count);
@@ -274,8 +276,8 @@ public class StorageImporter
 
     private async Task RemoveMissingNodesAsync(string? parentPath, JsonSerializerOptions options, CancellationToken ct)
     {
-        var (targetNodePaths, targetDirPaths) = await _target.ListChildPathsAsync(parentPath, ct);
-        var (sourceNodePaths, sourceDirPaths) = await _source.ListChildPathsAsync(parentPath, ct);
+        var (targetNodePaths, targetDirPaths) = await _target.ListChildPaths(parentPath).FirstAsync().ToTask(ct);
+        var (sourceNodePaths, sourceDirPaths) = await _source.ListChildPaths(parentPath).FirstAsync().ToTask(ct);
         var sourceNodeSet = new HashSet<string>(sourceNodePaths, StringComparer.OrdinalIgnoreCase);
         var sourceDirSet = new HashSet<string>(sourceDirPaths, StringComparer.OrdinalIgnoreCase);
 
@@ -285,8 +287,8 @@ public class StorageImporter
             {
                 try
                 {
-                    await _target.DeleteAsync(nodePath, ct);
-                    await _target.DeletePartitionObjectsAsync(nodePath, ct: ct);
+                    await _target.Delete(nodePath).FirstAsync().ToTask(ct);
+                    await _target.DeletePartitionObjects(nodePath).FirstAsync().ToTask(ct);
                     _nodesRemoved++;
                     _logger?.LogInformation("Removed missing node {Path}", nodePath);
                 }

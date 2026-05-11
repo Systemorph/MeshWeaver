@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// </summary>
 internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
 {
-    private readonly IStorageService persistence;
+    private readonly IStorageAdapter persistence;
     private readonly AccessService? accessService;
     private readonly IDataChangeNotifier? changeNotifier;
     private readonly MeshConfiguration? meshConfiguration;
@@ -57,7 +57,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
     private readonly HashSet<string> _excludedNamespaces;
 
     public MeshQueryEngine(
-        IStorageService persistence,
+        IStorageAdapter persistence,
         // 🚨 NO ISecurityService here — that parameter created the Autofac
         // cycle SecurityService → SyncedQueryMeshNodes → IMeshQueryCore →
         // MeshQueryEngine → SecurityService. Per-node read filtering on the
@@ -356,7 +356,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         // here at the IMeshQuery boundary (sanctioned per AsynchronousCalls.md).
         foreach (var searchPath in pathsToSearch)
         {
-            var node = await persistence.GetNodeSecure(searchPath, userId, options).FirstAsync().ToTask(ct);
+            var node = await persistence.Read(searchPath, options).FirstAsync().ToTask(ct);
             if (node != null && _evaluator.Matches(node, parsedQuery)
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
@@ -554,7 +554,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         {
             if (!string.IsNullOrEmpty(normalizedPath))
             {
-                var rootNode = await persistence.GetNodeSecure(normalizedPath, userId, options).FirstAsync().ToTask(ct);
+                var rootNode = await persistence.Read(normalizedPath, options).FirstAsync().ToTask(ct);
                 if (rootNode != null)
                     yield return rootNode;
             }
@@ -697,7 +697,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
     public async Task<T?> SelectAsync<T>(string path, string property, JsonSerializerOptions options, CancellationToken ct = default)
     {
         // SelectAsync<T> contract is Task by design; bridge once at the call site.
-        var node = await persistence.GetNode(path, options).FirstAsync().ToTask(ct);
+        var node = await persistence.Read(path, options).FirstAsync().ToTask(ct);
         if (node == null)
             return default;
 

@@ -1,3 +1,4 @@
+using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -110,13 +111,13 @@ public class MeshExportService : IMeshExportService
                 var storageAdapter = _hub.ServiceProvider.GetService<IStorageAdapter>();
                 if (storageAdapter != null)
                 {
-                    var subPaths = await storageAdapter.ListPartitionSubPathsAsync(node.Path, ct);
+                    var subPaths = await storageAdapter.ListPartitionSubPaths(node.Path).FirstAsync().ToTask(ct);
                     foreach (var subPath in subPaths)
                     {
                         try
                         {
                             var objects = new List<object>();
-                            await foreach (var obj in storageAdapter.GetPartitionObjectsAsync(node.Path, subPath, jsonOptions, ct))
+                            await foreach (var obj in storageAdapter.GetPartitionObjects(node.Path, subPath, jsonOptions).ToAsyncEnumerable().WithCancellation(ct))
                                 objects.Add(obj);
 
                             if (objects.Count > 0)

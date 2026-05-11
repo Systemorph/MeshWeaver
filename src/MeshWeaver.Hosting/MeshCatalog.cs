@@ -18,21 +18,21 @@ using System.Runtime.CompilerServices;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Mesh catalog implementation that uses IMeshStorage for storage.
+/// Mesh catalog implementation that uses IStorageAdapter for storage.
 /// Configure with AddFileSystemPersistence() for file-backed storage
 /// or AddInMemoryPersistence() for transient storage.
 /// </summary>
 internal sealed class MeshCatalog(
     IMessageHub hub,
     MeshConfiguration configuration,
-    IMeshStorage persistenceService,
+    IStorageAdapter persistenceService,
     IEnumerable<IMeshQueryProvider> queryProviders,
     IEnumerable<IStaticNodeProvider> staticNodeProviders,
     ILogger<MeshCatalog>? logger = null)
     : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; } = configuration;
-    internal IMeshStorage Persistence { get; } = persistenceService;
+    internal IStorageAdapter Persistence { get; } = persistenceService;
     internal Address MeshAddress => hub.Address;
     private readonly Lazy<IMessageHub> _persistenceHub = new(() => hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!);
     private IMessageHub PersistenceHub => _persistenceHub.Value;
@@ -58,7 +58,7 @@ internal sealed class MeshCatalog(
             return Observable.Return<MeshNode?>(node);
         }
 
-        return Persistence.GetNode(addressKey)
+        return Persistence.Read(addressKey, hub.JsonSerializerOptions)
             .Select(persistenceNode =>
                 persistenceNode ?? staticNodeProviders
                     .SelectMany(p => p.GetStaticNodes())
@@ -107,7 +107,7 @@ internal sealed class MeshCatalog(
             : Observable.Return(transientNode);
 
         return resolvedObs
-            .SelectMany(resolved => Persistence.SaveNode(resolved))
+            .SelectMany(resolved => Persistence.Write(resolved, hub.JsonSerializerOptions))
             .Do(saved => logger?.LogInformation("Created transient node at path {Path}", saved.Path));
     }
 
@@ -147,7 +147,7 @@ internal sealed class MeshCatalog(
     /// <summary>
     /// IPathResolver implementation — direct observable composition (no Task bridge).
     /// The path-resolution layer is one of two sanctioned places that touch persistence
-    /// directly (the other is IMeshStorage itself); see
+    /// directly (the other is IStorageAdapter itself); see
     /// Doc/Architecture/CqrsAndContentAccess.md.
     /// </summary>
     public IObservable<AddressResolution?> ResolvePath(string path)
@@ -161,7 +161,7 @@ internal sealed class MeshCatalog(
     /// <summary>
     /// Resolves a path reactively. The chain stays in observable composition all the way
     /// down to the leaves; <c>Observable.FromAsync</c> bridges only the actual DB hits
-    /// (<see cref="IMeshStorage.FindBestPrefixMatchAsync"/>, <c>GetNodeAsync</c>,
+    /// (<see cref="IStorageAdapter.FindBestPrefixMatchAsync"/>, <c>GetNodeAsync</c>,
     /// <c>GetChildrenAsync</c>) — that's the one place we hit the database. Per
     /// <c>Doc/Architecture/CqrsAndContentAccess.md</c>, the path-resolution layer is
     /// one of two sanctioned places that touch persistence directly.
@@ -208,7 +208,7 @@ internal sealed class MeshCatalog(
         var fullPath = string.Join("/", segments);
 
         // Step 1: prefix-match query at the DB layer. IObservable end-to-end.
-        return Persistence.FindBestPrefixMatch(fullPath)
+        return Persistence.FindBestPrefixMatch(fullPath, hub.JsonSerializerOptions)
             .SelectMany(prefix =>
             {
                 if (prefix.Item1 != null)
@@ -268,7 +268,7 @@ internal sealed class MeshCatalog(
             var d = depth;
             var testPath = string.Join("/", segments.Take(d));
             // ⬇ Native IObservable surface — no FromAsync bridging needed.
-            probes.Add(Persistence.GetNode(testPath)
+            probes.Add(Persistence.Read(testPath, hub.JsonSerializerOptions)
                 .Select(n => ((MeshNode?)n, d)));
         }
         return Observable.Concat(probes)

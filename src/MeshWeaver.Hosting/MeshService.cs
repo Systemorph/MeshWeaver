@@ -114,7 +114,7 @@ internal sealed class MeshService(
 
     public IObservable<MeshNode> CreateTransient(MeshNode node)
     {
-        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence == null)
             return CreateNode(node);
 
@@ -122,11 +122,11 @@ internal sealed class MeshService(
         // sets a transient MeshNode into the mesh. The request handler path for
         // `CreateNodeRequest` would force the node to `Active`; we deliberately want
         // a node in `Transient` state to register it without a permanent commit, so we
-        // write straight through `IMeshStorage`. This is the *only* IMeshService
+        // write straight through `IStorageAdapter`. This is the *only* IMeshService
         // method allowed to bypass the hub-message pipeline — every other CRUD method
         // routes through `Post + RegisterCallback` and never touches persistence.
         var transientNode = node with { State = MeshNodeState.Transient };
-        return persistence.SaveNode(transientNode);
+        return persistence.Write(transientNode, hub.JsonSerializerOptions);
     }
 
     public IObservable<MeshNode> CopyNode(string sourcePath, string targetPath,
