@@ -876,6 +876,39 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                     return Disposable.Empty;
                 });
 
+            // Race-fix: subscribe to changeNotifier BEFORE running the initial query so
+            // that any NotifyChange events fired during the initial query's I/O window
+            // are captured. Otherwise the events fire before the subscription is set
+            // up and are silently lost (the DataChangeNotifier is a plain Subject<> with
+            // no buffering). Symptom of the bug: synced query consumers (GetTokensForUser,
+            // WaitForPermissionAsync) never see writes that complete during their first
+            // Initial query — first emission has the stale snapshot and the live change
+            // stream never replays the missed event.
+            //
+            // Approach: accumulate early notifications in a synchronized List until the
+            // initial query completes. Inside the initialResults callback, swap to the
+            // live Buffer pipeline AND drain the backlog as one synthetic batch.
+            var earlyBacklog = new List<DataChangeNotification>();
+            var earlyLock = new object();
+            var initialDone = false;
+
+            IDisposable? earlySubscription = null;
+            if (changeNotifier != null)
+            {
+                earlySubscription = changeNotifier
+                    .Where(n => scopeFilters.Any(sf =>
+                        PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
+                    .Subscribe(n =>
+                    {
+                        lock (earlyLock)
+                        {
+                            if (!initialDone)
+                                earlyBacklog.Add(n);
+                        }
+                    });
+                disposables.Add(earlySubscription);
+            }
+
             disposables.Add(
                 RunQuery(cts.Token).Subscribe(
                     initialResults =>
@@ -888,11 +921,20 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                                 currentItems[path] = item;
                         }
 
-                        // Wire up change subscriptions BEFORE emitting Initial so that
+                        // Wire up the LIVE change pipeline before emitting Initial so that
                         // any node mutation triggered by a subscriber reacting to Initial
                         // is guaranteed to be captured by the changeBuffer.
+                        //
+                        // Ordering matters: set up the LIVE subscription FIRST so no event
+                        // can fire after "initialDone = true" but before there's any
+                        // downstream subscriber. Events fired between live-set-up and
+                        // backlog-swap may be captured BOTH by the live Buffer pipeline AND
+                        // by the early subscription — ProcessBatch is idempotent against
+                        // currentItems, so duplicate-processing is wasted CPU but correct.
+                        DataChangeNotification[] backlog = Array.Empty<DataChangeNotification>();
                         if (changeNotifier != null)
                         {
+                            // 1) Set up live subscription first — starts buffering immediately.
                             var changeBuffer = new Subject<DataChangeNotification>();
                             disposables.Add(changeBuffer);
                             disposables.Add(
@@ -909,6 +951,18 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                                             RunQuery(cts.Token).Subscribe(
                                                 newResults => ProcessBatch(batch, newResults, currentItems, parsedQuery, observer),
                                                 ex => observer.OnError(ex)))));
+
+                            // 2) Snapshot + clear early backlog under lock; gate further early-capture.
+                            lock (earlyLock)
+                            {
+                                backlog = earlyBacklog.ToArray();
+                                earlyBacklog.Clear();
+                                initialDone = true;
+                            }
+
+                            // 3) Early subscription is now redundant — live pipeline carries
+                            //    all subsequent events. Dispose to free the upstream sub.
+                            earlySubscription?.Dispose();
                         }
 
                         observer.OnNext(new QueryResultChange<T>
@@ -919,6 +973,17 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                             Version = Interlocked.Increment(ref _version),
                             Timestamp = DateTimeOffset.UtcNow,
                         });
+
+                        // Drain the early backlog as one immediate batch — these events
+                        // fired DURING the initial query window, so we need to re-query
+                        // and apply diffs against the just-populated currentItems.
+                        if (backlog.Length > 0)
+                        {
+                            disposables.Add(
+                                RunQuery(cts.Token).Subscribe(
+                                    newResults => ProcessBatch(backlog.ToList(), newResults, currentItems, parsedQuery, observer),
+                                    ex => observer.OnError(ex)));
+                        }
 
                         if (changeNotifier == null)
                             observer.OnCompleted();
