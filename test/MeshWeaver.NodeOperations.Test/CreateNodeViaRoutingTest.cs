@@ -41,26 +41,13 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
 
     /// <summary>
     /// SecurityService's synced query over AccessAssignment satellites populates
-    /// asynchronously. After creating an AccessAssignment, polling until
-    /// HasPermissionAsync reports the granted permission absorbs the
-    /// index-propagation race that flakes the impersonation tests on slow CI.
+    /// asynchronously. After creating an AccessAssignment, subscribing to the
+    /// live <c>GetEffectivePermissions</c> stream and using
+    /// <c>.Where(p => p.HasFlag(permission))</c> deterministically absorbs the
+    /// index-propagation race — no polling, no Task.Delay.
     /// </summary>
-    private async Task WaitForPermissionAsync(string path, string objectId, Permission permission)
-    {
-        // Polling: fresh HasPermissionAsync each tick. The stream.Where
-        // variant on GetEffectivePermissions regressed the broader CI suite
-        // (AI.Test shared-mesh tests started flaking after the change),
-        // and locally the synced AccessAssignment query never re-emitted
-        // with the required permission within 60s anyway. Polling at 200ms
-        // intervals with a 40s deadline matches the 99.4%-green baseline.
-        var deadline = DateTime.UtcNow.AddSeconds(40);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await Mesh.HasPermissionAsync(path, objectId, permission, TestTimeout))
-                return;
-            await Task.Delay(200, TestTimeout);
-        }
-    }
+    private Task WaitForPermissionAsync(string path, string objectId, Permission permission)
+        => Mesh.WaitForPermissionAsync(path, objectId, permission, TestTimeout);
 
     /// <summary>
     /// Creates a new MeshNode with valid content via CreateNodeRequest.
