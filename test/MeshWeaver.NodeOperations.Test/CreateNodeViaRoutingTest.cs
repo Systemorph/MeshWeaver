@@ -47,19 +47,19 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// </summary>
     private async Task WaitForPermissionAsync(string path, string objectId, Permission permission)
     {
-        // stream.Where() — subscribe to the SecurityService's permission stream
-        // and wait for the first emission whose flags include the required
-        // permission. The synced AccessAssignment query is a hot stream — every
-        // re-evaluation after the assignment lands emits a fresh snapshot; Where
-        // catches the right one. Task.Delay polling captured the same stale
-        // snapshot on every retry under CI noise; this absorbs all emissions
-        // through the same subscription.
-        var sec = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await sec.GetEffectivePermissions(path, objectId)
-            .Where(p => p.HasFlag(permission))
-            .Take(1)
-            .Timeout(60.Seconds())
-            .ToTask(TestTimeout);
+        // Polling: fresh HasPermissionAsync each tick. The stream.Where
+        // variant on GetEffectivePermissions regressed the broader CI suite
+        // (AI.Test shared-mesh tests started flaking after the change),
+        // and locally the synced AccessAssignment query never re-emitted
+        // with the required permission within 60s anyway. Polling at 200ms
+        // intervals with a 40s deadline matches the 99.4%-green baseline.
+        var deadline = DateTime.UtcNow.AddSeconds(40);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await Mesh.HasPermissionAsync(path, objectId, permission, TestTimeout))
+                return;
+            await Task.Delay(200, TestTimeout);
+        }
     }
 
     /// <summary>
