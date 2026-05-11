@@ -851,13 +851,12 @@ public static class ThreadExecution
                             status);
                     }
                 };
-                // Don't subscribe ForwardToolCall to add to toolCallLog: the streaming
-                // FunctionCallContent branch below already adds an entry for every tool
-                // call, and FunctionInvokingChatClient yields FCC outward. Subscribing
-                // here as well would add a SECOND entry per invocation — the
-                // FunctionResultContent handler only replaces the first match by name,
-                // leaving the second as a permanent "pending" entry (the "dropped tool
-                // call" user-visible symptom).
+                // FunctionInvokingChatClient consumes FCC internally for actual invocation
+                // (see ChatClientAgentFactory.cs:173); the middleware ForwardToolCall is
+                // the canonical "tool call started" signal. The streaming-side FCC branch
+                // below dedupes against entries added here to avoid the duplicate-entry
+                // / orphan-pending bug the user reported.
+                client.ForwardToolCall = entry => { toolCallLog = toolCallLog.Add(entry); };
 
                 var agentDisplayName = request.AgentName ?? "Agent";
 
@@ -963,18 +962,13 @@ public static class ThreadExecution
                         pendingCalls = pendingCalls.SetItem(callKey, functionCall);
                         lastCallKey = callKey;
 
-                        // Add pending tool call to local log — will be pushed on next throttled update
-                        // Skip if we already have an entry for this callKey (re-emitted content)
-                        if (!isDuplicate)
-                        {
-                            toolCallLog = toolCallLog.Add(new ToolCallEntry
-                            {
-                                Name = functionCall.Name,
-                                DisplayName = formatted,
-                                Arguments = argsDetail,
-                                Timestamp = DateTime.UtcNow
-                            });
-                        }
+                        // The FunctionInvokingChatClient middleware (ChatClientAgentFactory.cs:178)
+                        // already added a toolCallLog entry when it invoked the tool — that's the
+                        // canonical "started" signal. Skip the streaming-side add to avoid leaving
+                        // an orphan pending entry (the FRC handler only replaces the first match
+                        // by name, so the duplicate stays as a permanent "loading" tool call).
+                        // pendingCalls is still populated above so the FRC branch can locate the
+                        // FunctionCallContent (for Arguments + DelegationPath extraction).
                     }
                     else if (content is UsageContent usage)
                     {
