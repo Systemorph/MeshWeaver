@@ -155,23 +155,9 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         // Scan EVERY query's basePath for Activity satellite nodes and union their
         // MainNode paths so multi-query unions don't filter queries #2+ against
         // query #0's subtree only.
-        if (parsedQuery.Source == QuerySource.Activity && matched.Count > 0)
-        {
-            var activityMainPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var bp in basePaths)
-            {
-                await foreach (var actNode in persistence.GetAllDescendantsAsync(bp, options)
-                    .WithCancellation(ct))
-                {
-                    if (actNode.NodeType == ActivityNodeType.NodeType
-                        && !string.IsNullOrEmpty(actNode.MainNode))
-                        activityMainPaths.Add(actNode.MainNode);
-                }
-            }
-            matched = matched
-                .Where(n => n is MeshNode mn && activityMainPaths.Contains(mn.Path ?? ""))
-                .ToList();
-        }
+        // `source:activity` filtering: previously walked persistence descendants.
+        // Now handled by the pedestrian query provider (SimpleMeshNodeStorageQueryProvider)
+        // or by Postgres SQL-side JOIN — the engine knows nothing about how it's done.
 
         // Apply sort
         IEnumerable<object> sorted = matched;
@@ -228,23 +214,9 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         var (matched, parsedQuery, basePaths) = await CollectMatchedAsync(
             request, options, useSecurityFilter: false, ct);
 
-        if (parsedQuery.Source == QuerySource.Activity && matched.Count > 0)
-        {
-            var activityMainPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var bp in basePaths)
-            {
-                await foreach (var actNode in persistence.GetAllDescendantsAsync(bp, options)
-                    .WithCancellation(ct))
-                {
-                    if (actNode.NodeType == ActivityNodeType.NodeType
-                        && !string.IsNullOrEmpty(actNode.MainNode))
-                        activityMainPaths.Add(actNode.MainNode);
-                }
-            }
-            matched = matched
-                .Where(n => n is MeshNode mn && activityMainPaths.Contains(mn.Path ?? ""))
-                .ToList();
-        }
+        // `source:activity` activity-MainNode filter via persistence loop deleted —
+        // see comment in QueryAsync above. Backend providers do this themselves
+        // (Postgres satellite-table join; FS scans the _Activity satellite tree).
 
         IEnumerable<object> sorted = matched;
         if (parsedQuery.OrderBy != null)
@@ -394,70 +366,13 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
             }
         }
 
-        // Children scope
-        // When the query has conditions (e.g., nodeType:Thread), include satellite children.
-        if (effectiveScope == QueryScope.Children)
-        {
-            var source = parsedQuery.HasConditions
-                ? persistence.GetAllChildrenAsync(basePath, options)
-                : ObservableTopNExtensions.ToAsyncEnumerableSequence(
-                    persistence.GetChildrenSecure(basePath, userId, options), ct);
-
-            await foreach (var child in source.WithCancellation(ct))
-            {
-                if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context)
-                    && !IsExcludedByIsMain(child, parsedQuery))
-                    yield return child;
-            }
-        }
-
-        // Ancestor children (AncestorsAndSelf, Hierarchy — NOT plain Ancestors which only returns exact ancestor nodes)
-        if (effectiveScope == QueryScope.AncestorsAndSelf
-            || effectiveScope == QueryScope.Hierarchy)
-        {
-            var pathsToSearchChildren = effectiveScope == QueryScope.Ancestors
-                ? GetPathsForScope(basePath, QueryScope.Ancestors)
-                : GetPathsForScope(basePath, QueryScope.AncestorsAndSelf);
-
-            foreach (var ancestorPath in pathsToSearchChildren)
-            {
-                await foreach (var child in ObservableTopNExtensions.ToAsyncEnumerableSequence(
-                    persistence.GetChildrenSecure(ancestorPath, userId, options), ct))
-                {
-                    if (_evaluator.Matches(child, parsedQuery)
-                        && !IsExcludedByContext(child, context)
-                        && !IsExcludedByIsMain(child, parsedQuery))
-                        yield return child;
-                }
-            }
-        }
-
-        // Descendants scope
-        // When the query has conditions (e.g., nodeType:Thread), use GetAllDescendantsAsync
-        // to include satellite nodes. Also use GetAllDescendantsAsync when the base path
-        // itself is within a satellite partition (e.g., querying subtree of a comment node).
-        // Otherwise use GetDescendantsSecure (excludes satellites from general browsing).
-        if (effectiveScope == QueryScope.Descendants
-            || effectiveScope == QueryScope.Hierarchy
-            || effectiveScope == QueryScope.Subtree)
-        {
-            var includeSatellites = parsedQuery.HasConditions || IsSatellitePath(basePath);
-            var source = includeSatellites
-                ? persistence.GetAllDescendantsAsync(basePath, options)
-                : ObservableTopNExtensions.ToAsyncEnumerableSequence(
-                    persistence.GetDescendantsSecure(basePath, userId, options), ct);
-
-            await foreach (var descendant in source.WithCancellation(ct))
-            {
-                if (_evaluator.Matches(descendant, parsedQuery)
-                    && !IsExcludedByContext(descendant, context)
-                    && !IsExcludedByIsMain(descendant, parsedQuery))
-                {
-                    if (!string.IsNullOrEmpty(descendant.Path)) emittedPaths.Add(descendant.Path);
-                    yield return descendant;
-                }
-            }
-        }
+        // Children / Descendants / Hierarchy / Subtree scopes are NOT handled here.
+        // 🚨 The engine itself knows nothing about descendant walks — that's the
+        // pedestrian-backend's job (in-memory / file-system / embedded resources)
+        // via `SimpleMeshNodeStorage` + its dedicated `IMeshQueryProvider`.
+        // Postgres handles these scopes via SQL pushdown in `PostgreSqlMeshQuery`.
+        // What this engine still serves: static-node fold-in (below) + Exact-path
+        // probes (above).
 
         // Static nodes — same path/scope/context filtering as persistence
         // results, with path-keyed dedup so backends that include static
@@ -632,8 +547,9 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
 
         var suggestions = new List<QuerySuggestion>();
 
-        // Search the root node itself + descendants for matching nodes (with security filtering)
-        // The root node (e.g., "ACME") is not a descendant of itself, so check it explicitly.
+        // Autocomplete on this engine: root-node exact match only. Descendant
+        // walks happen in the per-backend IMeshQueryProvider (pedestrian via
+        // SimpleMeshNodeStorageQueryProvider; Postgres via its own pushdown).
         async IAsyncEnumerable<MeshNode> GetNodesForAutocomplete()
         {
             if (!string.IsNullOrEmpty(normalizedPath))
@@ -642,9 +558,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 if (rootNode != null)
                     yield return rootNode;
             }
-            await foreach (var node in ObservableTopNExtensions.ToAsyncEnumerableSequence(
-                persistence.GetDescendantsSecure(normalizedPath, userId, options), ct))
-                yield return node;
+            await Task.CompletedTask;
         }
 
         await foreach (var node in GetNodesForAutocomplete())

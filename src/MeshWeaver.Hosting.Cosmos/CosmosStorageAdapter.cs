@@ -1,4 +1,5 @@
-using System.Runtime.CompilerServices;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Text.Json;
 using Microsoft.Azure.Cosmos;
 using MeshWeaver.Mesh;
@@ -69,7 +70,10 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 
-    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+
+    private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(path);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -94,7 +98,10 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return Unit.Default; });
+
+    private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
         // Ensure namespace is never null — Cosmos partition key /namespace requires the field to be present
         var nodeToWrite = node.Namespace is null ? node with { Namespace = "" } : node;
@@ -106,7 +113,10 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
             cancellationToken: ct);
     }
 
-    public async Task DeleteAsync(string path, CancellationToken ct = default)
+    public IObservable<Unit> Delete(string path)
+        => Observable.FromAsync(async ct => { await DeleteAsyncCore(path, ct); return Unit.Default; });
+
+    private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
         var normalizedPath = NormalizePath(path);
         if (string.IsNullOrEmpty(normalizedPath))
@@ -130,9 +140,11 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
-        string? parentPath,
-        CancellationToken ct = default)
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => Observable.FromAsync(ct => ListChildPathsAsyncCore(parentPath, ct));
+
+    private async Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsyncCore(
+        string? parentPath, CancellationToken ct)
     {
         var normalizedParent = NormalizePath(parentPath);
         var depth = string.IsNullOrEmpty(normalizedParent)
@@ -164,7 +176,10 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         return (paths, Enumerable.Empty<string>());
     }
 
-    public async Task<bool> ExistsAsync(string path, CancellationToken ct = default)
+    public IObservable<bool> Exists(string path)
+        => Observable.FromAsync(ct => ExistsAsyncCore(path, ct));
+
+    private async Task<bool> ExistsAsyncCore(string path, CancellationToken ct)
     {
         var node = await ReadAsync(path, new JsonSerializerOptions(), ct);
         return node != null;
@@ -172,11 +187,18 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
 
     #region Partition Storage
 
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
-        string nodePath,
-        string? subPath,
-        JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
+    public IObservable<object> GetPartitionObjects(
+        string nodePath, string? subPath, JsonSerializerOptions options)
+        => Observable.Create<object>(async (observer, ct) =>
+        {
+            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+                observer.OnNext(obj);
+            observer.OnCompleted();
+        });
+
+    private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
+        string nodePath, string? subPath, JsonSerializerOptions options,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
@@ -197,7 +219,12 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public async Task SavePartitionObjectsAsync(
+    public IObservable<Unit> SavePartitionObjects(
+        string nodePath, string? subPath,
+        IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct => { await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct); return Unit.Default; });
+
+    private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
@@ -229,7 +256,10 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public async Task DeletePartitionObjectsAsync(
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => Observable.FromAsync(async ct => { await DeletePartitionObjectsAsyncCore(nodePath, subPath, ct); return Unit.Default; });
+
+    private async Task DeletePartitionObjectsAsyncCore(
         string nodePath,
         string? subPath = null,
         CancellationToken ct = default)
@@ -263,7 +293,10 @@ public class CosmosStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
-    public async Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => Observable.FromAsync(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct));
+
+    private async Task<DateTimeOffset?> GetPartitionMaxTimestampAsyncCore(
         string nodePath,
         string? subPath = null,
         CancellationToken ct = default)

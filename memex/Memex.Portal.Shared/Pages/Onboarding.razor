@@ -7,6 +7,7 @@
 @using MeshWeaver.Messaging
 @using MeshWeaver.Hosting.Blazor
 @using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Logging
 @using System.Reactive.Linq
 @inject AccessService AccessService
 @inject IMeshService NodeFactory
@@ -14,6 +15,7 @@
 @inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
 @inject CircuitAccessHandler CircuitAccessHandler
+@inject ILogger<Onboarding> Logger
 
 <PageTitle>Complete Your Profile - Memex Portal</PageTitle>
 
@@ -241,6 +243,12 @@ else
                 // (namespace = "{username}/_Access") and grants Admin on the
                 // user's whole partition. Without this, ApiToken creation,
                 // settings writes, etc. all fail with "Create permission required".
+                //
+                // Awaited rather than fire-and-forget: a silent failure here
+                // leaves the user able to sign in but unable to write anything,
+                // which surfaces only later as "Create permission required" on
+                // first content write. Surface the error here so onboarding
+                // either succeeds end-to-end or shows the user what went wrong.
                 var selfAssignment = new MeshNode($"{username}_Access", $"{username}/_Access")
                 {
                     NodeType = "AccessAssignment",
@@ -253,12 +261,26 @@ else
                         Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
                     }
                 };
-                NodeFactory.CreateNode(selfAssignment).Subscribe();
+                try
+                {
+                    await NodeFactory.CreateNode(selfAssignment);
+                }
+                catch (Exception aaEx)
+                {
+                    Logger.LogError(aaEx,
+                        "Onboarding: failed to create self-AccessAssignment for {Username} at {Namespace}",
+                        username, $"{username}/_Access");
+                    errorMessage =
+                        $"Profile created but failed to grant access on your own partition: {aaEx.Message}. " +
+                        "You will see 'Create permission required' on writes until this is fixed.";
+                    return;
+                }
 
                 // First user becomes global Admin — write the AccessAssignment node
                 // directly via IMeshService.CreateNode (replaces the obsolete
-                // ISecurityService.AddUserRoleAsync). Subscribe + fire-and-forget; the
-                // navigation below reloads the circuit so the new role is picked up.
+                // ISecurityService.AddUserRoleAsync). Awaited and logged: a silent
+                // failure here would leave the platform with no admins at all,
+                // which is not recoverable from the UI side without manual SQL.
                 if (isFirstUser)
                 {
                     var assignmentNode = new MeshNode($"{username}_Access", "Admin/_Access")
@@ -273,7 +295,20 @@ else
                             Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = false }]
                         }
                     };
-                    NodeFactory.CreateNode(assignmentNode).Subscribe();
+                    try
+                    {
+                        await NodeFactory.CreateNode(assignmentNode);
+                    }
+                    catch (Exception adminEx)
+                    {
+                        Logger.LogError(adminEx,
+                            "Onboarding: failed to grant first-user global Admin to {Username}",
+                            username);
+                        errorMessage =
+                            $"Profile created but failed to grant global admin (first user): {adminEx.Message}. " +
+                            "Platform has no admin yet — fix manually before proceeding.";
+                        return;
+                    }
                 }
             }
 

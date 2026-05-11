@@ -83,35 +83,31 @@ public sealed class PathRemappingStorageAdapter : IStorageAdapter
         return remapped;
     }
 
-    public Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.ReadAsync(Remap(path), options, ct);
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => _inner.Read(Remap(path), options);
 
-    public Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.WriteAsync(RemapNode(node), options, ct);
+    public IObservable<System.Reactive.Unit> Write(MeshNode node, JsonSerializerOptions options)
+        => _inner.Write(RemapNode(node), options);
 
-    public Task DeleteAsync(string path, CancellationToken ct = default)
-        => _inner.DeleteAsync(Remap(path), ct);
+    public IObservable<System.Reactive.Unit> Delete(string path)
+        => _inner.Delete(Remap(path));
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-        => _inner.ExistsAsync(Remap(path), ct);
+    public IObservable<bool> Exists(string path)
+        => _inner.Exists(Remap(path));
 
-    public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
-        string? parentPath, CancellationToken ct = default)
-        => _inner.ListChildPathsAsync(parentPath is null ? null : Remap(parentPath), ct);
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => _inner.ListChildPaths(parentPath is null ? null : Remap(parentPath));
 
-    public IAsyncEnumerable<object> GetPartitionObjectsAsync(
-        string nodePath, string? subPath, JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.GetPartitionObjectsAsync(Remap(nodePath), subPath, options, ct);
+    public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
+        => _inner.GetPartitionObjects(Remap(nodePath), subPath, options);
 
-    public Task SavePartitionObjectsAsync(
-        string nodePath, string? subPath, IReadOnlyCollection<object> objects,
-        JsonSerializerOptions options, CancellationToken ct = default)
-        => _inner.SavePartitionObjectsAsync(Remap(nodePath), subPath, objects, options, ct);
+    public IObservable<System.Reactive.Unit> SavePartitionObjects(
+        string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => _inner.SavePartitionObjects(Remap(nodePath), subPath, objects, options);
 
-    public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-        => _inner.DeletePartitionObjectsAsync(Remap(nodePath), subPath, ct);
+    public IObservable<System.Reactive.Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => _inner.DeletePartitionObjects(Remap(nodePath), subPath);
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
-        string nodePath, string? subPath = null, CancellationToken ct = default)
-        => _inner.GetPartitionMaxTimestampAsync(Remap(nodePath), subPath, ct);
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => _inner.GetPartitionMaxTimestamp(Remap(nodePath), subPath);
 }

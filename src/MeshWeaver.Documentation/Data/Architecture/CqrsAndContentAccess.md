@@ -67,6 +67,129 @@ to the metadata you need (`Path`, `Name`, `NodeType`, `Icon`, `LastModified`,
 wrong layer — either reshape it to use `GetMeshNodeStream`, or send the work to
 the owning hub via a named request type.
 
+### 🚨 Select only what you need — no whole-node loads
+
+A query is a **shell projection**, not a node loader. Before you write
+`ObserveQuery<MeshNode>` or `QueryAsync`, ask "what fields do I actually
+consume?" and add `select:` to pull only those. The whole-`MeshNode` shape is a
+historical convenience that defeats the partition routing, balloons memory, and
+encourages the stale-`Content` antipattern.
+
+**The most common consumer — "is this set up to date?"** — needs only
+`(path, version)`. That is *enough* to compare against a cached snapshot and
+decide "nothing changed, skip the work" / "something changed, recompile". You
+do **not** load the nodes themselves to answer this question.
+
+```csharp
+// ❌ Wrong — loads every descendant node to ask one yes/no question.
+await foreach (var n in mesh.QueryAsync<MeshNode>(
+    $"namespace:{root} scope:descendants nodeType:Code"))
+{
+    if (n.Version != cachedVersions[n.Path]) needsRecompile = true;
+}
+
+// ✅ Right — project (path, version), compare against snapshot.
+var stale = false;
+await foreach (var row in mesh.QueryAsync<MeshNode>(
+    $"namespace:{root} scope:descendants nodeType:Code select:path,version"))
+{
+    if (!cachedVersions.TryGetValue(row.Path, out var prev) || row.Version != prev)
+    { stale = true; break; }
+}
+```
+
+**Field cheat-sheet:**
+
+| Question | `select:` clause |
+|---|---|
+| "Does it exist?" | `select:path` |
+| "Is anything stale?" | `select:path,version` |
+| "Render a tree / list / picker" | `select:path,name,nodeType,icon` |
+| "Show last-modified column" | `select:path,name,lastModified` |
+| "Compute access shells" | `select:path,nodeType,mainNode` |
+
+When the projection isn't enough — you actually need `Content` for a specific
+path (compiler input, document viewer, edit form) — fetch *that one node*
+through `workspace.GetMeshNodeStream(path)` (the owning-hub live read). One
+authoritative read per path, never a subtree-wide content load.
+
+The recompile design that this rule supports is in
+[project_recompile_via_synced_versions](xref:Architecture/RecompileViaSyncedVersions)
+— the NodeType keeps `{sourcePath → version}` from the synced query, and a
+divergent emission triggers re-fetch + recompile. Nothing in the upstream
+catalog row's `Content` is consulted.
+
+### 🚨 Staleness lives on the owner — never query to check "is this stale?"
+
+The corollary to "select only what you need": a query is for finding
+**sets** of things. "Is *this* specific thing up to date?" is a question
+about a specific thing, and the answer belongs **on the thing** as a
+property — never re-derived by querying.
+
+| Pattern | Where it lives |
+|---|---|
+| `IsDirty` / `NeedsRebuild` / `IsStale` flag | Property on the owning node (set by its own hub) |
+| Synced subscription that maintains the flag | The owning hub's `Initialize` hook |
+| Snapshot the flag is computed against | Stored on the node itself (survives restart) |
+| Consumer wanting to know "is X stale?" | **Read the property.** Never query. |
+
+The cleanest demonstration is the NodeType recompile detector:
+
+```csharp
+// In the NodeType's hub WithInitialization — observable pattern, no await,
+// no Take(1) on the source subscription (we want to keep listening!).
+config.WithInitialization(hub =>
+{
+    var workspace = hub.GetWorkspace();
+    var self = hub.Address.ToString();
+
+    // Two synced queries — Source files and Test files. Path-keyed dedup,
+    // Replay(1).RefCount(), provider fan-out. select:path,version keeps
+    // the rows light. Persistent subscription — every emission recomputes.
+    var sources = workspace.GetQuery($"{self}:sources",
+        $"nodeType:Code namespace:{self}/Source scope:descendants select:path,version");
+    var tests = workspace.GetQuery($"{self}:tests",
+        $"nodeType:Code namespace:{self}/Test scope:descendants select:path,version");
+
+    Observable.CombineLatest(sources, tests, (s, t) =>
+            s.Concat(t).Select(n => (n.Path!, n.Version))
+                       .ToImmutableSortedSet())
+        .Subscribe(current =>
+        {
+            // Compute IsDirty against the snapshot stored on the node itself.
+            workspace.GetMeshNodeStream(self).Update(node =>
+            {
+                var snapshot = (node.Content as NodeTypeDefinition)?.CompiledSources
+                    ?? ImmutableSortedSet<(string, long)>.Empty;
+                var dirty = !current.SetEquals(snapshot);
+                return node with { /* IsDirty = dirty */ };
+            }).Subscribe(_ => { },
+                         ex => logger.LogWarning(ex, "dirty flag update failed"));
+        });
+});
+```
+
+**Why this is load-bearing:**
+
+- **One source of truth.** The dirty flag lives where the answer is computed.
+  A separate `InvalidateCache(path)` dictionary keyed by path is a duplicate
+  truth that drifts.
+- **Restart-safe.** The hub's `Initialize` runs at activation; the synced
+  query's *first* emission IS the recompute. No "did we miss a change-feed
+  event" gap.
+- **No `Take(1)`** on the dependency subscription. The persistent
+  subscription is the whole point — a source edit while the hub is running
+  must flip `IsDirty` without anyone polling.
+- **Consumers read a property.** Asking "is this stale?" by re-querying the
+  dependencies *every time* is forbidden. The property carries the answer.
+
+A central `InvalidateCache(path)` invalidator outside the owning hub — even
+when wired to the change feed — is the wrong layer. Move the watcher into
+the owning hub and let it maintain its own dirty flag.
+
+Reference design with implementation entrypoints:
+`project_recompile_via_synced_versions.md` → "Sharper design (2026-05-11)".
+
 ### The "send the work to the owning hub" pattern (Copy / Move / Delete)
 
 Recursive operations on a subtree look superficially like "query → load each →

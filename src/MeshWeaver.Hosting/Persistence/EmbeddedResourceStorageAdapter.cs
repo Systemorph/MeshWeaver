@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
@@ -133,7 +134,10 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         return map;
     }
 
-    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+
+    private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalized = path.Trim('/');
         // Overlay precedence: a write or tombstone overrides the embedded layer.
@@ -172,25 +176,29 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        // Mutate the in-memory overlay only — embedded resources stay immutable.
-        _writeOverlay[node.Path.Trim('/')] = node;
-        return Task.CompletedTask;
-    }
+    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.Defer(() =>
+        {
+            // Mutate the in-memory overlay only — embedded resources stay immutable.
+            _writeOverlay[node.Path.Trim('/')] = node;
+            return Observable.Return(Unit.Default);
+        });
 
-    public Task DeleteAsync(string path, CancellationToken ct = default)
-    {
-        var normalized = path.Trim('/');
-        // Tombstone (null entry) so a deleted overlay write or shadowed embedded
-        // entry stops resolving — this matches FileSystem adapter semantics where
-        // a delete is observable as "no node at path".
-        _writeOverlay[normalized] = null;
-        return Task.CompletedTask;
-    }
+    public IObservable<Unit> Delete(string path)
+        => Observable.Defer(() =>
+        {
+            var normalized = path.Trim('/');
+            // Tombstone (null entry) so a deleted overlay write or shadowed embedded
+            // entry stops resolving — this matches FileSystem adapter semantics where
+            // a delete is observable as "no node at path".
+            _writeOverlay[normalized] = null;
+            return Observable.Return(Unit.Default);
+        });
 
-    public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
-        string? parentPath, CancellationToken ct = default)
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
+
+    private (IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths) ListChildPathsCore(string? parentPath)
     {
         var prefix = string.IsNullOrEmpty(parentPath) ? "" : parentPath.Trim('/') + "/";
         var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -223,7 +231,7 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
         // index-style file at the directory level).
         directoryPaths.ExceptWith(nodePaths);
 
-        return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>((nodePaths, directoryPaths));
+        return (nodePaths, directoryPaths);
     }
 
     private static void AddIfMatchesPrefix(
@@ -243,38 +251,29 @@ public sealed class EmbeddedResourceStorageAdapter : IStorageAdapter
             directoryPaths.Add(prefix + remainder[..firstSlash]);
     }
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-    {
-        var normalized = path.Trim('/');
-        // Overlay tombstone wins over embedded entry; live overlay write also wins.
-        if (_writeOverlay.TryGetValue(normalized, out var ov))
-            return Task.FromResult(ov is not null);
-        return Task.FromResult(_seedNodes.ContainsKey(normalized) || _entriesByPath.ContainsKey(normalized));
-    }
+    public IObservable<bool> Exists(string path)
+        => Observable.Defer(() =>
+        {
+            var normalized = path.Trim('/');
+            // Overlay tombstone wins over embedded entry; live overlay write also wins.
+            if (_writeOverlay.TryGetValue(normalized, out var ov))
+                return Observable.Return(ov is not null);
+            return Observable.Return(_seedNodes.ContainsKey(normalized) || _entriesByPath.ContainsKey(normalized));
+        });
 
-#pragma warning disable CS1998 // async without await — yields without awaits, kept for IAsyncEnumerable signature
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
-        string nodePath,
-        string? subPath,
-        JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
+    public IObservable<object> GetPartitionObjects(
+        string nodePath, string? subPath, JsonSerializerOptions options)
         // Embedded resources do not host partition sub-objects (no .json
-        // collections under a node directory). Yield nothing.
-        yield break;
-    }
-#pragma warning restore CS1998
+        // collections under a node directory).
+        => Observable.Empty<object>();
 
-    public Task SavePartitionObjectsAsync(
-        string nodePath, string? subPath, IReadOnlyCollection<object> objects,
-        JsonSerializerOptions options, CancellationToken ct = default)
-        => throw new NotSupportedException("EmbeddedResourceStorageAdapter is read-only.");
+    public IObservable<Unit> SavePartitionObjects(
+        string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => Observable.Throw<Unit>(new NotSupportedException("EmbeddedResourceStorageAdapter is read-only."));
 
-    public Task DeletePartitionObjectsAsync(
-        string nodePath, string? subPath = null, CancellationToken ct = default)
-        => throw new NotSupportedException("EmbeddedResourceStorageAdapter is read-only.");
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => Observable.Throw<Unit>(new NotSupportedException("EmbeddedResourceStorageAdapter is read-only."));
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
-        string nodePath, string? subPath = null, CancellationToken ct = default)
-        => Task.FromResult<DateTimeOffset?>(null);
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => Observable.Return<DateTimeOffset?>(null);
 }

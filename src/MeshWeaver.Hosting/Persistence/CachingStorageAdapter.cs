@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
@@ -119,7 +120,10 @@ public class CachingStorageAdapter : IStorageAdapter
         }
     }
 
-    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+
+    private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var normalizedPath = path?.Trim('/');
         if (string.IsNullOrEmpty(normalizedPath))
@@ -192,40 +196,40 @@ public class CachingStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        // Write to disk
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
-        await innerAdapter.WriteAsync(node, options, ct);
-
-        // Refresh cache for this path
-        RefreshCacheForPath(node.Path);
-    }
-
-    public async Task DeleteAsync(string path, CancellationToken ct = default)
+    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
-        await innerAdapter.DeleteAsync(path, ct);
-
-        // Remove from cache
-        var normalizedPath = path.Trim('/').Replace('/', '/');
-        foreach (var ext in SupportedExtensions)
-        {
-            var segments = normalizedPath.Split('/');
-            var relativePath = string.Join("/", segments) + ext;
-            _snapshot.Files.TryRemove(relativePath, out _);
-        }
+        return innerAdapter.Write(node, options)
+            .Do(_ => RefreshCacheForPath(node.Path));
     }
 
-    public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
-        string? parentPath, CancellationToken ct = default)
+    public IObservable<Unit> Delete(string path)
+    {
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        return innerAdapter.Delete(path)
+            .Do(_ =>
+            {
+                var normalizedPath = path.Trim('/');
+                foreach (var ext in SupportedExtensions)
+                {
+                    var segments = normalizedPath.Split('/');
+                    var relativePath = string.Join("/", segments) + ext;
+                    _snapshot.Files.TryRemove(relativePath, out _);
+                }
+            });
+    }
+
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
+
+    private (IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths) ListChildPathsCore(string? parentPath)
     {
         var normalizedParent = parentPath?.Trim('/') ?? "";
 
         // Get directory for this parent
         var dirPath = normalizedParent;
         if (!_snapshot.Directories.TryGetValue(dirPath, out var entries))
-            return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+            return ([], []);
 
         var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directoryPaths = new List<string>();
@@ -274,20 +278,24 @@ public class CachingStorageAdapter : IStorageAdapter
             }
         }
 
-        return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>((nodePaths, directoryPaths));
+        return (nodePaths, directoryPaths);
     }
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-    {
-        var (filePath, _) = FindCachedFile(path?.Trim('/') ?? "");
-        return Task.FromResult(filePath != null && _snapshot.Files.ContainsKey(filePath));
-    }
+    public IObservable<bool> Exists(string path)
+        => Observable.Defer(() =>
+        {
+            var (filePath, _) = FindCachedFile(path?.Trim('/') ?? "");
+            return Observable.Return(filePath != null && _snapshot.Files.ContainsKey(filePath));
+        });
 
-    public Task<IEnumerable<string>> ListPartitionSubPathsAsync(string nodePath, CancellationToken ct = default)
+    public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
+        => Observable.Defer(() => Observable.Return(ListPartitionSubPathsCore(nodePath)));
+
+    private IEnumerable<string> ListPartitionSubPathsCore(string nodePath)
     {
         var normalizedPath = nodePath.Trim('/');
         if (!_snapshot.Directories.TryGetValue(normalizedPath, out var entries))
-            return Task.FromResult<IEnumerable<string>>(Enumerable.Empty<string>());
+            return Enumerable.Empty<string>();
 
         var partitionSubPaths = new List<string>();
         foreach (var entry in entries)
@@ -308,14 +316,23 @@ public class CachingStorageAdapter : IStorageAdapter
                 partitionSubPaths.Add(subDirName);
         }
 
-        return Task.FromResult<IEnumerable<string>>(partitionSubPaths);
+        return partitionSubPaths;
     }
 
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
+    public IObservable<object> GetPartitionObjects(
+        string nodePath, string? subPath, JsonSerializerOptions options)
+        => Observable.Create<object>(async (observer, ct) =>
+        {
+            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+                observer.OnNext(obj);
+            observer.OnCompleted();
+        });
+
+    private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
         string? subPath,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         var partitionDir = string.IsNullOrEmpty(subPath)
             ? nodePath.Trim('/')
@@ -374,37 +391,34 @@ public class CachingStorageAdapter : IStorageAdapter
         }
     }
 
-    public Task SavePartitionObjectsAsync(
-        string nodePath, string? subPath, IReadOnlyCollection<object> objects,
-        JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        // Delegate to file system, then refresh cache
-        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
-        var task = innerAdapter.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
-        // Refresh cache after write
-        return task.ContinueWith(_ => RefreshCacheForPartition(nodePath, subPath), ct);
-    }
-
-    public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
+    public IObservable<Unit> SavePartitionObjects(
+        string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
-        return innerAdapter.DeletePartitionObjectsAsync(nodePath, subPath, ct);
+        return innerAdapter.SavePartitionObjects(nodePath, subPath, objects, options)
+            .Do(_ => RefreshCacheForPartition(nodePath, subPath));
     }
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
-        string nodePath, string? subPath = null, CancellationToken ct = default)
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
     {
-        // For cached data, just return now (cache was loaded at startup)
-        var partitionDir = string.IsNullOrEmpty(subPath)
-            ? nodePath.Trim('/')
-            : nodePath.Trim('/') + "/" + subPath.Trim('/');
-
-        var prefix = partitionDir + "/";
-        var hasFiles = _snapshot.Files.Keys.Any(k =>
-            k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
-
-        return Task.FromResult<DateTimeOffset?>(hasFiles ? DateTimeOffset.UtcNow : null);
+        var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier);
+        return innerAdapter.DeletePartitionObjects(nodePath, subPath);
     }
+
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => Observable.Defer(() =>
+        {
+            // For cached data, just return now (cache was loaded at startup)
+            var partitionDir = string.IsNullOrEmpty(subPath)
+                ? nodePath.Trim('/')
+                : nodePath.Trim('/') + "/" + subPath.Trim('/');
+
+            var prefix = partitionDir + "/";
+            var hasFiles = _snapshot.Files.Keys.Any(k =>
+                k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+
+            return Observable.Return<DateTimeOffset?>(hasFiles ? DateTimeOffset.UtcNow : null);
+        });
 
     #region Helpers
 
