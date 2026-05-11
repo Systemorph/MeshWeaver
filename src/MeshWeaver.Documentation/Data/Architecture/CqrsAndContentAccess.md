@@ -44,6 +44,94 @@ content → merge → write), auditing ("did my change take?"), or any decision 
 source of truth. No staleness. It also activates the hub if it was cold; you don't have
 to pre-subscribe.
 
+## 🚨 Query.Content is always stale — never read it
+
+`mesh.ObserveQuery<MeshNode>` / `mesh.QueryAsync<MeshNode>` and the lower-level
+`IStorageAdapter.Query(params string[] queries)` enumerate MeshNodes by reading the
+read-side index. The returned objects technically include `.Content` — **but you
+must never read it**. The catalog is eventually consistent and the `Content` column
+lags every committed write by the index-refresh window.
+
+**Rules — bright lines, no exceptions:**
+
+| What you have | What you do | What you must NOT do |
+|---|---|---|
+| A query you want to enumerate paths / names / nodeTypes / icons | `await foreach (var n in adapter.Query(queries)) yield return n.Path;` (or `n.Name`, etc.) | Read `n.Content` |
+| A known **path** and you want the live MeshNode | `workspace.GetMeshNodeStream(path)` (returns `IObservable<MeshNode?>` subscribed to the owning hub) | `adapter.Query($"path:{path}")` and read `.Content` |
+| A known path and you want a one-shot read | `hub.Post(GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))` + `hub.Observe(...)` | Anything that goes through the index |
+| Recursive operation on a subtree (Copy, Move, Delete, …) | `hub.Post(CopyNodeRequest / MoveNodeRequest / DeleteNodeRequest, o => o.WithTarget(new Address(sourcePath)))` — the owning hub uses `GetMeshNodeStream` internally for live state | Load every node in the subtree from the query result, then write each one |
+
+**Treat `MeshNode.Content` on a query row as if the column doesn't exist.** Project
+to the metadata you need (`Path`, `Name`, `NodeType`, `Icon`, `LastModified`,
+`Version`, `State`) and stop. If your call site needs `Content`, you're at the
+wrong layer — either reshape it to use `GetMeshNodeStream`, or send the work to
+the owning hub via a named request type.
+
+### The "send the work to the owning hub" pattern (Copy / Move / Delete)
+
+Recursive operations on a subtree look superficially like "query → load each →
+do something" — that's the pattern that leaks `Content` reads and stale state.
+The correct shape sends one request to each affected node's hub, where the
+handler uses `GetMeshNodeStream` (or the workspace's `MeshNodeReference`
+reducer) to obtain the **authoritative** state before acting.
+
+```csharp
+// Caller — fires one request per descendant, never touches Content from the query.
+public IObservable<Unit> DeleteSubtree(string rootPath, IMessageHub hub, IMeshService mesh) =>
+    Observable.Create<Unit>(async (observer, ct) =>
+    {
+        // 1. Enumerate descendant PATHS only — never read .Content from the iteration.
+        var paths = new List<string>();
+        await foreach (var shell in mesh.QueryAsync<MeshNode>(
+            $"namespace:{rootPath} scope:subtree").WithCancellation(ct))
+            paths.Add(shell.Path);                         // ← project to path; .Content untouched.
+        paths.Add(rootPath);
+
+        // 2. Fan out: one DeleteNodeRequest per address. Each owning hub
+        //    handles its own delete — uses workspace.GetMeshNodeStream(self)
+        //    if it needs current state, NOT the stale catalog row.
+        Observable.Merge(paths.Select(p =>
+                hub.Observe(new DeleteNodeRequest(p),
+                    o => o.WithTarget(new Address(p)))))
+            .Subscribe(_ => { },
+                       ex => observer.OnError(ex),
+                       () => { observer.OnNext(Unit.Default); observer.OnCompleted(); });
+    });
+```
+
+```csharp
+// Handler — registered on the owning per-node hub. Reads its OWN content via
+// the workspace's MeshNodeReference reducer (the source of truth), not via
+// any storage adapter or query.
+private static IMessageDelivery HandleCopyNodeRequest(
+    IMessageHub hub, IMessageDelivery<CopyNodeRequest> request)
+{
+    var targetPath = request.Message.TargetPath;
+    hub.GetWorkspace().GetStream(new MeshNodeReference())!
+        .Select(change => change.Value)
+        .Where(node => node is not null)
+        .Take(1)
+        .Subscribe(self =>
+        {
+            // Use `self` to materialise the target — never query for it.
+            hub.Post(new CreateNodeRequest(self! with { /* re-target */ }),
+                o => o.WithTarget(new Address("mesh")));
+            hub.Post(CopyNodeResponse.Ok(self!), o => o.ResponseFor(request));
+        });
+    return request.Processed();
+}
+```
+
+The `DeleteNodeRequest` / `MoveNodeRequest` / `CopyNodeRequest` types are
+defined in `src/MeshWeaver.Mesh.Contract/CreateNodeRequest.cs`. They route to
+the source-node's address (or to the mesh hub which forwards). The handler
+**never** reaches back through the index for content — it reads its own state
+through the workspace's `MeshNodeReference` reducer, which is the only
+non-stale view of the node.
+
+> **Summary in one line:** `Query` gives you paths and shells; `GetMeshNodeStream`
+> gives you live content. There is no third channel.
+
 ## One-shot reads (`GetDataRequest` + `Observe`)
 
 The canonical pattern for "give me this node's current MeshNode":
@@ -251,15 +339,17 @@ return request.Processed();   // handler returns immediately
 
 | Intent | Primitive |
 |---|---|
-| List nodes under X | `ObserveQuery` |
+| List nodes under X (paths / metadata only) | `mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(...))` — project to `Path` / `Name` / etc. **never read `.Content`** |
 | Does node X exist? | `ObserveQuery` + check `Items.Count` |
+| Give me node X's MeshNode (live) | `workspace.GetMeshNodeStream(X)` — the **only** non-stale read path |
 | Give me node X's MeshNode (once) | `hub.Post(GetDataRequest(new MeshNodeReference()), WithTarget(X))` + `Observe` |
 | Keep me updated on node X's MeshNode | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` |
 | Patch node X | `hub.Post(PatchDataChangeRequest(...), WithTarget(X))` |
 | Replace node X wholesale | `hub.Post(DataChangeRequest{...}.WithUpdates(fullNode), WithTarget(X))` |
 | Run the script on Code node X | `hub.Post(ExecuteScriptRequest(), WithTarget(X))` + `Observe<ExecuteScriptResponse>` |
 | Wait until the run finishes | `workspace.GetRemoteStream` on X's output area until a terminal condition |
-| Move/Copy node X | `hub.Post(MoveNodeRequest(...), WithTarget(X))` — same pattern, different request type |
+| Move/Copy node X (incl. subtree) | `hub.Post(MoveNodeRequest / CopyNodeRequest, WithTarget(X))` — owning hub reads its own state via `GetMeshNodeStream`, fans out per-child requests, never queries for content |
+| Delete node X (incl. subtree) | `hub.Post(DeleteNodeRequest, WithTarget(X))` — recursive variant queries for **paths only** then fires one `DeleteNodeRequest` per descendant address |
 | Stream content into node X during execution (AI streaming, long-running output) | Open `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(X, new MeshNodeReference())` once at start, push every delta via `.Update(node => node with { Content = ... })`, dispose at end. See [Thread Execution Streaming](xref:Architecture/ThreadExecutionStreaming) for the canonical writer + renderer pair. |
 
 ## Anti-patterns
@@ -273,15 +363,45 @@ return JsonSerializer.Serialize(node);
 return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
     .Take(1).Select(c => c.Items.FirstOrDefault());
 
+// ❌ Reading Content while enumerating a query result — Content is stale.
+await foreach (var n in mesh.QueryAsync<MeshNode>($"namespace:{parent} scope:subtree"))
+{
+    if (n.Content is JobStatus { State: "Done" }) { … }   // ← stale Content
+}
+
 // ❌ Wrapping QueryAsync in Observable.FromAsync does not fix consistency.
 return Observable.FromAsync(ct =>
     mesh.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync(ct).AsTask());
+
+// ❌ "Recursive operation" by loading every subtree node from a query.
+//    Stale Content + N+1 + memory blow-up + bypasses per-node hub validators.
+await foreach (var n in mesh.QueryAsync<MeshNode>(
+    $"namespace:{root} scope:subtree"))
+{
+    storage.DeleteAsync(n.Path);            // ← uses stale n; bypasses hub
+}
 
 // ❌ Caller addressing the implementation detail (kernel) directly.
 hub.Post(new SubmitCodeRequest(...), o => o.WithTarget(kernelAddress));
 
 // ❌ Async in a handler body.
 .WithHandler<FooRequest>(async (hub, req) => { await something; return req.Processed(); })
+
+// ✅ Project to metadata only — `.Path` / `.Name` / `.NodeType`, never `.Content`.
+await foreach (var shell in mesh.QueryAsync<MeshNode>(
+    $"namespace:{parent} scope:subtree"))
+    paths.Add(shell.Path);                  // never read shell.Content
+
+// ✅ Need content for a known path? Subscribe to the owning hub.
+workspace.GetMeshNodeStream(path)
+    .Take(1)
+    .Subscribe(node => { /* node.Content is live, no lag */ });
+
+// ✅ Recursive operation — fan out one request per descendant address;
+//    each owning hub does the work with its own live state.
+Observable.Merge(paths.Select(p =>
+        hub.Observe(new DeleteNodeRequest(p), o => o.WithTarget(new Address(p)))))
+    .Subscribe(_ => { }, err => logger.LogError(err, "delete fan-out failed"));
 
 // ✅ One-shot content read — authoritative.
 var delivery = hub.Post(new GetDataRequest(new MeshNodeReference()),
