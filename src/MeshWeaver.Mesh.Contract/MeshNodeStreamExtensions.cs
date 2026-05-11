@@ -207,6 +207,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private IObservable<MeshNode> UpdateRemote(Func<MeshNode, MeshNode> update)
         => Observable.Create<MeshNode>(observer =>
         {
+            var diagLogger = _workspace.Hub.ServiceProvider
+                .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Mesh.MeshNodeStreamHandle");
+            diagLogger?.LogInformation(
+                "[UpdateRemote] BEGIN hub={Hub} target={Path}",
+                _workspace.Hub.Address, _path);
+
             var remoteStream = _workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(_path!), new MeshNodeReference());
 
@@ -236,6 +243,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 {
                     if (!updateIssued)
                     {
+                        diagLogger?.LogInformation(
+                            "[UpdateRemote] CHANGE-PRE-UPDATE hub={Hub} target={Path} version={Version} valueNull={ValueNull}",
+                            _workspace.Hub.Address, _path, change.Version, change.Value is null);
                         // Wait for first non-null initial state — that's
                         // when the per-node hub has delivered the persisted
                         // node value via SubscribeResponse and SetCurrent
@@ -244,6 +254,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             return;
                         baseline = change.Version;
                         updateIssued = true;
+                        diagLogger?.LogInformation(
+                            "[UpdateRemote] INITIAL-STATE-RECEIVED hub={Hub} target={Path} baseline={Baseline}",
+                            _workspace.Hub.Address, _path, baseline);
 
                         try
                         {
@@ -278,15 +291,30 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         return;
                     }
 
-                    // Update was issued — wait for post-update emission past baseline.
-                    if (baseline is null || change.Version <= baseline.Value) return;
+                    // Update was issued — the next non-null emission carries the
+                    // post-update value back from the per-node hub. We don't
+                    // compare versions because the initial state arrives via the
+                    // synced stream (mesh hub's version counter) while the post-
+                    // update emission carries the per-node hub's OWN version
+                    // counter — incomparable sequences. The "updateIssued" flag
+                    // is the gate; any non-null emission after it represents the
+                    // applied update.
+                    diagLogger?.LogInformation(
+                        "[UpdateRemote] POST-UPDATE-CHANGE hub={Hub} target={Path} version={Version} baseline={Baseline}",
+                        _workspace.Hub.Address, _path, change.Version, baseline);
                     if (change.Value is { } node)
                     {
+                        diagLogger?.LogInformation(
+                            "[UpdateRemote] COMPLETE hub={Hub} target={Path} version={Version}",
+                            _workspace.Hub.Address, _path, change.Version);
                         observer.OnNext(node);
                         observer.OnCompleted();
                     }
                 }, ex =>
                 {
+                    diagLogger?.LogWarning(ex,
+                        "[UpdateRemote] ERROR hub={Hub} target={Path} updateIssued={UpdateIssued} type={ExType}",
+                        _workspace.Hub.Address, _path, updateIssued, ex.GetType().Name);
                     // Timeout-wrapped: a TimeoutException here means we never got
                     // an initial state. The per-node hub either didn't activate,
                     // didn't load the node from persistence, or doesn't have a
