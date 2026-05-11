@@ -210,7 +210,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var diagLogger = _workspace.Hub.ServiceProvider
                 .GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
                 ?.CreateLogger("MeshWeaver.Mesh.MeshNodeStreamHandle");
-            diagLogger?.LogInformation(
+            diagLogger?.LogDebug(
                 "[UpdateRemote] BEGIN hub={Hub} target={Path}",
                 _workspace.Hub.Address, _path);
 
@@ -243,7 +243,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 {
                     if (!updateIssued)
                     {
-                        diagLogger?.LogInformation(
+                        diagLogger?.LogDebug(
                             "[UpdateRemote] CHANGE-PRE-UPDATE hub={Hub} target={Path} version={Version} valueNull={ValueNull}",
                             _workspace.Hub.Address, _path, change.Version, change.Value is null);
                         // Wait for first non-null initial state — that's
@@ -254,7 +254,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             return;
                         baseline = change.Version;
                         updateIssued = true;
-                        diagLogger?.LogInformation(
+                        diagLogger?.LogDebug(
                             "[UpdateRemote] INITIAL-STATE-RECEIVED hub={Hub} target={Path} baseline={Baseline}",
                             _workspace.Hub.Address, _path, baseline);
 
@@ -299,12 +299,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // counter — incomparable sequences. The "updateIssued" flag
                     // is the gate; any non-null emission after it represents the
                     // applied update.
-                    diagLogger?.LogInformation(
+                    diagLogger?.LogDebug(
                         "[UpdateRemote] POST-UPDATE-CHANGE hub={Hub} target={Path} version={Version} baseline={Baseline}",
                         _workspace.Hub.Address, _path, change.Version, baseline);
                     if (change.Value is { } node)
                     {
-                        diagLogger?.LogInformation(
+                        diagLogger?.LogDebug(
                             "[UpdateRemote] COMPLETE hub={Hub} target={Path} version={Version}",
                             _workspace.Hub.Address, _path, change.Version);
                         observer.OnNext(node);

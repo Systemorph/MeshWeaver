@@ -303,6 +303,22 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
                 ApiTokenNodeType.InvalidateValidationCache(token.TokenHash);
                 return current with { Content = token with { IsRevoked = true } };
             })
+            .Do(updatedNode =>
+            {
+                // Force the per-node hub to persist the patched node. The
+                // sync-protocol path (workspace.GetMeshNodeStream(remote)
+                // .Update) updates the mesh-hub-side stream and emits a
+                // DataChangeRequest to the per-node hub, but the per-node
+                // hub's data source `saveSub` only fires on `ownStream`
+                // emissions — and those don't fire for sync-driven changes,
+                // so persistence never sees the IsRevoked=true update. The
+                // SaveMeshNodeRequest below routes to the per-node hub's
+                // HandleSaveMeshNode which writes through IStorageService
+                // (firing IDataChangeNotifier.Updated, so the synced
+                // GetTokensForUser view picks up the change).
+                hub.Post(new SaveMeshNodeRequest(updatedNode),
+                    o => o.WithTarget(new Address(tokenNodePath)));
+            })
             .Select(_ => true)
             .Catch<bool, Exception>(ex =>
             {

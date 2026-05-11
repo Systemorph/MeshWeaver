@@ -209,9 +209,12 @@ public static class MeshDataSourceExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
         var node = request.Message.Node;
+        logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
+            node.Path, node.Version);
         persistence.SaveNode(node, hub.JsonSerializerOptions)
             .Subscribe(
-                _ => { },
+                saved => logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
+                    saved.Path, saved.Version),
                 ex => logger?.LogWarning(ex, "SaveMeshNode failed for {Path} (version={Version})",
                     node.Path, node.Version));
         return request.Processed();
