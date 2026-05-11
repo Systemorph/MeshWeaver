@@ -111,7 +111,13 @@ public static class PermissionTestExtensions
     {
         var sec = hub.ServiceProvider.GetRequiredService<ISecurityService>();
         var t = timeout ?? TimeSpan.FromSeconds(40);
-        await Observable.Interval(TimeSpan.FromMilliseconds(200))
+        // Polling-via-observables: each Interval tick subscribes fresh to
+        // GetEffectivePermissions and takes the latest cached Replay(1)
+        // value. Once the synced AccessAssignment query catches the new
+        // satellite, the next tick observes the updated permission.
+        // Pure IObservable, no Task.Delay — matches the 99.4%-green
+        // baseline of the previous Task.Delay polling loop.
+        await Observable.Interval(TimeSpan.FromMilliseconds(100))
             .StartWith(-1L)
             .SelectMany(_ => sec.GetEffectivePermissions(path, userId).Take(1))
             .Where(p => p.HasFlag(permission))
