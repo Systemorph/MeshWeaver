@@ -284,14 +284,16 @@ internal sealed class MeshCatalog(
         {
             var d = depth;
             var testPath = string.Join("/", segments.Take(d));
-            // Pure IObservable — no await, no IAsyncEnumerable bridge inside the
-            // chain. Persistence.GetChildren emits one snapshot collection;
-            // mapping to .Count > 0 yields the existence answer.
-            probes.Add(Persistence.GetChildren(testPath)
+            // Path-only existence probe via the query engine — `select:path` keeps
+            // it light, never reads stale `Content`. Persistence.GetChildren was
+            // deleted in the persistence-cull (2026-05-11).
+            probes.Add(meshQuery
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{testPath} scope:children select:path"))
                 .Take(1)
-                .Select(children =>
+                .Select(change =>
                 {
-                    if (children.Count == 0)
+                    if (change.Items.Count == 0)
                         return ((MeshNode?)null, 0);
                     var ns = d > 1 ? string.Join("/", segments.Take(d - 1)) : null;
                     var virt = new MeshNode(segments[d - 1], ns) { Name = segments[d - 1] };

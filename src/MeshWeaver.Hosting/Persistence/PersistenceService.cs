@@ -32,14 +32,9 @@ internal class PersistenceService(
     public IObservable<MeshNode?> GetNode(string path)
         => core.GetNode(path, Options);
 
-    public IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath)
-        => core.GetChildrenAsync(parentPath, Options);
-
-    public IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath)
-        => core.GetDescendantsAsync(parentPath, Options);
-
-    public IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath)
-        => core.GetAllDescendantsAsync(parentPath, Options);
+    // Get*Async / SearchAsync deleted in persistence-cull (2026-05-11). Listings
+    // go through `workspace.GetQuery(id, queries…)`; single-node reads through
+    // `workspace.GetMeshNodeStream(path)`. See `Doc/Architecture/CqrsAndContentAccess.md`.
 
     public IObservable<MeshNode> SaveNode(MeshNode node)
         => core.SaveNode(node, Options);
@@ -49,9 +44,6 @@ internal class PersistenceService(
 
     public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath)
         => core.MoveNode(sourcePath, targetPath, Options);
-
-    public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query)
-        => core.SearchAsync(parentPath, query, Options);
 
     public IObservable<bool> Exists(string path)
         => core.Exists(path);
@@ -170,19 +162,9 @@ internal class PersistenceService(
                     });
             });
 
-    public IObservable<MeshNode> GetChildrenSecure(string? parentPath, string? userId)
-        => ObservableTopNExtensions.ToObservableSequence(core.GetChildrenAsync(parentPath, Options))
-            .SelectMany(node =>
-                securityService == null
-                    ? Observable.Return(node)
-                    : HasReadAccess(node, userId).Take(1).Where(ok => ok).Select(_ => node));
-
-    public IObservable<MeshNode> GetDescendantsSecure(string? parentPath, string? userId)
-        => ObservableTopNExtensions.ToObservableSequence(core.GetDescendantsAsync(parentPath, Options))
-            .SelectMany(node =>
-                securityService == null
-                    ? Observable.Return(node)
-                    : HasReadAccess(node, userId).Take(1).Where(ok => ok).Select(_ => node));
+    // Get*Secure deleted with the rest of the "load all" surface. Permission-filtered
+    // listing is now done via `workspace.GetQuery(id, query)` — the synced-query
+    // engine pushes RLS into the underlying provider.
 
     #endregion
 }

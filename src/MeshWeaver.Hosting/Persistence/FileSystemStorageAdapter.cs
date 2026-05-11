@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+﻿using System.Reactive;
+using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -39,7 +41,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
         Directory.CreateDirectory(baseDirectory);
     }
 
-    public async Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => Observable.FromAsync(ct => ReadAsyncCore(path, options, ct));
+
+    private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
         var (filePath, extension) = FindFileWithExtension(path);
         if (filePath == null || !File.Exists(filePath))
@@ -119,7 +124,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return node;
     }
 
-    public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct => { await WriteAsyncCore(node, options, ct); return Unit.Default; });
+
+    private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
         // Check if this node uses the JSON + index.md split pattern
         var existingJsonPath = GetFilePath(node.Path, ".json");
@@ -173,7 +181,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
         CleanupOtherExtensions(node.Path, extension);
     }
 
-    public Task DeleteAsync(string path, CancellationToken ct = default)
+    public IObservable<Unit> Delete(string path)
+        => Observable.Defer(() => { DeleteCore(path); return Observable.Return(Unit.Default); });
+
+    private void DeleteCore(string path)
     {
         // Delete any file with supported extensions
         foreach (var ext in SupportedExtensions)
@@ -222,18 +233,19 @@ public class FileSystemStorageAdapter : IStorageAdapter
             }
             directory = Path.GetDirectoryName(directory);
         }
-
-        return Task.CompletedTask;
     }
 
-    public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(string? parentPath, CancellationToken ct = default)
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
+
+    private (IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths) ListChildPathsCore(string? parentPath)
     {
         var directoryPath = string.IsNullOrEmpty(parentPath)
             ? _baseDirectory
             : Path.Combine(_baseDirectory, parentPath.Replace('/', Path.DirectorySeparatorChar));
 
         if (!Directory.Exists(directoryPath))
-            return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+            return ([], []);
 
         var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directoryPaths = new List<string>();
@@ -287,20 +299,24 @@ public class FileSystemStorageAdapter : IStorageAdapter
             }
         }
 
-        return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>((nodePaths, directoryPaths));
+        return (nodePaths, directoryPaths);
     }
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-    {
-        var (filePath, _) = FindFileWithExtension(path);
-        return Task.FromResult(filePath != null && File.Exists(filePath));
-    }
+    public IObservable<bool> Exists(string path)
+        => Observable.Defer(() =>
+        {
+            var (filePath, _) = FindFileWithExtension(path);
+            return Observable.Return(filePath != null && File.Exists(filePath));
+        });
 
-    public Task<IEnumerable<string>> ListPartitionSubPathsAsync(string nodePath, CancellationToken ct = default)
+    public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
+        => Observable.Defer(() => Observable.Return(ListPartitionSubPathsCore(nodePath)));
+
+    private IEnumerable<string> ListPartitionSubPathsCore(string nodePath)
     {
         var nodeDir = Path.Combine(_baseDirectory, nodePath.Trim('/').Replace('/', Path.DirectorySeparatorChar));
         if (!Directory.Exists(nodeDir))
-            return Task.FromResult<IEnumerable<string>>(Enumerable.Empty<string>());
+            return Enumerable.Empty<string>();
 
         var partitionSubPaths = new List<string>();
         foreach (var subDir in Directory.GetDirectories(nodeDir))
@@ -319,7 +335,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             partitionSubPaths.Add(subDirName);
         }
 
-        return Task.FromResult<IEnumerable<string>>(partitionSubPaths);
+        return partitionSubPaths;
     }
 
     /// <summary>
@@ -356,7 +372,16 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     #region Partition Storage
 
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
+    public IObservable<object> GetPartitionObjects(
+        string nodePath, string? subPath, JsonSerializerOptions options)
+        => Observable.Create<object>(async (observer, ct) =>
+        {
+            await foreach (var obj in GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+                observer.OnNext(obj);
+            observer.OnCompleted();
+        });
+
+    private async IAsyncEnumerable<object> GetPartitionObjectsAsyncCore(
         string nodePath,
         string? subPath,
         JsonSerializerOptions options,
@@ -465,12 +490,21 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return obj;
     }
 
-    public async Task SavePartitionObjectsAsync(
+    public IObservable<Unit> SavePartitionObjects(
+        string nodePath, string? subPath,
+        IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => Observable.FromAsync(async ct =>
+        {
+            await SavePartitionObjectsAsyncCore(nodePath, subPath, objects, options, ct);
+            return Unit.Default;
+        });
+
+    private async Task SavePartitionObjectsAsyncCore(
         string nodePath,
         string? subPath,
         IReadOnlyCollection<object> objects,
         JsonSerializerOptions options,
-        CancellationToken ct = default)
+        CancellationToken ct)
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         Directory.CreateDirectory(partitionDir);
@@ -496,10 +530,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
         }
     }
 
-    public Task DeletePartitionObjectsAsync(
-        string nodePath,
-        string? subPath = null,
-        CancellationToken ct = default)
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => Observable.Defer(() => { DeletePartitionObjectsCore(nodePath, subPath); return Observable.Return(Unit.Default); });
+
+    private void DeletePartitionObjectsCore(string nodePath, string? subPath)
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         if (Directory.Exists(partitionDir))
@@ -525,8 +559,6 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 Directory.Delete(partitionDir);
             }
         }
-
-        return Task.CompletedTask;
     }
 
     private string GetPartitionDirectory(string nodePath, string? subPath)
@@ -560,14 +592,14 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return $"{typeName}_{hash}.json";
     }
 
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
-        string nodePath,
-        string? subPath = null,
-        CancellationToken ct = default)
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => Observable.Defer(() => Observable.Return(GetPartitionMaxTimestampCore(nodePath, subPath)));
+
+    private DateTimeOffset? GetPartitionMaxTimestampCore(string nodePath, string? subPath)
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         if (!Directory.Exists(partitionDir))
-            return Task.FromResult<DateTimeOffset?>(null);
+            return null;
 
         var files = Directory.GetFiles(partitionDir, "*.json").ToList();
 
@@ -578,13 +610,13 @@ public class FileSystemStorageAdapter : IStorageAdapter
         }
 
         if (files.Count == 0)
-            return Task.FromResult<DateTimeOffset?>(null);
+            return null;
 
         var maxTime = files
             .Select(f => new FileInfo(f).LastWriteTimeUtc)
             .Max();
 
-        return Task.FromResult<DateTimeOffset?>(new DateTimeOffset(maxTime, TimeSpan.Zero));
+        return new DateTimeOffset(maxTime, TimeSpan.Zero);
     }
 
     private static string GetCodeConfigurationFileName(CodeConfiguration config)

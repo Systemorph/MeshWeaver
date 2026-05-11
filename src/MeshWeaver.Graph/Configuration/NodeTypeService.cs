@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
@@ -68,6 +69,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     // Subscription to the cross-silo change feed — disposed with the service.
     private readonly IDisposable? _changeFeedSubscription;
+
+    // Note: the persistent per-NodeType source-set watcher (the subscription that
+    // listens for source add/remove/version-bump and invalidates the compile) lives
+    // in the compiled NodeType's own hub configuration — it knows its CurrentPath
+    // and runs `workspace.GetQuery` against its sources. See
+    // `project_recompile_via_synced_versions.md` for that design. The compile
+    // bootstrap below uses a one-shot `ObserveQuery.Take(1)` for the initial path
+    // snapshot — invalidation reaches us via the change-feed subscription above.
 
     public NodeTypeService(
         IMessageHub hub,
@@ -443,6 +452,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _creatableTypesRules.TryRemove(nodeTypePath, out _);
         _notCreatableTypes.TryRemove(nodeTypePath, out _);
         _accessRules.TryRemove(nodeTypePath, out _);
+
 
         // Path cache removed — EnrichWithNodeType always issues a fresh
         // GetCompilationPathRequest and lets the disk-level cache decide. Nothing
@@ -1035,34 +1045,60 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         }
 
         // Collect Code nodes from the configured sources. Default: the sibling "Source"
-        // subtree. `GetAllDescendantsAsync` (not `GetDescendantsAsync`) is used as a
-        // belt-and-braces include — Code nodes are primary content (IsSatelliteType =
-        // false), but historic data may still carry satellite-style MainNode values
-        // from when Code was registered as a satellite type.
-        // We also check the parent path as a single-node fetch so `path:X` shorthand
-        // with a leaf Code node path works.
+        // subtree. The descendant enumeration is **path-only** — we never read
+        // `MeshNode.Content` off a query row (stale by definition; see
+        // `Doc/Architecture/CqrsAndContentAccess.md` → "Select only what you need").
+        // For each discovered Code path we then fetch the live single node via
+        // `meshStorage.GetNode(path)` to read `CodeConfiguration.Code`.
         var codeFiles = new List<string>();
         var codeFilePaths = new List<string>();
         var seenCodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var sourcePaths = ResolveSourcePaths(definition.Sources, nodeTypePath);
+
+        // Path-only shell projection across providers — `select:path` keeps the
+        // query light (never reads stale `Content`). Filtered server-side to
+        // `nodeType:Code` so we don't enumerate the whole subtree. The
+        // persistent change subscription that drives invalidation lives in the
+        // NodeType's own hub (see comment above on _sourceShellCache).
+        var shellPaths = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sourcePath in sourcePaths)
+        {
+            var req = MeshQueryRequest.FromQuery(
+                $"nodeType:{CodeNodeType.NodeType} namespace:{sourcePath} scope:descendants select:path");
+            foreach (var provider in queryProviders)
+            {
+                var change = await provider.ObserveQuery<MeshNode>(req, hub.JsonSerializerOptions)
+                    .Take(1).Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
+                foreach (var n in change.Items)
+                    if (n.Path is { Length: > 0 } p) shellPaths.Add(p);
+            }
+        }
+
         foreach (var sourcePath in sourcePaths)
         {
             // Path-exact fetch first (handles `path:X` / `@X` pointing at a single Code node).
             var single = await meshStorage.GetNode(sourcePath).FirstAsync().ToTask(ct);
             if (single != null) AddIfCodeNode(single);
-
-            // Then all descendants INCLUDING satellites — that's the Code-file case.
-            await foreach (var descendant in meshStorage.GetAllDescendantsAsync(sourcePath))
-                AddIfCodeNode(descendant);
         }
 
-        void AddIfCodeNode(MeshNode candidate)
+        // Now fetch live content for each Code shell — one authoritative read per
+        // path via `meshStorage.GetNode` (single-node, no descendant load). NEVER
+        // read `Content` off the shell row (stale by definition; see
+        // `Doc/Architecture/CqrsAndContentAccess.md` → "Select only what you need").
+        foreach (var p in shellPaths)
+        {
+            if (!seenCodePaths.Add(p)) continue;
+            var live = await meshStorage.GetNode(p).FirstAsync().ToTask(ct);
+            if (live != null) AddIfCodeNode(live, skipDedup: true);
+        }
+
+        void AddIfCodeNode(MeshNode candidate, bool skipDedup = false)
         {
             if (candidate.NodeType != CodeNodeType.NodeType) return;
             if (candidate.Content is not CodeConfiguration codeConfig) return;
             if (string.IsNullOrEmpty(codeConfig.Code)) return;
-            if (candidate.Path is { Length: > 0 } p && !seenCodePaths.Add(p)) return;
+            if (!skipDedup && candidate.Path is { Length: > 0 } p && !seenCodePaths.Add(p)) return;
             codeFiles.Add(codeConfig.Code);
             if (candidate.Path != null) codeFilePaths.Add(candidate.Path);
         }

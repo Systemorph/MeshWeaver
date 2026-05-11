@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -11,22 +10,37 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Routing persistence core that maintains per-partition IStorageService instances.
-/// Routes operations based on the first segment of the path.
-/// Auto-provisions new partitions on first access via IPartitionedStoreFactory.
+/// Reduced-scope partition router: keeps a per-partition <see cref="IStorageAdapter"/>
+/// dict + handles auto-provisioning and the <see cref="IMeshQueryProvider"/> registry.
+///
+/// <para>🚨 The router exposes ONLY <see cref="Save"/> + <see cref="Delete"/> + partition
+/// discovery. Everything else (reads / enumeration / partition objects / comments /
+/// security filtering) was deleted in the persistence cull (2026-05-11) — application
+/// code now goes through <c>workspace.GetMeshNodeStream(path)</c> /
+/// <c>workspace.GetQuery(id, queries…)</c> (per
+/// <c>Doc/Architecture/CqrsAndContentAccess.md</c>). Per-node hubs hold their own
+/// <see cref="IStorageAdapter"/> reference for content access.</para>
+///
+/// <para>The <see cref="QueryProviders"/> dict is the fan-out target for
+/// <see cref="RoutingMeshQueryProvider"/>. Each partition either supplies its own
+/// (Postgres native push-down, static-node provider) or — for adapter-only
+/// pedestrian backends — gets a <see cref="Query.MeshQueryEngine"/> instance bound
+/// to the adapter.</para>
+///
+/// <para>API: <see cref="IObservable{T}"/> end-to-end (no <c>Task&lt;T&gt;</c>,
+/// no <c>.ToTask()</c>). Composes with <c>SelectMany</c>/<c>Subscribe</c>.</para>
 /// </summary>
-internal class RoutingPersistenceServiceCore : IStorageService
+internal class RoutingPersistenceServiceCore
 {
     private readonly IPartitionedStoreFactory _factory;
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly IEnumerable<IStaticNodeProvider> _staticNodeProviders;
     private readonly IEnumerable<IPartitionStorageProvider> _partitionStorageProviders;
-    private readonly ConcurrentDictionary<string, IStorageService> _stores = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IStorageAdapter> _adapters = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IVersionQuery> _versionQueries = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
     private volatile bool _initialized;
-
 
     public RoutingPersistenceServiceCore(
         IPartitionedStoreFactory factory,
@@ -39,71 +53,96 @@ internal class RoutingPersistenceServiceCore : IStorageService
         _staticNodeProviders = staticNodeProviders ?? [];
         _partitionStorageProviders = partitionStorageProviders ?? [];
 
-        // Synchronous seed: every IPartitionStorageProvider with an explicit
-        // PartitionDefinition.Namespace is registered into _stores +
-        // _queryProviders eagerly. This is the production wiring path for
-        // read-only embedded-resource partitions (e.g. AddDocumentation), so
-        // queries that fan out across all partitions reach Doc/Architecture/...
-        // without waiting for a lazy InitializeAsync to run.
-        //
-        // Per Doc/Architecture/AsynchronousCalls.md: nothing async in
-        // hub-reachable code. The query path that depends on _queryProviders
-        // (RoutingMeshQueryProvider.QueryAsync / ObserveQuery) MUST NOT
-        // .Wait() / .Result on EnsureInitializedAsync — that deadlocks the
-        // hub action block. Pre-seed synchronously here instead.
-        //
-        // Backend-backed partitions (FileSystem subdirs, PostgreSQL schemas)
-        // still discover lazily via DiscoverNewProvidersAsync — they have no
-        // PartitionDefinition.Namespace at registration time.
+        // Eager registration for IPartitionStorageProvider rules with a fixed
+        // PartitionDefinition.Namespace (single-namespace rules like EmbeddedResource).
+        // Wildcard / pattern rules are exercised lazily by GetOrCreateAdapterAsync
+        // on first first-segment access.
         foreach (var provider in _partitionStorageProviders)
         {
             var ns = provider.PartitionDefinition?.Namespace;
             if (string.IsNullOrEmpty(ns)) continue;
-            if (_stores.ContainsKey(ns)) continue;
+            if (_adapters.ContainsKey(ns)) continue;
 
-            var core = NewAdapterCore(ns, provider.Adapter);
-            if (_stores.TryAdd(ns, core))
+            if (_adapters.TryAdd(ns, provider.Adapter))
             {
                 _queryProviders[ns] =
-                    new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
+                    new Query.MeshQueryEngine(persistence: null!, changeNotifier: _changeNotifier);
             }
         }
     }
 
+    internal IReadOnlyDictionary<string, IMeshQueryProvider> QueryProviders => _queryProviders;
+    internal IReadOnlyDictionary<string, IVersionQuery> VersionQueries => _versionQueries;
+    internal IEnumerable<string> PartitionNames => _adapters.Keys;
+
     /// <summary>
-    /// Builds an <see cref="AdapterPersistenceService"/> for a given partition's
-    /// first segment and seeds it with every <see cref="IStaticNodeProvider"/>
-    /// node that lives under that segment. Without this fan-in the seeded
-    /// in-memory nodes (e.g. <c>builder.AddMeshNodes(...)</c> via
-    /// <see cref="MeshConfigurationStaticNodeProvider"/>) would be invisible to
-    /// reads — they used to be merged in the now-removed
-    /// <c>InMemoryPersistenceService._nodes</c> cache.
+    /// Resolves the partition key for a path via longest-prefix match against the
+    /// registered partitions, then returns the matching <see cref="IStorageAdapter"/>.
+    /// Returns null if no partition matches (caller decides what to do).
     /// </summary>
-    private AdapterPersistenceService NewAdapterCore(string firstSegment, IStorageAdapter? adapter)
+    internal IStorageAdapter? TryGetAdapter(string? path)
     {
-        var core = new AdapterPersistenceService(adapter, _changeNotifier);
-        foreach (var staticProvider in _staticNodeProviders)
+        var key = ResolvePartitionKey(path);
+        return key != null && _adapters.TryGetValue(key, out var adapter) ? adapter : null;
+    }
+
+    private string? ResolvePartitionKey(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        var test = path;
+        while (true)
         {
-            foreach (var node in staticProvider.GetStaticNodes())
-            {
-                if (string.IsNullOrEmpty(node.Path)) continue;
-                if (string.Equals(
-                        PathPartition.GetFirstSegment(node.Path),
-                        firstSegment,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    core.SeedIfAbsent(node);
-                }
-            }
+            if (_adapters.ContainsKey(test)) return test;
+            var lastSlash = test.LastIndexOf('/');
+            if (lastSlash < 0) break;
+            test = test[..lastSlash];
         }
-        return core;
+        return null;
+    }
+
+    /// <summary>
+    /// Saves a node by routing to the adapter for the node's partition. Auto-provisions
+    /// the partition if it doesn't yet exist. Publishes a change notification on success.
+    /// </summary>
+    public IObservable<MeshNode> Save(MeshNode node, JsonSerializerOptions options)
+    {
+        var segment = ResolvePartitionKey(node.Path)
+            ?? PathPartition.GetFirstSegment(node.Path)
+            ?? throw new ArgumentException($"Cannot save node: no partition found for path '{node.Path}'");
+
+        var savedNode = node with
+        {
+            LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
+        };
+
+        return GetOrCreateAdapter(segment)
+            .SelectMany(adapter => adapter.Write(savedNode, options))
+            .Select(_ => savedNode)
+            .Do(saved => _changeNotifier?.NotifyChange(
+                DataChangeNotification.Updated(NormalizePath(saved.Path), saved)));
+    }
+
+    /// <summary>
+    /// Deletes a node by routing to the adapter for the node's partition.
+    /// Publishes a change notification on success.
+    /// </summary>
+    public IObservable<string> Delete(string path)
+    {
+        var adapter = TryGetAdapter(path);
+        if (adapter == null)
+            return Observable.Return(path);
+
+        var normalized = NormalizePath(path);
+        return adapter.Delete(path)
+            .Select(_ => path)
+            .Do(_ => _changeNotifier?.NotifyChange(
+                DataChangeNotification.Deleted(normalized, null)));
     }
 
     /// <summary>
     /// Ensures partitions have been discovered at least once.
-    /// Uses double-checked locking for thread safety.
     /// </summary>
-    private async Task EnsureInitializedAsync(CancellationToken ct = default)
+    public async Task EnsureInitializedAsync(CancellationToken ct = default)
     {
         if (_initialized) return;
         await _provisionLock.WaitAsync(ct);
@@ -119,50 +158,21 @@ internal class RoutingPersistenceServiceCore : IStorageService
         }
     }
 
-    /// <summary>
-    /// Gets all registered query providers (for use by RoutingMeshQueryProvider).
-    /// </summary>
-    internal IReadOnlyDictionary<string, IMeshQueryProvider> QueryProviders => _queryProviders;
-    internal IReadOnlyDictionary<string, IVersionQuery> VersionQueries => _versionQueries;
-
-    /// <summary>
-    /// Gets all registered partition names.
-    /// </summary>
-    internal IEnumerable<string> PartitionNames => _stores.Keys;
-
-
-    /// <summary>
-    /// Discovers partitions not yet provisioned, provisions each, and yields its
-    /// key and query provider. Already-provisioned partitions are skipped. Safe
-    /// to call concurrently.
-    ///
-    /// <para>Reactive shape: returns <see cref="IObservable{T}"/> so subscribers
-    /// can compose without <c>await</c>. Inner <see cref="Observable.FromAsync{TResult}(Func{Task{TResult}})"/>
-    /// runs the factory calls on the default scheduler (thread pool) — they
-    /// never capture the caller's synchronization context, so a hub action
-    /// block calling this won't deadlock waiting for its own pump. The
-    /// <see cref="Observable.SelectMany{TSource,TResult}(IObservable{TSource},Func{TSource,IObservable{TResult}})"/>
-    /// fan-out provisions partitions in parallel; each emits as its store is
-    /// ready (so the slowest partition doesn't block the fastest).</para>
-    /// </summary>
     internal IObservable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProviders(CancellationToken ct = default)
     {
-        // 30 s startup ceiling, composed with caller's token. The Observable.FromAsync
-        // calls below pass `ct` through; the timeout is enforced via Observable.Timeout.
         return Observable
             .FromAsync(token => _factory.DiscoverPartitionsAsync(token), Scheduler.Default)
             .Timeout(TimeSpan.FromSeconds(30))
             .SelectMany(partitions => partitions.ToObservable())
-            .Where(segment => !_stores.ContainsKey(segment))
+            .Where(segment => !_adapters.ContainsKey(segment))
             .SelectMany(segment =>
                 Observable.FromAsync(token => _factory.CreateStoreAsync(segment, token), Scheduler.Default)
                     .Select(partition =>
                     {
-                        var core = NewAdapterCore(segment, partition.StorageAdapter);
-                        if (!_stores.TryAdd(segment, core))
+                        if (!_adapters.TryAdd(segment, partition.StorageAdapter!))
                             return ((string, IMeshQueryProvider)?)null;
                         var queryProvider = partition.QueryProvider
-                            ?? new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
+                            ?? new Query.MeshQueryEngine(persistence: null!, changeNotifier: _changeNotifier);
                         _queryProviders[segment] = queryProvider;
                         if (partition.VersionQuery != null)
                             _versionQueries[segment] = partition.VersionQuery;
@@ -172,17 +182,9 @@ internal class RoutingPersistenceServiceCore : IStorageService
             .Select(t => t!.Value);
     }
 
-    /// <summary>
-    /// Backwards-compatible <see cref="IAsyncEnumerable{T}"/> wrapper around
-    /// <see cref="DiscoverNewProviders"/> for existing <c>await foreach</c>
-    /// callers. New code should prefer the observable form — see
-    /// <c>Doc/Architecture/AsynchronousCalls.md</c>.
-    /// </summary>
     internal async IAsyncEnumerable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProvidersAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
-        // Bridge: subscribe the observable, push each emission into a channel,
-        // and yield from the channel as the consumer awaits.
         var ch = System.Threading.Channels.Channel.CreateUnbounded<(string, IMeshQueryProvider)>();
         using var sub = DiscoverNewProviders(ct).Subscribe(
             value => ch.Writer.TryWrite(value),
@@ -196,51 +198,38 @@ internal class RoutingPersistenceServiceCore : IStorageService
         }
     }
 
-    private async Task<IStorageService> GetOrCreateStoreAsync(string firstSegment, CancellationToken ct)
+    private IObservable<IStorageAdapter> GetOrCreateAdapter(string firstSegment) =>
+        Observable.Defer(() =>
+            _adapters.TryGetValue(firstSegment, out var existing)
+                ? Observable.Return(existing)
+                : Observable.FromAsync(ct => GetOrCreateAdapterAsync(firstSegment, ct), Scheduler.Default));
+
+    private async Task<IStorageAdapter> GetOrCreateAdapterAsync(string firstSegment, CancellationToken ct)
     {
-        if (_stores.TryGetValue(firstSegment, out var existing))
-            return existing;
+        if (_adapters.TryGetValue(firstSegment, out var existing)) return existing;
 
         await _provisionLock.WaitAsync(ct);
         try
         {
-            if (_stores.TryGetValue(firstSegment, out existing))
-                return existing;
+            if (_adapters.TryGetValue(firstSegment, out existing)) return existing;
 
-            // Sequential rule lookup: first IPartitionStorageProvider whose
-            // Matches() returns true wins. This is the new routing model —
-            // explicit rules in registration order, no DataSource string
-            // discriminators, no special-cases inside the routing core.
-            // See IPartitionStorageProvider.cs for the why.
             foreach (var provider in _partitionStorageProviders)
             {
-                if (!provider.Matches(firstSegment))
-                    continue;
-
-                // 🚨 NO eager InitializeAsync — that drove a recursive
-                // ListChildPaths walk over the whole partition tree per
-                // first-segment activation (~30% of CPU per profiling).
-                // Lazy reads via GetNode/GetChildren/GetDescendants pull
-                // only what's actually queried.
-                var providerCore = NewAdapterCore(firstSegment, provider.Adapter);
-                _stores[firstSegment] = providerCore;
+                if (!provider.Matches(firstSegment)) continue;
+                _adapters[firstSegment] = provider.Adapter;
                 _queryProviders[firstSegment] =
-                    new Query.MeshQueryEngine(providerCore, changeNotifier: _changeNotifier);
-                return providerCore;
+                    new Query.MeshQueryEngine(persistence: null!, changeNotifier: _changeNotifier);
+                return provider.Adapter;
             }
 
-            // No rule matched — fall through to the legacy partitioned-store
-            // factory (FileSystem / Postgres / Cosmos). This is the implicit
-            // catch-all until a wildcard provider is registered.
             var partition = await _factory.CreateStoreAsync(firstSegment, ct);
-            var core = NewAdapterCore(firstSegment, partition.StorageAdapter);
-            _stores[firstSegment] = core;
+            _adapters[firstSegment] = partition.StorageAdapter!;
             var queryProvider = partition.QueryProvider
-                ?? new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
+                ?? new Query.MeshQueryEngine(persistence: null!, changeNotifier: _changeNotifier);
             _queryProviders[firstSegment] = queryProvider;
             if (partition.VersionQuery != null)
                 _versionQueries[firstSegment] = partition.VersionQuery;
-            return core;
+            return partition.StorageAdapter!;
         }
         finally
         {
@@ -248,74 +237,21 @@ internal class RoutingPersistenceServiceCore : IStorageService
         }
     }
 
-    private IStorageService? TryGetStore(string? path)
-    {
-        var key = ResolvePartitionKey(path);
-        return key != null && _stores.TryGetValue(key, out var store) ? store : null;
-    }
-
-    /// <summary>
-    /// Gets the partition prefix for a given path (longest matching registered prefix).
-    /// </summary>
-    internal string? GetPartitionPrefix(string? path)
-        => PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
-
-    /// <summary>
-    /// Resolves the partition key for a given path using longest-prefix matching.
-    /// Walks from full path down to first segment, returns the first _stores key that matches.
-    /// </summary>
-    private string? ResolvePartitionKey(string? path)
-    {
-        if (string.IsNullOrEmpty(path)) return null;
-
-        // Walk from full path down to first segment
-        var test = path;
-        while (true)
-        {
-            if (_stores.ContainsKey(test))
-                return test;
-
-            var lastSlash = test.LastIndexOf('/');
-            if (lastSlash < 0) break;
-            test = test[..lastSlash];
-        }
-
-        return null;
-    }
-
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        // 0. Pre-seed stores for IPartitionStorageProvider rules that have
-        //    a fixed PartitionDefinition (single-namespace rules like
-        //    EmbeddedResource). Wildcard / pattern rules don't surface here
-        //    — they'll be exercised lazily by GetOrCreateStoreAsync when
-        //    a new first-segment path arrives. This keeps single-namespace
-        //    partitions (e.g. Doc) visible to listings without forcing
-        //    wildcard rules to enumerate every possible namespace upfront.
         foreach (var provider in _partitionStorageProviders)
         {
             var ns = provider.PartitionDefinition?.Namespace;
-            if (string.IsNullOrEmpty(ns))
-                continue;
-            if (_stores.ContainsKey(ns))
-                continue;
+            if (string.IsNullOrEmpty(ns)) continue;
+            if (_adapters.ContainsKey(ns)) continue;
 
-            // No eager InitializeAsync — the cache is gone, reads pass
-            // through to the storage adapter directly (see
-            // AdapterPersistenceService rewrite).
-            var core = NewAdapterCore(ns, provider.Adapter);
-            if (_stores.TryAdd(ns, core))
+            if (_adapters.TryAdd(ns, provider.Adapter))
             {
                 _queryProviders[ns] =
-                    new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
+                    new Query.MeshQueryEngine(persistence: null!, changeNotifier: _changeNotifier);
             }
         }
 
-        // 1. Collect every PartitionDefinition declared by any static-provider /
-        //    config-time AddMeshNodes seed. These tell the routing layer which
-        //    partitions exist and where they live. See `AddDocumentation` for the
-        //    canonical pattern: registers a `Documentation` Partition node with
-        //    `Content = new PartitionDefinition { Namespace = "Doc", DataSource = "static" }`.
         var allStaticNodes = _staticNodeProviders
             .SelectMany(p => p.GetStaticNodes())
             .ToList();
@@ -325,546 +261,34 @@ internal class RoutingPersistenceServiceCore : IStorageService
             .OfType<PartitionDefinition>()
             .ToList();
 
-        // 2. Pre-init writable partitions (DataSource != "static") on the backend
-        //    factory so PostgreSQL `CREATE SCHEMA`, Cosmos containers, etc. are ready.
-        //    Static-only partitions skip this — they have no backing store to provision.
         var writableDefs = allPartitionDefs
             .Where(d => !string.Equals(d.DataSource, "static", StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (writableDefs.Count > 0)
             await _factory.InitializeDefaultPartitionsAsync(writableDefs, ct);
 
-        // 3. Discover existing partitions on the writable backend (FS subdirs,
-        //    PostgreSQL schemas, Cosmos containers) — this also re-registers the
-        //    ones we just init'd in step 2.
         await foreach (var (_, _) in DiscoverNewProvidersAsync(ct))
         { }
 
-        // 4. Register a read-only StaticNodePartitionStore for every PartitionDefinition
-        //    whose DataSource == "static". The store is populated with all
-        //    IStaticNodeProvider nodes whose first segment matches the partition's
-        //    Namespace. This surfaces NodeType definitions, doc namespaces, and test
-        //    seed nodes through the same routing path as writable partitions — without
-        //    leaking IStaticNodeProvider into the writable persisters
-        //    (AdapterPersistenceService, FileSystemPersistenceService, ...).
-        //    See Doc/Architecture/PartitionedPersistence.md §"Where Partitions Come From".
         foreach (var def in allPartitionDefs)
         {
             if (!string.Equals(def.DataSource, "static", StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (string.IsNullOrEmpty(def.Namespace))
-                continue;
-            if (_stores.ContainsKey(def.Namespace))
-                continue; // a writable partition already claimed this name
+            if (string.IsNullOrEmpty(def.Namespace)) continue;
+            if (_adapters.ContainsKey(def.Namespace)) continue;
 
             var nodesInPartition = allStaticNodes
                 .Where(n => string.Equals(
                     PathPartition.GetFirstSegment(n.Path),
                     def.Namespace,
                     StringComparison.OrdinalIgnoreCase));
-            var store = new StaticNodePartitionStore(nodesInPartition);
-            if (_stores.TryAdd(def.Namespace, store))
+            var staticAdapter = new StaticNodeStorageAdapter(nodesInPartition);
+            if (_adapters.TryAdd(def.Namespace, staticAdapter))
             {
-                _queryProviders[def.Namespace] = new Query.MeshQueryEngine(store, changeNotifier: _changeNotifier);
+                _queryProviders[def.Namespace] = new Query.MeshQueryEngine(persistence: null!, changeNotifier: _changeNotifier);
             }
         }
     }
 
-
-    #region Node Operations
-
-    public IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options) =>
-        // Pure IObservable composition end-to-end — no inner await, no
-        // .FirstAsync().ToTask() bridge. The init step is wrapped in
-        // Observable.FromAsync on Scheduler.Default so the caller's
-        // synchronization context is never captured (no deadlock surface
-        // for hub-action-block callers). Per Doc/Architecture/AsynchronousCalls.md.
-        Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
-            .SelectMany(_ =>
-            {
-                var partitionKey = ResolvePartitionKey(path);
-                if (partitionKey == null || !_stores.TryGetValue(partitionKey, out var store))
-                    return Observable.Return<MeshNode?>(null);
-                return store.GetNode(path, options);
-            });
-
-    /// <summary>
-    /// Test/back-compat shim. Production callers go through <see cref="GetNode"/>.
-    /// </summary>
-    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default) =>
-        GetNode(path, options).FirstAsync().ToTask(ct);
-
-    public async IAsyncEnumerable<MeshNode> GetChildrenAsync(
-        string? parentPath,
-        JsonSerializerOptions options)
-    {
-        await EnsureInitializedAsync();
-        var segment = PathPartition.GetFirstSegment(parentPath);
-
-        if (segment == null)
-        {
-            // Root level: each partition contributes its root node
-            foreach (var (seg, store) in _stores)
-            {
-                var rootNode = await store.GetNode(seg, options).FirstAsync().ToTask();
-                if (rootNode != null)
-                    yield return rootNode;
-            }
-            yield break;
-        }
-
-        var core = TryGetStore(parentPath);
-        if (core == null) yield break;
-        await foreach (var child in core.GetChildrenAsync(parentPath, options))
-            yield return child;
-    }
-
-    public async IAsyncEnumerable<MeshNode> GetAllChildrenAsync(
-        string? parentPath,
-        JsonSerializerOptions options)
-    {
-        await EnsureInitializedAsync();
-        var segment = PathPartition.GetFirstSegment(parentPath);
-        if (segment == null) yield break;
-
-        var core = TryGetStore(parentPath);
-        if (core == null) yield break;
-        await foreach (var child in core.GetAllChildrenAsync(parentPath, options))
-            yield return child;
-    }
-
-    public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(
-        string? parentPath,
-        JsonSerializerOptions options)
-    {
-        await EnsureInitializedAsync();
-        var segment = PathPartition.GetFirstSegment(parentPath);
-
-        if (segment == null)
-        {
-            // Root level: each partition contributes root node + all descendants
-            foreach (var (seg, store) in _stores)
-            {
-                var rootNode = await store.GetNode(seg, options).FirstAsync().ToTask();
-                if (rootNode != null)
-                    yield return rootNode;
-
-                await foreach (var desc in store.GetDescendantsAsync(seg, options))
-                    yield return desc;
-            }
-            yield break;
-        }
-
-        var core = TryGetStore(parentPath);
-        if (core == null) yield break;
-        await foreach (var desc in core.GetDescendantsAsync(parentPath, options))
-            yield return desc;
-    }
-
-    public async IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(
-        string? parentPath,
-        JsonSerializerOptions options)
-    {
-        await EnsureInitializedAsync();
-        var segment = PathPartition.GetFirstSegment(parentPath);
-
-        if (segment == null)
-        {
-            foreach (var (seg, store) in _stores)
-            {
-                var rootNode = await store.GetNode(seg, options).FirstAsync().ToTask();
-                if (rootNode != null)
-                    yield return rootNode;
-
-                await foreach (var desc in store.GetAllDescendantsAsync(seg, options))
-                    yield return desc;
-            }
-            yield break;
-        }
-
-        var core = TryGetStore(parentPath);
-        if (core == null) yield break;
-        await foreach (var desc in core.GetAllDescendantsAsync(parentPath, options))
-            yield return desc;
-    }
-
-    public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options)
-    {
-        var segment = ResolvePartitionKey(node.Path)
-            ?? PathPartition.GetFirstSegment(node.Path)
-            ?? throw new ArgumentException($"Cannot save node: no partition found for path '{node.Path}'");
-
-        return GetOrCreateStore(segment)
-            .SelectMany(store => store.SaveNode(node, options))
-            .SelectMany(saved =>
-                node.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace)
-                    ? EnsurePartitionSchema(def).Select(_ => saved)
-                    : Observable.Return(saved));
-    }
-
-    /// <summary>
-    /// IObservable wrapper around <see cref="GetOrCreateStoreAsync"/>. Subscribers
-    /// compose with <c>SelectMany</c> instead of bridging to Task — keeps the
-    /// caller's reactive chain hot through the partition-resolution leg.
-    /// </summary>
-    private IObservable<IStorageService> GetOrCreateStore(string firstSegment) =>
-        Observable.Defer(() =>
-            _stores.TryGetValue(firstSegment, out var existing)
-                ? Observable.Return(existing)
-                : Observable.FromAsync(ct => GetOrCreateStoreAsync(firstSegment, ct), Scheduler.Default));
-
-    /// <summary>
-    /// Ensures the schema/tables exist for a partition definition. Returns
-    /// IObservable so the caller composes via SelectMany; the only Task→Observable
-    /// bridge is the leaf <see cref="IPartitionedStoreFactory"/> calls scheduled
-    /// on TaskPool.
-    /// </summary>
-    private IObservable<Unit> EnsurePartitionSchema(PartitionDefinition def) =>
-        Observable.Defer<Unit>(() =>
-            Observable.FromAsync(
-                ct => _factory.InitializeDefaultPartitionsAsync([def], ct),
-                Scheduler.Default)
-            .SelectMany(_ => _stores.ContainsKey(def.Namespace)
-                ? Observable.Return(Unit.Default)
-                : Observable.FromAsync(ct => _factory.CreateStoreAsync(def.Namespace, ct), Scheduler.Default)
-                    .Select(partition =>
-                    {
-                        var core = NewAdapterCore(def.Namespace, partition.StorageAdapter);
-                        if (_stores.TryAdd(def.Namespace, core))
-                        {
-                            var queryProvider = partition.QueryProvider
-                                ?? new Query.MeshQueryEngine(core, changeNotifier: _changeNotifier);
-                            _queryProviders[def.Namespace] = queryProvider;
-                            if (partition.VersionQuery != null)
-                                _versionQueries[def.Namespace] = partition.VersionQuery;
-                        }
-                        return Unit.Default;
-                    })));
-
-    public IObservable<string> DeleteNode(string path, bool recursive = false)
-    {
-        var segment = PathPartition.GetFirstSegment(path);
-        if (segment == null)
-            return Observable.Return(path);
-
-        var store = TryGetStore(path);
-        if (store == null)
-            return Observable.Return(path);
-
-        return store.DeleteNode(path, recursive);
-    }
-
-    public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options)
-    {
-        var sourceSegment = ResolvePartitionKey(sourcePath)
-            ?? PathPartition.GetFirstSegment(sourcePath)
-            ?? throw new ArgumentException($"No partition found for source path '{sourcePath}'");
-        var targetSegment = ResolvePartitionKey(targetPath)
-            ?? PathPartition.GetFirstSegment(targetPath)
-            ?? throw new ArgumentException($"No partition found for target path '{targetPath}'");
-
-        if (string.Equals(sourceSegment, targetSegment, StringComparison.OrdinalIgnoreCase))
-        {
-            // Same partition: delegate directly.
-            return GetOrCreateStore(sourceSegment)
-                .SelectMany(store => store.MoveNode(sourcePath, targetPath, options));
-        }
-
-        // Cross-partition move: move root node + all descendants. Compose via SelectMany;
-        // the only Task→Observable bridge is the leaf IAsyncEnumerable enumeration over
-        // descendants, scheduled on TaskPool via Observable.Create.
-        return GetOrCreateStore(sourceSegment)
-            .SelectMany(sourceStore => GetOrCreateStore(targetSegment)
-                .SelectMany(targetStore => sourceStore.GetNode(sourcePath, options)
-                    .SelectMany(sourceNode => sourceNode is null
-                        ? Observable.Throw<MeshNode>(
-                            new InvalidOperationException($"Source node not found: {sourcePath}"))
-                        : MoveCrossPartitionImpl(
-                            sourcePath, targetPath, options,
-                            sourceStore, targetStore, targetSegment, sourceNode))));
-    }
-
-    private IObservable<MeshNode> MoveCrossPartitionImpl(
-        string sourcePath, string targetPath, JsonSerializerOptions options,
-        IStorageService sourceStore, IStorageService targetStore, string targetSegment,
-        MeshNode sourceNode)
-    {
-        // Existence check on target — composed via the IObservable surface.
-        return targetStore.Exists(targetPath)
-            .SelectMany(targetExists => targetExists
-                ? Observable.Throw<MeshNode>(
-                    new InvalidOperationException($"Target path already exists: {targetPath}"))
-                : Observable.FromAsync(
-                        async ct =>
-                        {
-                            // Collect descendants — single async leaf into a list, no
-                            // hub round-trips, runs on TaskPool.
-                            var descendants = new List<MeshNode>();
-                            await foreach (var desc in sourceStore.GetDescendantsAsync(sourcePath, options).WithCancellation(ct))
-                                descendants.Add(desc);
-                            return descendants;
-                        }, Scheduler.Default)
-                    .SelectMany(descendants => MoveDescendantsAndRoot(
-                        sourcePath, targetPath, options,
-                        sourceStore, targetStore, targetSegment,
-                        sourceNode, descendants)));
-    }
-
-    private IObservable<MeshNode> MoveDescendantsAndRoot(
-        string sourcePath, string targetPath, JsonSerializerOptions options,
-        IStorageService sourceStore, IStorageService targetStore, string targetSegment,
-        MeshNode sourceNode, List<MeshNode> descendants)
-    {
-        // Save each descendant in sequence (preserves prior semantics).
-        // Concat ensures sequential subscription; each store.SaveNode is a cold
-        // IObservable that doesn't fire until subscribed.
-        var descSaves = descendants.Select(descendant =>
-        {
-            var newDescPath = targetPath + descendant.Path[sourcePath.Length..];
-            var descTargetSeg = ResolvePartitionKey(newDescPath) ?? PathPartition.GetFirstSegment(newDescPath);
-            var descStoreObs = descTargetSeg != null && !string.Equals(descTargetSeg, targetSegment, StringComparison.OrdinalIgnoreCase)
-                ? GetOrCreateStore(descTargetSeg)
-                : Observable.Return(targetStore);
-
-            var movedDesc = MeshNode.FromPath(newDescPath) with
-            {
-                Name = descendant.Name,
-                NodeType = descendant.NodeType,
-                Icon = descendant.Icon,
-                Order = descendant.Order,
-                Content = descendant.Content,
-                AssemblyLocation = descendant.AssemblyLocation,
-                HubConfiguration = descendant.HubConfiguration,
-                GlobalServiceConfigurations = descendant.GlobalServiceConfigurations
-            };
-
-            return descStoreObs.SelectMany(s => s.SaveNode(movedDesc, options));
-        });
-
-        var movedNode = MeshNode.FromPath(targetPath) with
-        {
-            Name = sourceNode.Name,
-            NodeType = sourceNode.NodeType,
-            Icon = sourceNode.Icon,
-            Order = sourceNode.Order,
-            Content = sourceNode.Content,
-            AssemblyLocation = sourceNode.AssemblyLocation,
-            HubConfiguration = sourceNode.HubConfiguration,
-            GlobalServiceConfigurations = sourceNode.GlobalServiceConfigurations
-        };
-
-        // Run all descendant saves, then the root save, then the source delete.
-        return (descSaves.Any()
-                ? descSaves.Aggregate((a, b) => a.IgnoreElements().Concat(b))
-                : Observable.Empty<MeshNode>())
-            .IgnoreElements()
-            .Concat(targetStore.SaveNode(movedNode, options))
-            .SelectMany(saved => sourceStore.DeleteNode(sourcePath, recursive: true)
-                .Select(_ => saved));
-    }
-
-    public async IAsyncEnumerable<MeshNode> SearchAsync(
-        string? parentPath,
-        string query,
-        JsonSerializerOptions options)
-    {
-        await EnsureInitializedAsync();
-        var segment = PathPartition.GetFirstSegment(parentPath);
-
-        if (segment == null)
-        {
-            // Fan out to all partitions, scoping each to its own segment
-            foreach (var (seg, store) in _stores)
-            {
-                await foreach (var node in store.SearchAsync(seg, query, options))
-                    yield return node;
-            }
-            yield break;
-        }
-
-        var core = TryGetStore(parentPath);
-        if (core == null) yield break;
-        await foreach (var node in core.SearchAsync(parentPath, query, options))
-            yield return node;
-    }
-
-    public IObservable<bool> Exists(string path) =>
-        Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
-            .SelectMany(_ =>
-            {
-                var store = TryGetStore(path);
-                return store == null
-                    ? Observable.Return(false)
-                    : store.Exists(path);
-            });
-
-    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
-        string fullPath, JsonSerializerOptions options) =>
-        PathPartition.GetFirstSegment(fullPath) is null
-            ? Observable.Return<(MeshNode?, int)>((null, 0))
-            : Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
-                .SelectMany(_ =>
-                {
-                    var store = TryGetStore(fullPath);
-                    return store == null
-                        ? Observable.Return<(MeshNode?, int)>((null, 0))
-                        : store.FindBestPrefixMatch(fullPath, options);
-                });
-
-    #endregion
-
-    #region Comments
-
-    public async IAsyncEnumerable<Comment> GetCommentsAsync(
-        string nodePath,
-        JsonSerializerOptions options)
-    {
-        var segment = PathPartition.GetFirstSegment(nodePath);
-        if (segment == null) yield break;
-
-        var store = TryGetStore(nodePath);
-        if (store == null) yield break;
-
-        await foreach (var comment in store.GetCommentsAsync(nodePath, options))
-            yield return comment;
-    }
-
-    public IObservable<Comment> AddComment(Comment comment, JsonSerializerOptions options) =>
-        Observable.Defer(() =>
-        {
-            var store = TryGetStore(comment.PrimaryNodePath)
-                ?? throw new ArgumentException($"No partition found for comment path '{comment.PrimaryNodePath}'");
-            return store.AddComment(comment, options);
-        });
-
-    public IObservable<string> DeleteComment(string commentId) =>
-        // Fan out to all partitions since we don't know which one has the comment.
-        // Concat sequentially subscribes to each — none of them touch a hub.
-        Observable.Defer(() =>
-            _stores.Values
-                .Select(store => store.DeleteComment(commentId))
-                .Aggregate(
-                    Observable.Empty<string>().AsObservable(),
-                    (acc, next) => acc.IgnoreElements().Concat(next))
-                .DefaultIfEmpty(commentId));
-
-    public IObservable<Comment?> GetComment(string commentId) =>
-        // Fan out to all partitions sequentially; emit the first non-null match.
-        // Concat preserves cold/sequential semantics — no Task bridges between hops.
-        _stores.Values
-            .Select(store => store.GetComment(commentId))
-            .Aggregate(
-                (IObservable<Comment?>)Observable.Return<Comment?>(null),
-                (acc, next) => acc.SelectMany(found => found != null
-                    ? Observable.Return(found)
-                    : next));
-
-    #endregion
-
-    #region Partition Storage
-
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
-    {
-        await EnsureInitializedAsync();
-        var store = TryGetStore(nodePath);
-        if (store == null) yield break;
-        await foreach (var obj in store.GetPartitionObjectsAsync(nodePath, subPath, options))
-            yield return obj;
-    }
-
-    public IObservable<IReadOnlyCollection<object>> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options) =>
-        Observable.Defer(() =>
-        {
-            var store = TryGetStore(nodePath)
-                ?? throw new ArgumentException($"No partition found for path '{nodePath}'");
-            return store.SavePartitionObjects(nodePath, subPath, objects, options);
-        });
-
-    public IObservable<string> DeletePartitionObjects(string nodePath, string? subPath = null) =>
-        Observable.Defer(() =>
-        {
-            var store = TryGetStore(nodePath);
-            return store == null
-                ? Observable.Return(subPath ?? nodePath)
-                : store.DeletePartitionObjects(nodePath, subPath);
-        });
-
-    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-    {
-        var store = TryGetStore(nodePath);
-        return store == null
-            ? Observable.Return<DateTimeOffset?>(null)
-            : store.GetPartitionMaxTimestamp(nodePath, subPath);
-    }
-
-    #endregion
-
-    #region Secure Operations
-
-    public IObservable<MeshNode?> GetNodeSecure(string path, string? userId, JsonSerializerOptions options)
-        => Observable.FromAsync(ct => EnsureInitializedAsync(ct))
-            .SelectMany(_ =>
-            {
-                var store = TryGetStore(path);
-                if (store == null)
-                    return Observable.Return<MeshNode?>(null);
-                return store.GetNodeSecure(path, userId, options);
-            });
-
-    public IObservable<MeshNode> GetChildrenSecure(
-        string? parentPath,
-        string? userId,
-        JsonSerializerOptions options)
-        => Observable.FromAsync(() => EnsureInitializedAsync())
-            .SelectMany(_ =>
-            {
-                var segment = PathPartition.GetFirstSegment(parentPath);
-
-                if (segment == null)
-                {
-                    // Root level: each partition contributes its root node
-                    return _stores
-                        .Select(kvp => kvp.Value.GetNodeSecure(kvp.Key, userId, options))
-                        .Concat()
-                        .Where(n => n != null)
-                        .Select(n => n!);
-                }
-
-                var core = TryGetStore(parentPath);
-                if (core == null)
-                    return Observable.Empty<MeshNode>();
-                return core.GetChildrenSecure(parentPath, userId, options);
-            });
-
-    public IObservable<MeshNode> GetDescendantsSecure(
-        string? parentPath,
-        string? userId,
-        JsonSerializerOptions options)
-        => Observable.FromAsync(() => EnsureInitializedAsync())
-            .SelectMany(_ =>
-            {
-                var segment = PathPartition.GetFirstSegment(parentPath);
-
-                if (segment == null)
-                {
-                    // Root level: each partition contributes root node + all descendants
-                    return _stores
-                        .Select(kvp =>
-                        {
-                            var rootObs = kvp.Value.GetNodeSecure(kvp.Key, userId, options)
-                                .Where(n => n != null)
-                                .Select(n => n!);
-                            var descObs = kvp.Value.GetDescendantsSecure(kvp.Key, userId, options);
-                            return rootObs.Concat(descObs);
-                        })
-                        .Concat();
-                }
-
-                var core = TryGetStore(parentPath);
-                if (core == null)
-                    return Observable.Empty<MeshNode>();
-                return core.GetDescendantsSecure(parentPath, userId, options);
-            });
-
-    #endregion
+    private static string NormalizePath(string? path) => path?.Trim('/') ?? "";
 }

@@ -24,49 +24,17 @@ internal interface IStorageService
     /// <returns>Observable emitting the node or null</returns>
     IObservable<MeshNode?> GetNode(string path, JsonSerializerOptions options);
 
-    /// <summary>
-    /// Gets all child nodes at the specified parent path. Cold IObservable —
-    /// Subscribe triggers the read; emits one snapshot collection (and may emit
-    /// further snapshots if a backing implementation is live). Composes safely
-    /// from hub-handler contexts; no Task await on the calling scheduler. Per
-    /// Doc/Architecture/AsynchronousCalls.md.
-    /// </summary>
-    IObservable<IReadOnlyCollection<MeshNode>> GetChildren(string? parentPath, JsonSerializerOptions options) =>
-        ObservableTopNExtensions.ToObservableSequence(GetChildrenAsync(parentPath, options))
-            .ToList()
-            .Select(list => (IReadOnlyCollection<MeshNode>)list);
-
-    /// <summary>
-    /// Gets all child nodes at the specified parent path.
-    /// </summary>
-    /// <param name="parentPath">Parent path (empty or null for root level)</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <returns>Async enumerable of child nodes</returns>
-    IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options);
-
-    /// <summary>
-    /// Gets ALL child nodes including satellites (MainNode != Path).
-    /// Used by filtered queries (e.g., nodeType:Thread) that need to find satellite children.
-    /// Default implementation delegates to GetChildrenAsync (excludes satellites).
-    /// </summary>
-    IAsyncEnumerable<MeshNode> GetAllChildrenAsync(string? parentPath, JsonSerializerOptions options)
-        => GetChildrenAsync(parentPath, options);
-
-    /// <summary>
-    /// Gets all descendant nodes under the specified path.
-    /// </summary>
-    /// <param name="parentPath">Parent path</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <returns>Async enumerable of all descendant nodes</returns>
-    IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options);
-
-    /// <summary>
-    /// Gets ALL descendant nodes including satellites (MainNode != Path).
-    /// Used by filtered queries (e.g., nodeType:Thread) that need to find satellite nodes.
-    /// Default implementation delegates to GetDescendantsAsync (excludes satellites).
-    /// </summary>
-    IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath, JsonSerializerOptions options)
-        => GetDescendantsAsync(parentPath, options);
+    // GetChildren / GetChildrenAsync / GetAllChildrenAsync / GetDescendantsAsync
+    // / GetAllDescendantsAsync / GetChildrenSecure / GetDescendantsSecure / SearchAsync
+    // (the MeshNode-returning forms) all deleted in the persistence-layer cull
+    // (2026-05-11). The routing layer holds no enumeration concept at all.
+    // Application code uses `workspace.GetQuery(id, queries…)` per
+    // `Doc/Architecture/SyncedMeshNodeQueries.md`; recursive hub operations
+    // (Copy/Move/Delete) fan out per-node requests; backend-specific descendant
+    // walks live in `SimpleMeshNodeStorage` (for pedestrian adapters: in-memory,
+    // file-system, embedded resources) — exposed through a separate
+    // `IMeshQueryProvider` implementation, never through this interface.
+    // Postgres deployments route through PostgreSqlMeshQuery's SQL pushdown.
 
     /// <summary>
     /// Creates or updates a node. Cold IObservable — Subscribe triggers the write.
@@ -90,14 +58,8 @@ internal interface IStorageService
     /// </summary>
     IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options);
 
-    /// <summary>
-    /// Searches nodes by query text within their Name or Content.
-    /// </summary>
-    /// <param name="parentPath">Parent path to search under (null for all)</param>
-    /// <param name="query">Search query</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <returns>Async enumerable of matching nodes</returns>
-    IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options);
+    // SearchAsync deleted with the rest of the "load all" surface.
+    // Use `workspace.GetQuery(id, queryString)` (synced) for any user-facing search.
 
     /// <summary>
     /// Checks if a node exists at the given path. Cold IObservable — Subscribe
@@ -197,29 +159,10 @@ internal interface IStorageService
     IObservable<MeshNode?> GetNodeSecure(string path, string? userId, JsonSerializerOptions options)
         => GetNode(path, options);
 
-    /// <summary>
-    /// Gets child nodes, filtering out those the user cannot read.
-    /// Default implementation delegates to <see cref="GetChildrenAsync"/> (no security filtering).
-    /// Use SecurePersistenceServiceDecorator to add security.
-    /// </summary>
-    /// <param name="parentPath">Parent path (empty or null for root level)</param>
-    /// <param name="userId">The user's ObjectId (null for anonymous)</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <returns>Observable of accessible child nodes</returns>
-    IObservable<MeshNode> GetChildrenSecure(string? parentPath, string? userId, JsonSerializerOptions options)
-        => ObservableTopNExtensions.ToObservableSequence(GetChildrenAsync(parentPath, options));
-
-    /// <summary>
-    /// Gets descendant nodes, filtering out those the user cannot read.
-    /// Default implementation delegates to <see cref="GetDescendantsAsync"/> (no security filtering).
-    /// Use SecurePersistenceServiceDecorator to add security.
-    /// </summary>
-    /// <param name="parentPath">Parent path</param>
-    /// <param name="userId">The user's ObjectId (null for anonymous)</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <returns>Observable of accessible descendant nodes</returns>
-    IObservable<MeshNode> GetDescendantsSecure(string? parentPath, string? userId, JsonSerializerOptions options)
-        => ObservableTopNExtensions.ToObservableSequence(GetDescendantsAsync(parentPath, options));
+    // GetChildrenSecure / GetDescendantsSecure deleted with the rest of the
+    // "load all" surface. Permission-filtered listing is done via
+    // `workspace.GetQuery(id, query)` — the synced-query engine pushes RLS
+    // into the underlying provider.
 
     #endregion
 }

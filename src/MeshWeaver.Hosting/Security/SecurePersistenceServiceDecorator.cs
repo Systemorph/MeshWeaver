@@ -96,29 +96,10 @@ internal class SecurePersistenceServiceDecorator : IStorageService
                     });
             });
 
-    public IObservable<MeshNode> GetChildrenSecure(string? parentPath, string? userId, JsonSerializerOptions options)
-        => ObservableTopNExtensions.ToObservableSequence(_inner.GetChildrenAsync(parentPath, options))
-            .SelectMany(node => HasReadAccess(node, userId)
-                .Take(1)
-                .Do(ok =>
-                {
-                    if (!ok)
-                        _logger.LogTrace("SecurePersistence: Filtering out {Path} for user {UserId}", node.Path, userId ?? "(anonymous)");
-                })
-                .Where(ok => ok)
-                .Select(_ => node));
-
-    public IObservable<MeshNode> GetDescendantsSecure(string? parentPath, string? userId, JsonSerializerOptions options)
-        => ObservableTopNExtensions.ToObservableSequence(_inner.GetDescendantsAsync(parentPath, options))
-            .SelectMany(node => HasReadAccess(node, userId)
-                .Take(1)
-                .Do(ok =>
-                {
-                    if (!ok)
-                        _logger.LogTrace("SecurePersistence: Filtering out {Path} for user {UserId}", node.Path, userId ?? "(anonymous)");
-                })
-                .Where(ok => ok)
-                .Select(_ => node));
+    // GetChildrenSecure / GetDescendantsSecure / Get*Async / SearchAsync deleted in the
+    // persistence-layer cull (2026-05-11). Permission-filtered listing now flows through
+    // `workspace.GetQuery(id, query)` — the synced-query engine pushes RLS down into the
+    // underlying provider, so this decorator no longer has to filter row-by-row in memory.
 
     #endregion
 
@@ -133,18 +114,6 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
         => _inner.GetNode(path, options).FirstAsync().ToTask(ct);
 
-    public IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options)
-        => _inner.GetChildrenAsync(parentPath, options);
-
-    public IAsyncEnumerable<MeshNode> GetAllChildrenAsync(string? parentPath, JsonSerializerOptions options)
-        => _inner.GetAllChildrenAsync(parentPath, options);
-
-    public IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
-        => _inner.GetDescendantsAsync(parentPath, options);
-
-    public IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath, JsonSerializerOptions options)
-        => _inner.GetAllDescendantsAsync(parentPath, options);
-
     public IObservable<MeshNode> SaveNode(MeshNode node, JsonSerializerOptions options)
         => _inner.SaveNode(node, options);
 
@@ -153,9 +122,6 @@ internal class SecurePersistenceServiceDecorator : IStorageService
 
     public IObservable<MeshNode> MoveNode(string sourcePath, string targetPath, JsonSerializerOptions options)
         => _inner.MoveNode(sourcePath, targetPath, options);
-
-    public IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)
-        => _inner.SearchAsync(parentPath, query, options);
 
     public IObservable<bool> Exists(string path)
         => _inner.Exists(path);

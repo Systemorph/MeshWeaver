@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Linq;
 using System.Text.Json;
 
 namespace MeshWeaver.Mesh.Services;
@@ -40,103 +42,101 @@ public sealed class StaticNodeStorageAdapter : IStorageAdapter
     private static string Norm(string? path) => path?.Trim('/') ?? "";
 
     /// <inheritdoc/>
-    public Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        _nodes.TryGetValue(Norm(path), out var node);
-        return Task.FromResult<MeshNode?>(node);
-    }
-
-    /// <inheritdoc/>
-    public Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
-        => throw new NotSupportedException(
-            $"StaticNodeStorageAdapter is read-only; cannot write '{node.Path}'.");
-
-    /// <inheritdoc/>
-    public Task DeleteAsync(string path, CancellationToken ct = default)
-        => throw new NotSupportedException(
-            $"StaticNodeStorageAdapter is read-only; cannot delete '{path}'.");
-
-    /// <inheritdoc/>
-    public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
-        string? parentPath, CancellationToken ct = default)
-    {
-        var normalized = Norm(parentPath);
-        var prefix = string.IsNullOrEmpty(normalized) ? "" : normalized + "/";
-        var expectedDepth = string.IsNullOrEmpty(normalized)
-            ? 1
-            : normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).Length + 1;
-
-        var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var k in _nodes.Keys)
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => Observable.Defer(() =>
         {
-            if (!string.IsNullOrEmpty(prefix) && !k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (string.IsNullOrEmpty(prefix) && k.Contains('/'))
-            {
-                directoryPaths.Add(k.Split('/', 2)[0]);
-                continue;
-            }
-            var segments = k.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (segments.Length == expectedDepth)
-                nodePaths.Add(k);
-            else if (segments.Length > expectedDepth)
-            {
-                var dirPath = string.Join("/", segments.Take(expectedDepth));
-                if (!_nodes.ContainsKey(dirPath))
-                    directoryPaths.Add(dirPath);
-            }
-        }
-
-        return Task.FromResult<(IEnumerable<string>, IEnumerable<string>)>(
-            (nodePaths, directoryPaths));
-    }
+            _nodes.TryGetValue(Norm(path), out var node);
+            return Observable.Return<MeshNode?>(node);
+        });
 
     /// <inheritdoc/>
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
-        => Task.FromResult(_nodes.ContainsKey(Norm(path)));
+    public IObservable<Unit> Write(MeshNode node, JsonSerializerOptions options)
+        => Observable.Throw<Unit>(new NotSupportedException(
+            $"StaticNodeStorageAdapter is read-only; cannot write '{node.Path}'."));
 
     /// <inheritdoc/>
-    public Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
-        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
-    {
-        var normalized = Norm(fullPath);
-        if (string.IsNullOrEmpty(normalized))
-            return Task.FromResult<(MeshNode?, int)>((null, 0));
+    public IObservable<Unit> Delete(string path)
+        => Observable.Throw<Unit>(new NotSupportedException(
+            $"StaticNodeStorageAdapter is read-only; cannot delete '{path}'."));
 
-        var pathSegments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        for (int depth = pathSegments.Length; depth > 0; depth--)
+    /// <inheritdoc/>
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
+        ListChildPaths(string? parentPath)
+        => Observable.Defer(() =>
         {
-            var testPath = string.Join("/", pathSegments.Take(depth));
-            if (_nodes.TryGetValue(testPath, out var node))
-                return Task.FromResult<(MeshNode?, int)>((node, depth));
-        }
-        return Task.FromResult<(MeshNode?, int)>((null, 0));
-    }
+            var normalized = Norm(parentPath);
+            var prefix = string.IsNullOrEmpty(normalized) ? "" : normalized + "/";
+            var expectedDepth = string.IsNullOrEmpty(normalized)
+                ? 1
+                : normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).Length + 1;
 
-#pragma warning disable CS1998
+            var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var directoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var k in _nodes.Keys)
+            {
+                if (!string.IsNullOrEmpty(prefix) && !k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (string.IsNullOrEmpty(prefix) && k.Contains('/'))
+                {
+                    directoryPaths.Add(k.Split('/', 2)[0]);
+                    continue;
+                }
+                var segments = k.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length == expectedDepth)
+                    nodePaths.Add(k);
+                else if (segments.Length > expectedDepth)
+                {
+                    var dirPath = string.Join("/", segments.Take(expectedDepth));
+                    if (!_nodes.ContainsKey(dirPath))
+                        directoryPaths.Add(dirPath);
+                }
+            }
+
+            return Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(
+                (nodePaths, directoryPaths));
+        });
+
     /// <inheritdoc/>
-    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(
-        string nodePath, string? subPath, JsonSerializerOptions options,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
-    {
+    public IObservable<bool> Exists(string path)
+        => Observable.Defer(() => Observable.Return(_nodes.ContainsKey(Norm(path))));
+
+    /// <inheritdoc/>
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options)
+        => Observable.Defer(() =>
+        {
+            var normalized = Norm(fullPath);
+            if (string.IsNullOrEmpty(normalized))
+                return Observable.Return<(MeshNode?, int)>((null, 0));
+
+            var pathSegments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            for (int depth = pathSegments.Length; depth > 0; depth--)
+            {
+                var testPath = string.Join("/", pathSegments.Take(depth));
+                if (_nodes.TryGetValue(testPath, out var node))
+                    return Observable.Return<(MeshNode?, int)>((node, depth));
+            }
+            return Observable.Return<(MeshNode?, int)>((null, 0));
+        });
+
+    /// <inheritdoc/>
+    public IObservable<object> GetPartitionObjects(
+        string nodePath, string? subPath, JsonSerializerOptions options)
         // Static partitions don't carry partition objects — the data is the nodes themselves.
-        yield break;
-    }
-#pragma warning restore CS1998
+        => Observable.Empty<object>();
 
     /// <inheritdoc/>
-    public Task SavePartitionObjectsAsync(string nodePath, string? subPath,
-        IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
-        => throw new NotSupportedException("StaticNodeStorageAdapter is read-only.");
+    public IObservable<Unit> SavePartitionObjects(string nodePath, string? subPath,
+        IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => Observable.Throw<Unit>(new NotSupportedException("StaticNodeStorageAdapter is read-only."));
 
     /// <inheritdoc/>
-    public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-        => throw new NotSupportedException("StaticNodeStorageAdapter is read-only.");
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => Observable.Throw<Unit>(new NotSupportedException("StaticNodeStorageAdapter is read-only."));
 
     /// <inheritdoc/>
-    public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
-        string nodePath, string? subPath = null, CancellationToken ct = default)
-        => Task.FromResult<DateTimeOffset?>(null);
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(
+        string nodePath, string? subPath = null)
+        => Observable.Return<DateTimeOffset?>(null);
 }

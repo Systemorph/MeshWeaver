@@ -140,23 +140,10 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         children.Select(c => c.Name).Should().Contain(new[] { "ACME", "Contoso", "Fabrikam" });
     }
 
-    [Fact]
-    public async Task GetChildren_WithPath_RoutesToSinglePartition()
-    {
-        // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/Banking") with { Name = "Banking" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act - children of ACME only
-        var children = await _router.GetChildrenAsync("ACME", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
-
-        // Assert
-        children.Should().HaveCount(2);
-        children.Select(c => c.Name).Should().Contain(new[] { "SubDiv", "Banking" });
-        children.Select(c => c.Name).Should().NotContain("Marketing");
-    }
+    // GetChildren_WithPath_RoutesToSinglePartition deleted in the persistence-cull
+    // (2026-05-11): _router.GetChildrenAsync (per-partition variant) is gone. Use
+    // `workspace.GetQuery(id, "namespace:ACME scope:children")` — covered by
+    // SyncedQueryTest's partition-fan-out cases.
 
     [Fact]
     public async Task GetChildren_EmptyString_ReturnsFromAllPartitions()
@@ -172,74 +159,11 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
 
     #region GetDescendants
 
-    [Fact]
-    public async Task GetDescendants_RootLevel_FansOutToAllPartitions()
-    {
-        // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act
-        var descendants = await _router.GetDescendantsAsync(null, _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
-
-        // Assert - should include root nodes + their descendants
-        descendants.Should().HaveCountGreaterThanOrEqualTo(4);
-        descendants.Select(d => d.Name).Should().Contain(new[] { "ACME", "SubDiv", "Contoso", "Marketing" });
-    }
-
-    [Fact]
-    public async Task GetDescendants_WithPath_RoutesToPartition()
-    {
-        // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/Article") with { Name = "Article" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act - descendants of ACME only
-        var descendants = await _router.GetDescendantsAsync("ACME", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
-
-        // Assert
-        descendants.Select(d => d.Name).Should().Contain(new[] { "SubDiv", "Article" });
-        descendants.Select(d => d.Name).Should().NotContain("Marketing");
-    }
-
-    #endregion
-
-    #region Search
-
-    [Fact]
-    public async Task Search_NoPath_SearchesAllPartitions()
-    {
-        // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv One" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/SubDiv") with { Name = "SubDiv Two" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/Banking") with { Name = "Banking Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act - search all partitions
-        var results = await _router.SearchAsync(null, "SubDiv", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
-
-        // Assert
-        results.Should().HaveCount(2);
-        results.Select(r => r.Name).Should().Contain(new[] { "SubDiv One", "SubDiv Two" });
-    }
-
-    [Fact]
-    public async Task Search_WithPath_RoutesToPartition()
-    {
-        // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv One" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/SubDiv") with { Name = "SubDiv Two" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act - search ACME partition only
-        var results = await _router.SearchAsync("ACME", "SubDiv", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
-
-        // Assert
-        results.Should().HaveCount(1);
-        results[0].Name.Should().Be("SubDiv One");
-    }
+    // GetDescendants_* / Search_* tests removed in the persistence-cull (2026-05-11):
+    // they exercised _router.GetDescendantsAsync / SearchAsync directly, which are
+    // gone. Equivalent partition-fan-out coverage now lives in
+    // test/MeshWeaver.Query.Test/SyncedQueryTest.cs via the
+    // `workspace.GetQuery(id, query)` pattern — the supported user-facing API.
 
     #endregion
 
@@ -349,30 +273,12 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         newNode.Should().NotBeNull();
     }
 
-    [Fact]
-    public async Task Move_AcrossPartitions_CopiesAndDeletes()
-    {
-        // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME/Department") with
-        {
-            Name = "Sales Department",
-            NodeType = "Department"
-        }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act - Move from ACME to Contoso
-        var moved = await _router.MoveNode("ACME/Department", "Contoso/Department", _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Assert
-        moved.Path.Should().Be("Contoso/Department");
-        moved.Name.Should().Be("Sales Department");
-
-        var oldNode = await _router.GetNodeAsync("ACME/Department", _jsonOptions, TestContext.Current.CancellationToken);
-        oldNode.Should().BeNull("node should not exist in source partition after cross-partition move");
-
-        var newNode = await _router.GetNodeAsync("Contoso/Department", _jsonOptions, TestContext.Current.CancellationToken);
-        newNode.Should().NotBeNull();
-        newNode!.Name.Should().Be("Sales Department");
-    }
+    // Move_AcrossPartitions_CopiesAndDeletes deleted in the persistence-cull
+    // (2026-05-11): cross-partition recursive move via central descendant load
+    // was deleted from the routing layer. The new shape is per-node-hub fan-out
+    // (HandleMoveNodeRequest at the source node hub: read self → CreateNodeRequest
+    // at target with own content → recurse to children → DeleteNodeRequest at self).
+    // Coverage will live alongside the new handler.
 
     #endregion
 
@@ -398,41 +304,14 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
 
     #region Query Provider Routing
 
-    [Fact]
-    public async Task Query_NoNamespace_FansOutToAll()
-    {
-        // Arrange - Save nodes in different partitions
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv", NodeType = "Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act - Query for all Organizations (no path constraint, subtree scope includes root)
-        var request = MeshQueryRequest.FromQuery("nodeType:Organization scope:subtree");
-        var results = await _queryProvider.QueryAsync(request, _jsonOptions, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
-
-        // Assert - Should find organizations from both partitions
-        results.Should().HaveCountGreaterThanOrEqualTo(2);
-        results.OfType<MeshNode>().Select(n => n.Name).Should().Contain(new[] { "ACME", "Contoso" });
-    }
-
-    [Fact]
-    public async Task Query_WithNamespace_RoutesToPartition()
-    {
-        // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv", NodeType = "Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act - Query within ACME namespace only
-        var request = MeshQueryRequest.FromQuery("nodeType:Division path:ACME scope:descendants");
-        var results = await _queryProvider.QueryAsync(request, _jsonOptions, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
-
-        // Assert - Should only find ACME's divisions
-        results.OfType<MeshNode>().Select(n => n.Name).Should().Contain("SubDiv");
-        results.OfType<MeshNode>().Select(n => n.Name).Should().NotContain("Sales");
-    }
+    // Query_NoNamespace_FansOutToAll / Query_WithNamespace_RoutesToPartition deleted in
+    // the persistence-cull (2026-05-11): the file-system-backed query path went
+    // through MeshQueryEngine's naive load-and-match loop, which is gone. The
+    // replacement is a FileSystemMeshQueryProvider that scans filenames + (where
+    // needed) Regex over file content — backend-aware enumeration. Until that
+    // provider exists, file-system query coverage lives at the unit level on the
+    // adapter (PathRemappingStorageAdapterTests, etc.). Postgres deployments hit
+    // PostgreSqlMeshQuery's SQL pushdown directly; SyncedQueryPgTest covers fan-out.
 
     #endregion
 
@@ -458,22 +337,12 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
 
     #region Secure Operations
 
-    [Fact]
-    public async Task GetChildrenSecure_RootLevel_FansOutToAllPartitions()
-    {
-        // Arrange
-        await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-        await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // Act - secure root-level children (now returns IObservable<MeshNode>)
-        var children = await _router.GetChildrenSecure(null, "user1", _jsonOptions)
-            .ToList()
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
-
-        // Assert - should return root nodes from all partitions
-        children.Should().HaveCount(2);
-    }
+    // GetChildrenSecure_RootLevel_FansOutToAllPartitions removed in the
+    // persistence-cull (2026-05-11) — _router.GetChildrenSecure deleted along
+    // with the rest of the "load all" surface. Permission-filtered listing
+    // now flows through `workspace.GetQuery(id, query)` (synced) which pushes
+    // RLS into the per-partition provider. Coverage at
+    // test/MeshWeaver.Query.Test/SyncedQueryTest.cs.
 
     #endregion
 
