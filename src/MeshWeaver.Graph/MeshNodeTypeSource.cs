@@ -334,12 +334,10 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken cancellationToken)
     {
-        // Single source of truth for the own MeshNode — MeshDataSource resolves
-        // it from the unified built-in → static → routing-stream → persistence
-        // chain. No fallback branch here: when MeshDataSource is asked for a
-        // built-in or static node it returns early with InitialData (never
-        // instantiates this type source); a writable per-node hub always gets a
-        // non-null ownNodeStream from the routing stream or persistence read.
+        // Prefer the routing-supplied stream when available (live updates,
+        // catalog stream). Fall back to a one-shot persistence read for test
+        // fixtures that construct this TypeSource directly without going
+        // through MeshDataSource's MonolithRoutingService wiring.
         if (_ownNodeStream is not null)
         {
             return _ownNodeStream
@@ -347,8 +345,13 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 .Select(rawNode => BuildInstanceCollection(rawNode));
         }
 
-        // Defensive: someone constructed this type source without a stream
-        // (test fixtures, future caller). Emit empty and open the gate so
+        if (_persistenceCore is not null)
+        {
+            return _persistenceCore.GetNode(_hubPath, _workspace.Hub.JsonSerializerOptions)
+                .Select(rawNode => BuildInstanceCollection(rawNode));
+        }
+
+        // No stream and no persistence — emit empty and open the gate so
         // queued CreateNodeRequest / GetDataResponse traffic isn't held forever.
         _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
         return Observable.Return(_lastSaved);
