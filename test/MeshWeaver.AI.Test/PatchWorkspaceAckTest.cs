@@ -102,21 +102,7 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
         var patched = await plugin.Patch($"@{path}", $"{{\"name\":\"{newName}\"}}");
         patched.Should().StartWith("Patched:", because: "valid patch must succeed");
 
-        // Wait deterministically for the workspace to observe the patched name
-        // before reading via Get. The Patch handler's Ok is sent after the
-        // DataChangeRequest fan-out, but the test is on a *different* hub —
-        // bridging via the per-node hub's MeshNode stream removes the
-        // last-mile cache-propagation race that flaked under shared-mesh.
-        var nodeHub = Mesh.GetHostedHub(new Address(path));
-        var workspace = nodeHub.GetWorkspace();
-        var stream = workspace.GetStream<MeshNode>();
-        stream.Should().NotBeNull("the hub must expose a MeshNode stream");
-        await stream!
-            .Where(nodes => nodes != null && nodes.Any(n => n.Path == path && n.Name == newName))
-            .Timeout(10.Seconds())
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
-
+        // Immediately after Ok, Get must see the new state — no fresh page-load required.
         var got = await plugin.Get($"@{path}");
         got.Should().Contain(newName,
             because: "the workspace must already reflect the patch when Ok is returned " +
