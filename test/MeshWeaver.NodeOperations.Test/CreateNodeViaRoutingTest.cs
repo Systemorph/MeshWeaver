@@ -50,10 +50,12 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
         // 40 s, not 20 — CI runners are noticeably slower than dev boxes; the
         // synced AccessAssignment query's debounce + index propagation has
         // tripped the prior 20 s deadline on three CreateNodeViaEventTest
-        // tests in a row (Query_WithoutImpersonation_ReturnsNoResults,
-        // Query_WithImpersonation_ReturnsNode, CreateNode_ImpersonateAsHub_UsesHubIdentity).
-        // The outer [Fact(Timeout = 60000)] still fails the test if the wait
-        // genuinely hangs — this just absorbs CI scheduling noise.
+        // tests in a row. The outer [Fact(Timeout = 60000)] still fails the
+        // test if the wait genuinely hangs — this just absorbs CI scheduling
+        // noise. Polling (not subscribe) intentionally — each iteration calls
+        // GetPermissionAsync which fetches the CURRENT permission snapshot
+        // from SecurityService's BehaviorSubject; subsequent calls see the
+        // updated snapshot once the synced query has re-evaluated.
         var deadline = DateTime.UtcNow.AddSeconds(40);
         while (DateTime.UtcNow < deadline)
         {
