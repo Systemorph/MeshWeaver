@@ -816,8 +816,9 @@ public static class ThreadExecution
                 client.UpdateDelegationStatus = status =>
                 {
                     currentStatus = status;
-                    logger.LogInformation("[ThreadExec] DELEGATION_STATUS: threadPath={ThreadPath}, status={Status}, delegationPaths=[{Paths}]",
-                        threadPath, status, string.Join(",", chatClient.DelegationPaths.Select(kv => $"{kv.Key}={kv.Value}")));
+                    logger.LogInformation("[ThreadExec] DELEGATION_STATUS: threadPath={ThreadPath}, status={Status}, delegationPaths=[{Paths}], toolCallLogSize={LogSize}",
+                        threadPath, status, string.Join(",", chatClient.DelegationPaths.Select(kv => $"{kv.Key}={kv.Value}")),
+                        toolCallLog.Count);
                     // Push immediately when delegation path becomes available —
                     // the streaming loop is blocked during tool execution so the
                     // throttle block never runs. This ensures the parent message
@@ -831,13 +832,23 @@ public static class ThreadExecution
                             if (!stamped && e.Name.StartsWith("delegate_to") && e.DelegationPath == null)
                             {
                                 stamped = true;
+                                logger.LogInformation("[ThreadExec] DELEGATION_STAMPED: name={Name} delPath={DelPath}",
+                                    e.Name, delPath);
                                 return e with { DelegationPath = delPath };
                             }
                             return e;
                         }).ToImmutableList();
+                        if (!stamped)
+                            logger.LogWarning("[ThreadExec] DELEGATION_NO_STAMP: status={Status} — no unmatched delegate_to entry to stamp (logSize={LogSize})",
+                                status, toolCallLog.Count);
                         // Preserve any previously streamed text
                         PushToResponseMessage(capturedResponseText?.ToString() ?? "", toolCallLog, nodeChangeLog,
                             request.AgentName, request.ModelName);
+                    }
+                    else
+                    {
+                        logger.LogInformation("[ThreadExec] DELEGATION_STATUS_NO_PATH: status={Status} — no entry in DelegationPaths yet (set when ExecuteDelegationAsync runs)",
+                            status);
                     }
                 };
                 client.ForwardToolCall = entry => { toolCallLog = toolCallLog.Add(entry); };
@@ -1002,6 +1013,11 @@ public static class ThreadExecution
                             // Preserve DelegationPath if already stamped by UpdateDelegationStatus.
                             var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
                             var existingDelegationPath = idx >= 0 ? toolCallLog[idx].DelegationPath : null;
+                            logger.LogInformation(
+                                "[ThreadExec] TOOL_RESULT_REPLACE: name={Name} callId={CallId} idx={Idx} " +
+                                "existingDelegationPath={ExistingDelegationPath} extractedPath={ExtractedPath} logSize={LogSize}",
+                                originalCall.Name, originalCall.CallId, idx,
+                                existingDelegationPath ?? "(null)", delegationPath ?? "(null)", toolCallLog.Count);
                             var finalEntry = new ToolCallEntry
                             {
                                 Name = originalCall.Name,
