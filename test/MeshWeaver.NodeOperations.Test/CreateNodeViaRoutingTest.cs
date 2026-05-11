@@ -47,22 +47,19 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     /// </summary>
     private async Task WaitForPermissionAsync(string path, string objectId, Permission permission)
     {
-        // 40 s, not 20 — CI runners are noticeably slower than dev boxes; the
-        // synced AccessAssignment query's debounce + index propagation has
-        // tripped the prior 20 s deadline on three CreateNodeViaEventTest
-        // tests in a row. The outer [Fact(Timeout = 60000)] still fails the
-        // test if the wait genuinely hangs — this just absorbs CI scheduling
-        // noise. Polling (not subscribe) intentionally — each iteration calls
-        // GetPermissionAsync which fetches the CURRENT permission snapshot
-        // from SecurityService's BehaviorSubject; subsequent calls see the
-        // updated snapshot once the synced query has re-evaluated.
-        var deadline = DateTime.UtcNow.AddSeconds(40);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (await Mesh.HasPermissionAsync(path, objectId, permission, TestTimeout))
-                return;
-            await Task.Delay(200, TestTimeout);
-        }
+        // stream.Where() — subscribe to the SecurityService's permission stream
+        // and wait for the first emission whose flags include the required
+        // permission. The synced AccessAssignment query is a hot stream — every
+        // re-evaluation after the assignment lands emits a fresh snapshot; Where
+        // catches the right one. Task.Delay polling captured the same stale
+        // snapshot on every retry under CI noise; this absorbs all emissions
+        // through the same subscription.
+        var sec = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await sec.GetEffectivePermissions(path, objectId)
+            .Where(p => p.HasFlag(permission))
+            .Take(1)
+            .Timeout(60.Seconds())
+            .ToTask(TestTimeout);
     }
 
     /// <summary>
