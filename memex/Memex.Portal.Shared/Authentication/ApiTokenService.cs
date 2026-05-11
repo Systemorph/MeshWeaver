@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -295,6 +296,11 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
             {
                 var token = current.Content as ApiToken ?? ExtractApiToken(current);
                 if (token == null) return current;
+                // Drop the in-memory ValidationCache entry so the next
+                // ValidateToken call re-reads from this hub and observes
+                // IsRevoked=true. Without this, the 5-min cache outlives
+                // the revoke and validation keeps succeeding.
+                ApiTokenNodeType.InvalidateValidationCache(token.TokenHash);
                 return current with { Content = token with { IsRevoked = true } };
             })
             .Select(_ => true)

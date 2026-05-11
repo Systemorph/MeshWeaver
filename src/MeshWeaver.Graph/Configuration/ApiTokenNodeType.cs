@@ -25,6 +25,20 @@ public static class ApiTokenNodeType
     private static readonly ConcurrentDictionary<string, (ValidateTokenResponse Response, DateTimeOffset ExpiresAt)> ValidationCache = new();
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Drops a token's cached validation entry so the next ValidateToken call
+    /// re-resolves from the per-node hub. Called by ApiTokenService.RevokeToken
+    /// to ensure the 5-minute cache doesn't outlive a revoke — without this
+    /// `RevokeToken_AfterImmediateValidate_BlocksFutureValidation` would fail
+    /// because the cache returns the pre-revoke response.
+    /// </summary>
+    public static void InvalidateValidationCache(string tokenHash)
+    {
+        if (string.IsNullOrEmpty(tokenHash))
+            return;
+        ValidationCache.TryRemove(tokenHash, out _);
+    }
+
     public static TBuilder AddApiTokenType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
