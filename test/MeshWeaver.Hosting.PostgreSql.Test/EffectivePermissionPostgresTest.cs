@@ -139,14 +139,14 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
             var before = await Mesh.GetPermissionAsync(scope, userId, TestTimeout);
             before.Should().Be(Permission.None);
 
-            // Admin (statically seeded as global Admin via SetupAccessRightsAsync)
-            // creates the assignment. AccessContext is captured at call time by
-            // the underlying CreateNodeRequest pipeline.
-            accessService.SetCircuitContext(new AccessContext
-            {
-                ObjectId = TestUsers.Admin.ObjectId,
-                Name = TestUsers.Admin.Name
-            });
+            // Admin authorises the assignment-create. Use TestUsers.Admin
+            // directly so its Roles=["Admin"] claim is preserved — claim-based
+            // role resolution takes the fast path in SecurityService.ComputeRoleState
+            // (no synced-query round-trip for the AUTHORISING user). The
+            // RUNTIME AccessAssignment being created here is what the test
+            // actually exercises further down via the `after` permission
+            // check on `pg-runtime-assignee`.
+            accessService.SetCircuitContext(TestUsers.Admin);
 
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);

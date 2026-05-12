@@ -550,6 +550,19 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             TestUsers.DevLogin(Mesh);
             TestPhaseTrace(name, "INIT_DEVLOGIN_DONE", sw.ElapsedMilliseconds);
 
+            // Start any IHostedService registered by ConfigureMesh. Tests don't
+            // run a full Host (no IHostedLifecycleService machinery), so without
+            // an explicit StartAsync sweep here, hosted services registered via
+            // AddPartitionedPostgreSqlPersistence (PostgreSqlChangeListener) etc.
+            // are constructed by DI but never activated — pg_notify never
+            // reaches IDataChangeNotifier and synced queries freeze at Initial.
+            foreach (var hosted in Mesh.ServiceProvider
+                .GetServices<Microsoft.Extensions.Hosting.IHostedService>())
+            {
+                await hosted.StartAsync(TestContext.Current.CancellationToken);
+            }
+            TestPhaseTrace(name, "INIT_HOSTED_SERVICES_STARTED", sw.ElapsedMilliseconds);
+
             await SetupAccessRightsAsync();
             TestPhaseTrace(name, "INIT_DONE", sw.ElapsedMilliseconds);
             TestMemTrace(name, "INIT_MEM", forceGc: false);

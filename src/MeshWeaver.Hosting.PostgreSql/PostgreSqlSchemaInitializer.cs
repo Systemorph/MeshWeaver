@@ -309,6 +309,17 @@ public static class PostgreSqlSchemaInitializer
                 CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_main_node" ON "{{tableName}}" (main_node);
                 CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_node_type" ON "{{tableName}}" (node_type);
                 CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_last_modified" ON "{{tableName}}" (last_modified DESC);
+
+                -- pg_notify trigger on the satellite table — mirrors the one
+                -- installed on mesh_nodes by GetSchemaScript. Without this,
+                -- writes to satellite tables (AccessAssignment / Thread /
+                -- Activity / Comment / etc.) never fire pg_notify and synced
+                -- queries scoped to satellite namespaces (`namespace:X/_Access`,
+                -- `namespace:X/_Thread`, …) stay frozen at their Initial state.
+                DROP TRIGGER IF EXISTS "{{tableName}}_notify" ON "{{tableName}}";
+                CREATE TRIGGER "{{tableName}}_notify"
+                    AFTER INSERT OR UPDATE OR DELETE ON "{{tableName}}"
+                    FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
                 """;
 
             await using var cmd = schemaDataSource.CreateCommand(sql);

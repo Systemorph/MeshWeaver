@@ -247,6 +247,19 @@ public static class PostgreSqlExtensions
         services.AddSingleton<IPartitionAccessProvider>(
             new PostgreSqlPartitionAccessProvider(baseDataSource));
 
+        // pg_notify listener: register both the singleton and an IHostedService
+        // wrapper so the LISTEN session opens at host startup. Without the
+        // hosted-service wrapper the listener never starts and every synced
+        // query's Replay(1) cache freezes at its Initial value (writes propagate
+        // to the table but the cached observable never re-emits).
+        services.AddSingleton(sp =>
+        {
+            var notifier = sp.GetRequiredService<IDataChangeNotifier>();
+            var listenerLogger = sp.GetService<ILogger<PostgreSqlChangeListener>>();
+            return new PostgreSqlChangeListener(baseDataSource, notifier, listenerLogger);
+        });
+        services.AddHostedService<PostgreSqlChangeListenerHostedService>();
+
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;
