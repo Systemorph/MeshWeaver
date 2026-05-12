@@ -72,7 +72,7 @@ public static class PersistenceExtensions
         services.AddKeyedSingleton<IStorageAdapterFactory, CosmosStorageAdapterFactory>(
             CosmosStorageAdapterFactory.StorageType);
 
-        // Register CosmosMeshQuery so it takes priority over MeshQueryEngine (via TryAddSingleton)
+        // Register CosmosMeshQuery so it takes priority over StorageAdapterMeshQueryProvider (via TryAddSingleton)
         services.AddSingleton<IMeshQueryProvider>(sp =>
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as CosmosStorageAdapter

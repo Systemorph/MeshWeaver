@@ -24,8 +24,8 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <para>The <see cref="QueryProviders"/> dict is the fan-out target for
 /// <see cref="RoutingMeshQueryProvider"/>. Each partition either supplies its own
 /// (Postgres native push-down, static-node provider) or — for adapter-only
-/// pedestrian backends — gets a <see cref="Query.MeshQueryEngine"/> instance bound
-/// to the adapter.</para>
+/// pedestrian backends — gets a <see cref="Query.StorageAdapterMeshQueryProvider"/>
+/// instance bound to the adapter.</para>
 ///
 /// <para>API: <see cref="IObservable{T}"/> end-to-end (no <c>Task&lt;T&gt;</c>,
 /// no <c>.ToTask()</c>). Composes with <c>SelectMany</c>/<c>Subscribe</c>.</para>
@@ -66,7 +66,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
             if (_adapters.TryAdd(ns, provider.Adapter))
             {
                 _queryProviders[ns] =
-                    new Query.MeshQueryEngine(persistence: provider.Adapter, changeNotifier: _changeNotifier);
+                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier);
             }
         }
     }
@@ -172,7 +172,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
                         if (!_adapters.TryAdd(segment, partition.StorageAdapter!))
                             return ((string, IMeshQueryProvider)?)null;
                         var queryProvider = partition.QueryProvider
-                            ?? new Query.MeshQueryEngine(persistence: partition.StorageAdapter!, changeNotifier: _changeNotifier);
+                            ?? new Query.StorageAdapterMeshQueryProvider(persistence: partition.StorageAdapter!, changeNotifier: _changeNotifier);
                         _queryProviders[segment] = queryProvider;
                         if (partition.VersionQuery != null)
                             _versionQueries[segment] = partition.VersionQuery;
@@ -218,14 +218,14 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
                 if (!provider.Matches(firstSegment)) continue;
                 _adapters[firstSegment] = provider.Adapter;
                 _queryProviders[firstSegment] =
-                    new Query.MeshQueryEngine(persistence: provider.Adapter, changeNotifier: _changeNotifier);
+                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier);
                 return provider.Adapter;
             }
 
             var partition = await _factory.CreateStoreAsync(firstSegment, ct);
             _adapters[firstSegment] = partition.StorageAdapter!;
             var queryProvider = partition.QueryProvider
-                ?? new Query.MeshQueryEngine(persistence: partition.StorageAdapter!, changeNotifier: _changeNotifier);
+                ?? new Query.StorageAdapterMeshQueryProvider(persistence: partition.StorageAdapter!, changeNotifier: _changeNotifier);
             _queryProviders[firstSegment] = queryProvider;
             if (partition.VersionQuery != null)
                 _versionQueries[firstSegment] = partition.VersionQuery;
@@ -248,7 +248,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
             if (_adapters.TryAdd(ns, provider.Adapter))
             {
                 _queryProviders[ns] =
-                    new Query.MeshQueryEngine(persistence: provider.Adapter, changeNotifier: _changeNotifier);
+                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier);
             }
         }
 
@@ -285,7 +285,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
             var staticAdapter = new StaticNodeStorageAdapter(nodesInPartition);
             if (_adapters.TryAdd(def.Namespace, staticAdapter))
             {
-                _queryProviders[def.Namespace] = new Query.MeshQueryEngine(persistence: staticAdapter, changeNotifier: _changeNotifier);
+                _queryProviders[def.Namespace] = new Query.StorageAdapterMeshQueryProvider(persistence: staticAdapter, changeNotifier: _changeNotifier);
             }
         }
     }

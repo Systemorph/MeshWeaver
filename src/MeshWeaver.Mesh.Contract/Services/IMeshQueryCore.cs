@@ -22,7 +22,7 @@ namespace MeshWeaver.Mesh.Services;
 /// <para>Decouples consumers from <see cref="IMeshQueryProvider"/> which
 /// pulls in <see cref="MeshWeaver.Mesh.Security.ISecurityService"/> as a constructor dependency
 /// — the cycle source for SecurityService → workspace.GetQuery →
-/// SyncedQueryMeshNodes → IMeshQueryProvider → MeshQueryEngine →
+/// SyncedQueryMeshNodes → IMeshQueryProvider → StorageAdapterMeshQueryProvider →
 /// ISecurityService.</para>
 /// </summary>
 internal interface IMeshQueryCore

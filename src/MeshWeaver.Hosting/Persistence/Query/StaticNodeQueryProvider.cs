@@ -121,6 +121,11 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         var parsed = _parser.Parse(request.Query);
         var context = request.Context ?? parsed.Context;
 
+        // source:activity / source:accessed never match static catalog entries —
+        // they have no activity satellites and no UserActivity rows.
+        if (parsed.Source is QuerySource.Activity or QuerySource.Accessed)
+            yield break;
+
         // Short-circuit: if query has a nodeType filter that doesn't match any static node type
         var nodeTypeFilter = GetNodeTypeFilterValue(parsed.Filter);
         if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))
@@ -266,6 +271,11 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     {
         var context = requestContext ?? parsed.Context;
         var items = new List<T>();
+
+        // source:activity / source:accessed are activity-satellite / UserActivity
+        // joins — static catalog entries have neither, so always empty here.
+        if (parsed.Source is QuerySource.Activity or QuerySource.Accessed)
+            return items;
 
         var nodeTypeFilter = GetNodeTypeFilterValue(parsed.Filter);
         if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))

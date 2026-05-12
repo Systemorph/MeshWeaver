@@ -214,10 +214,10 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // Single IMeshQueryCore — the unsecured query surface. Has no
         // ISecurityService dependency, so SecurityService can consume a
         // synced query (`nodeType:AccessAssignment`) without an Autofac
-        // cycle. Static-node providers are folded into the same surface
-        // (see <c>MeshQueryEngine</c>'s ctor), so a single
-        // ObserveQuery returns persistence + static union — no DI-marker
-        // fan-out, no per-provider gating.
+        // cycle. Static-node providers are surfaced as a sibling
+        // IMeshQueryProvider (StaticNodeQueryProvider) and merged at the
+        // top-level MeshQuery, so a single ObserveQuery returns persistence
+        // + static union — no DI-marker fan-out, no per-provider gating.
         var queryCore = workspace.Hub.ServiceProvider.GetService<IMeshQueryCore>();
         var options = workspace.Hub.JsonSerializerOptions;
         var diagLogger = workspace.Hub.ServiceProvider
@@ -230,10 +230,10 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             string.Join(" | ", queries),
             queryCore?.GetType().Name ?? "(null)");
 
-        // 🚨 ONE call into the engine — the engine unions every query's hits
-        // by Path (see MeshQueryEngine.CollectMatchedAsync; PostgreSQL pushes
-        // UNION down to SQL via PostgreSqlMeshQuery.QueryAsync). No per-query
-        // merge / per-query Initial gating in user code.
+        // 🚨 ONE call into the query layer — providers union every query's
+        // hits by Path (see StorageAdapterMeshQueryProvider.CollectMatchedAsync;
+        // PostgreSQL pushes UNION down to SQL via PostgreSqlMeshQuery.QueryAsync).
+        // No per-query merge / per-query Initial gating in user code.
         IObservable<QueryResultChange<MeshNode>> upstream;
         if (queryCore == null)
         {

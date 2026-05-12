@@ -37,7 +37,7 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Registers <see cref="IMeshQueryCore"/> as a singleton on the top-most
-    /// mesh hub's service container. Resolves to <see cref="MeshQueryEngine"/>,
+    /// mesh hub's service container. Resolves to <see cref="StorageAdapterMeshQueryProvider"/>,
     /// the unsecured surface (no <c>ISecurityService</c> dep) used by
     /// <see cref="SyncedQueryMeshNodes"/> and other infrastructure paths
     /// (NavigationService, VUserHelper, etc.).
@@ -432,17 +432,18 @@ public static class PersistenceExtensions
         });
 
         // IMeshQueryCore — unsecured query surface used by SyncedQueryMeshNodes.
-        // Root-container registration so every hub (mesh, per-node, hosted
-        // sub-hubs) inherits via Autofac child-scope resolution. The
-        // partitioned path's IMeshQueryProvider is RoutingMeshQueryProvider
-        // (so MeshQueryEngine isn't otherwise registered), but synced
-        // queries still need an unsecured IMeshQueryCore — register
-        // MeshQueryEngine as the impl, backed by the routing
-        // IStorageService and the same static-node providers the chat
-        // picker relies on.
-        services.TryAddSingleton<MeshQueryEngine>();
+        // Singleton MeshQuery is the SINGLE boss for fan-out: across every
+        // IMeshQueryProvider (RoutingMeshQueryProvider for partitions +
+        // StaticNodeQueryProvider for built-in catalogs). MeshQuery dispatches
+        // each provider's IMeshQueryCore surface where available (so per-result
+        // validators are bypassed) and falls through to the regular ObserveQuery
+        // for providers without an IMeshQueryCore (e.g. StaticNodeQueryProvider,
+        // which has no security to bypass anyway).
+        //
+        // hub: null is OK here — the IMeshQueryCore surface receives options
+        // explicitly and doesn't read hub.JsonSerializerOptions.
         services.TryAddSingleton<IMeshQueryCore>(sp =>
-            sp.GetRequiredService<MeshQueryEngine>());
+            new MeshQuery(sp.GetServices<IMeshQueryProvider>(), hub: null!));
 
         // Register the routing version query
         services.AddSingleton<IVersionQuery>(sp =>
@@ -506,9 +507,14 @@ public static class PersistenceExtensions
     private static IServiceCollection AddCoreAndWrapperServices(this IServiceCollection services)
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-        services.TryAddSingleton<MeshQueryEngine>();
-        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<MeshQueryEngine>());
-        services.TryAddSingleton<IMeshQueryCore>(sp => sp.GetRequiredService<MeshQueryEngine>());
+        services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
+        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
+        // IMeshQueryCore — one boss for unsecured fan-out (see comment on the
+        // partitioned registration). Constructs MeshQuery over every
+        // IMeshQueryProvider; null hub is OK because the IMeshQueryCore
+        // surface takes options explicitly.
+        services.TryAddSingleton<IMeshQueryCore>(sp =>
+            new MeshQuery(sp.GetServices<IMeshQueryProvider>(), hub: null!));
 
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
         {
