@@ -246,13 +246,11 @@ public class MeshOperations
         if (string.IsNullOrEmpty(compileError))
             return Observable.Return($"Not found: {resolvedPath}");
 
-        // Catalog read — IObservable wrapper around the IAsyncEnumerable so we
-        // stay on the reactive path. FirstOrDefaultAsync on a snapshot query is
-        // safe here (the catalog is the source of truth for the broken-hub
-        // case; live content is unreachable by definition).
-        return Observable.FromAsync(ct =>
-                mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
-                    .FirstOrDefaultAsync(ct).AsTask())
+        // Live ObserveQuery — first emission carries the snapshot; the catalog
+        // is the source of truth here (the per-node hub is broken by
+        // definition, so live content is unreachable).
+        return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+            .Select(c => c.Items.FirstOrDefault())
             .Select(node => node is null
                 ? $"Not found: {resolvedPath}"
                 : JsonSerializer.Serialize(

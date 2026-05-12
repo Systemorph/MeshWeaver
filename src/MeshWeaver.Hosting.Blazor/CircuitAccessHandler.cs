@@ -125,7 +125,7 @@ public class CircuitAccessHandler : CircuitHandler
             // Resolve email -> ObjectId via mesh User node lookup
             if (!string.IsNullOrEmpty(email))
             {
-                var meshUser = await TryLoadMeshUserAsync(email);
+                var meshUser = TryLoadMeshUser(email);
                 if (meshUser != null)
                 {
                     context = context with
@@ -145,41 +145,19 @@ public class CircuitAccessHandler : CircuitHandler
         }
     }
 
-    private async ValueTask<MeshNode?> TryLoadMeshUserAsync(string email)
+    /// <summary>
+    /// Synchronous email → mesh User lookup via the hot
+    /// <see cref="MeshWeaver.Blazor.Infrastructure.UserIdentityCache"/>. The cache
+    /// subscribes to <see cref="IMeshService.ObserveQuery{T}"/> at startup so the
+    /// lookup never bridges back to <c>Task</c> — <c>await FirstAsync()</c> on a
+    /// hub-touching observable deadlocks the hub pump.
+    /// </summary>
+    private MeshNode? TryLoadMeshUser(string email)
     {
         try
         {
-            // IMeshQueryCore — the unsecured infrastructure-query surface (same one
-            // VUserHelper / SyncedQueryMeshNodes / OnboardingMiddleware use). The
-            // ImpersonateAsHub-on-IMeshService approach was unreliable: at login
-            // time the user has no mesh roles yet, so the secured query returned
-            // nothing and ObjectId stayed as the email. Downstream code then
-            // routed to User/{email}, which doesn't exist (the actual node is
-            // User/{username}), producing "Delivery failed to User/<email>".
-            // See PersistenceExtensions.RegisterMeshQueryCoreOnMeshHub.
-            var meshQuery = _hub.ServiceProvider.GetService<IMeshQueryCore>();
-            if (meshQuery == null)
-                return null;
-
-            // Post-v10: each user owns their own partition, the User node lives
-            // at namespace='' / path=userid (NOT under "User/" anymore). Query
-            // by email + nodeType only — no namespace constraint.
-            var request = MeshQueryRequest.FromQuery(
-                $"nodeType:User content.email:{email} limit:1",
-                Mesh.Security.WellKnownUsers.System);
-
-            // IAsyncEnumerable + await foreach — pull-based protocol, no hub
-            // round-trip on the observable side, so no risk of the
-            // ObserveQuery + .ToTask() deadlock the user flagged. MeshQueryEngineCore's
-            // QueryAsync is an in-memory filter with no hub messaging; the
-            // enumeration yields cooperatively. Take the first match (limit:1)
-            // and bail; the loop exits via the break before it sees a second.
-            await foreach (var item in meshQuery.QueryAsync(request, _hub.JsonSerializerOptions))
-            {
-                if (item is MeshNode node)
-                    return node;
-            }
-            return null;
+            var cache = _hub.ServiceProvider.GetService<MeshWeaver.Blazor.Infrastructure.UserIdentityCache>();
+            return cache?.TryGetByEmail(email);
         }
         catch (Exception ex)
         {

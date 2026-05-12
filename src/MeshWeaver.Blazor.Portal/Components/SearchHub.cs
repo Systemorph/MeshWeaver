@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using System.Threading.Channels;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -90,21 +91,16 @@ internal sealed class SearchHub
 
             if (string.IsNullOrEmpty(req.Input))
             {
-                // Empty input: show recently accessed items ordered by last access time
+                // Empty input: show recently accessed items ordered by last access time.
+                // Subscribe-based — await on a hub-touching observable deadlocks the
+                // hub pump (see AsynchronousCalls.md).
                 var query = $"source:accessed scope:descendants is:main sort:LastModified-desc context:search limit:{req.MaxResults}";
-                await foreach (var obj in meshService.QueryAsync(
-                    new MeshQueryRequest { Query = query }, ct))
-                {
-                    if (obj is MeshNode n)
-                    {
-                        await pending.Writer.WriteAsync(new QuerySuggestion(
-                            n.Path ?? "",
-                            n.Name ?? n.Id ?? "",
-                            n.NodeType,
-                            0,
-                            n.Icon), ct);
-                    }
-                }
+                StreamInitialResults(meshService, query, n => new QuerySuggestion(
+                    n.Path ?? "",
+                    n.Name ?? n.Id ?? "",
+                    n.NodeType,
+                    0,
+                    n.Icon), pending);
             }
             else if (req.Input.StartsWith('@'))
             {
@@ -120,7 +116,7 @@ internal sealed class SearchHub
             }
             else
             {
-                await ExecuteTextSearchAsync(meshService, req, pending, ct);
+                ExecuteTextSearch(meshService, req, pending);
             }
         }
         catch (OperationCanceledException) { }
@@ -133,35 +129,54 @@ internal sealed class SearchHub
     }
 
     /// <summary>
-    /// Free-text search: fetches a wider candidate pool from QueryAsync,
-    /// scores each result by where the search terms match (name > nodeType > path > content),
-    /// adds proximity boost, then streams results ordered by score.
+    /// Free-text search: subscribes to <see cref="IMeshService.ObserveQuery{T}"/>
+    /// for the initial candidate pool, scores each row by match quality, and
+    /// pumps the top-N scored results into the pending channel. Fire-and-forget
+    /// subscription — no <c>await</c> on hub-touching observables.
     /// </summary>
-    private static async Task ExecuteTextSearchAsync(
-        IMeshService meshService, SearchRequest req, PendingSearch pending, CancellationToken ct)
+    private static void ExecuteTextSearch(
+        IMeshService meshService, SearchRequest req, PendingSearch pending)
     {
-        // Fetch a wider pool so scoring can surface the best matches
         var query = $"*{req.Input}* scope:descendants context:search is:main limit:{CandidatePoolSize}";
-        var candidates = new List<QuerySuggestion>();
+        meshService.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = query })
+            .Take(1)
+            .Subscribe(
+                change =>
+                {
+                    var candidates = new List<QuerySuggestion>();
+                    foreach (var n in change.Items)
+                    {
+                        var score = ComputeRelevanceScore(n, req.Input!, req.ContextPath);
+                        candidates.Add(new QuerySuggestion(
+                            n.Path ?? "",
+                            n.Name ?? n.Id ?? "",
+                            n.NodeType,
+                            score,
+                            n.Icon));
+                    }
+                    foreach (var s in candidates.OrderByDescending(c => c.Score).Take(req.MaxResults))
+                        pending.Writer.TryWrite(s);
+                });
+    }
 
-        await foreach (var obj in meshService.QueryAsync(
-            new MeshQueryRequest { Query = query }, ct))
-        {
-            if (obj is MeshNode n)
+    /// <summary>
+    /// Helper: subscribe to a query's initial emission, project each MeshNode
+    /// into a <see cref="QuerySuggestion"/>, and write to the pending channel.
+    /// Fire-and-forget — no await on hub-touching observables.
+    /// </summary>
+    private static void StreamInitialResults(
+        IMeshService meshService,
+        string query,
+        Func<MeshNode, QuerySuggestion> project,
+        PendingSearch pending)
+    {
+        meshService.ObserveQuery<MeshNode>(new MeshQueryRequest { Query = query })
+            .Take(1)
+            .Subscribe(change =>
             {
-                var score = ComputeRelevanceScore(n, req.Input!, req.ContextPath);
-                candidates.Add(new QuerySuggestion(
-                    n.Path ?? "",
-                    n.Name ?? n.Id ?? "",
-                    n.NodeType,
-                    score,
-                    n.Icon));
-            }
-        }
-
-        // Sort by score descending and stream top results
-        foreach (var s in candidates.OrderByDescending(c => c.Score).Take(req.MaxResults))
-            await pending.Writer.WriteAsync(s, ct);
+                foreach (var n in change.Items)
+                    pending.Writer.TryWrite(project(n));
+            });
     }
 
     /// <summary>

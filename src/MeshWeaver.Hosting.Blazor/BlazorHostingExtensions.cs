@@ -27,6 +27,7 @@ public static class BlazorHostingExtensions
             .ConfigureServices(services => services
                 .AddContentService()
                 .AddFluentUIComponents()
+                .AddSingleton<UserIdentityCache>()
                 .AddScoped<PortalApplication>()
                 .AddScoped<INavigationService, NavigationService>()
                 .AddScoped<IMenuItemsProvider, MenuItemsProvider>()

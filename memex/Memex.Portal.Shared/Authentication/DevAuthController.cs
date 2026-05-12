@@ -1,4 +1,5 @@
-﻿using System.Security.Claims;
+﻿using System.Reactive.Linq;
+using System.Security.Claims;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -26,8 +27,12 @@ public class DevAuthController : ControllerBase
     [HttpPost("signin")]
     public async Task<IActionResult> Login([FromForm] string personId, [FromForm] string? returnUrl)
     {
-        // Fetch the person node via IMeshService (bypasses security)
-        var node = await _meshQuery.QueryAsync<MeshNode>($"path:User/{personId}").FirstOrDefaultAsync();
+        // TODO(persistence-cull): framework boundary — review whether this should
+        // route through UserIdentityCache (sync) instead of awaiting the observable.
+        var change = await _meshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:User/{personId}"))
+            .FirstAsync();
+        var node = change.Items.FirstOrDefault();
         if (node?.NodeType != "User" || node.Content == null)
         {
             return BadRequest("Person not found");

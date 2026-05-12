@@ -53,7 +53,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // lookups to fail since AccessAssignment nodes use the username, not the email.
             if (!string.IsNullOrEmpty(userContext.Email))
             {
-                var meshUser = await TryLoadMeshUserAsync(userContext.Email, hub);
+                var meshUser = TryLoadMeshUser(userContext.Email, hub);
                 if (meshUser is not null)
                 {
                     userContext = userContext with
@@ -182,22 +182,23 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// Uses ImpersonateAsHub scope since the user context hasn't been set yet at this point.
     /// Returns the MeshNode if found, so we can use its Name (from the system) instead of the claim.
     /// </summary>
-    private ValueTask<MeshNode?> TryLoadMeshUserAsync(string email, IMessageHub hub)
+    /// <summary>
+    /// Synchronous email → mesh User node lookup via the hot
+    /// <see cref="UserIdentityCache"/> hub-singleton (no await, no hub-touching
+    /// observable bridging). Returns <c>null</c> until the cache has received
+    /// its first <c>ObserveQuery</c> emission.
+    /// </summary>
+    private MeshNode? TryLoadMeshUser(string email, IMessageHub hub)
     {
         try
         {
-            var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-            using (accessService.ImpersonateAsHub(hub))
-            {
-                var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-                return meshService.QueryAsync<MeshNode>(
-                    $"nodeType:User namespace:User content.email:{email} limit:1").FirstOrDefaultAsync();
-            }
+            var cache = hub.ServiceProvider.GetRequiredService<UserIdentityCache>();
+            return cache.TryGetByEmail(email);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to load mesh user for email {Email}", email);
-            return default;
+            return null;
         }
     }
 

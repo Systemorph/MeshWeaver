@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive;
 
 namespace MeshWeaver.AI;
 
@@ -28,7 +30,11 @@ public static class AgentOrderingHelper
             try
             {
                 var query = $"path:{nodeTypePath} nodeType:Agent scope:hierarchy";
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query))
+                var stream = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+                    .Take(1)
+                    .SelectMany(c => c.Items.ToObservable())
+                    .ToAsyncEnumerableSequence();
+                await foreach (var node in stream)
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                     {
@@ -51,7 +57,11 @@ public static class AgentOrderingHelper
                     ? "nodeType:Agent scope:selfAndAncestors"
                     : $"path:{contextPath} nodeType:Agent scope:selfAndAncestors";
 
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(query))
+                var stream = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+                    .Take(1)
+                    .SelectMany(c => c.Items.ToObservable())
+                    .ToAsyncEnumerableSequence();
+                await foreach (var node in stream)
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                     {
@@ -99,7 +109,11 @@ public static class AgentOrderingHelper
 
         try
         {
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}"))
+            var stream = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{contextPath}"))
+                .Take(1)
+                .SelectMany(c => c.Items.ToObservable())
+                .ToAsyncEnumerableSequence();
+            await foreach (var node in stream)
             {
                 if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
                 {

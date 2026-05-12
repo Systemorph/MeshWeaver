@@ -199,9 +199,9 @@
     private record ThreadItem(string Path, MeshNode Node, MeshThread Content);
     private IReadOnlyList<ThreadItem> Chats = [];
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        await LoadConversations();
+        LoadConversations();
     }
 
     private string GetCurrentUserId()
@@ -224,25 +224,32 @@
         return path;
     }
 
-    private async Task LoadConversations()
+    private IDisposable? _conversationSubscription;
+
+    private void LoadConversations()
     {
+        _conversationSubscription?.Dispose();
         try
         {
             var userId = GetCurrentUserId();
 
-            // Query threads by node type and created by user
             var query = $"nodeType:{ThreadNodeType.NodeType} createdBy:{userId}";
-            var threadNodes = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+            _conversationSubscription = MeshQuery
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Subscribe(change =>
+                {
+                    var items = change.Items
+                        .OrderByDescending(n => n.LastModified)
+                        .Select(n => new ThreadItem(n.Path ?? n.Id, n, n.Content as MeshThread ?? new MeshThread()))
+                        .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
+                        .ToList();
 
-            // Convert to ThreadItem list, filtering by scope if specified
-            var items = threadNodes
-                .OrderByDescending(n => n.LastModified)
-                .Select(n => new ThreadItem(n.Path ?? n.Id, n, n.Content as MeshThread ?? new MeshThread()))
-                .Where(c => Scope == null || GetPathScope(c.Path) == Scope)
-                .ToList();
-
-            Chats = items;
-            StateHasChanged();
+                    InvokeAsync(() =>
+                    {
+                        Chats = items;
+                        StateHasChanged();
+                    });
+                });
         }
         catch (Exception ex)
         {
@@ -369,8 +376,11 @@
         }
     }
 
-    public async Task RefreshConversations()
+    public Task RefreshConversations()
     {
-        await LoadConversations();
+        LoadConversations();
+        return Task.CompletedTask;
     }
+
+    public void Dispose() => _conversationSubscription?.Dispose();
 }

@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -11,99 +12,45 @@ namespace MeshWeaver.Graph;
 public static class ChildrenQueryExtensions
 {
     /// <summary>
-    /// Queries for child nodes using the specified query pattern via IMeshService.
-    /// Supports query patterns like "nodeType:ACME/Project/Todo".
+    /// Live <see cref="IObservable{T}"/> of child <see cref="MeshNode"/>s matching the supplied
+    /// query pattern (e.g. <c>"nodeType:ACME/Project/Todo"</c>). Re-emits whenever the
+    /// underlying result set changes — subscribe and react.
     /// </summary>
-    /// <param name="host">The layout area host</param>
-    /// <param name="childrenQuery">The query pattern (e.g., "nodeType:ACME/Project/Todo")</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Matching MeshNode results</returns>
-    public static async IAsyncEnumerable<MeshNode> QueryChildrenAsync(
+    public static IObservable<IReadOnlyList<MeshNode>> ObserveChildren(
         this LayoutAreaHost host,
-        string childrenQuery,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        string childrenQuery)
     {
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
-            yield break;
+            return Observable.Return<IReadOnlyList<MeshNode>>([]);
 
         var hubPath = host.Hub.Address.ToString();
-
-        // Build the full query with path context
-        // The childrenQuery may contain placeholders like {path}
         var query = childrenQuery.Replace("{path}", hubPath);
-
-        // If the query doesn't already have a namespace filter, add it
         if (!query.Contains("namespace:"))
-        {
             query = $"namespace:{hubPath} {query}";
-        }
 
-        await foreach (var item in meshQuery.QueryAsync<MeshNode>(query, ct: ct))
-        {
-            yield return item;
-        }
+        return meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Select(c => (IReadOnlyList<MeshNode>)c.Items);
     }
 
     /// <summary>
-    /// Queries for child nodes of a specific nodeType via IMeshService.
-    /// This is a convenience method for the common pattern "nodeType:{nodeType}".
+    /// Live observable of child nodes of a specific nodeType.
     /// </summary>
-    /// <param name="host">The layout area host</param>
-    /// <param name="nodeType">The nodeType to filter by (e.g., "ACME/Project/Todo")</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Matching MeshNode results</returns>
-    public static IAsyncEnumerable<MeshNode> QueryChildrenByTypeAsync(
+    public static IObservable<IReadOnlyList<MeshNode>> ObserveChildrenByType(
         this LayoutAreaHost host,
-        string nodeType,
-        CancellationToken ct = default)
-    {
-        return host.QueryChildrenAsync($"nodeType:{nodeType}", ct);
-    }
-
-    /// <summary>
-    /// Queries for child nodes and extracts their content as the specified type.
-    /// Uses Hub's JsonSerializerOptions for proper type handling.
-    /// </summary>
-    /// <typeparam name="T">The content type to extract</typeparam>
-    /// <param name="host">The layout area host</param>
-    /// <param name="nodeType">The nodeType to filter by (e.g., "ACME/Project/Todo")</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Content objects of type T</returns>
-    public static async IAsyncEnumerable<T> QueryChildContentAsync<T>(
-        this LayoutAreaHost host,
-        string nodeType,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default) where T : class
-    {
-        await foreach (var node in host.QueryChildrenByTypeAsync(nodeType, ct))
-        {
-            // Use Hub's JsonSerializerOptions for proper camelCase and type handling
-            var content = node.GetContent<T>(host.Hub.JsonSerializerOptions);
-            if (content != null)
-            {
-                yield return content;
-            }
-        }
-    }
+        string nodeType)
+        => host.ObserveChildren($"nodeType:{nodeType}");
 
     /// <summary>
     /// Gets the content from a MeshNode, handling both direct types and JsonElement deserialization.
     /// Uses Hub's JsonSerializerOptions via the host for proper type handling.
     /// </summary>
-    /// <typeparam name="T">The expected content type</typeparam>
-    /// <param name="node">The mesh node</param>
-    /// <param name="host">The layout area host to get JsonSerializerOptions from</param>
-    /// <returns>The content as type T, or null if conversion fails</returns>
     public static T? GetContent<T>(this MeshNode node, LayoutAreaHost host) where T : class
         => node.GetContent<T>(host.Hub.JsonSerializerOptions);
 
     /// <summary>
     /// Gets the content from a MeshNode, handling both direct types and JsonElement deserialization.
     /// </summary>
-    /// <typeparam name="T">The expected content type</typeparam>
-    /// <param name="node">The mesh node</param>
-    /// <param name="options">JsonSerializerOptions to use for deserialization (should come from Hub.JsonSerializerOptions)</param>
-    /// <returns>The content as type T, or null if conversion fails</returns>
     public static T? GetContent<T>(this MeshNode node, System.Text.Json.JsonSerializerOptions options) where T : class
     {
         if (node.Content == null)
@@ -132,9 +79,6 @@ public static class ChildrenQueryExtensions
     /// WARNING: Uses default JsonSerializerOptions which may not have proper camelCase handling.
     /// Prefer the overload that takes JsonSerializerOptions from Hub.
     /// </summary>
-    /// <typeparam name="T">The expected content type</typeparam>
-    /// <param name="node">The mesh node</param>
-    /// <returns>The content as type T, or null if conversion fails</returns>
     [Obsolete("Use GetContent<T>(node, options) with Hub.JsonSerializerOptions instead for proper camelCase handling")]
     public static T? GetContent<T>(this MeshNode node) where T : class
     {
@@ -148,7 +92,6 @@ public static class ChildrenQueryExtensions
         {
             try
             {
-                // Use CamelCase to match Hub's default serialization options
                 var options = new System.Text.Json.JsonSerializerOptions
                 {
                     PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -109,10 +110,18 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     {
         if (!IsInteractive)
         {
-            // Prerender: one-shot attempt to get cached HTML directly from the MeshNode.
-            // No path resolution, no stream subscriptions, no PortalApplication.
+            // Prerender: subscribe once for the cached HTML; first emission wins.
+            // Subscribe + Take(1) — no await on a hub-touching observable.
             if (!string.IsNullOrEmpty(Path))
-                PreRenderedHtml = await MeshService.GetPreRenderedHtmlAsync(Path);
+            {
+                MeshService.GetPreRenderedHtml(Path)
+                    .Take(1)
+                    .Subscribe(html =>
+                    {
+                        PreRenderedHtml = html;
+                        _ = InvokeAsync(StateHasChanged);
+                    });
+            }
             return;
         }
 

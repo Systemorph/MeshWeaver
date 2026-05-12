@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -19,42 +20,41 @@ public static class VUserHelper
     /// Uses unprotected storage read for existence check (no security overhead),
     /// and ImpersonateAsHub for creation (VUserAccessRule allows portal namespace).
     /// </summary>
-    public static async Task EnsureVUserNodeAsync(PortalApplication portalApp, string virtualUserId, ILogger? logger = null)
+    public static void EnsureVUserNode(PortalApplication portalApp, string virtualUserId, ILogger? logger = null)
     {
         var hub = portalApp.Hub;
         var queryCore = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
         var path = $"VUser/{virtualUserId}";
 
-        // Existence check via IMeshQueryCore — infrastructure-scoped query (no access
-        // control) avoids reaching into IMeshStorage from a non-handler caller. Take
-        // the first item and break; if none, the node is missing.
-        await foreach (var _ in queryCore.QueryAsync(
-            MeshQueryRequest.FromQuery($"path:{path}"),
-            hub.JsonSerializerOptions))
-        {
-            return; // exists
-        }
-
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        using (accessService.ImpersonateAsHub(hub))
-        {
-            var userNode = new MeshNode(virtualUserId, "VUser")
-            {
-                Name = "Guest",
-                NodeType = "VUser",
-                State = MeshNodeState.Active,
-                Content = new AccessObject
+        // Existence check via IMeshQueryCore.ObserveQuery — fire-and-forget;
+        // subscribe creates the node on the very first emission if no rows.
+        queryCore.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{path}"),
+                hub.JsonSerializerOptions)
+            .Take(1)
+            .Subscribe(
+                change =>
                 {
-                    IsVirtual = true
-                }
-            };
+                    if (change.Items.Count > 0)
+                        return; // exists
 
-            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            // Fire-and-forget: await on hub-backed CreateNode deadlocks the hub
-            // pump (see AsynchronousCalls.md). Subscribe logs success/failure.
-            meshService.CreateNode(userNode).Subscribe(
-                _ => logger?.LogDebug("VirtualUser: Created VUser node {Path}", path),
-                ex => logger?.LogWarning(ex, "VirtualUser: Failed to create VUser node {Path}", path));
-        }
+                    var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+                    using (accessService.ImpersonateAsHub(hub))
+                    {
+                        var userNode = new MeshNode(virtualUserId, "VUser")
+                        {
+                            Name = "Guest",
+                            NodeType = "VUser",
+                            State = MeshNodeState.Active,
+                            Content = new AccessObject { IsVirtual = true }
+                        };
+
+                        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+                        meshService.CreateNode(userNode).Subscribe(
+                            _ => logger?.LogDebug("VirtualUser: Created VUser node {Path}", path),
+                            ex => logger?.LogWarning(ex, "VirtualUser: Failed to create VUser node {Path}", path));
+                    }
+                },
+                ex => logger?.LogWarning(ex, "VirtualUser: existence check failed for {Path}", path));
     }
 }

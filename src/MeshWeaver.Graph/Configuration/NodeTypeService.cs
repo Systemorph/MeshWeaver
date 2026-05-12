@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Reactive;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using MeshWeaver.Data;
@@ -192,11 +193,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         var options = hub.JsonSerializerOptions;
         foreach (var provider in queryProviders)
         {
-            await foreach (var item in provider.QueryAsync(request, options, ct))
-            {
-                if (item is T typed)
-                    yield return typed;
-            }
+            var stream = provider.ObserveQuery<T>(request, options)
+                .Take(1)
+                .SelectMany(c => c.Items.ToObservable())
+                .ToAsyncEnumerableSequence(ct);
+            await foreach (var item in stream)
+                yield return item;
         }
     }
 

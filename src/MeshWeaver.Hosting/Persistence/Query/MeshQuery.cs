@@ -41,59 +41,6 @@ public class MeshQuery
 
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
-    public async IAsyncEnumerable<object> QueryAsync(
-        MeshQueryRequest request,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        var parsedQuery = new QueryParser().Parse(request.Query);
-        var channel = Channel.CreateUnbounded<object>();
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
-
-        // Scoped query → only providers whose Matches() predicate accepts
-        // the query's namespace candidates. Unscoped → fan to all. Extract
-        // once here so every provider's predicate is a cheap HashSet lookup.
-        var queryNamespaces = MergeQueryNamespaces(parsedQuery);
-        var participating = queryNamespaces.Count == 0
-            ? providers
-            : providers.Where(p => p.Matches(queryNamespaces)).ToList();
-
-        _ = FanOutProvidersAsync();
-        async Task FanOutProvidersAsync()
-        {
-            await Task.WhenAll(participating.Select(async provider =>
-            {
-                try
-                {
-                    await foreach (var item in provider.QueryAsync(request, Options, ct))
-                    {
-                        if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
-                            continue;
-
-                        var result = parsedQuery.Select != null && item is MeshNode
-                            ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
-                            : item;
-                        await channel.Writer.WriteAsync(result, ct);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    logger?.LogTrace("MeshQuery: {Provider} cancelled for '{Query}'",
-                        provider.GetType().Name, request.Query);
-                }
-                catch (Exception ex)
-                {
-                    logger?.LogWarning(ex, "MeshQuery: {Provider} failed for '{Query}'",
-                        provider.GetType().Name, request.Query);
-                }
-            }));
-            channel.Writer.Complete();
-        }
-
-        await foreach (var item in channel.Reader.ReadAllAsync(CancellationToken.None))
-            yield return item;
-    }
-
     /// <summary>
     /// Pre-extracts the partition candidates a query targets — union of
     /// <c>namespace:</c> condition values and the first segment of

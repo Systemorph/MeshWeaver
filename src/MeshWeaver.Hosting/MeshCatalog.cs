@@ -355,34 +355,19 @@ internal sealed class MeshCatalog(
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    public IObservable<IReadOnlyList<MeshNode>> Query(string? parentPath, string? query = null, int? maxResults = null)
     {
-        var count = 0;
-
-        // Build query string for IMeshQuery
-        var queryParts = new List<string>();
-        queryParts.Add(string.IsNullOrEmpty(parentPath) ? "namespace:" : $"namespace:{parentPath}");
+        var queryParts = new List<string>
+        {
+            string.IsNullOrEmpty(parentPath) ? "namespace:" : $"namespace:{parentPath}"
+        };
         if (!string.IsNullOrWhiteSpace(query))
             queryParts.Add(query);
 
-        var fullQuery = string.Join(" ", queryParts);
-
-        {
-            var request = new MeshQueryRequest { Query = fullQuery, Limit = maxResults };
-            await foreach (var item in meshQuery.QueryAsync(request, ct))
-            {
-                if (item is MeshNode child)
-                {
-                    yield return child;
-                    count++;
-
-                    // Apply max results if provided
-                    if (maxResults.HasValue && maxResults.Value > 0 && count >= maxResults.Value)
-                    {
-                        yield break;
-                    }
-                }
-            }
-        }
+        var request = new MeshQueryRequest { Query = string.Join(" ", queryParts), Limit = maxResults };
+        return meshQuery.ObserveQuery<MeshNode>(request)
+            .Select(c => (IReadOnlyList<MeshNode>)(maxResults is int max && c.Items.Count > max
+                ? c.Items.Take(max).ToList()
+                : c.Items));
     }
 }

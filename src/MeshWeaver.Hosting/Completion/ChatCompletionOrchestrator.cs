@@ -246,9 +246,9 @@ internal sealed class ChatCompletionOrchestrator(
             Limit = 20
         };
 
-        return meshService.QueryAsync(request)
-            .ToObservableSequence()
-            .OfType<MeshNode>()
+        return meshService.ObserveQuery<MeshNode>(request)
+            .Take(1)
+            .SelectMany(c => c.Items.ToObservable())
             .Where(node => !string.IsNullOrEmpty(node.Path) && seenPaths.TryAdd(node.Path!, 0))
             .Select(node => new AutocompleteItem(
                 Label: node.Name ?? node.Id,
