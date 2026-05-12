@@ -17,14 +17,16 @@ public static class IMeshQueryTestExtensions
     /// <summary>
     /// Legacy <c>QueryAsync</c> shape for tests: subscribes to <see cref="IMeshService.ObserveQuery{T}"/>,
     /// takes the Initial emission, flattens its items as <c>IAsyncEnumerable&lt;object&gt;</c>.
+    /// Uses <c>object</c> as the type parameter so <c>select:</c>-projected
+    /// dictionaries (and other non-MeshNode payloads) survive the generic cast.
     /// </summary>
     public static IAsyncEnumerable<object> QueryAsync(
         this IMeshService svc,
         MeshQueryRequest request,
         CancellationToken ct = default)
-        => svc.ObserveQuery<MeshNode>(request)
+        => svc.ObserveQuery<object>(request)
             .Take(1)
-            .SelectMany(c => c.Items.Cast<object>().ToObservable())
+            .SelectMany(c => c.Items.ToObservable())
             .ToAsyncEnumerableSequence(ct);
 
     /// <summary>

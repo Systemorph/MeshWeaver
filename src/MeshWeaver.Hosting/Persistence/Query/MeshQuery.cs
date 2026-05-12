@@ -362,6 +362,9 @@ public class MeshQuery
     /// <summary>
     /// Sort + skip + clip the merged initial set. Mirrors the post-collect
     /// pipeline that <see cref="MeshQueryEngine.QueryAsync"/> runs per-provider.
+    /// Also applies <c>select:</c> projection: static-node providers don't
+    /// project to dictionaries on their own, so merging engine projections with
+    /// raw static MeshNodes left mixed-shape results for callers.
     /// </summary>
     private static QueryResultChange<T> ClipMergedInitial<T>(
         List<T> items,
@@ -380,6 +383,14 @@ public class MeshQuery
         var effectiveLimit = request.Limit ?? parsed.Limit;
         if (effectiveLimit is int limit && limit > 0)
             merged = merged.Take(limit);
+        if (parsed.Select is { } select)
+        {
+            // Project each MeshNode through select; for non-MeshNode inputs
+            // (already-projected dicts coming from the engine) leave alone.
+            merged = merged.Select(item => item is MeshNode node
+                ? (T)(object)ParsedQuery.ProjectToSelect(node, select)
+                : item);
+        }
         return change with { Items = merged.ToList() };
     }
 
