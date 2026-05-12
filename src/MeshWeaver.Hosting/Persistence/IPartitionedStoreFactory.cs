@@ -46,7 +46,7 @@ public interface IPartitionedStoreFactory
 /// </summary>
 /// <param name="StorageAdapter">The storage adapter for this partition (reads/writes nodes)</param>
 /// <param name="QueryProvider">Optional native query provider (e.g., CosmosMeshQuery, PostgreSqlMeshQuery).
-/// When null, the MeshQueryEngine wrapping the storage adapter is used.</param>
+/// When null, a StorageAdapterMeshQueryProvider wrapping the storage adapter is used.</param>
 public record PartitionedStore(
     IStorageAdapter StorageAdapter,
     IMeshQueryProvider? QueryProvider = null,

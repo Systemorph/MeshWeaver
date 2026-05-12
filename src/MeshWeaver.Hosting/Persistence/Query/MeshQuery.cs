@@ -12,14 +12,20 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.Persistence.Query;
 
 /// <summary>
-/// Scoped wrapper that automatically injects JsonSerializerOptions from the current IMessageHub
-/// and aggregates results from all registered IMeshQueryProvider instances.
+/// Single top-level query fan-out. Aggregates every registered
+/// <see cref="IMeshQueryProvider"/> for both the secured surface
+/// (<see cref="ObserveQuery{T}(MeshQueryRequest)"/>) and the unsecured
+/// <see cref="IMeshQueryCore"/> surface (used by SyncedQueryMeshNodes /
+/// SecurityService to dodge the validator cycle). One boss for fan-out —
+/// per-adapter providers stay leaves.
+/// <para>
 /// source:activity implies nodeType:Activity filter; source:accessed JOINs with UserActivity
 /// nodes to order by last-access time. Providers that don't support these sources return normal results.
 /// Identity is resolved from AccessService.Context. Use accessService.ImpersonateAsHub(hub)
 /// to temporarily switch identity for hub-level operations.
+/// </para>
 /// </summary>
-public class MeshQuery
+public class MeshQuery : IMeshQueryCore
 {
     private readonly IReadOnlyList<IMeshQueryProvider> providers;
     private readonly IMessageHub hub;
@@ -248,13 +254,33 @@ public class MeshQuery
     }
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
+        => MergeProviderObservables(
+            providers.Select(p => p.ObserveQuery<T>(request, Options)).ToList(),
+            request);
+
+    /// <summary>
+    /// Unsecured fan-out — same merge as the secured surface, but each
+    /// provider that implements <see cref="IMeshQueryCore"/> is invoked
+    /// through that surface (skipping per-result validators). Providers
+    /// that don't implement <c>IMeshQueryCore</c> (e.g. static-node
+    /// catalogs) fall through to their regular surface because they have
+    /// no security to bypass anyway.
+    /// </summary>
+    IObservable<QueryResultChange<T>> IMeshQueryCore.ObserveQuery<T>(
+        MeshQueryRequest request,
+        JsonSerializerOptions options)
+        => MergeProviderObservables(
+            providers.Select(p => p is IMeshQueryCore core
+                ? core.ObserveQuery<T>(request, options)
+                : p.ObserveQuery<T>(request, options)).ToList(),
+            request);
+
+    private IObservable<QueryResultChange<T>> MergeProviderObservables<T>(
+        List<IObservable<QueryResultChange<T>>> observables,
+        MeshQueryRequest request)
     {
         // Collect Initial from all providers, merge into a single Initial emission,
         // then forward subsequent (non-Initial) changes from ongoing providers.
-        var observables = providers
-            .Select(p => p.ObserveQuery<T>(request, Options))
-            .ToList();
-
         if (observables.Count == 0)
             return Observable.Empty<QueryResultChange<T>>();
 
@@ -361,7 +387,7 @@ public class MeshQuery
 
     /// <summary>
     /// Sort + skip + clip the merged initial set. Mirrors the post-collect
-    /// pipeline that <see cref="MeshQueryEngine.QueryAsync"/> runs per-provider.
+    /// pipeline that <see cref="StorageAdapterMeshQueryProvider.QueryAsync"/> runs per-provider.
     /// Also applies <c>select:</c> projection: static-node providers don't
     /// project to dictionaries on their own, so merging engine projections with
     /// raw static MeshNodes left mixed-shape results for callers.

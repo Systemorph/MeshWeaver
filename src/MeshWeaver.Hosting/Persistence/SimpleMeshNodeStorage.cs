@@ -18,7 +18,8 @@ namespace MeshWeaver.Hosting.Persistence;
 /// 🚨 The descendant walk is the ONE concession to the "no naive load" rule
 /// (per <c>Doc/Architecture/CqrsAndContentAccess.md</c>). It is contained
 /// here. The routing layer (<c>RoutingPersistenceServiceCore</c>) and the
-/// in-memory query engine (<c>MeshQueryEngine</c>) know nothing about it.
+/// per-adapter query provider (<c>StorageAdapterMeshQueryProvider</c>) know
+/// nothing about it.
 /// Only a dedicated <see cref="IMeshQueryProvider"/> registered for
 /// pedestrian-backed partitions consumes <see cref="ListDescendantPaths"/>.
 /// Postgres / Cosmos / blob backends don't extend this — they route queries

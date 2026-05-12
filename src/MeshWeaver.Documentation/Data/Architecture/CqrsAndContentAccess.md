@@ -306,6 +306,33 @@ If you find yourself reading `MeshNode.Content` out of a one-shot
 wrong layer. Wrap the query in `workspace.GetQuery` and subscribe — the
 recompile / re-render fires automatically when the underlying nodes change.
 
+## Where scope walks live
+
+`scope:children / scope:descendants / scope:subtree / scope:hierarchy /
+scope:ancestorsAndSelf` are **per-provider** responsibilities. The mesh level
+never walks content; it only coordinates fan-out across providers and merges
+the results.
+
+| Layer | Class | Walks? |
+|---|---|---|
+| Mesh | `MeshQuery` (top-level), `RoutingMeshQueryProvider` | **No.** Fans out across providers and partitions, merges per-provider buckets with writable-first ordering, applies post-merge sort/skip/limit/select. |
+| Mesh | `StaticNodeQueryProvider` | **No walks needed** — iterates the in-memory static catalog directly. |
+| Per-provider (SQL) | `PostgreSqlMeshQuery` + `PostgreSqlSqlGenerator` | **Yes — pushed down to SQL.** `path LIKE '<prefix>/%'` on the indexed `path` column for `descendants` / `subtree`; `namespace = <basePath>` for `children`; in-memory ancestor split + `IN`-clause for `ancestors`. |
+| Per-provider (SQL) | `CosmosMeshQuery` + `CosmosSqlGenerator` | **Yes — pushed down to Cosmos SQL** via `CosmosStorageAdapter.QueryNodesAsync`. |
+| Per-provider (pedestrian) | `StorageAdapterMeshQueryProvider` (in-memory, file-system, embedded-resource) | **Yes — composed against `IStorageAdapter.ListChildPaths` in `IObservable` form.** One instance per `IStorageAdapter` (i.e. per partition in routed setups). |
+
+**Why this matters:** every provider owns its own walk implementation, so adding
+a new backend (e.g. blob storage) is local — implement `IMeshQueryProvider`
+once, with whatever native pushdown the backend supports. The mesh layer is
+unchanged. Likewise, when something feels like it belongs at the mesh layer
+("discover all partitions", "find nodes matching X across the whole mesh"), it
+goes in `RoutingMeshQueryProvider` — never into a per-adapter walker.
+
+**Autocomplete follows the same rule.** Per-adapter `AutocompleteAsync`
+consumes the QUERY stream (already-populated `MeshNode`s) and just scores
+against the prefix — it never reads paths by hand. Discovering partitions
+when `basePath` is empty is `RoutingMeshQueryProvider.AutocompleteAsync`'s job.
+
 ## One-shot reads (`GetDataRequest` + `Observe`)
 
 The canonical pattern for "give me this node's current MeshNode":

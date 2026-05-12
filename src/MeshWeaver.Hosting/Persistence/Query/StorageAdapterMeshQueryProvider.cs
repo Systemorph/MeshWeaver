@@ -15,10 +15,25 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.Persistence.Query;
 
 /// <summary>
-/// In-memory implementation of IMeshService.
-/// Extracts query functionality from AdapterPersistenceService for use as a standalone service.
+/// Pedestrian, per-adapter implementation of <see cref="IMeshQueryProvider"/> +
+/// <see cref="IMeshQueryCore"/>. One instance per <see cref="IStorageAdapter"/>;
+/// constructed by <c>RoutingPersistenceServiceCore</c> per partition.
+/// <para>
+/// Scope walks (<c>Children / Descendants / Subtree / Hierarchy / AncestorsAndSelf</c>)
+/// compose against <see cref="IStorageAdapter.ListChildPaths"/> in IObservable form —
+/// the right shape for in-memory, file-system, and embedded-resource adapters where
+/// no native pushdown exists. SQL-backed backends register their own
+/// <see cref="IMeshQueryProvider"/> (e.g. <c>PostgreSqlMeshQuery</c>,
+/// <c>CosmosMeshQuery</c>) that pushes the scope clause to the database.
+/// </para>
+/// <para>
+/// Strictly per-adapter: never walks partition keys, never holds a static-node
+/// catalog, never coordinates across providers. Those concerns belong to
+/// <c>RoutingMeshQueryProvider</c>, <c>StaticNodeQueryProvider</c>, and
+/// <c>MeshQuery</c> respectively.
+/// </para>
 /// </summary>
-internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
+internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryCore
 {
     private readonly IStorageAdapter persistence;
     private readonly AccessService? accessService;
@@ -27,53 +42,42 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
     // 🚨 Lazy<INodeValidator> — NOT bare INodeValidator. RlsNodeValidator
     // (the only non-test impl) takes ISecurityService at construction time.
     // SecurityService warms up by subscribing to a synced query during its
-    // own ctor → reaches MeshQueryEngine → resolving INodeValidators eagerly
-    // would re-enter SecurityService and cycle. Lazy<T> defers each
-    // validator's construction to first ValidateReadAsync access; by then
-    // SecurityService is fully built.
+    // own ctor → reaches StorageAdapterMeshQueryProvider → resolving
+    // INodeValidators eagerly would re-enter SecurityService and cycle.
+    // Lazy<T> defers each validator's construction to first ValidateReadAsync
+    // access; by then SecurityService is fully built.
     private readonly IEnumerable<Lazy<INodeValidator>>? nodeValidators;
-    private readonly ILogger<MeshQueryEngine>? logger;
+    private readonly ILogger<StorageAdapterMeshQueryProvider>? logger;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
     private long _version;
 
     /// <summary>
-    /// Static-node providers folded into the query stream — built-in agents,
-    /// well-known roles, type definitions. Indexed by path so
-    /// <see cref="FindMatchingNodesAsync"/> can yield them alongside
-    /// persistence-served nodes with path-keyed dedup against persistence
-    /// (RoutingPersistenceServiceCore consumes IStaticNodeProvider directly,
-    /// so the same node may come from both sources in prod).
-    /// </summary>
-    private readonly IReadOnlyDictionary<string, MeshNode> staticNodes;
-
-    /// <summary>
     /// First-segment namespaces owned by static partitions (Agent, Model, …).
-    /// The engine excludes these from its <see cref="Matches"/> predicate so the
+    /// This provider excludes them from its <see cref="Matches"/> predicate so the
     /// aggregator routes those queries to <see cref="StaticNodeQueryProvider"/>
     /// only — Postgres / in-memory persistence never round-trips for built-in
     /// content.
     /// </summary>
     private readonly HashSet<string> _excludedNamespaces;
 
-    public MeshQueryEngine(
+    public StorageAdapterMeshQueryProvider(
         IStorageAdapter persistence,
         // 🚨 NO ISecurityService here — that parameter created the Autofac
         // cycle SecurityService → SyncedQueryMeshNodes → IMeshQueryCore →
-        // MeshQueryEngine → SecurityService. Per-node read filtering on the
-        // secured IMeshQueryProvider surface goes through INodeValidator
-        // instead, which has no back-reference into the synced-query path.
-        // GetEffectivePermissions-style filtering for non-MeshNode results
-        // is intentionally dropped — IMeshService.QueryAsync results are
-        // MeshNodes today, and any future non-MeshNode projection should
-        // declare an INodeValidator if it needs gating.
+        // StorageAdapterMeshQueryProvider → SecurityService. Per-node read
+        // filtering on the secured IMeshQueryProvider surface goes through
+        // INodeValidator instead, which has no back-reference into the
+        // synced-query path. GetEffectivePermissions-style filtering for
+        // non-MeshNode results is intentionally dropped — IMeshService.QueryAsync
+        // results are MeshNodes today, and any future non-MeshNode projection
+        // should declare an INodeValidator if it needs gating.
         AccessService? accessService = null,
         IDataChangeNotifier? changeNotifier = null,
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<Lazy<INodeValidator>>? nodeValidators = null,
-        IEnumerable<IStaticNodeProvider>? staticProviders = null,
         IEnumerable<IPartitionStorageProvider>? partitionProviders = null,
-        ILogger<MeshQueryEngine>? logger = null)
+        ILogger<StorageAdapterMeshQueryProvider>? logger = null)
     {
         this.persistence = persistence;
         this.accessService = accessService;
@@ -81,17 +85,12 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         this.meshConfiguration = meshConfiguration;
         this.nodeValidators = nodeValidators;
         this.logger = logger;
-        staticNodes = (staticProviders ?? Enumerable.Empty<IStaticNodeProvider>())
-            .SelectMany(p => p.GetStaticNodes())
-            .Where(n => !string.IsNullOrEmpty(n.Path))
-            .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         // Exclusion derived from IPartitionStorageProvider — the partition
         // registry. Only static-source partitions (DataSource="static") count
         // as "owned by someone else" for the Matches predicate. AddMeshNodes
         // seeds (writable runtime namespaces surfaced via
         // MeshConfigurationStaticNodeProvider) are NOT in this list — they
-        // remain queryable through the engine.
+        // remain queryable through this provider.
         _excludedNamespaces = (partitionProviders ?? Enumerable.Empty<IPartitionStorageProvider>())
             .Where(p => string.Equals(p.PartitionDefinition?.DataSource, "static", StringComparison.OrdinalIgnoreCase))
             .Select(p => p.Name)
@@ -336,6 +335,48 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        // source:activity is a join with the `_activity` satellites — pushed
+        // down to SQL by PostgreSqlSqlGenerator (INNER JOIN activities ON
+        // act.main_node = n.path). For pedestrian adapters the equivalent
+        // "join" is in the path itself: any activity satellite lives at
+        // `{mainPath}/_activity/{actId}`, so we derive the MainNode by string
+        // trim and skip the satellite read entirely. 1 walk + 1 read per
+        // distinct main — same cost shape as Postgres' JOIN.
+        if (parsedQuery.Source == QuerySource.Activity)
+        {
+            const string activitySegment = "/_activity/";
+            var seenMains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var activityPipeline = WalkAdapter(basePath, QueryScope.Subtree)
+                .Select(path =>
+                {
+                    if (string.IsNullOrEmpty(path)) return null;
+                    var idx = path.IndexOf(activitySegment, StringComparison.OrdinalIgnoreCase);
+                    return idx > 0 ? path.Substring(0, idx) : null;
+                })
+                .Where(mainPath => mainPath != null && seenMains.Add(mainPath))
+                .SelectMany(mainPath => persistence.Read(mainPath!, options)
+                    .Take(1)
+                    .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
+                .Where(node => node != null)
+                .Select(node => node!)
+                .Where(node => _evaluator.Matches(node, parsedQuery)
+                    && !IsExcludedByContext(node, context)
+                    && !IsExcludedByIsMain(node, parsedQuery))
+                .Catch<MeshNode, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[StorageAdapterMeshQueryProvider.SourceActivity] pipeline threw query=[{Query}] basePath={BasePath}",
+                        string.Join(" | ", request.EffectiveQueries), basePath);
+                    return Observable.Empty<MeshNode>();
+                });
+
+            await foreach (var node in activityPipeline.ToAsyncEnumerableSequence(ct))
+                yield return node;
+
+            // source:activity is exclusive — bypass the normal walk/exact-probe.
+            yield break;
+        }
+
         var pathsToSearch = GetPathsForScope(basePath, effectiveScope);
         var emittedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -354,7 +395,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                     catch (Exception ex)
                     {
                         logger?.LogWarning(ex,
-                            "[Engine.ExactRead] read threw synchronously path={Path}", searchPath);
+                            "[StorageAdapterMeshQueryProvider.ExactRead] read threw synchronously path={Path}", searchPath);
                         return Observable.Return<MeshNode?>(null);
                     }
                 })
@@ -369,7 +410,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
             .Catch<MeshNode, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
-                    "[Engine.ExactScope] pipeline threw query=[{Query}] basePath={BasePath}",
+                    "[StorageAdapterMeshQueryProvider.ExactScope] pipeline threw query=[{Query}] basePath={BasePath}",
                     string.Join(" | ", request.EffectiveQueries), basePath);
                 return Observable.Empty<MeshNode>();
             });
@@ -414,37 +455,13 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 .Catch<MeshNode, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
-                        "[Engine.MatchScope] pipeline threw query=[{Query}] basePath={BasePath}",
+                        "[StorageAdapterMeshQueryProvider.MatchScope] pipeline threw query=[{Query}] basePath={BasePath}",
                         string.Join(" | ", request.EffectiveQueries), basePath);
                     return Observable.Empty<MeshNode>();
                 });
 
             await foreach (var node in matchedScopeNodes.ToAsyncEnumerableSequence(ct))
                 yield return node;
-        }
-
-        // Static nodes — same path/scope/context filtering as persistence
-        // results, with path-keyed dedup so backends that include static
-        // nodes directly (RoutingPersistenceServiceCore) don't double-count.
-        //
-        // 🚨 Skip when context == "search": StaticNodeQueryProvider is the
-        // canonical search-context source for static partitions and applies
-        // its own context filter (type definitions excluded from search).
-        // Iterating staticNodes here too leaks config-node type definitions
-        // into search results (regression caught by
-        // StaticNodeQueryContextTests.SearchContext_ExcludesStaticNodes).
-        if (!string.Equals(context, "search", StringComparison.OrdinalIgnoreCase))
-        {
-            foreach (var (_, node) in staticNodes)
-            {
-                if (string.IsNullOrEmpty(node.Path)) continue;
-                if (emittedPaths.Contains(node.Path)) continue;
-                if (!StaticNodeMatchesScope(node, basePath, effectiveScope)) continue;
-                if (IsExcludedByContext(node, context)) continue;
-                if (IsExcludedByIsMain(node, parsedQuery)) continue;
-                if (!_evaluator.Matches(node, parsedQuery)) continue;
-                yield return node;
-            }
         }
     }
 
@@ -470,13 +487,13 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 catch (Exception ex)
                 {
                     logger?.LogWarning(ex,
-                        "[Engine.WalkLevel] ListChildPaths threw parent={Parent}", parent);
+                        "[StorageAdapterMeshQueryProvider.WalkLevel] ListChildPaths threw parent={Parent}", parent);
                     return Observable.Empty<(IEnumerable<string>, IEnumerable<string>)>();
                 }
             })
             .Take(1)
             .Do(level => logger?.LogDebug(
-                "[Engine.WalkLevel] parent={Parent} recursive={Recursive} nodes=[{Nodes}] dirs=[{Dirs}]",
+                "[StorageAdapterMeshQueryProvider.WalkLevel] parent={Parent} recursive={Recursive} nodes=[{Nodes}] dirs=[{Dirs}]",
                 parent ?? "(null)", recursive,
                 string.Join(",", level.Item1 ?? Enumerable.Empty<string>()),
                 string.Join(",", level.Item2 ?? Enumerable.Empty<string>())))
@@ -493,36 +510,9 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
             })
             .Catch<string, Exception>(ex =>
             {
-                logger?.LogWarning(ex, "[Engine.WalkLevel] parent={Parent} failed", parent);
+                logger?.LogWarning(ex, "[StorageAdapterMeshQueryProvider.WalkLevel] parent={Parent} failed", parent);
                 return Observable.Empty<string>();
             });
-
-    private static bool StaticNodeMatchesScope(MeshNode node, string basePath, QueryScope scope)
-    {
-        var path = node.Path ?? "";
-        if (string.IsNullOrEmpty(basePath))
-            return true;
-        return scope switch
-        {
-            QueryScope.Exact => string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase),
-            QueryScope.Children =>
-                string.Equals(node.Namespace ?? "", basePath, StringComparison.OrdinalIgnoreCase),
-            QueryScope.Subtree =>
-                string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase) ||
-                path.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase),
-            QueryScope.Descendants =>
-                path.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase),
-            QueryScope.Ancestors => basePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
-            QueryScope.AncestorsAndSelf =>
-                string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase) ||
-                basePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
-            QueryScope.Hierarchy =>
-                string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase) ||
-                path.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase) ||
-                basePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase),
-            _ => true,
-        };
-    }
 
     /// <summary>
     /// Gets the path for an item (MeshNode or object with Path property).
@@ -645,22 +635,32 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
 
         var suggestions = new List<QuerySuggestion>();
 
-        // Autocomplete on this engine: root-node exact match only. Descendant
-        // walks happen in the per-backend IMeshQueryProvider (pedestrian via
-        // SimpleMeshNodeStorageQueryProvider; Postgres via its own pushdown).
-        IAsyncEnumerable<MeshNode> GetNodesForAutocomplete()
-        {
-            if (string.IsNullOrEmpty(normalizedPath))
-                return AsyncEnumerable.Empty<MeshNode>();
-            return persistence.Read(normalizedPath, options)
-                .Take(1)
-                .Where(n => n != null)
-                .Select(n => n!)
-                .ToAsyncEnumerableSequence();
-        }
+        // Per-adapter autocomplete is a thin scoring layer over the QUERY
+        // stream — autocomplete never reads nodes by path itself, never
+        // re-walks the adapter. The query path (FindMatchingNodesAsync via
+        // QueryCoreAsync) handles the scope walk inside this adapter and
+        // returns fully-populated MeshNodes; here we just score them against
+        // the prefix.
+        //
+        // Empty basePath: partition fan-out is RoutingMeshQueryProvider's job,
+        // so this provider has nothing to contribute at the mesh root.
+        if (string.IsNullOrEmpty(normalizedPath))
+            yield break;
 
-        await foreach (var node in GetNodesForAutocomplete())
+        var queryRequest = new MeshQueryRequest
         {
+            Query = $"path:{normalizedPath} scope:subtree",
+            Context = context,
+            ContextPath = contextPath,
+            UserId = userId,
+            // Over-fetch so the scorer can pick the best matches; the request
+            // limit is enforced post-scoring below.
+            Limit = Math.Max(limit * 5, 100),
+        };
+
+        await foreach (var obj in QueryCoreAsync(queryRequest, options, ct))
+        {
+            if (obj is not MeshNode node) continue;
             // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
             if (meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
                 continue;
@@ -1117,22 +1117,4 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         return node.MainNode != node.Path;
     }
 
-    /// <summary>
-    /// Checks if a path is within a satellite partition (contains /_X/ segments
-    /// where X starts with uppercase, e.g., /_Comment/, /_Thread/).
-    /// When the base path is within a satellite partition, descendant queries
-    /// should include satellite nodes (use GetAllDescendantsAsync).
-    /// </summary>
-    private static bool IsSatellitePath(string? path)
-    {
-        if (string.IsNullOrEmpty(path)) return false;
-        var idx = 0;
-        while ((idx = path.IndexOf("/_", idx, StringComparison.Ordinal)) >= 0)
-        {
-            idx += 2; // skip "/_"
-            if (idx < path.Length && char.IsUpper(path[idx]))
-                return true;
-        }
-        return false;
-    }
 }
