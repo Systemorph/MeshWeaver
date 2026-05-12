@@ -382,15 +382,17 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         // adapter; we BFS through descendants here for the simple cases tests rely
         // on. Postgres deployments route through PostgreSqlMeshQuery which does its
         // own SQL pushdown and skips this engine.
+        // AncestorsAndSelf is intentionally EXCLUDED: that scope is fully covered
+        // by the exact-path probe above (self + every ancestor by path). Recursing
+        // from each ancestor would re-emit the whole descendants subtree, which
+        // breaks tests that ask "find Agents above X" and expect to filter out the
+        // sibling subtree.
         if (effectiveScope is QueryScope.Children
             or QueryScope.Descendants
             or QueryScope.Hierarchy
-            or QueryScope.Subtree
-            or QueryScope.AncestorsAndSelf)
+            or QueryScope.Subtree)
         {
-            IEnumerable<string> walkRoots = effectiveScope == QueryScope.AncestorsAndSelf
-                ? GetPathsForScope(basePath, QueryScope.AncestorsAndSelf)
-                : new[] { basePath };
+            IEnumerable<string> walkRoots = new[] { basePath };
 
             // Compose pure-observable walk + read + match — no inner await.
             // The IAsyncEnumerable boundary at the top of QueryAsync still
