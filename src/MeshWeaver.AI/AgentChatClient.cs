@@ -1003,15 +1003,15 @@ public class AgentChatClient : IAgentChat
                     logger.LogDebug("[AgentChatClient] Agent emission: {Count} for ctx={Ctx}",
                         agents.Count, contextPath ?? "(null)");
                     ApplyAgents(agents, contextPath);
-                    if (!readinessFired && loadedAgents.Count > 0)
-                    {
+                    // Synced queries emit Initial first, then incremental changes.
+                    // Initial-with-0-agents is the legitimate "no agents configured"
+                    // state — not "still loading". Gating readiness on count>0
+                    // hangs WhenInitialized forever in that case (the only-Initial
+                    // synced query then quiesces). Fire on every emission; callers
+                    // inspect loadedAgents to decide what to do with an empty list.
+                    if (!readinessFired)
                         readinessFired = true;
-                        agentsLoadedSubject.OnNext(this);
-                    }
-                    else if (readinessFired)
-                    {
-                        agentsLoadedSubject.OnNext(this);
-                    }
+                    agentsLoadedSubject.OnNext(this);
                 },
                 ex =>
                 {

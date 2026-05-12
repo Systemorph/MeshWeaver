@@ -44,6 +44,7 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
             .UseMonolithMesh()
             .AddFileSystemPersistence(TestDataPath)
             .AddGraph()
+            .AddAI()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
 
     /// <summary>

@@ -1,13 +1,12 @@
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Threading;
+using System.Reactive.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI;
-using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using NSubstitute;
@@ -66,30 +65,28 @@ public class AgentSelectionTest
             Content = todoAgentConfig
         };
 
-        // Mock: Query for current node to get NodeType (no nodeType: filter in query)
-        // Note: QueryAsync<MeshNode> does NOT add $type:MeshNode (it's the base type)
-        _meshQuery.QueryAsync(
+        // Mock: Query for current node to get NodeType (no nodeType: filter in query).
+        // Production calls IMeshService.ObserveQuery<MeshNode> directly — mock that
+        // (extension methods like QueryAsync can't be intercepted by NSubstitute).
+        _meshQuery.ObserveQuery<MeshNode>(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    !r.Query.Contains("nodeType:")),
-                Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable<object>(productLaunchNode));
+                    !r.Query.Contains("nodeType:")))
+            .Returns(InitialChange(productLaunchNode));
 
         // Mock: Query for agents in NodeType namespace returns TodoAgent
-        _meshQuery.QueryAsync(
+        _meshQuery.ObserveQuery<MeshNode>(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{nodeTypePath}") &&
-                    r.Query.Contains("nodeType:Agent")),
-                Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable<object>(todoAgentNode));
+                    r.Query.Contains("nodeType:Agent")))
+            .Returns(InitialChange(todoAgentNode));
 
         // Mock: Query for agents in context path namespace returns empty
-        _meshQuery.QueryAsync(
+        _meshQuery.ObserveQuery<MeshNode>(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("nodeType:Agent")),
-                Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable<object>());
+                    r.Query.Contains("nodeType:Agent")))
+            .Returns(InitialChange());
 
         // Act - Call the REAL AgentOrderingHelper implementation
         // First get the NodeType
@@ -141,22 +138,21 @@ public class AgentSelectionTest
             Content = orchestratorConfig
         };
 
-        // Mock: Query for current node (no nodeType: filter in query)
-        // Note: QueryAsync<MeshNode> does NOT add $type:MeshNode (it's the base type)
-        _meshQuery.QueryAsync(
+        // Mock: Query for current node (no nodeType: filter in query).
+        // Production calls IMeshService.ObserveQuery<MeshNode> directly — mock that
+        // (extension methods like QueryAsync can't be intercepted by NSubstitute).
+        _meshQuery.ObserveQuery<MeshNode>(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    !r.Query.Contains("nodeType:")),
-                Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable<object>(productLaunchNode));
+                    !r.Query.Contains("nodeType:")))
+            .Returns(InitialChange(productLaunchNode));
 
         // Mock: Query for agents in context path namespace returns Orchestrator
-        _meshQuery.QueryAsync(
+        _meshQuery.ObserveQuery<MeshNode>(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("nodeType:Agent")),
-                Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable<object>(orchestratorNode));
+                    r.Query.Contains("nodeType:Agent")))
+            .Returns(InitialChange(orchestratorNode));
 
         // Act - Call the REAL AgentOrderingHelper implementation
         var detectedNodeType = await AgentOrderingHelper.GetNodeTypeAsync(_meshQuery, contextPath);
@@ -267,14 +263,17 @@ public class AgentSelectionTest
 
     #region Helper Methods
 
-    private static async IAsyncEnumerable<T> ToAsyncEnumerable<T>(params T[] items)
-    {
-        foreach (var item in items)
+    /// <summary>
+    /// Mock <see cref="IMeshService.ObserveQuery{T}"/> by returning a single
+    /// Initial <see cref="QueryResultChange{T}"/>. Production code subscribes,
+    /// takes the Initial, and processes <c>Items</c> — exactly what this fakes.
+    /// </summary>
+    private static IObservable<QueryResultChange<MeshNode>> InitialChange(params MeshNode[] items)
+        => Observable.Return(new QueryResultChange<MeshNode>
         {
-            await Task.Yield();
-            yield return item;
-        }
-    }
+            ChangeType = QueryChangeType.Initial,
+            Items = items,
+        });
 
     #endregion
 }
