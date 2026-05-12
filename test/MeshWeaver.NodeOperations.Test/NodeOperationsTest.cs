@@ -539,10 +539,14 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
     [Fact]
     public async Task DeleteNode_UnprotectedNode_ShouldSucceed()
     {
-        // Arrange — create an unprotected node
+        // Arrange — create an unprotected node. NodeType is required so the per-node
+        // hub gets AddMeshDataSource via Markdown's HubConfiguration; otherwise the
+        // deletion validator's GetWorkspace() throws
+        // "Configuration of message hub is inconsistent: AddData was not called."
         var node = new MeshNode("UnprotectedNode", "deletion/validation")
         {
             Name = "Unprotected Node",
+            NodeType = "Markdown",
             Content = new ProtectedContent("Regular Data", IsProtected: false)
         };
         await NodeFactory.CreateNode(node);
@@ -558,10 +562,13 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
     [Fact]
     public async Task DeleteNode_NodeWithoutProtectedContent_ShouldSucceed()
     {
-        // Arrange — create a node with different content type (not ProtectedContent)
+        // Arrange — create a node with different content type (not ProtectedContent).
+        // NodeType required so the per-node hub's IWorkspace activates — see the
+        // comment on DeleteNode_UnprotectedNode_ShouldSucceed above.
         var node = new MeshNode("RegularNode", "deletion/validation")
         {
             Name = "Regular Node",
+            NodeType = "Markdown",
             Content = new { Data = "Some data" }  // Not ProtectedContent
         };
         await NodeFactory.CreateNode(node);
