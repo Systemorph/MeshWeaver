@@ -320,8 +320,20 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-        => TryGetAdapter(parentPath)?.ListChildPaths(parentPath)
+    {
+        // Root-level (empty/null) — fan out across every registered partition's
+        // root entry. Returns each partition's namespace key as a "node path"
+        // so consumers see the per-partition root nodes (ACME, Contoso, …).
+        if (string.IsNullOrEmpty(parentPath))
+        {
+            var nodes = _adapters.Keys.ToList();
+            return Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(
+                (nodes, Array.Empty<string>()));
+        }
+
+        return TryGetAdapter(parentPath)?.ListChildPaths(parentPath)
             ?? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+    }
 
     /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
