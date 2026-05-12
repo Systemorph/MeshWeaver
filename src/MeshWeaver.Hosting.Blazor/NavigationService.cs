@@ -7,6 +7,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
@@ -151,7 +152,7 @@ internal class NavigationService : INavigationService
         if (snapshot.IsLoading || snapshot.Items.Count > 0)
             return;
 
-        _ = LoadCreatableTypesAsync(CurrentNamespace ?? "");
+        LoadCreatableTypes(CurrentNamespace ?? "");
     }
 
     /// <inheritdoc />
@@ -200,7 +201,7 @@ internal class NavigationService : INavigationService
         var effectiveNamespace = @namespace ?? "";
         if (effectiveNamespace != _lastLoadedNodePath)
         {
-            _ = LoadCreatableTypesAsync(effectiveNamespace);
+            LoadCreatableTypes(effectiveNamespace);
         }
     }
 
@@ -355,7 +356,7 @@ internal class NavigationService : INavigationService
 
             var currentNodePath = context.PrimaryPath ?? "";
             if (currentNodePath != _lastLoadedNodePath)
-                _ = LoadCreatableTypesAsync(currentNodePath);
+                LoadCreatableTypes(currentNodePath);
         });
     }
 
@@ -492,42 +493,51 @@ internal class NavigationService : INavigationService
         return (mainPart, querySuffix);
     }
 
-    private async Task LoadCreatableTypesAsync(string nodePath)
+    private IDisposable? _creatableLoadSub;
+
+    /// <summary>
+    /// Comparer for incremental CreatableTypeInfo emission. Primary key is
+    /// <see cref="CreatableTypeInfo.Order"/> (ascending), secondary keys are
+    /// <c>DisplayName</c>/<c>NodeTypePath</c> for stable ordering. Used with
+    /// <c>ScanTopN(int.MaxValue, …)</c> so the IAsyncEnumerable source is folded
+    /// into a stream of immutable snapshots without await foreach.
+    /// </summary>
+    private static readonly IComparer<CreatableTypeInfo> _creatableComparer =
+        Comparer<CreatableTypeInfo>.Create((a, b) =>
+        {
+            var c = a.Order.CompareTo(b.Order);
+            if (c != 0) return c;
+            c = string.Compare(a.DisplayName ?? a.NodeTypePath, b.DisplayName ?? b.NodeTypePath,
+                StringComparison.OrdinalIgnoreCase);
+            if (c != 0) return c;
+            return string.Compare(a.NodeTypePath, b.NodeTypePath, StringComparison.OrdinalIgnoreCase);
+        });
+
+    private void LoadCreatableTypes(string nodePath)
     {
         // INodeTypeService is registered at the Hub level, not in the main DI container
         var nodeTypeService = _hub.ServiceProvider.GetService<INodeTypeService>();
         if (nodeTypeService == null)
             return;
 
-        // Cancel any previous loading
-        _loadingCts?.Cancel();
-        _loadingCts = new CancellationTokenSource();
-        var ct = _loadingCts.Token;
-
+        // Cancel any previous loading by disposing the previous subscription;
+        // the IAsyncEnumerable bridge in ToObservableSequence flips its
+        // CancellationToken when Dispose runs.
+        _creatableLoadSub?.Dispose();
         _lastLoadedNodePath = nodePath;
-        var items = new List<CreatableTypeInfo>();
-        _creatableTypes.OnNext(CreatableTypesSnapshot.Loading(items.ToArray()));
+        _creatableTypes.OnNext(CreatableTypesSnapshot.Loading([]));
 
-        try
-        {
-            await foreach (var typeInfo in nodeTypeService.GetCreatableTypesAsync(nodePath, ct).WithCancellation(ct))
-            {
-                items.Add(typeInfo);
-                _creatableTypes.OnNext(CreatableTypesSnapshot.Loading(items.ToArray()));
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Path changed, loading was cancelled - this is expected
-        }
-        catch
-        {
-            // Fallback on error - keep whatever items we loaded
-        }
-        finally
-        {
-            _creatableTypes.OnNext(CreatableTypesSnapshot.Done(items.ToArray()));
-        }
+        IReadOnlyList<CreatableTypeInfo> latest = [];
+        _creatableLoadSub = nodeTypeService.GetCreatableTypesAsync(nodePath)
+            .ScanTopN(int.MaxValue, _creatableComparer)
+            .Subscribe(
+                snapshot =>
+                {
+                    latest = snapshot;
+                    _creatableTypes.OnNext(CreatableTypesSnapshot.Loading(snapshot));
+                },
+                _ => _creatableTypes.OnNext(CreatableTypesSnapshot.Done(latest)),
+                () => _creatableTypes.OnNext(CreatableTypesSnapshot.Done(latest)));
     }
 
     /// <inheritdoc />
@@ -539,6 +549,7 @@ internal class NavigationService : INavigationService
         _disposed = true;
         _loadingCts?.Cancel();
         _loadingCts?.Dispose();
+        _creatableLoadSub?.Dispose();
         _resolutionSubscription?.Dispose();
         _notFoundWatchdog?.Dispose();
         _navigationSubscription?.Dispose();
