@@ -282,16 +282,9 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
         var workspace = hub.GetWorkspace();
         var indexPath = DeriveIndexPath(tokenNodePath);
 
-        // Fire-and-forget delete of the global index entry. Subscribe is
-        // mandatory (the IObservable is cold) — the empty error handler
-        // is intentional: a missing index entry is fine here (token was
-        // already revoked / index never created).
-        if (indexPath != null && indexPath != tokenNodePath)
-            nodeFactory.DeleteNode(indexPath).Subscribe(_ => { }, _ => { });
-
         logger.LogInformation("Revoking API token at {Path}", tokenNodePath);
 
-        return workspace.GetMeshNodeStream(tokenNodePath)
+        var primary = workspace.GetMeshNodeStream(tokenNodePath)
             .Update(current =>
             {
                 var token = current.Content as ApiToken ?? ExtractApiToken(current);
@@ -325,6 +318,18 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
                 logger.LogWarning(ex, "RevokeToken failed for {Path}", tokenNodePath);
                 return Observable.Return(false);
             });
+
+        // Chain the global-index delete into the returned observable rather
+        // than firing a separate Subscribe — see the matching comment in
+        // DeleteToken. A missing index entry is fine: the Catch returns false
+        // and the primary revoke result wins.
+        if (indexPath == null || indexPath == tokenNodePath)
+            return primary;
+
+        return primary.SelectMany(result =>
+            nodeFactory.DeleteNode(indexPath)
+                .Catch<bool, Exception>(_ => Observable.Return(false))
+                .Select(_ => result));
     }
 
     /// <summary>
@@ -337,18 +342,31 @@ internal class ApiTokenService(IMeshService nodeFactory, IMessageHub hub, ILogge
     {
         var indexPath = DeriveIndexPath(tokenNodePath);
 
-        if (indexPath != null && indexPath != tokenNodePath)
-            nodeFactory.DeleteNode(indexPath).Subscribe(_ => { }, _ => { });
-
         logger.LogInformation("Deleting API token at {Path}", tokenNodePath);
 
-        return nodeFactory.DeleteNode(tokenNodePath)
+        var primary = nodeFactory.DeleteNode(tokenNodePath)
             .Select(_ => true)
             .Catch<bool, Exception>(ex =>
             {
                 logger.LogWarning(ex, "DeleteToken failed for {Path}", tokenNodePath);
                 return Observable.Return(false);
             });
+
+        // Chain the index-entry delete into the returned observable rather than
+        // firing a separate Subscribe. The previous shape leaked a pending
+        // hub.Observe callback past test dispose — the response arrives only
+        // after routing surfaces NotFound (~15ms+) but the test's await
+        // completes faster, so the dispose-time Quiescing watchdog flags the
+        // pending callback as a leaked subscription. Chaining here also makes
+        // a missing-index case (token already gone) a non-failure of the whole
+        // operation: the inner Catch swallows it and the primary result wins.
+        if (indexPath == null || indexPath == tokenNodePath)
+            return primary;
+
+        return primary.SelectMany(result =>
+            nodeFactory.DeleteNode(indexPath)
+                .Catch<bool, Exception>(_ => Observable.Return(false))
+                .Select(_ => result));
     }
 
     /// <summary>
