@@ -27,8 +27,14 @@ public sealed class UserIdentityCache : IDisposable
     {
         _jsonOptions = hub.JsonSerializerOptions;
         _logger = logger;
+        // Post-v10: each User node lives at the root of its own partition
+        // (path = ObjectId, namespace = ""). The legacy `namespace:User` filter
+        // matched only the old `User/{id}` layout and missed every per-user
+        // partition — so email→User resolution returned null and Index.razor
+        // routed to the raw email ("No node found at 'rbuergi@systemorph.com'").
+        // Drop the namespace constraint and fan out across user partitions.
         _subscription = mesh
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User namespace:User"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
             .Subscribe(
                 Apply,
                 ex => _logger.LogWarning(ex, "UserIdentityCache subscription failed"));
