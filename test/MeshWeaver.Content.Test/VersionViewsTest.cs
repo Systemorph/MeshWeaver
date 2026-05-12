@@ -172,12 +172,17 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).FirstAsync().ToTask();
 
-        // Find the first version number via IVersionQuery
+        // Find the first version number via IVersionQuery — wait for snapshots to land.
+        // Treat GetVersions as a snapshot read and use Where() polling to avoid racing
+        // the version-writing storage decorator's async file I/O.
         var versionQuery = Mesh.ServiceProvider.GetService<IVersionQuery>();
         versionQuery.Should().NotBeNull("FileSystemVersionStore should be registered");
 
-        var versions = await versionQuery!.GetVersions(nodePath)
-            .ToList()
+        var versions = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => versionQuery!.GetVersions(nodePath).ToList())
+            .Where(v => v.Count >= 1)
+            .Timeout(TimeSpan.FromSeconds(5))
             .FirstAsync()
             .ToTask(TestContext.Current.CancellationToken);
 

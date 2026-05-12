@@ -1,0 +1,69 @@
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Text.Json;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+
+namespace MeshWeaver.Hosting.Persistence;
+
+/// <summary>
+/// Decorates an <see cref="IStorageAdapter"/> so every <see cref="IStorageAdapter.Write"/>
+/// chains a snapshot through <see cref="IVersionQuery.WriteVersion"/> after the inner
+/// save succeeds. Replaces the historical
+/// <c>FileSystemPersistenceService.SaveNodeAsync</c> chokepoint that was deleted in the
+/// persistence cull (2026-05-12) — without this, every save path
+/// (CreateNode / UpdateNode handlers, MeshNodeTypeSource flush, sampler) skipped the
+/// version-history write and <c>IVersionQuery.GetVersions</c> returned an empty list.
+///
+/// <para>Best-effort: version-write failures are swallowed so they cannot mask a
+/// successful primary save.</para>
+/// </summary>
+internal class VersionWritingStorageAdapter(
+    IStorageAdapter inner,
+    IVersionQuery? versionQuery) : IStorageAdapter
+{
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => inner.Read(path, options);
+
+    public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
+    {
+        var write = inner.Write(node, options);
+        if (versionQuery is null)
+            return write;
+
+        return write.SelectMany(saved =>
+            versionQuery.WriteVersion(saved, options)
+                .Catch<MeshNode, Exception>(_ => Observable.Return(saved))
+                .DefaultIfEmpty(saved)
+                .LastAsync()
+                .Select(_ => saved));
+    }
+
+    public IObservable<string> Delete(string path) => inner.Delete(path);
+
+    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
+        => inner.ListChildPaths(parentPath);
+
+    public IObservable<bool> Exists(string path) => inner.Exists(path);
+
+    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
+        string fullPath, JsonSerializerOptions options)
+        => inner.FindBestPrefixMatch(fullPath, options);
+
+    public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
+        => inner.ListPartitionSubPaths(nodePath);
+
+    public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
+        => inner.GetPartitionObjects(nodePath, subPath, options);
+
+    public IObservable<Unit> SavePartitionObjects(
+        string nodePath, string? subPath,
+        IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+        => inner.SavePartitionObjects(nodePath, subPath, objects, options);
+
+    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+        => inner.DeletePartitionObjects(nodePath, subPath);
+
+    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+        => inner.GetPartitionMaxTimestamp(nodePath, subPath);
+}
