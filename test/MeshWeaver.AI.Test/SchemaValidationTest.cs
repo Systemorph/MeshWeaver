@@ -3,6 +3,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Schema;
 using System.Threading;
@@ -318,12 +320,15 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #region Schema Helper API
 
-    [Fact]
-    public void GetContentSchema_ForRegisteredType_ReturnsSchema()
+    [Fact(Timeout = 30000)]
+    public async Task GetContentSchema_ForRegisteredType_ReturnsSchema()
     {
         var ops = new MeshOperations(Mesh);
 
-        var schema = ops.GetContentSchema(TestNodeType);
+        var schema = await ops.GetContentSchema(TestNodeType)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         schema.Should().NotBeNullOrEmpty();
         schema!.Should().Contain("name");
@@ -331,12 +336,15 @@ public class SchemaValidationTest : MonolithMeshTestBase
         schema.Should().Contain("quantity");
     }
 
-    [Fact]
-    public void GetContentSchema_ForUnknownType_ReturnsNull()
+    [Fact(Timeout = 30000)]
+    public async Task GetContentSchema_ForUnknownType_ReturnsNull()
     {
         var ops = new MeshOperations(Mesh);
 
-        var schema = ops.GetContentSchema("NonExistentType");
+        var schema = await ops.GetContentSchema("NonExistentType")
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         schema.Should().BeNull();
     }
@@ -369,8 +377,8 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
     #region Schema-Based Validation Helper
 
-    [Fact]
-    public void ValidateContent_ValidContent_ReturnsNull()
+    [Fact(Timeout = 30000)]
+    public async Task ValidateContent_ValidContent_ReturnsNull()
     {
         var ops = new MeshOperations(Mesh);
         var node = new MeshNode("test", "ACME")
@@ -380,13 +388,16 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new TestProduct { Name = "Widget", Price = 9.99m, Quantity = 5 }
         };
 
-        var result = ops.ValidateContentAgainstSchema(node);
+        var result = await ops.ValidateContentAgainstSchema(node)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         result.Should().BeNull(because: "valid content should not produce validation errors");
     }
 
-    [Fact]
-    public void ValidateContent_NoNodeType_SkipsValidation()
+    [Fact(Timeout = 30000)]
+    public async Task ValidateContent_NoNodeType_SkipsValidation()
     {
         var ops = new MeshOperations(Mesh);
         var node = new MeshNode("test", "ACME")
@@ -395,13 +406,16 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new { random = "data" }
         };
 
-        var result = ops.ValidateContentAgainstSchema(node);
+        var result = await ops.ValidateContentAgainstSchema(node)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         result.Should().BeNull(because: "no nodeType means validation is skipped");
     }
 
-    [Fact]
-    public void ValidateContent_UnknownNodeType_SkipsValidation()
+    [Fact(Timeout = 30000)]
+    public async Task ValidateContent_UnknownNodeType_SkipsValidation()
     {
         var ops = new MeshOperations(Mesh);
         var node = new MeshNode("test", "ACME")
@@ -411,7 +425,10 @@ public class SchemaValidationTest : MonolithMeshTestBase
             Content = new { anything = "goes" }
         };
 
-        var result = ops.ValidateContentAgainstSchema(node);
+        var result = await ops.ValidateContentAgainstSchema(node)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         result.Should().BeNull(because: "unknown node type means no schema to validate against");
     }

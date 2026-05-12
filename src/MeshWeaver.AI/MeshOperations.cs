@@ -609,14 +609,14 @@ public class MeshOperations
             meshNode = SanitizeNodeId(meshNode);
 
             // Validate content against schema if both nodeType and content are provided.
-            if (!string.IsNullOrEmpty(meshNode.NodeType) && meshNode.Content != null)
-            {
-                var validationError = ValidateContentWithSchema(meshNode);
-                if (validationError != null)
-                    return Observable.Return(validationError);
-            }
+            var validationObs = !string.IsNullOrEmpty(meshNode.NodeType) && meshNode.Content != null
+                ? ValidateContentWithSchema(meshNode)
+                : Observable.Return<string?>(null);
 
-            return mesh.CreateNode(meshNode)
+            return validationObs.SelectMany(validationError =>
+                validationError != null
+                    ? Observable.Return(validationError)
+                    : mesh.CreateNode(meshNode)
                 .Select(created =>
                 {
                     OnNodeChange?.Invoke(new NodeChangeEntry
@@ -634,7 +634,7 @@ public class MeshOperations
                 {
                     logger.LogWarning(ex, "Error creating node");
                     return Observable.Return($"Error creating node: {ex.Message}");
-                });
+                }));
         });
     }
 
@@ -696,37 +696,33 @@ public class MeshOperations
 
                 if (meshNode.Content == null)
                 {
-                    perNode = perNode.Add(Observable.Return(
-                        BuildNullContentError(meshNode.Path, meshNode.NodeType!)));
-                    continue;
-                }
-
-                var validationError = ValidateContentWithSchema(meshNode);
-                if (validationError != null)
-                {
-                    perNode = perNode.Add(Observable.Return(validationError));
+                    perNode = perNode.Add(BuildNullContentError(meshNode.Path, meshNode.NodeType!));
                     continue;
                 }
 
                 var versionBefore = meshNode.Version;
                 var currentPath = meshNode.Path;
+                var nodeForCapture = meshNode;
                 perNode = perNode.Add(
-                    mesh.UpdateNode(meshNode)
-                        .Select(updated =>
-                        {
-                            OnNodeChange?.Invoke(new NodeChangeEntry
-                            {
-                                Path = updated.Path,
-                                Operation = "Updated",
-                                VersionBefore = versionBefore,
-                                VersionAfter = updated.Version,
-                                NodeType = updated.NodeType,
-                                NodeName = updated.Name
-                            });
-                            return $"Updated: {updated.Path}";
-                        })
-                        .Catch((Exception ex) =>
-                            Observable.Return($"Error updating {currentPath}: {ex.Message}")));
+                    ValidateContentWithSchema(nodeForCapture).SelectMany(validationError =>
+                        validationError != null
+                            ? Observable.Return(validationError)
+                            : mesh.UpdateNode(nodeForCapture)
+                                .Select(updated =>
+                                {
+                                    OnNodeChange?.Invoke(new NodeChangeEntry
+                                    {
+                                        Path = updated.Path,
+                                        Operation = "Updated",
+                                        VersionBefore = versionBefore,
+                                        VersionAfter = updated.Version,
+                                        NodeType = updated.NodeType,
+                                        NodeName = updated.Name
+                                    });
+                                    return $"Updated: {updated.Path}";
+                                })
+                                .Catch((Exception ex) =>
+                                    Observable.Return($"Error updating {currentPath}: {ex.Message}"))));
             }
 
             return perNode
@@ -796,7 +792,7 @@ public class MeshOperations
                 // Content-specific rejections carry the expected schema so agents
                 // can recover on the next call without guessing.
                 if (jsonObj.ContainsKey("content") && jsonObj["content"] is null)
-                    return Observable.Return(BuildNullContentError(existing.Path, existing.NodeType!));
+                    return BuildNullContentError(existing.Path, existing.NodeType!);
 
                 var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
                     ?? new MeshNode(existing.Id, existing.Namespace);
@@ -814,33 +810,33 @@ public class MeshOperations
                 // Validate merged content against the NodeType's schema when the
                 // caller touched content. Surface the schema in the error so an
                 // agent can fix its payload on the retry.
-                if (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
-                {
-                    var validationError = ValidateContentWithSchema(merged);
-                    if (validationError != null)
-                        return Observable.Return(validationError);
-                }
+                var validationObs = (jsonObj.ContainsKey("content") && !string.IsNullOrEmpty(merged.NodeType) && merged.Content != null)
+                    ? ValidateContentWithSchema(merged)
+                    : Observable.Return<string?>(null);
 
                 var versionBefore = existing.Version;
-                return mesh.UpdateNode(merged)
-                    .Select(updated =>
-                    {
-                        OnNodeChange?.Invoke(new NodeChangeEntry
-                        {
-                            Path = updated.Path,
-                            Operation = "Updated",
-                            VersionBefore = versionBefore,
-                            VersionAfter = updated.Version,
-                            NodeType = updated.NodeType,
-                            NodeName = updated.Name
-                        });
-                        var versionText = updated.Version > versionBefore
-                            ? $" (v{versionBefore} → v{updated.Version})"
-                            : "";
-                        return $"Patched: {updated.Path}{versionText}";
-                    })
-                    .Catch((Exception ex) =>
-                        Observable.Return($"Error patching {merged.Path}: {ex.Message}"));
+                return validationObs.SelectMany(validationError =>
+                    validationError != null
+                        ? Observable.Return(validationError)
+                        : mesh.UpdateNode(merged)
+                            .Select(updated =>
+                            {
+                                OnNodeChange?.Invoke(new NodeChangeEntry
+                                {
+                                    Path = updated.Path,
+                                    Operation = "Updated",
+                                    VersionBefore = versionBefore,
+                                    VersionAfter = updated.Version,
+                                    NodeType = updated.NodeType,
+                                    NodeName = updated.Name
+                                });
+                                var versionText = updated.Version > versionBefore
+                                    ? $" (v{versionBefore} → v{updated.Version})"
+                                    : "";
+                                return $"Patched: {updated.Path}{versionText}";
+                            })
+                            .Catch((Exception ex) =>
+                                Observable.Return($"Error patching {merged.Path}: {ex.Message}")));
             })
             .Catch((Exception ex) =>
             {
@@ -1134,136 +1130,168 @@ public class MeshOperations
     /// <summary>
     /// Builds the standard "content is null" rejection message for Update/Patch,
     /// embedding the JSON schema for the node's content type when available so the
-    /// agent can fill content correctly on the next call.
+    /// agent can fill content correctly on the next call. Reactive: schema lookup
+    /// may need a workspace round-trip for dynamic NodeTypes.
     /// </summary>
-    internal string BuildNullContentError(string path, string nodeType)
+    internal IObservable<string> BuildNullContentError(string path, string nodeType)
     {
         var msg = $"Error: cannot write {path}: 'content' is null. " +
                   "Fetch the node first with Get, modify the returned content in-place, " +
                   "and resend the complete node. Never send null content.";
-        var schema = GetContentSchema(nodeType);
-        if (schema != null)
-            msg += $" Expected content schema for NodeType '{nodeType}': {schema}";
-        return msg;
+        return GetContentSchema(nodeType)
+            .Select(schema => schema != null
+                ? msg + $" Expected content schema for NodeType '{nodeType}': {schema}"
+                : msg);
     }
 
     /// <summary>
     /// Runs schema validation for <paramref name="meshNode"/> and, when invalid,
     /// appends the expected JSON schema to the error so the agent can recover.
-    /// Returns null when content is valid (or when no schema is available).
+    /// Emits null when content is valid (or when no schema is available).
     /// </summary>
-    internal string? ValidateContentWithSchema(MeshNode meshNode)
+    internal IObservable<string?> ValidateContentWithSchema(MeshNode meshNode)
     {
-        var validationError = ValidateContentAgainstSchema(meshNode);
-        if (validationError == null)
-            return null;
+        return ValidateContentAgainstSchema(meshNode)
+            .SelectMany(validationError =>
+            {
+                if (validationError == null)
+                    return Observable.Return<string?>(null);
+                if (string.IsNullOrEmpty(meshNode.NodeType))
+                    return Observable.Return<string?>(validationError);
+                return GetContentSchema(meshNode.NodeType!)
+                    .Select(schema => schema != null
+                        ? validationError + $" Expected content schema for NodeType '{meshNode.NodeType}': {schema}"
+                        : validationError);
+            });
+    }
 
-        if (!string.IsNullOrEmpty(meshNode.NodeType))
+    /// <summary>
+    /// Resolves the HubConfiguration delegate for <paramref name="nodeType"/>:
+    /// fast path — static NodeType registered via <c>AddMeshNodes</c> in
+    /// <c>meshConfiguration.Nodes</c>; slow path — read the NodeType MeshNode
+    /// via <c>workspace.GetMeshNodeStream</c> and recover the delegate from the
+    /// already-cached DLL via
+    /// <see cref="IMeshNodeCompilationService.GetConfigurationsFromExistingAssembly"/>.
+    /// Single emission; emits null when neither path can produce a delegate.
+    /// </summary>
+    private IObservable<Func<MessageHubConfiguration, MessageHubConfiguration>?>
+        ResolveHubConfigForSchema(string nodeType)
+    {
+        var meshConfig = hub.ServiceProvider.GetService<MeshConfiguration>();
+        if (meshConfig != null
+            && meshConfig.Nodes.TryGetValue(nodeType, out var staticNode)
+            && staticNode.HubConfiguration != null)
         {
-            var schema = GetContentSchema(meshNode.NodeType);
-            if (schema != null)
-                validationError += $" Expected content schema for NodeType '{meshNode.NodeType}': {schema}";
+            return Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(staticNode.HubConfiguration);
         }
-        return validationError;
+
+        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+        if (compilationService == null)
+            return Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null);
+
+        return hub.GetWorkspace().GetMeshNodeStream(nodeType)
+            .Where(n => n is not null && !string.IsNullOrEmpty(n.AssemblyLocation))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .SelectMany(node => compilationService.GetConfigurationsFromExistingAssembly(node!).Take(1))
+            .Select(result =>
+            {
+                var matching = result?.NodeTypeConfigurations
+                    .FirstOrDefault(c => string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
+                    ?? result?.NodeTypeConfigurations.FirstOrDefault();
+                return matching?.HubConfiguration;
+            })
+            .Catch<Func<MessageHubConfiguration, MessageHubConfiguration>?, Exception>(_ =>
+                Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null));
     }
 
     /// <summary>
     /// Returns the JSON schema string for the content type registered against
     /// <paramref name="nodeType"/>, or null if no schema can be derived.
     /// </summary>
-    internal string? GetContentSchema(string nodeType)
+    internal IObservable<string?> GetContentSchema(string nodeType)
     {
-        try
-        {
-            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-            if (nodeTypeService == null)
-                return null;
-
-            var hubConfig = nodeTypeService.GetCachedHubConfiguration(nodeType);
-            if (hubConfig == null)
-                return null;
-
-            var tempAddress = new Address($"_schema_lookup/{Guid.NewGuid():N}");
-            var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
-            if (tempHub == null)
-                return null;
-
-            try
+        return ResolveHubConfigForSchema(nodeType)
+            .Select(hubConfig =>
             {
-                var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
-                if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
+                if (hubConfig == null) return null;
+                try
+                {
+                    var tempAddress = new Address($"_schema_lookup/{Guid.NewGuid():N}");
+                    var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
+                    if (tempHub == null) return null;
+                    try
+                    {
+                        var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
+                        if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
+                            return null;
+                        var schemaNode = hub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
+                        return (string?)schemaNode.ToJsonString();
+                    }
+                    finally
+                    {
+                        tempHub.Dispose();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Schema retrieval skipped for NodeType {NodeType}", nodeType);
                     return null;
-
-                var schemaNode = hub.JsonSerializerOptions.GetJsonSchemaAsNode(typeDefinition!.Type);
-                return schemaNode.ToJsonString();
-            }
-            finally
-            {
-                tempHub.Dispose();
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Schema retrieval skipped for NodeType {NodeType}", nodeType);
-            return null;
-        }
+                }
+            });
     }
 
     /// <summary>
     /// Validates node content against the content type for its NodeType.
     /// Creates a temporary hub with the NodeType's configuration to find the
     /// registered content type, then attempts to deserialize the content into that type.
-    /// Returns an error message if invalid, or null if valid/no schema available.
+    /// Emits an error message if invalid, or null if valid/no schema available.
     /// </summary>
-    internal string? ValidateContentAgainstSchema(MeshNode meshNode)
+    internal IObservable<string?> ValidateContentAgainstSchema(MeshNode meshNode)
     {
-        try
-        {
-            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-            if (nodeTypeService == null)
-                return null;
+        if (string.IsNullOrEmpty(meshNode.NodeType))
+            return Observable.Return<string?>(null);
 
-            var hubConfig = nodeTypeService.GetCachedHubConfiguration(meshNode.NodeType!);
-            if (hubConfig == null)
-                return null;
-
-            var tempAddress = new Address($"_schema_validation/{Guid.NewGuid():N}");
-            var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
-            if (tempHub == null)
-                return null;
-
-            try
+        return ResolveHubConfigForSchema(meshNode.NodeType!)
+            .Select(hubConfig =>
             {
-                var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
-                if (typeRegistry == null || !typeRegistry.TryGetType(meshNode.NodeType!, out var typeDefinition))
-                    return null;
-
-                var contentType = typeDefinition!.Type;
-
-                var contentJson = JsonSerializer.Serialize(meshNode.Content, hub.JsonSerializerOptions);
+                if (hubConfig == null) return null;
                 try
                 {
-                    var deserialized = JsonSerializer.Deserialize(contentJson, contentType, hub.JsonSerializerOptions);
-                    if (deserialized == null)
-                        return $"Error: Content is null after deserialization for NodeType '{meshNode.NodeType}'.";
+                    var tempAddress = new Address($"_schema_validation/{Guid.NewGuid():N}");
+                    var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
+                    if (tempHub == null) return null;
+                    try
+                    {
+                        var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
+                        if (typeRegistry == null || !typeRegistry.TryGetType(meshNode.NodeType!, out var typeDefinition))
+                            return null;
 
+                        var contentType = typeDefinition!.Type;
+                        var contentJson = JsonSerializer.Serialize(meshNode.Content, hub.JsonSerializerOptions);
+                        try
+                        {
+                            var deserialized = JsonSerializer.Deserialize(contentJson, contentType, hub.JsonSerializerOptions);
+                            return (string?)(deserialized == null
+                                ? $"Error: Content is null after deserialization for NodeType '{meshNode.NodeType}'."
+                                : null);
+                        }
+                        catch (JsonException ex)
+                        {
+                            return (string?)$"Error: Content does not match the schema for NodeType '{meshNode.NodeType}'. {ex.Message}";
+                        }
+                    }
+                    finally
+                    {
+                        tempHub.Dispose();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
                     return null;
                 }
-                catch (JsonException ex)
-                {
-                    return $"Error: Content does not match the schema for NodeType '{meshNode.NodeType}'. {ex.Message}";
-                }
-            }
-            finally
-            {
-                tempHub.Dispose();
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
-            return null;
-        }
+            });
     }
 
     /// <summary>
