@@ -178,6 +178,8 @@ public static class PersistenceExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services)
     {
+        services.TryAddSingleton<IStorageAdapter>(sp =>
+            new InMemoryStorageAdapter(sp.GetService<ILogger<InMemoryStorageAdapter>>()));
         return services.AddCoreAndWrapperServices();
     }
 
