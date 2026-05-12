@@ -218,11 +218,15 @@ public static class PersistenceExtensions
         return builder.RegisterMeshQueryCoreOnMeshHub();
     }
 
-    // AddInMemoryPersistence(IServiceCollection, AdapterPersistenceService) deleted
-    // in the persistence-cull (2026-05-12) — AdapterPersistenceService is gone.
-    // Tests that need a pre-seeded in-memory adapter should call
-    // `services.AddSingleton<IStorageAdapter>(new InMemoryStorageAdapter())` then
-    // `services.AddCoreAndWrapperServices()`.
+    /// <summary>
+    /// Adds an existing in-memory storage adapter instance.
+    /// Useful for tests that need to seed data before the hub is initialized.
+    /// </summary>
+    public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, IStorageAdapter adapter)
+    {
+        services.AddSingleton(adapter);
+        return services.AddCoreAndWrapperServices();
+    }
 
     /// <summary>
     /// Adds file system persistence that reads directly from disk.

@@ -59,7 +59,7 @@ public class SharedOrleansFixture : IAsyncLifetime
         var builder = new TestClusterBuilder();
         // Single-silo: avoids per-silo persistence isolation. Both writer (mesh hub)
         // and reader (per-Thread/per-Message grain) share the same singleton
-        // AdapterPersistenceService so the grain's OnActivateAsync persistence
+        // InMemoryStorageAdapter so the grain's OnActivateAsync persistence
         // lookup finds the node the mesh hub just saved. Production runs N silos
         // with backend-shared persistence (PostgreSQL / Cosmos) which doesn't have
         // this issue; the in-memory test cluster does.

@@ -44,7 +44,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 {
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDataContextTests");
     private string? _testDirectory;
-    private AdapterPersistenceService? _persistence;
+    private InMemoryStorageAdapter? _persistence;
 
 
     private string GetOrCreateTestDirectory()
@@ -66,7 +66,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 
     private static readonly JsonSerializerOptions SetupJsonOptions = new();
 
-    private static void SetupTestConfiguration(AdapterPersistenceService persistence)
+    private static void SetupTestConfiguration(InMemoryStorageAdapter persistence)
     {
         // Create Story type at type/story (NodeType = "NodeType")
         var storyCodeConfig = new CodeConfiguration
@@ -114,7 +114,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         var testDataDirectory = GetOrCreateTestDirectory();
 
         // Create in-memory persistence and pre-seed with test data including Content
-        var persistence = _persistence = new AdapterPersistenceService();
+        var persistence = _persistence = new InMemoryStorageAdapter();
 
         // Setup NodeType configurations using "type/" prefix
         SetupTestConfiguration(persistence);
@@ -286,7 +286,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // and UpdateNodeRequest requires DataChangeRequest handlers which are not
         // registered on the mesh hub in this minimal test setup.
         //
-        // Both reads and the write go through the AdapterPersistenceService directly,
+        // Both reads and the write go through the InMemoryStorageAdapter directly,
         // bypassing the catalog index — this avoids the CQRS lag that made the
         // QueryAsync-based version flaky on CI.
 

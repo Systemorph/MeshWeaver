@@ -54,7 +54,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
     private static readonly JsonSerializerOptions SetupJsonOptions = new();
 
-    private static void SetupTestData(AdapterPersistenceService persistence)
+    private static void SetupTestData(InMemoryStorageAdapter persistence)
     {
         // Create Organization type (global - can be created at root level)
         var orgTypeDef = new NodeTypeDefinition
@@ -158,7 +158,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var testDataDirectory = GetOrCreateTestDirectory();
 
         // Create in-memory persistence and pre-seed with test data
-        var persistence = new AdapterPersistenceService();
+        var persistence = new InMemoryStorageAdapter();
 
         // Setup test data
         SetupTestData(persistence);

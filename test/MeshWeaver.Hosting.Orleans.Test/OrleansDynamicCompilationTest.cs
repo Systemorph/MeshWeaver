@@ -284,7 +284,7 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
 ///
 /// <para>Why <see cref="CrossSiloFileSystemSiloConfigurator"/> instead of
 /// <see cref="DynamicCompilationSiloConfigurator"/>: in-memory persistence is
-/// per-silo (one <c>AdapterPersistenceService</c> singleton per silo's DI
+/// per-silo (one <c>InMemoryStorageAdapter</c> singleton per silo's DI
 /// container, no cluster sharing). Seeding the NodeType + Code via silo 0's
 /// <see cref="IMeshService"/> populates only silo 0's dictionary; if Orleans
 /// places the per-NodeType grain on silo 1, silo 1's persistence is empty and
