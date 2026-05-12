@@ -47,6 +47,16 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private readonly object _timerLock = new();
     private readonly CompositeDisposable _pendingFlushSubscriptions = new();
 
+    // Paths just deleted via IDataChangeNotifier — short-window block list so a
+    // workspace UpdateImpl that fires AFTER storage.Delete (per-node hub starting
+    // up to handle a recursive delete sees the node in its initial instances
+    // snapshot) doesn't resurrect the row. Kept as a plain set: the
+    // RecentlyDeletedTtl window is short, the volume is bounded by deletes in
+    // flight, and a stale entry only blocks one save that would otherwise be a
+    // no-op anyway.
+    private static readonly TimeSpan RecentlyDeletedTtl = TimeSpan.FromSeconds(30);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _recentlyDeleted = new();
+
     internal MeshNodeTypeSource(
         IWorkspace workspace,
         object dataSource,
@@ -75,6 +85,36 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
             TypeDefinition.CollectionName,
             new KeyFunction(o => ((MeshNode)o).Id, typeof(string)));
+
+        // Race guard: when a node is deleted via HandleDeleteNodeRequest's
+        // direct storage.Delete (recursive subtree fan-out, not via the
+        // workspace), MeshNodeTypeSource's debounce-driven save would
+        // otherwise resurrect it. The own-node hub's workspace initialises
+        // from storage when the per-node hub starts up to handle the
+        // delete — UpdateImpl sees the node as an "add" and queues a save
+        // that fires ~200 ms later, AFTER storage.Delete has already
+        // succeeded. The DeleteNode handler fires
+        // `IDataChangeNotifier.NotifyChange(Deleted)` per path; subscribing
+        // and dropping the pending save reconciles the two writers.
+        var changeNotifier = workspace.Hub.ServiceProvider.GetService<IDataChangeNotifier>();
+        if (changeNotifier != null)
+        {
+            var sub = changeNotifier
+                .Where(n => n.Kind == DataChangeKind.Deleted && !string.IsNullOrEmpty(n.Path))
+                .Subscribe(n =>
+                {
+                    // Mark recently-deleted so the next UpdateImpl filters this
+                    // path out of `adds` even when the workspace's initial
+                    // snapshot still contains it. Drop any save already queued
+                    // in the debounce buffer for completeness.
+                    _recentlyDeleted[n.Path] = DateTimeOffset.UtcNow;
+                    var dropped = _pendingSaves.TryRemove(n.Path, out _);
+                    _logger?.LogDebug(
+                        "MeshNodeTypeSource[{HubPath}]: delete notified path={Path} pendingDropped={Dropped}",
+                        _hubPath, n.Path, dropped);
+                });
+            _pendingFlushSubscriptions.Add(sub);
+        }
 
         // Hub-teardown hook — awaits any pending flushes so a per-node hub
         // disposing mid-write doesn't lose data. Without it, the next test
@@ -137,8 +177,26 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         // burst of UpdateImpl emissions for the same path into a single
         // SaveNode call — important when the workspace pipeline re-fires on
         // each MeshNodeReference reducer notification.
+        //
+        // Recently-deleted guard: a per-node hub starting up to handle a
+        // recursive DeleteNodeRequest sees its own node in the workspace's
+        // initial instances snapshot. UpdateImpl then sees an "add" and would
+        // resurrect the row 200 ms later. The IDataChangeNotifier delete
+        // arrives BEFORE that UpdateImpl, so the path is already on the
+        // recently-deleted list — drop the add.
+        var nowUtc = DateTimeOffset.UtcNow;
+        PruneRecentlyDeleted(nowUtc);
         foreach (var node in adds)
         {
+            if (!string.IsNullOrEmpty(node.Path)
+                && _recentlyDeleted.TryGetValue(node.Path, out var deletedAt)
+                && nowUtc - deletedAt < RecentlyDeletedTtl)
+            {
+                _logger?.LogDebug(
+                    "MeshNodeTypeSource[{HubPath}]: skip save for recently-deleted {Path}",
+                    _hubPath, node.Path);
+                continue;
+            }
             var nodeWithVersion = node with { Version = hubVersion };
             _pendingSaves[node.Path] = nodeWithVersion;
         }
@@ -162,6 +220,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         _lastSaved = instances;
         return instances;
+    }
+
+    private void PruneRecentlyDeleted(DateTimeOffset nowUtc)
+    {
+        foreach (var kv in _recentlyDeleted)
+        {
+            if (nowUtc - kv.Value > RecentlyDeletedTtl)
+                _recentlyDeleted.TryRemove(kv.Key, out _);
+        }
     }
 
     private void ResetDebounceTimer()
