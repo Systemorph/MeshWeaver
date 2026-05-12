@@ -28,14 +28,6 @@ namespace MeshWeaver.Mesh.Services;
 internal interface IMeshQueryCore
 {
     /// <summary>
-    /// Query nodes without access control filtering.
-    /// </summary>
-    IAsyncEnumerable<object> QueryAsync(
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Observe nodes matching a query without access control filtering.
     /// Emits Initial / Added / Updated / Removed deltas as the underlying
     /// data changes. Same shape as

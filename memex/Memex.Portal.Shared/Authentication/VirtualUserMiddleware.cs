@@ -111,7 +111,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
     {
         try
         {
-            await VUserHelper.EnsureVUserNodeAsync(portalApp, virtualUserId, logger);
+            VUserHelper.EnsureVUserNode(portalApp, virtualUserId, logger);
         }
         catch (Exception ex)
         {

@@ -54,17 +54,19 @@ public static class GroupLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
-        return nodeStream.SelectMany(async nodes =>
+        var membersStream = host.Workspace.GetQuery(
+            $"group-members:{hubPath}",
+            $"namespace:{hubPath} nodeType:GroupMembership");
+
+        return nodeStream.CombineLatest(membersStream, (nodes, members) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             var stack = Controls.Stack.WithStyle("padding: 24px; gap: 16px;");
 
-            // Group header
             var groupName = node?.Name ?? hubPath;
             stack = stack.WithView(Controls.H2(groupName));
 
@@ -76,32 +78,25 @@ public static class GroupLayoutAreas
             if (!string.IsNullOrEmpty(accessObject?.Description))
                 stack = stack.WithView(Controls.Html($"<p>{System.Web.HttpUtility.HtmlEncode(accessObject.Description)}</p>"));
 
-            // Members section
             stack = stack.WithView(Controls.H3("Members").WithStyle("margin: 0;"));
 
-            if (meshQuery != null)
+            var memberList = members as IReadOnlyList<MeshNode> ?? members.ToList();
+            if (memberList.Count == 0)
             {
-                var members = await meshQuery
-                    .QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:GroupMembership")
-                    .ToListAsync();
-
-                if (members.Count == 0)
+                stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No members.</p>"));
+            }
+            else
+            {
+                foreach (var member in memberList)
                 {
-                    stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No members.</p>"));
-                }
-                else
-                {
-                    foreach (var member in members)
-                    {
-                        var membership = DeserializeMembership(member);
-                        var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
+                    var membership = DeserializeMembership(member);
+                    var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
 
-                        stack = stack.WithView(Controls.Stack
-                            .WithOrientation(Orientation.Horizontal)
-                            .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
-                            .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-                            .WithView(Controls.Label(memberDisplay)));
-                    }
+                    stack = stack.WithView(Controls.Stack
+                        .WithOrientation(Orientation.Horizontal)
+                        .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
+                        .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
+                        .WithView(Controls.Label(memberDisplay)));
                 }
             }
 
@@ -117,12 +112,15 @@ public static class GroupLayoutAreas
     public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext context)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
-        return nodeStream.SelectMany(async nodes =>
+        var membersStream = host.Workspace.GetQuery(
+            $"group-members-edit:{hubPath}",
+            $"namespace:{hubPath} nodeType:GroupMembership");
+
+        return nodeStream.CombineLatest(membersStream, (nodes, members) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             var stack = Controls.Stack.WithStyle("padding: 24px; gap: 16px;");
@@ -130,40 +128,31 @@ public static class GroupLayoutAreas
             var groupName = node?.Name ?? hubPath;
             stack = stack.WithView(Controls.H2($"Edit Group: {groupName}"));
 
-            // Members section
             stack = stack.WithView(Controls.H3("Members").WithStyle("margin: 0;"));
 
-            if (meshQuery != null)
+            foreach (var member in members)
             {
-                var members = await meshQuery
-                    .QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:GroupMembership")
-                    .ToListAsync();
+                var membership = DeserializeMembership(member);
+                var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
 
-                foreach (var member in members)
-                {
-                    var membership = DeserializeMembership(member);
-                    var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
-
-                    stack = stack.WithView(Controls.Stack
-                        .WithOrientation(Orientation.Horizontal)
-                        .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
-                        .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-                        .WithView(Controls.Label(memberDisplay).WithStyle("flex: 1;"))
-                        .WithView(Controls.Button("")
-                            .WithIconStart(FluentIcons.Delete())
-                            .WithAppearance(Appearance.Stealth)
-                            .WithClickAction(ctx =>
-                            {
-                                var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                                nodeFactory.DeleteNode(member.Path).Subscribe(
-                                    _ => { },
-                                    _ => { });
-                                return Task.CompletedTask;
-                            })));
-                }
+                stack = stack.WithView(Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
+                    .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
+                    .WithView(Controls.Label(memberDisplay).WithStyle("flex: 1;"))
+                    .WithView(Controls.Button("")
+                        .WithIconStart(FluentIcons.Delete())
+                        .WithAppearance(Appearance.Stealth)
+                        .WithClickAction(ctx =>
+                        {
+                            var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                            nodeFactory.DeleteNode(member.Path).Subscribe(
+                                _ => { },
+                                _ => { });
+                            return Task.CompletedTask;
+                        })));
             }
 
-            // Add Member button — sync click action; ShowAddMemberDialog runs as fire-and-forget Task.
             stack = stack.WithView(Controls.Button("Add Member")
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.PersonAdd())

@@ -49,25 +49,18 @@ public static class RunningActivitiesStripe
             : ownPath;
         var activitiesNamespace = $"{partitionRoot}/_Activity";
 
-        return Observable
-            .Interval(TimeSpan.FromSeconds(2))
-            .StartWith(0L)
-            .SelectMany(_ => Observable.FromAsync(async ct =>
+        return meshService
+            .ObserveQuery<MeshNode>(new MeshQueryRequest
             {
-                var nodes = new List<MeshNode>();
-                await foreach (var node in meshService.QueryAsync<MeshNode>(
-                    $"namespace:{activitiesNamespace} nodeType:Activity",
-                    skip: 0, limit: 50, ct: ct))
-                {
-                    if (node.Content is ActivityLog log
-                        && log.Status == ActivityStatus.Running
-                        && string.Equals(log.HubPath, ownPath, StringComparison.Ordinal))
-                    {
-                        nodes.Add(node);
-                    }
-                }
-                return nodes;
-            }))
+                Query = $"namespace:{activitiesNamespace} nodeType:Activity",
+                Skip = 0,
+                Limit = 50
+            })
+            .Select(c => c.Items
+                .Where(node => node.Content is ActivityLog log
+                    && log.Status == ActivityStatus.Running
+                    && string.Equals(log.HubPath, ownPath, StringComparison.Ordinal))
+                .ToList())
             .DistinctUntilChanged(EqualityComparerForActivityIds.Instance)
             .Select(activities => RenderStripe(activities))
             .Catch<UiControl?, Exception>(_ => Observable.Return<UiControl?>(null));

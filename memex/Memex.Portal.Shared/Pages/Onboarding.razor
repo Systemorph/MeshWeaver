@@ -128,9 +128,12 @@ else
         {
             using (AccessService!.ImpersonateAsHub(PortalApplication!.Hub))
             {
-                var existing = await MeshQuery.QueryAsync<MeshNode>(
-                    $"nodeType:User namespace:User content.email:{context.Email} limit:1")
-                    .FirstOrDefaultAsync();
+                // TODO(persistence-cull): framework boundary; review against UserIdentityCache.
+                var existing = (await MeshQuery.ObserveQuery<MeshNode>(
+                        MeshQueryRequest.FromQuery(
+                            $"nodeType:User namespace:User content.email:{context.Email} limit:1"))
+                    .FirstAsync())
+                    .Items.FirstOrDefault();
 
                 if (existing is { State: MeshNodeState.Active })
                 {
@@ -200,16 +203,15 @@ else
             using (AccessService!.ImpersonateAsHub(PortalApplication!.Hub))
             {
                 // Check if this is the first user (no existing User nodes = platform admin)
-                var isFirstUser = true;
-                await foreach (var _ in MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:User", Limit = 1 }))
-                {
-                    isFirstUser = false;
-                    break;
-                }
+                var firstUserCheck = (await MeshQuery
+                    .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = "namespace:User", Limit = 1 })
+                    .FirstAsync()).Items;
+                var isFirstUser = firstUserCheck.Count == 0;
 
                 // Check that the username is not already taken
-                var existingNode = await MeshQuery.QueryAsync<MeshNode>(
-                    $"path:User/{username} scope:self").FirstOrDefaultAsync();
+                var existingNode = (await MeshQuery
+                    .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:User/{username} scope:self"))
+                    .FirstAsync()).Items.FirstOrDefault();
                 if (existingNode != null)
                 {
                     errorMessage = $"Username '{username}' is already taken. Please choose a different one.";
@@ -218,8 +220,9 @@ else
 
                 // Check that the email is not already assigned to another user
                 var emailValue = model.Email.Trim();
-                var existingByEmail = await MeshQuery.QueryAsync<MeshNode>(
-                    $"nodeType:User content.email:{emailValue}").FirstOrDefaultAsync();
+                var existingByEmail = (await MeshQuery
+                    .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:User content.email:{emailValue}"))
+                    .FirstAsync()).Items.FirstOrDefault();
                 if (existingByEmail != null && existingByEmail.State == MeshNodeState.Active)
                 {
                     errorMessage = $"This email is already assigned to user '{existingByEmail.Id}'. Please sign in with that account.";

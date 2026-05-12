@@ -1,8 +1,10 @@
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 
 namespace MeshWeaver.Graph;
 
@@ -40,7 +42,11 @@ internal class MeshNodeAutocompleteProvider(
 
         // Query for child nodes and yield results
         var count = 0;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>(queryString).WithCancellation(ct))
+        var stream = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(queryString))
+            .Take(1)
+            .SelectMany(c => c.Items.ToObservable())
+            .ToAsyncEnumerableSequence(ct);
+        await foreach (var node in stream.WithCancellation(ct))
         {
             if (count >= DefaultMaxResults) break;
             count++;

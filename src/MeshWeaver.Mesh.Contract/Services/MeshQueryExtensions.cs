@@ -1,176 +1,71 @@
-using System.Runtime.CompilerServices;
+using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
-/// Extension methods for IMeshService providing typed query support.
+/// Extension methods for IMeshService / IMeshQueryProvider providing typed-result queries.
+/// All overloads compose on top of <see cref="IMeshService.ObserveQuery{T}"/> — there is no
+/// underlying <c>QueryAsync</c> interface method anymore. The Initial emission of
+/// <see cref="IMeshService.ObserveQuery{T}"/> is the legacy "QueryAsync" snapshot.
 /// </summary>
 public static class MeshQueryExtensions
 {
-    #region IMeshService (wrapper) extensions - no JsonSerializerOptions
+    #region IMeshService observable typed query
 
     /// <summary>
-    /// Query for objects of a specific type with type-safe results.
-    /// Adds $type filter to the query and casts results to T.
+    /// Observe typed results for a query — emits Initial / Added / Updated / Removed changes
+    /// scoped to objects of type <typeparamref name="T"/>. Adds <c>$type</c> filter to the
+    /// query so non-MeshNode payloads (partition objects) only show up when <c>T</c> matches.
     /// </summary>
-    /// <typeparam name="T">The type to query for</typeparam>
-    /// <param name="meshQuery">The mesh query service</param>
-    /// <param name="request">The query request</param>
-    /// <param name="typeRegistry">Optional type registry for type name resolution</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Typed results matching the query</returns>
-    public static async IAsyncEnumerable<T> QueryAsync<T>(
+    public static IObservable<QueryResultChange<T>> ObserveQuery<T>(
         this IMeshService meshQuery,
         MeshQueryRequest request,
-        ITypeRegistry? typeRegistry = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        ITypeRegistry? typeRegistry = null)
     {
         var typeName = GetTypeName<T>(typeRegistry);
         var typedRequest = AddTypeFilter(request, typeName);
-
-        await foreach (var item in meshQuery.QueryAsync(typedRequest, ct))
-        {
-            if (item is T typed)
-            {
-                yield return typed;
-            }
-        }
+        return meshQuery.ObserveQuery<T>(typedRequest);
     }
 
     /// <summary>
-    /// Query for objects of a specific type using a query string.
-    /// Adds $type filter to the query and casts results to T.
+    /// Observe typed results from a query string.
     /// </summary>
-    /// <typeparam name="T">The type to query for</typeparam>
-    /// <param name="meshQuery">The mesh query service</param>
-    /// <param name="query">The query string</param>
-    /// <param name="typeRegistry">Optional type registry for type name resolution</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Typed results matching the query</returns>
-    public static IAsyncEnumerable<T> QueryAsync<T>(
+    public static IObservable<QueryResultChange<T>> ObserveQuery<T>(
         this IMeshService meshQuery,
         string query,
-        ITypeRegistry? typeRegistry = null,
-        CancellationToken ct = default)
-    {
-        return meshQuery.QueryAsync<T>(MeshQueryRequest.FromQuery(query), typeRegistry, ct);
-    }
+        ITypeRegistry? typeRegistry = null)
+        => meshQuery.ObserveQuery<T>(MeshQueryRequest.FromQuery(query), typeRegistry);
 
     /// <summary>
-    /// Query for objects of a specific type with paging.
-    /// Adds $type filter to the query and casts results to T.
+    /// Observe typed results from a query string with paging.
     /// </summary>
-    /// <typeparam name="T">The type to query for</typeparam>
-    /// <param name="meshQuery">The mesh query service</param>
-    /// <param name="query">The query string</param>
-    /// <param name="skip">Number of results to skip</param>
-    /// <param name="limit">Maximum number of results</param>
-    /// <param name="typeRegistry">Optional type registry for type name resolution</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Typed results matching the query</returns>
-    public static IAsyncEnumerable<T> QueryAsync<T>(
+    public static IObservable<QueryResultChange<T>> ObserveQuery<T>(
         this IMeshService meshQuery,
         string query,
         int skip,
         int limit,
-        ITypeRegistry? typeRegistry = null,
-        CancellationToken ct = default)
-    {
-        var request = new MeshQueryRequest
-        {
-            Query = query,
-            Skip = skip,
-            Limit = limit
-        };
-        return meshQuery.QueryAsync<T>(request, typeRegistry, ct);
-    }
+        ITypeRegistry? typeRegistry = null)
+        => meshQuery.ObserveQuery<T>(new MeshQueryRequest { Query = query, Skip = skip, Limit = limit }, typeRegistry);
 
     #endregion
 
-    #region IMeshQueryProvider extensions - with JsonSerializerOptions
+    #region IMeshQueryProvider observable typed query
 
     /// <summary>
-    /// Query for objects of a specific type with type-safe results.
-    /// Adds $type filter to the query and casts results to T.
+    /// Observe typed results for a query against a raw provider (no security filter).
     /// </summary>
-    /// <typeparam name="T">The type to query for</typeparam>
-    /// <param name="meshQuery">The mesh query core service</param>
-    /// <param name="request">The query request</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="typeRegistry">Optional type registry for type name resolution</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Typed results matching the query</returns>
-    public static async IAsyncEnumerable<T> QueryAsync<T>(
+    public static IObservable<QueryResultChange<T>> ObserveQuery<T>(
         this IMeshQueryProvider meshQuery,
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        ITypeRegistry? typeRegistry = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        ITypeRegistry? typeRegistry = null)
     {
         var typeName = GetTypeName<T>(typeRegistry);
         var typedRequest = AddTypeFilter(request, typeName);
-
-        await foreach (var item in meshQuery.QueryAsync(typedRequest, options, ct))
-        {
-            if (item is T typed)
-            {
-                yield return typed;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Query for objects of a specific type using a query string.
-    /// Adds $type filter to the query and casts results to T.
-    /// </summary>
-    /// <typeparam name="T">The type to query for</typeparam>
-    /// <param name="meshQuery">The mesh query core service</param>
-    /// <param name="query">The query string</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="typeRegistry">Optional type registry for type name resolution</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Typed results matching the query</returns>
-    public static IAsyncEnumerable<T> QueryAsync<T>(
-        this IMeshQueryProvider meshQuery,
-        string query,
-        JsonSerializerOptions options,
-        ITypeRegistry? typeRegistry = null,
-        CancellationToken ct = default)
-    {
-        return meshQuery.QueryAsync<T>(MeshQueryRequest.FromQuery(query), options, typeRegistry, ct);
-    }
-
-    /// <summary>
-    /// Query for objects of a specific type with paging.
-    /// Adds $type filter to the query and casts results to T.
-    /// </summary>
-    /// <typeparam name="T">The type to query for</typeparam>
-    /// <param name="meshQuery">The mesh query core service</param>
-    /// <param name="query">The query string</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="skip">Number of results to skip</param>
-    /// <param name="limit">Maximum number of results</param>
-    /// <param name="typeRegistry">Optional type registry for type name resolution</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Typed results matching the query</returns>
-    public static IAsyncEnumerable<T> QueryAsync<T>(
-        this IMeshQueryProvider meshQuery,
-        string query,
-        JsonSerializerOptions options,
-        int skip,
-        int limit,
-        ITypeRegistry? typeRegistry = null,
-        CancellationToken ct = default)
-    {
-        var request = new MeshQueryRequest
-        {
-            Query = query,
-            Skip = skip,
-            Limit = limit
-        };
-        return meshQuery.QueryAsync<T>(request, options, typeRegistry, ct);
+        return meshQuery.ObserveQuery<T>(typedRequest, options);
     }
 
     #endregion
@@ -181,11 +76,8 @@ public static class MeshQueryExtensions
         {
             var collectionName = typeRegistry.GetCollectionName(typeof(T));
             if (!string.IsNullOrEmpty(collectionName))
-            {
                 return collectionName;
-            }
         }
-
         return typeof(T).Name;
     }
 

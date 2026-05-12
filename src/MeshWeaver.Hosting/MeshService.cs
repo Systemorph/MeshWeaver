@@ -160,9 +160,6 @@ internal sealed class MeshService(
 
     // === Query (delegated to MeshQuery) ===
 
-    public IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, CancellationToken ct = default)
-        => _query.QueryAsync(request, ct);
-
     public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath, string prefix, int limit = 10, CancellationToken ct = default)
         => _query.AutocompleteAsync(basePath, prefix, limit, ct);
@@ -178,14 +175,8 @@ internal sealed class MeshService(
     public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
         => _query.SelectAsync<T>(path, property, ct);
 
-    public async Task<string?> GetPreRenderedHtmlAsync(string path, CancellationToken ct = default)
-    {
-        await foreach (var result in _query.QueryAsync(
-            new MeshQueryRequest { Query = $"path:{path}", Limit = 1 }, ct))
-        {
-            if (result is MeshNode node)
-                return node.PreRenderedHtml;
-        }
-        return null;
-    }
+    public IObservable<string?> GetPreRenderedHtml(string path)
+        => _query
+            .ObserveQuery<MeshNode>(new MeshQueryRequest { Query = $"path:{path}", Limit = 1 })
+            .Select(c => c.Items.FirstOrDefault()?.PreRenderedHtml);
 }

@@ -23,10 +23,12 @@ internal interface IMeshCatalog : IPathResolver
     MeshConfiguration Configuration { get; }
 
     /// <summary>
-    /// Streaming query for autocomplete and node discovery. <see cref="IAsyncEnumerable{T}"/>
-    /// is the natural shape for sets — not <c>Task&lt;List&lt;T&gt;&gt;</c>.
+    /// Live observable of MeshNodes matching the catalog query. Emits the
+    /// initial snapshot and every subsequent update. Subscribers compose with
+    /// <c>Select</c>/<c>Subscribe</c> — no await, no <see cref="IAsyncEnumerable{T}"/>
+    /// bridge.
     /// </summary>
-    IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, CancellationToken ct = default);
+    IObservable<IReadOnlyList<MeshNode>> Query(string? parentPath, string? query = null, int? maxResults = null);
 }
 
 /// <summary>

@@ -33,13 +33,11 @@ public static class ReportsCatalogLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
+        var childrenStream = host.ObserveChildren("");
+
+        return nodeStream.CombineLatest(childrenStream, (nodes, children) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-
-            // Query child report nodes
-            var children = await host.QueryChildrenAsync("").ToListAsync();
-
             return (UiControl?)BuildCatalogOverview(host, node, children);
         });
     }

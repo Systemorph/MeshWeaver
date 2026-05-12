@@ -56,13 +56,11 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
             && string.Equals(node.NodeType, "User", System.StringComparison.OrdinalIgnoreCase))
         {
             // Only show "Link LinkedIn" when no credential exists yet.
-            var credentialExists = false;
-            await foreach (var _ in mesh.QueryAsync<MeshNode>(
-                $"path:{hubPath}/_ApiCredentials/linkedin"))
-            {
-                credentialExists = true;
-                break;
-            }
+            var credentialChange = await mesh
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{hubPath}/_ApiCredentials/linkedin"))
+                .FirstAsync();
+            var credentialExists = credentialChange.Items.Count > 0;
 
             if (!credentialExists)
             {

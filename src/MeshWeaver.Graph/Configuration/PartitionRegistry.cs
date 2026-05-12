@@ -49,28 +49,29 @@ public sealed class PartitionRegistry
             // Workspace query is reactive, so this stays live as partitions
             // are added or updated at runtime (rare, but possible).
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            return Observable
-                .FromAsync(async ct =>
+            return meshService
+                .ObserveQuery<MeshNode>(new MeshQueryRequest
                 {
-                    try
+                    Query = "namespace:Admin/Partition nodeType:Partition",
+                    Skip = 0,
+                    Limit = 100
+                })
+                .Select(c =>
+                {
+                    foreach (var node in c.Items)
                     {
-                        await foreach (var node in meshService.QueryAsync<MeshNode>(
-                            "namespace:Admin/Partition nodeType:Partition",
-                            skip: 0, limit: 100, ct: ct))
-                        {
-                            if (node.Content is PartitionDefinition def
-                                && string.Equals(def.Namespace, ns, StringComparison.Ordinal))
-                                return (PartitionDefinition?)def;
-                        }
-                        return null;
+                        if (node.Content is PartitionDefinition def
+                            && string.Equals(def.Namespace, ns, StringComparison.Ordinal))
+                            return (PartitionDefinition?)def;
                     }
-                    catch (Exception ex)
-                    {
-                        logger?.LogWarning(ex,
-                            "PartitionRegistry: lookup for {Namespace} failed; treating as no definition.",
-                            ns);
-                        return null;
-                    }
+                    return null;
+                })
+                .Catch<PartitionDefinition?, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "PartitionRegistry: lookup for {Namespace} failed; treating as no definition.",
+                        ns);
+                    return Observable.Return<PartitionDefinition?>(null);
                 })
                 .Replay(1)
                 .RefCount();

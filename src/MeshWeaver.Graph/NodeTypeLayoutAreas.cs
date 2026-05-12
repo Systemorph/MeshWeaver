@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
+using MeshWeaver.Reactive;
 using System.Reactive.Threading.Tasks;
 using Humanizer;
 using MeshWeaver.Application.Styles;
@@ -426,7 +427,12 @@ public static class NodeTypeLayoutAreas
         {
             try
             {
-                await foreach (var n in meshQuery.QueryAsync<MeshNode>(q, ct: ct).WithCancellation(ct))
+                var stream = meshQuery
+                    .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q))
+                    .Take(1)
+                    .SelectMany(c => c.Items.ToObservable())
+                    .ToAsyncEnumerableSequence(ct);
+                await foreach (var n in stream.WithCancellation(ct))
                 {
                     if (n?.Path is { Length: > 0 } p && seen.Add(p))
                         results.Add(n);

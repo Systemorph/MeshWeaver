@@ -130,20 +130,7 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
-    /// <inheritdoc />
-    /// <summary>
-    /// Core query without access control — for infrastructure use (NodeTypeService, compilation).
-    /// </summary>
-    async IAsyncEnumerable<object> IMeshQueryCore.QueryAsync(
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct)
-    {
-        await foreach (var item in QueryCoreAsync(request, options, ct))
-            yield return item;
-    }
-
-    public async IAsyncEnumerable<object> QueryAsync(
+    private async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -352,19 +339,20 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         var pathsToSearch = GetPathsForScope(basePath, effectiveScope);
         var emittedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Exact path matches — bridge IObservable<MeshNode?> back to a one-shot Task
-        // here at the IMeshQuery boundary (sanctioned per AsynchronousCalls.md).
-        foreach (var searchPath in pathsToSearch)
-        {
-            var node = await persistence.Read(searchPath, options).FirstAsync().ToTask(ct);
-            if (node != null && _evaluator.Matches(node, parsedQuery)
+        // Exact-path probes — pure-observable read+match for each path. The
+        // IAsyncEnumerable surface above iterates via Subscribe-pump
+        // (Observable.ToAsyncEnumerable), no inner await on hub-routed reads.
+        var exactPathNodes = pathsToSearch.ToObservable()
+            .SelectMany(searchPath => persistence.Read(searchPath, options).Take(1))
+            .Where(node => node != null)
+            .Select(node => node!)
+            .Where(node => _evaluator.Matches(node, parsedQuery)
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
-            {
-                if (!string.IsNullOrEmpty(node.Path)) emittedPaths.Add(node.Path);
-                yield return node;
-            }
-        }
+            .Do(node => { if (!string.IsNullOrEmpty(node.Path)) emittedPaths.Add(node.Path); });
+
+        await foreach (var node in exactPathNodes.ToAsyncEnumerableSequence(ct))
+            yield return node;
 
         // Children / Descendants / Hierarchy / Subtree scopes — walk via the adapter.
         // The router's IStorageAdapter routes ListChildPaths to the per-partition
@@ -381,19 +369,23 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 ? GetPathsForScope(basePath, QueryScope.AncestorsAndSelf)
                 : new[] { basePath };
 
-            foreach (var walkBase in walkRoots)
-            {
-                await foreach (var path in WalkAdapterAsync(walkBase, effectiveScope, ct))
-                {
-                    if (string.IsNullOrEmpty(path) || !emittedPaths.Add(path)) continue;
-                    var node = await persistence.Read(path, options).FirstAsync().ToTask(ct);
-                    if (node == null) continue;
-                    if (!_evaluator.Matches(node, parsedQuery)) continue;
-                    if (IsExcludedByContext(node, context)) continue;
-                    if (IsExcludedByIsMain(node, parsedQuery)) continue;
-                    yield return node;
-                }
-            }
+            // Compose pure-observable walk + read + match — no inner await.
+            // The IAsyncEnumerable boundary at the top of QueryAsync still
+            // needs to iterate; Subscribe-collect into a channel for that.
+            var matchedScopeNodes = walkRoots
+                .ToObservable()
+                .SelectMany(walkBase => WalkAdapter(walkBase, effectiveScope))
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Where(path => emittedPaths.Add(path))
+                .SelectMany(path => persistence.Read(path, options).Take(1))
+                .Where(node => node != null)
+                .Select(node => node!)
+                .Where(node => _evaluator.Matches(node, parsedQuery)
+                    && !IsExcludedByContext(node, context)
+                    && !IsExcludedByIsMain(node, parsedQuery));
+
+            await foreach (var node in matchedScopeNodes.ToAsyncEnumerableSequence(ct))
+                yield return node;
         }
 
         // Static nodes — same path/scope/context filtering as persistence
@@ -422,43 +414,32 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
     }
 
     /// <summary>
-    /// BFS walk through the adapter's children. Children scope = one level deep;
-    /// Descendants/Subtree/Hierarchy = recursive. Skips the basePath itself
-    /// (caller already probed it via Exact-path).
+    /// Pure-IObservable BFS walk through <see cref="IStorageAdapter.ListChildPaths"/>.
+    /// Children scope = one level; Descendants/Subtree/Hierarchy = recursive.
+    /// Composes via <c>SelectMany</c>; no <c>await</c>, no <c>.ToTask()</c> —
+    /// runs end-to-end reactively (per AsynchronousCalls.md).
     /// </summary>
-    private async IAsyncEnumerable<string> WalkAdapterAsync(
-        string basePath,
-        QueryScope scope,
-        [EnumeratorCancellation] CancellationToken ct)
+    private IObservable<string> WalkAdapter(string basePath, QueryScope scope)
     {
         var recursive = scope != QueryScope.Children;
-        var queue = new Queue<string?>();
-        queue.Enqueue(string.IsNullOrEmpty(basePath) ? null : basePath);
-
-        while (queue.Count > 0)
-        {
-            ct.ThrowIfCancellationRequested();
-            var parent = queue.Dequeue();
-            (IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths) level;
-            try
-            {
-                level = await persistence.ListChildPaths(parent).FirstAsync().ToTask(ct);
-            }
-            catch (Exception)
-            {
-                continue;
-            }
-
-            foreach (var node in level.NodePaths)
-            {
-                yield return node;
-                if (recursive) queue.Enqueue(node);
-            }
-            if (recursive)
-                foreach (var dir in level.DirectoryPaths)
-                    queue.Enqueue(dir);
-        }
+        return WalkLevel(string.IsNullOrEmpty(basePath) ? null : basePath, recursive);
     }
+
+    private IObservable<string> WalkLevel(string? parent, bool recursive)
+        => persistence.ListChildPaths(parent)
+            .Take(1)
+            .SelectMany(level =>
+            {
+                var nodePaths = level.NodePaths.ToObservable();
+                if (!recursive)
+                    return nodePaths;
+                var nodesAndDeeper = nodePaths.SelectMany(p =>
+                    Observable.Return(p).Concat(WalkLevel(p, recursive: true)));
+                var dirs = level.DirectoryPaths.ToObservable()
+                    .SelectMany(d => WalkLevel(d, recursive: true));
+                return nodesAndDeeper.Concat(dirs);
+            })
+            .Catch<string, Exception>(_ => Observable.Empty<string>());
 
     private static bool StaticNodeMatchesScope(MeshNode node, string basePath, QueryScope scope)
     {
@@ -611,15 +592,15 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         // Autocomplete on this engine: root-node exact match only. Descendant
         // walks happen in the per-backend IMeshQueryProvider (pedestrian via
         // SimpleMeshNodeStorageQueryProvider; Postgres via its own pushdown).
-        async IAsyncEnumerable<MeshNode> GetNodesForAutocomplete()
+        IAsyncEnumerable<MeshNode> GetNodesForAutocomplete()
         {
-            if (!string.IsNullOrEmpty(normalizedPath))
-            {
-                var rootNode = await persistence.Read(normalizedPath, options).FirstAsync().ToTask(ct);
-                if (rootNode != null)
-                    yield return rootNode;
-            }
-            await Task.CompletedTask;
+            if (string.IsNullOrEmpty(normalizedPath))
+                return AsyncEnumerable.Empty<MeshNode>();
+            return persistence.Read(normalizedPath, options)
+                .Take(1)
+                .Where(n => n != null)
+                .Select(n => n!)
+                .ToAsyncEnumerableSequence();
         }
 
         await foreach (var node in GetNodesForAutocomplete())

@@ -46,16 +46,6 @@ public interface IMeshQueryProvider
     bool Matches(IReadOnlyList<string> queryNamespaces);
 
     /// <summary>
-    /// Query nodes and partition objects with full-text search, filtering, and scoping.
-    /// Uses GitHub-style query syntax (e.g., "nodeType:Story status:Open laptop").
-    /// </summary>
-    /// <param name="request">Query request with filters, path, and options</param>
-    /// <param name="options">JSON serializer options for type polymorphism</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Matching objects (MeshNodes and partition objects)</returns>
-    IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, JsonSerializerOptions options, CancellationToken ct = default);
-
-    /// <summary>
     /// Autocomplete query - given a namespace, find best matching subnodes.
     /// Returns suggestions ordered by path length first (for path-based autocomplete).
     /// </summary>

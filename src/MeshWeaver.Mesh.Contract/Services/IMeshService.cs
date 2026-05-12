@@ -54,12 +54,6 @@ public interface IMeshService
     // === Query ===
 
     /// <summary>
-    /// Query nodes and partition objects with full-text search, filtering, and scoping.
-    /// Uses GitHub-style query syntax (e.g., "nodeType:Story status:Open laptop").
-    /// </summary>
-    IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, CancellationToken ct = default);
-
-    /// <summary>
     /// Autocomplete query - given a namespace, find best matching subnodes.
     /// Returns suggestions ordered by path length first (for path-based autocomplete).
     /// </summary>
@@ -95,10 +89,12 @@ public interface IMeshService
     Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
 
     /// <summary>
-    /// Tries to look up a MeshNode at the exact path and return its PreRenderedHtml.
-    /// Used during Blazor prerender for instant display without full path resolution.
-    /// Returns null if no node exists or no pre-rendered HTML is available.
+    /// Looks up a MeshNode at the exact path and emits its PreRenderedHtml.
+    /// Used during Blazor prerender for instant display. Returns an observable
+    /// of the latest <see cref="MeshNode.PreRenderedHtml"/> (or <c>null</c> when
+    /// no node exists or no HTML is cached). Subscribers compose with
+    /// <c>Select</c>/<c>Subscribe</c> — no await, no <see cref="Task"/> bridge.
     /// </summary>
-    Task<string?> GetPreRenderedHtmlAsync(string path, CancellationToken ct = default);
+    IObservable<string?> GetPreRenderedHtml(string path);
 
 }
