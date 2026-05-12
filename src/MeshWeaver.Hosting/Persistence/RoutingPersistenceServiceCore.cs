@@ -324,15 +324,22 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
         // Root-level (empty/null) — fan out across every registered partition's
         // root entry. Returns each partition's namespace key as a "node path"
         // so consumers see the per-partition root nodes (ACME, Contoso, …).
+        // The adapter dictionary populates lazily; ensure init before snapshotting
+        // the keys, otherwise the engine's children/descendants walk sees an empty
+        // root and the entire mesh-wide query returns nothing.
         if (string.IsNullOrEmpty(parentPath))
         {
-            var nodes = _adapters.Keys.ToList();
-            return Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(
-                (nodes, Array.Empty<string>()));
+            return Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+                .Select(_ =>
+                {
+                    var nodes = _adapters.Keys.ToList();
+                    return ((IEnumerable<string>)nodes, (IEnumerable<string>)Array.Empty<string>());
+                });
         }
 
-        return TryGetAdapter(parentPath)?.ListChildPaths(parentPath)
-            ?? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], []));
+        return Observable.FromAsync(ct => EnsureInitializedAsync(ct), Scheduler.Default)
+            .SelectMany(_ => TryGetAdapter(parentPath)?.ListChildPaths(parentPath)
+                ?? Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(([], [])));
     }
 
     /// <inheritdoc />
