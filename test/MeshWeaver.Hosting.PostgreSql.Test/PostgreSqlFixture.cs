@@ -63,10 +63,21 @@ public class PostgreSqlFixture : IAsyncLifetime
         await using (var cmd = DataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{schemaName}\""))
             await cmd.ExecuteNonQueryAsync(ct);
 
-        // Create per-schema data source
+        // Create per-schema data source with a SMALL pool. Default MaxPoolSize=100
+        // multiplied across ~30 per-test schema activations exhausts the
+        // Postgres container's max_connections=100 cap and every subsequent
+        // schema-init hits `53300: sorry, too many clients already`. Capping
+        // each data source at 2 connections (one for InitializeAsync, plus
+        // headroom) keeps total open connections bounded.
+        //
+        // Long-term: the per-(schema, table) PartitionStorageHub architecture
+        // (Doc/Architecture/PartitionStorageHubs.md) replaces this entirely
+        // with single-connection actors. This is the tactical CI unblock.
         var builder = new NpgsqlConnectionStringBuilder(ConnectionString)
         {
-            SearchPath = $"{schemaName},public"
+            SearchPath = $"{schemaName},public",
+            MaxPoolSize = 2,
+            ConnectionIdleLifetime = 10
         };
         var dsBuilder = new NpgsqlDataSourceBuilder(builder.ConnectionString);
         dsBuilder.UseVector();

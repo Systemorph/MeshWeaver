@@ -46,6 +46,6 @@ public sealed class EmbeddedResourcePartitionStorageProvider : IPartitionStorage
                 PartitionContexts.Browse);
     }
 
-    public bool Matches(string firstSegment)
-        => string.Equals(firstSegment, _namespace, StringComparison.OrdinalIgnoreCase);
+    public bool Matches(string fullPath)
+        => string.Equals(PathPartition.GetFirstSegment(fullPath), _namespace, StringComparison.OrdinalIgnoreCase);
 }

@@ -37,13 +37,25 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
     /// No PublicAdminAccess — permissions must come from persisted AccessAssignment nodes.
     /// </summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => builder
+    {
+        // Cap per-test MaxPoolSize so this test class (which spins a fresh Mesh
+        // per [Fact] late in the suite) doesn't exhaust the shared Postgres
+        // container's max_connections=100 after the fixture-managed tests
+        // have already consumed their share. Same tactical motivation as the
+        // MaxPoolSize=2 on PostgreSqlFixture.CreateSchemaAdapterAsync.
+        var csb = new Npgsql.NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+        {
+            MaxPoolSize = 4,
+            ConnectionIdleLifetime = 10
+        };
+        return builder
             .UseMonolithMesh()
             .ConfigureServices(services =>
-                services.AddPartitionedPostgreSqlPersistence(fixture.ConnectionString))
+                services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddRowLevelSecurity()
             .AddGraph()
             .AddOrganizationType();
+    }
 
     protected override async Task SetupAccessRightsAsync()
     {

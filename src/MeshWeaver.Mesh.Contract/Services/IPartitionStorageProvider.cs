@@ -67,13 +67,17 @@ public interface IPartitionStorageProvider
     string Name { get; }
 
     /// <summary>
-    /// True if the given path's first segment belongs to this
-    /// partition. Implementations match exact namespace, prefix list,
-    /// or wildcard <c>*</c> for "anything else".
+    /// True if the given node path belongs to this provider. Implementations
+    /// match exact namespaces, multi-segment prefixes (e.g.
+    /// <c>Admin/Partition/*</c>), or a wildcard for catch-all.
+    /// <para>The <b>full path</b> is passed (not just the first segment) so
+    /// providers can branch on multi-segment prefixes — e.g. one provider
+    /// routes <c>Admin/Partition/*</c> to Postgres while another routes
+    /// <c>Admin/Settings/*</c> to embedded resources.</para>
     /// </summary>
-    /// <param name="firstSegment">First path segment of the node
-    /// path, lowercased by the caller for case-insensitive match.</param>
-    bool Matches(string firstSegment);
+    /// <param name="fullPath">Full node path. Implementations are responsible
+    /// for case-insensitive comparison if they need it.</param>
+    bool Matches(string fullPath);
 
     /// <summary>
     /// Storage adapter backing every partition that resolves to this
@@ -82,6 +86,9 @@ public interface IPartitionStorageProvider
     /// uses one <c>AdapterPersistenceService</c> per first-segment
     /// with the same shared adapter (mirrors how the legacy
     /// FileSystemPartitionedStoreFactory works).
+    /// <para><b>Deprecated</b> by <see cref="CreateAdapterForTable"/> as
+    /// part of the per-(schema,table) hub redesign. Kept on the
+    /// interface during migration so existing providers still compile.</para>
     /// </summary>
     IStorageAdapter Adapter { get; }
 
@@ -93,6 +100,39 @@ public interface IPartitionStorageProvider
     /// data-driven (one entry per discovered first-segment).
     /// </summary>
     PartitionDefinition? PartitionDefinition => null;
+
+    /// <summary>
+    /// Returns the <see cref="PartitionDefinition"/> that owns
+    /// <paramref name="fullPath"/>. Paired with <see cref="Matches"/>:
+    /// when <c>Matches(p)</c> is true, this returns the definition;
+    /// otherwise null.
+    /// <para>The router uses <see cref="MeshWeaver.Mesh.PartitionDefinition.Schema"/>
+    /// (or <see cref="MeshWeaver.Mesh.PartitionDefinition.Namespace"/>)
+    /// and <see cref="MeshWeaver.Mesh.PartitionDefinition.ResolveTable"/>
+    /// to derive the <c>(schema, table)</c> hub key.</para>
+    /// <para>Default implementation returns the single
+    /// <see cref="PartitionDefinition"/> property — appropriate for
+    /// single-namespace static providers (Embedded, StaticNode). Backends
+    /// that track many partitions (Postgres wildcard) override this with
+    /// a dictionary lookup keyed on <c>GetFirstSegment(fullPath)</c>.</para>
+    /// </summary>
+    PartitionDefinition? ResolveDefinition(string fullPath) => PartitionDefinition;
+
+    /// <summary>
+    /// Builds an <see cref="IStorageAdapter"/> scoped to a specific
+    /// <c>(def, table)</c> pair. Called by the routing layer when it
+    /// needs to spawn a partition-storage hub for <c>(def.Schema, table)</c>.
+    /// <para>For Postgres / Cosmos, each <c>(schema, table)</c> gets a
+    /// fresh adapter with its own bounded connection (e.g.
+    /// <c>NpgsqlDataSource(MaxPoolSize=1)</c> with <c>SearchPath</c>
+    /// set to <paramref name="def"/>.Schema). For static / read-only
+    /// providers the table dimension is degenerate and the provider
+    /// may return the same shared <see cref="Adapter"/> for every
+    /// table.</para>
+    /// <para>Default implementation returns <see cref="Adapter"/> so
+    /// providers that haven't migrated to per-table adapters still work.</para>
+    /// </summary>
+    IStorageAdapter CreateAdapterForTable(PartitionDefinition def, string table) => Adapter;
 
     /// <summary>
     /// Contexts this partition opts into. Consumers iterating
