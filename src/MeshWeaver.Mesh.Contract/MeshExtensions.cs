@@ -338,6 +338,12 @@ public static class MeshExtensions
                                 CreatedBy = string.IsNullOrEmpty(node.CreatedBy) ? identity : node.CreatedBy,
                                 LastModified = node.LastModified == default ? now : node.LastModified,
                                 LastModifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? identity : node.LastModifiedBy,
+                                // Stamp an initial Version of 1 so the post-save JSON includes the
+                                // field (the hub's JsonSerializerOptions has
+                                // DefaultIgnoreCondition=WhenWritingDefault → Version=0 is omitted
+                                // on serialisation, which breaks callers that read it back for
+                                // optimistic-concurrency Update).
+                                Version = node.Version > 0 ? node.Version : 1,
                             };
 
                             // 5. Enrich (optional service). EnrichWithNodeType returns
