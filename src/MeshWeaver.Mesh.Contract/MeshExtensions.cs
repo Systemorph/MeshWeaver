@@ -378,6 +378,13 @@ public static class MeshExtensions
                         : MeshChangeEvent.Updated(resultNode);
                     hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(changeEvent);
 
+                    // Notify the live ObserveQuery change feed — the engine subscribes
+                    // to IDataChangeNotifier to surface Added/Updated/Removed deltas.
+                    // Bypassing this here (when persistence is a raw IStorageAdapter,
+                    // not the routing wrapper) left synced queries blind to writes.
+                    hub.ServiceProvider.GetService<IDataChangeNotifier>()?
+                        .NotifyChange(DataChangeNotification.Updated(resultNode.Path, resultNode));
+
                     // Version history is now written inside PersistenceService.SaveNode
                     // (chained off the post-save MeshNode emission) — no explicit
                     // WriteVersion needed here, and no race between competing save paths.
@@ -809,7 +816,9 @@ public static class MeshExtensions
                     // calling handler. Avoids re-entering this same handler via
                     // hub.Observe (which would cause an infinite request loop).
                     logger.LogDebug("[DeleteNode] storage.Delete (root) {Path}", path);
-                    return storage.Delete(path);
+                    return storage.Delete(path)
+                        .Do(_ => meshHub.ServiceProvider.GetService<IDataChangeNotifier>()?
+                            .NotifyChange(DataChangeNotification.Deleted(path, null)));
                 }
 
                 // Descendant: fan-out via per-node hub. The leaf hub re-enters
@@ -1409,6 +1418,8 @@ public static class MeshExtensions
                                 saved =>
                                 {
                                     updateChangeFeed?.Publish(MeshChangeEvent.Updated(saved));
+                                    hub.ServiceProvider.GetService<IDataChangeNotifier>()?
+                                        .NotifyChange(DataChangeNotification.Updated(saved.Path, saved));
                                     logger.LogInformation(
                                         "Node persisted at {Path} by {UpdatedBy}",
                                         saved.Path, capturedRequest.UpdatedBy ?? "system");
