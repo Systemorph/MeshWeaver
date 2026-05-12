@@ -252,13 +252,16 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
+        // The area emits `null` while the ACME/Project NodeType is still compiling
+        // (~12s on cold start) — wait for the actually-loaded shape, not just the
+        // first non-null emission. Backlog may return CatalogControl with groups
+        // or MarkdownControl if all tasks are assigned.
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(10.Seconds())
+            .Where(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl)
+            .Timeout(30.Seconds())
             .FirstAsync();
 
-        // Backlog may return CatalogControl with groups or Markdown if all tasks assigned
         control.Should().NotBeNull("Backlog view should render");
         Output.WriteLine($"Control type: {control?.GetType().Name}");
     }
@@ -307,11 +310,13 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             projectAddress,
             reference);
 
-        // Backlog returns CatalogControl with groups or Markdown if all tasks assigned
+        // Same gating shape as Planning_ShouldRenderWithData — wait for the
+        // loaded view rather than the first non-null emission, since the area
+        // can emit `null` while the ACME/Project NodeType is still compiling.
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
-            .Timeout(10.Seconds())
+            .Where(c => c is CatalogControl { Groups.Count: > 0 } || c is MarkdownControl)
+            .Timeout(30.Seconds())
             .FirstAsync();
 
         control.Should().NotBeNull("Backlog view should render");
