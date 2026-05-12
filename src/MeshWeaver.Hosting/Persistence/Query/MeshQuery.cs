@@ -268,13 +268,22 @@ public class MeshQuery
             // of the same provider — or two providers that both happen to surface
             // a static node — don't surface as duplicate rows in the GUI.
             // For non-MeshNode T, fall back to reference identity.
-            var initialItems = new List<T>();
+            //
+            // Per-provider buckets — kept separate until the final emission so the
+            // merge can order writable-persistence ahead of the static catalog
+            // (otherwise a `scope:descendants limit:N` query risks the static
+            // node-type entries crowding out the actual user content).
+            var providerItems = new List<T>[observables.Count];
+            for (var k = 0; k < providerItems.Length; k++) providerItems[k] = new List<T>();
             var initialPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var initialIdentities = new HashSet<T>();
             var initialCount = 0;
             var initialTarget = observables.Count;
             ParsedQuery? lastQuery = null;
             var gate = new object();
+            var providerIsStatic = providers
+                .Select(p => p is StaticNodeQueryProvider)
+                .ToArray();
 
             // Live-stream dedup: track Path → ChangeType so a Removed for a path
             // we never Added is dropped, and an Added for a path that's already
@@ -287,6 +296,7 @@ public class MeshQuery
             for (var i = 0; i < observables.Count; i++)
             {
                 var obs = observables[i];
+                var idx = i;
                 var sub = obs.Subscribe(
                     change =>
                     {
@@ -301,11 +311,11 @@ public class MeshQuery
                                         if (!string.IsNullOrEmpty(node.Path)
                                             && !initialPaths.Add(node.Path))
                                             continue;
-                                        initialItems.Add(item);
+                                        providerItems[idx].Add(item);
                                     }
                                     else if (initialIdentities.Add(item))
                                     {
-                                        initialItems.Add(item);
+                                        providerItems[idx].Add(item);
                                     }
                                 }
                                 lastQuery ??= change.Query;
@@ -315,7 +325,19 @@ public class MeshQuery
                                 {
                                     foreach (var path in initialPaths)
                                         liveItems.Add(path);
-                                    observer.OnNext(change with { Items = initialItems.ToList() });
+                                    // Engine / writable persistence first, static catalog last,
+                                    // so request-level Limit cuts off the static tail rather
+                                    // than user content.
+                                    var ordered = new List<T>();
+                                    for (var p = 0; p < providerItems.Length; p++)
+                                        if (!providerIsStatic[p])
+                                            ordered.AddRange(providerItems[p]);
+                                    for (var p = 0; p < providerItems.Length; p++)
+                                        if (providerIsStatic[p])
+                                            ordered.AddRange(providerItems[p]);
+                                    var clipped = ClipMergedInitial<T>(
+                                        ordered, change, lastQuery!, request);
+                                    observer.OnNext(clipped);
                                 }
                             }
                         }
@@ -335,6 +357,30 @@ public class MeshQuery
 
             return new System.Reactive.Disposables.CompositeDisposable(subscriptions);
         });
+    }
+
+    /// <summary>
+    /// Sort + skip + clip the merged initial set. Mirrors the post-collect
+    /// pipeline that <see cref="MeshQueryEngine.QueryAsync"/> runs per-provider.
+    /// </summary>
+    private static QueryResultChange<T> ClipMergedInitial<T>(
+        List<T> items,
+        QueryResultChange<T> change,
+        ParsedQuery parsed,
+        MeshQueryRequest request)
+    {
+        IEnumerable<T> merged = items;
+        if (parsed.OrderBy is { } orderBy)
+        {
+            var evaluator = new QueryEvaluator();
+            merged = evaluator.OrderResults(merged.OfType<MeshNode>(), orderBy).OfType<T>();
+        }
+        if (request.Skip is int skip && skip > 0)
+            merged = merged.Skip(skip);
+        var effectiveLimit = request.Limit ?? parsed.Limit;
+        if (effectiveLimit is int limit && limit > 0)
+            merged = merged.Take(limit);
+        return change with { Items = merged.ToList() };
     }
 
     /// <summary>
