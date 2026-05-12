@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -53,7 +52,7 @@ internal sealed class MeshCatalog(
         if (Configuration.Nodes.TryGetValue(addressKey, out var node))
         {
             if (node.HubConfiguration == null && ConfigResolver != null)
-                return Observable.FromAsync(ct => ConfigResolver.ResolveConfigurationAsync(node, ct))
+                return ConfigResolver.ResolveConfiguration(node)
                     .Select(n => (MeshNode?)n);
             return Observable.Return<MeshNode?>(node);
         }
@@ -67,7 +66,7 @@ internal sealed class MeshCatalog(
             {
                 if (persistenceNode == null) return Observable.Return<MeshNode?>(null);
                 if (ConfigResolver == null) return Observable.Return<MeshNode?>(persistenceNode);
-                return Observable.FromAsync(ct => ConfigResolver.ResolveConfigurationAsync(persistenceNode, ct))
+                return ConfigResolver.ResolveConfiguration(persistenceNode)
                     .Select(n => (MeshNode?)n);
             });
     }
@@ -103,7 +102,7 @@ internal sealed class MeshCatalog(
         }
 
         var resolvedObs = ConfigResolver != null
-            ? Observable.FromAsync(ct => ConfigResolver.ResolveConfigurationAsync(transientNode, ct))
+            ? ConfigResolver.ResolveConfiguration(transientNode)
             : Observable.Return(transientNode);
 
         return resolvedObs
