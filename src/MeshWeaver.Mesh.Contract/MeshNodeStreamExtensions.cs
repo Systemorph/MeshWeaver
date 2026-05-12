@@ -443,6 +443,12 @@ public static class MeshNodeStreamExtensions
         {
             var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(10));
             var emitted = 0;
+            // Inner hub.Observe subscription tracker. Captured so the returned
+            // disposable can tear it down — without this, the outer CTS-timeout
+            // path emits null and the outer observer disposes, but the inner
+            // Subscribe keeps the hub-level callback registered, surfacing as
+            // a "pending callback at dispose" Quiescing-watchdog failure.
+            IDisposable? innerSubscription = null;
 
             void EmitOnce(MeshNode? node)
             {
@@ -464,7 +470,7 @@ public static class MeshNodeStreamExtensions
                     return Disposable.Create(() => cts.Dispose());
                 }
 
-                hub.Observe(delivery)
+                innerSubscription = hub.Observe(delivery)
                     .Subscribe(
                         d =>
                         {
@@ -507,6 +513,10 @@ public static class MeshNodeStreamExtensions
                 EmitOnce(null);
             }
 
-            return Disposable.Create(() => cts.Dispose());
+            return Disposable.Create(() =>
+            {
+                innerSubscription?.Dispose();
+                cts.Dispose();
+            });
         });
 }
