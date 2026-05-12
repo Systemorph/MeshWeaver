@@ -475,6 +475,11 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 }
             })
             .Take(1)
+            .Do(level => logger?.LogDebug(
+                "[Engine.WalkLevel] parent={Parent} recursive={Recursive} nodes=[{Nodes}] dirs=[{Dirs}]",
+                parent ?? "(null)", recursive,
+                string.Join(",", level.Item1 ?? Enumerable.Empty<string>()),
+                string.Join(",", level.Item2 ?? Enumerable.Empty<string>())))
             .SelectMany(level =>
             {
                 var nodePaths = (level.Item1 ?? Enumerable.Empty<string>()).ToObservable();
