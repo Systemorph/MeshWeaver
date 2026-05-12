@@ -377,29 +377,29 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         await foreach (var node in exactPathNodes.ToAsyncEnumerableSequence(ct))
             yield return node;
 
-        // Children / Descendants / Hierarchy / Subtree scopes — walk via the adapter.
-        // The router's IStorageAdapter routes ListChildPaths to the per-partition
-        // adapter; we BFS through descendants here for the simple cases tests rely
-        // on. Postgres deployments route through PostgreSqlMeshQuery which does its
-        // own SQL pushdown and skips this engine.
-        // AncestorsAndSelf is intentionally EXCLUDED: that scope is fully covered
-        // by the exact-path probe above (self + every ancestor by path). Recursing
-        // from each ancestor would re-emit the whole descendants subtree, which
-        // breaks tests that ask "find Agents above X" and expect to filter out the
-        // sibling subtree.
+        // Children / Descendants / Hierarchy / Subtree / AncestorsAndSelf scopes —
+        // walk via the adapter. AncestorsAndSelf walks only the DIRECT children of
+        // each ancestor (one level), which surfaces "sibling agents" the test
+        // expects without dragging in unrelated subtree branches.
         if (effectiveScope is QueryScope.Children
             or QueryScope.Descendants
             or QueryScope.Hierarchy
-            or QueryScope.Subtree)
+            or QueryScope.Subtree
+            or QueryScope.AncestorsAndSelf)
         {
-            IEnumerable<string> walkRoots = new[] { basePath };
+            IEnumerable<string> walkRoots = effectiveScope == QueryScope.AncestorsAndSelf
+                ? GetPathsForScope(basePath, QueryScope.AncestorsAndSelf)
+                : new[] { basePath };
+            var walkScope = effectiveScope == QueryScope.AncestorsAndSelf
+                ? QueryScope.Children
+                : effectiveScope;
 
             // Compose pure-observable walk + read + match — no inner await.
             // The IAsyncEnumerable boundary at the top of QueryAsync still
             // needs to iterate; Subscribe-collect into a channel for that.
             var matchedScopeNodes = walkRoots
                 .ToObservable()
-                .SelectMany(walkBase => WalkAdapter(walkBase, effectiveScope))
+                .SelectMany(walkBase => WalkAdapter(walkBase, walkScope))
                 .Where(path => !string.IsNullOrEmpty(path))
                 .Where(path => emittedPaths.Add(path))
                 .SelectMany(path =>
