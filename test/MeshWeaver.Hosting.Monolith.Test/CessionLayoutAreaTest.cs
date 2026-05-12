@@ -149,6 +149,44 @@ public class CessionLayoutAreaTest : MonolithMeshTestBase
             "Overview area should return a response for MotorXL");
     }
 
+    /// <summary>
+    /// Negative case: pinging a path that doesn't exist must surface as a clear
+    /// "node does not exist" error — not a 30s ping timeout. The chain:
+    ///   1. PathResolver.ResolvePath returns null (or a resolution with a
+    ///      non-empty Remainder) for the missing path.
+    ///   2. RoutingServiceBase.PostNotFound returns a DeliveryFailure with
+    ///      ErrorType.NotFound + a message naming the missing path.
+    ///   3. client.Observe(...) propagates that failure as an exception on the
+    ///      Task — callers don't see a generic timeout.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task NonExistentPath_Failure()
+    {
+        const string missingPath = "Doc/Architecture/BusinessRules/Cession/Nonexistent";
+
+        // 1+2: path resolution does NOT find a complete prefix match —
+        //      either resolution is null or has a non-empty Remainder.
+        var resolution = await PathResolver.ResolvePath(missingPath).FirstAsync().ToTask();
+        if (resolution is not null)
+            resolution.Remainder.Should().NotBeNullOrEmpty(
+                $"Path '{missingPath}' should not resolve completely; closest ancestor + remainder is expected");
+        Output.WriteLine($"Resolution: {(resolution is null ? "(null)" : $"Prefix={resolution.Prefix} Remainder={resolution.Remainder}")}");
+
+        // 3+4: PingRequest fails with a DeliveryFailure(NotFound) — the
+        //      observable's OnError carries the failure as an exception.
+        var address = new Address(missingPath);
+        var client = GetClient();
+        var act = async () => await client.Observe(new PingRequest(), o => o.WithTarget(address))
+            .FirstAsync()
+            .ToTask();
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(act);
+        Output.WriteLine($"Got exception: {ex.GetType().Name}: {ex.Message}");
+        ex.Message.Should().ContainAny(
+            new[] { "No node found", "NotFound", "does not exist" },
+            $"Expected a NotFound-style failure naming '{missingPath}'");
+    }
+
     [Fact(Timeout = 60000)]
     public async Task BusinessRulesDoc_RelativeReference_ResolvesToMotorXL()
     {
