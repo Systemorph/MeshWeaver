@@ -366,13 +366,35 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
             }
         }
 
-        // Children / Descendants / Hierarchy / Subtree scopes are NOT handled here.
-        // 🚨 The engine itself knows nothing about descendant walks — that's the
-        // pedestrian-backend's job (in-memory / file-system / embedded resources)
-        // via `SimpleMeshNodeStorage` + its dedicated `IMeshQueryProvider`.
-        // Postgres handles these scopes via SQL pushdown in `PostgreSqlMeshQuery`.
-        // What this engine still serves: static-node fold-in (below) + Exact-path
-        // probes (above).
+        // Children / Descendants / Hierarchy / Subtree scopes — walk via the adapter.
+        // The router's IStorageAdapter routes ListChildPaths to the per-partition
+        // adapter; we BFS through descendants here for the simple cases tests rely
+        // on. Postgres deployments route through PostgreSqlMeshQuery which does its
+        // own SQL pushdown and skips this engine.
+        if (effectiveScope is QueryScope.Children
+            or QueryScope.Descendants
+            or QueryScope.Hierarchy
+            or QueryScope.Subtree
+            or QueryScope.AncestorsAndSelf)
+        {
+            IEnumerable<string> walkRoots = effectiveScope == QueryScope.AncestorsAndSelf
+                ? GetPathsForScope(basePath, QueryScope.AncestorsAndSelf)
+                : new[] { basePath };
+
+            foreach (var walkBase in walkRoots)
+            {
+                await foreach (var path in WalkAdapterAsync(walkBase, effectiveScope, ct))
+                {
+                    if (string.IsNullOrEmpty(path) || !emittedPaths.Add(path)) continue;
+                    var node = await persistence.Read(path, options).FirstAsync().ToTask(ct);
+                    if (node == null) continue;
+                    if (!_evaluator.Matches(node, parsedQuery)) continue;
+                    if (IsExcludedByContext(node, context)) continue;
+                    if (IsExcludedByIsMain(node, parsedQuery)) continue;
+                    yield return node;
+                }
+            }
+        }
 
         // Static nodes — same path/scope/context filtering as persistence
         // results, with path-keyed dedup so backends that include static
@@ -396,6 +418,45 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 if (!_evaluator.Matches(node, parsedQuery)) continue;
                 yield return node;
             }
+        }
+    }
+
+    /// <summary>
+    /// BFS walk through the adapter's children. Children scope = one level deep;
+    /// Descendants/Subtree/Hierarchy = recursive. Skips the basePath itself
+    /// (caller already probed it via Exact-path).
+    /// </summary>
+    private async IAsyncEnumerable<string> WalkAdapterAsync(
+        string basePath,
+        QueryScope scope,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var recursive = scope != QueryScope.Children;
+        var queue = new Queue<string?>();
+        queue.Enqueue(string.IsNullOrEmpty(basePath) ? null : basePath);
+
+        while (queue.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var parent = queue.Dequeue();
+            (IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths) level;
+            try
+            {
+                level = await persistence.ListChildPaths(parent).FirstAsync().ToTask(ct);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            foreach (var node in level.NodePaths)
+            {
+                yield return node;
+                if (recursive) queue.Enqueue(node);
+            }
+            if (recursive)
+                foreach (var dir in level.DirectoryPaths)
+                    queue.Enqueue(dir);
         }
     }
 
