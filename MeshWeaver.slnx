@@ -157,6 +157,5 @@
     <Project Path="tools/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
     <Project Path="tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj" />
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
-    <Project Path="tools/MeshWeaver.Tools.CosmosImport/MeshWeaver.Tools.CosmosImport.csproj" />
   </Folder>
 </Solution>

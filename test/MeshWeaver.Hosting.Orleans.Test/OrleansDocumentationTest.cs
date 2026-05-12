@@ -163,7 +163,7 @@ public class DocSiloConfigurator : ISiloConfigurator, IHostConfigurator
         // AddDocumentation registers an EmbeddedResource IPartitionStorageProvider
         // for the "Doc" namespace; the routing-aware partitioned in-memory stack is
         // required for that provider to actually serve reads. Plain AddInMemoryPersistence
-        // would register a single non-routing AdapterPersistenceService and the Doc
+        // would register a single non-routing InMemoryStorageAdapter and the Doc
         // namespace would be unreachable. See Doc/Architecture/PartitionedPersistence.md.
         hostBuilder.UseOrleansMeshServer()
             .AddPartitionedInMemoryPersistence()

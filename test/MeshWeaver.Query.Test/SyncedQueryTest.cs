@@ -300,7 +300,7 @@ public class SyncedQueryTest(ITestOutputHelper output)
     /// <para>This is the exact pipeline that
     /// <see cref="MeshWeaver.Hosting.Security.SecurityService"/> rides for
     /// permission evaluation; the in-memory test base wires the same
-    /// <see cref="MeshWeaver.Hosting.Persistence.AdapterPersistenceService"/>
+    /// <see cref="MeshWeaver.Hosting.Persistence.InMemoryStorageAdapter"/>
     /// + change-notifier setup that production uses for runtime CreateNode /
     /// DeleteNode of access assignments.</para>
     /// </summary>

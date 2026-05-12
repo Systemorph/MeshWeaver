@@ -14,7 +14,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// that IS the storage of record — there is no separate persistence-service
 /// cache on top.
 /// </summary>
-internal sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage
+public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage
 {
     private readonly ConcurrentDictionary<string, MeshNode> _nodes =
         new(StringComparer.OrdinalIgnoreCase);

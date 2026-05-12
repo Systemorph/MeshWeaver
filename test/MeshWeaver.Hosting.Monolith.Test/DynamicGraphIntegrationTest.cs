@@ -816,7 +816,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     {
         var testDataDirectory = GetOrCreateTestDirectory();
 
-        // Create actual JSON files on disk - this is the key difference from AdapterPersistenceService tests
+        // Create actual JSON files on disk - this is the key difference from InMemoryStorageAdapter tests
         SetupOrganizationsStructureOnDisk(testDataDirectory);
 
         var cacheDirectory = Path.Combine(testDataDirectory, ".mesh-cache");

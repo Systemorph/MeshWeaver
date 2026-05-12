@@ -164,53 +164,44 @@ public class PathRemappingStorageAdapterTests
         public List<string> Deletes { get; } = new();
         public List<string?> ListedParents { get; } = new();
 
-        public Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         {
             Reads.Add(path);
-            return Task.FromResult<MeshNode?>(null);
+            return System.Reactive.Linq.Observable.Return<MeshNode?>(null);
         }
 
-        public Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+        public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions options)
         {
             Writes.Add(node);
-            return Task.CompletedTask;
+            return System.Reactive.Linq.Observable.Return(node);
         }
 
-        public Task DeleteAsync(string path, CancellationToken ct = default)
+        public IObservable<string> Delete(string path)
         {
             Deletes.Add(path);
-            return Task.CompletedTask;
+            return System.Reactive.Linq.Observable.Return(path);
         }
 
-        public Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
-            string? parentPath, CancellationToken ct = default)
+        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         {
             ListedParents.Add(parentPath);
-            return Task.FromResult(((IEnumerable<string>)Array.Empty<string>(), (IEnumerable<string>)Array.Empty<string>()));
+            return System.Reactive.Linq.Observable.Return<(IEnumerable<string>, IEnumerable<string>)>(
+                (Array.Empty<string>(), Array.Empty<string>()));
         }
 
-        public Task<bool> ExistsAsync(string path, CancellationToken ct = default) => Task.FromResult(false);
+        public IObservable<bool> Exists(string path) => System.Reactive.Linq.Observable.Return(false);
 
-        public IAsyncEnumerable<object> GetPartitionObjectsAsync(
-            string nodePath, string? subPath, JsonSerializerOptions options, CancellationToken ct = default)
-            => AsyncEnumerable<object>();
+        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
+            => System.Reactive.Linq.Observable.Empty<object>();
 
-        public Task SavePartitionObjectsAsync(
-            string nodePath, string? subPath, IReadOnlyCollection<object> objects,
-            JsonSerializerOptions options, CancellationToken ct = default) => Task.CompletedTask;
+        public IObservable<System.Reactive.Unit> SavePartitionObjects(
+            string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+            => System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
 
-        public Task DeletePartitionObjectsAsync(string nodePath, string? subPath = null, CancellationToken ct = default)
-            => Task.CompletedTask;
+        public IObservable<System.Reactive.Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+            => System.Reactive.Linq.Observable.Return(System.Reactive.Unit.Default);
 
-        public Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
-            string nodePath, string? subPath = null, CancellationToken ct = default)
-            => Task.FromResult<DateTimeOffset?>(null);
-
-#pragma warning disable CS1998
-        private static async IAsyncEnumerable<T> AsyncEnumerable<T>()
-        {
-            yield break;
-        }
-#pragma warning restore CS1998
+        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+            => System.Reactive.Linq.Observable.Return<DateTimeOffset?>(null);
     }
 }
