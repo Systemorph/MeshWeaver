@@ -17,7 +17,11 @@ namespace MeshWeaver.Mesh.Services;
 /// </summary>
 public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvider
 {
-    private readonly Func<string, bool> _matches;
+    /// <summary>
+    /// Match predicate. Receives the path's first segment (lowercased) for
+    /// compatibility with the original first-segment-routing semantics.
+    /// </summary>
+    private readonly Func<string, bool> _matchesFirstSegment;
     private readonly Lazy<IStorageAdapter> _adapter;
 
     /// <inheritdoc/>
@@ -59,7 +63,7 @@ public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvid
         IEnumerable<string>? contexts = null)
     {
         Name = name;
-        _matches = matches;
+        _matchesFirstSegment = matches;
         // Lazy: GetStaticNodes() may touch hub-scoped services (e.g. logging) —
         // construct the adapter on first access, after DI is fully wired.
         _adapter = new Lazy<IStorageAdapter>(() =>
@@ -81,5 +85,18 @@ public sealed class StaticNodePartitionStorageProvider : IPartitionStorageProvid
     }
 
     /// <inheritdoc/>
-    public bool Matches(string firstSegment) => _matches(firstSegment);
+    public bool Matches(string fullPath)
+    {
+        var firstSegment = ExtractFirstSegment(fullPath);
+        return firstSegment != null && _matchesFirstSegment(firstSegment);
+    }
+
+    private static string? ExtractFirstSegment(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var normalized = path.Trim('/');
+        if (normalized.Length == 0) return null;
+        var slash = normalized.IndexOf('/');
+        return slash < 0 ? normalized : normalized[..slash];
+    }
 }
