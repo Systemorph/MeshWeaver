@@ -556,38 +556,49 @@ public static class MeshDataSourceExtensions
         if (request.Message.Reference is not SchemaReference { Type: null or "" })
             return request;
 
-        var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-        var persistenceCore = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var compilationService = hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
         // Address.Path (segments only) — ToString() on hosted hubs adds "~<host>",
-        // which never matches persistence keys / NodeTypeService paths (segment-only).
+        // which never matches persistence keys (segment-only).
         var hubPath = hub.Address.Path;
 
-        if (nodeTypeService == null || persistenceCore == null)
+        if (compilationService == null)
             return request;
 
-        persistenceCore.Read(hubPath, hub.JsonSerializerOptions)
+        // Read own MeshNode from the workspace (live, no extra storage hop). The
+        // per-NodeType hub itself is the schema authority — its own NodeTypeDefinition
+        // carries AssemblyLocation; recover the HubConfiguration delegate by
+        // reflecting against the cached DLL (no Roslyn re-run).
+        hub.GetWorkspace().GetMeshNodeStream()
+            .Where(node => node?.Content is NodeTypeDefinition
+                || (node is not null && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal)))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
             .SelectMany(node =>
             {
-                // Only handle NodeType nodes — for everything else, let the default
-                // handler process by returning an empty observable so we don't post
-                // any response (the default handler will).
-                if (node?.NodeType != MeshNode.NodeTypePath)
+                if (string.IsNullOrEmpty(node?.AssemblyLocation))
                     return Observable.Empty<GetDataResponse>();
 
-                var nodeTypeConfig = nodeTypeService.GetCachedConfiguration(hubPath);
-                if (nodeTypeConfig?.HubConfiguration == null)
-                    return Observable.Empty<GetDataResponse>();
-
-                var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
-                var subHub = hub.GetHostedHub(dummyAddress, c =>
-                    nodeTypeConfig.HubConfiguration(c.AddData()));
-
-                var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
-                return subHub.Observe(schemaDelivery)
-                    .Select(d => d.Message)
-                    .OfType<GetDataResponse>()
+                return compilationService.GetConfigurationsFromExistingAssembly(node!)
                     .Take(1)
-                    .Finally(subHub.Dispose);
+                    .SelectMany(result =>
+                    {
+                        var matching = result?.NodeTypeConfigurations
+                            .FirstOrDefault(c => string.Equals(c.NodeType, hubPath, StringComparison.OrdinalIgnoreCase))
+                            ?? result?.NodeTypeConfigurations.FirstOrDefault();
+                        if (matching?.HubConfiguration == null)
+                            return Observable.Empty<GetDataResponse>();
+
+                        var dummyAddress = new Address($"$schema-probe/{Guid.NewGuid():N}");
+                        var subHub = hub.GetHostedHub(dummyAddress, c =>
+                            matching.HubConfiguration(c.AddData()));
+
+                        var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
+                        return subHub.Observe(schemaDelivery)
+                            .Select(d => d.Message)
+                            .OfType<GetDataResponse>()
+                            .Take(1)
+                            .Finally(subHub.Dispose);
+                    });
             })
             .Subscribe(
                 schemaResponse => hub.Post(schemaResponse, o => o.ResponseFor(request)),
