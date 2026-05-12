@@ -60,9 +60,8 @@ public class MeshOperations
     /// - Otherwise checks the NodeType's path.
     /// Returns <c>null</c> if no error is recorded.
     /// </summary>
-    private string? LookupCompilationError(MeshNode node)
+    private IObservable<string?> LookupCompilationError(MeshNode node)
     {
-        if (nodeTypeService == null) return null;
         // NodeType==MeshNode.NodeTypePath catches the case where Content arrived
         // as a JsonElement (per-node hub didn't have NodeTypeDefinition in its
         // TypeRegistry, so polymorphic deserialisation fell back) — without
@@ -71,9 +70,24 @@ public class MeshOperations
         var isNodeTypeDef = node.Content is Graph.Configuration.NodeTypeDefinition
             || string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
         var nodeTypePath = isNodeTypeDef ? node.Path : node.NodeType;
-        return !string.IsNullOrEmpty(nodeTypePath)
-            ? nodeTypeService.GetCompilationError(nodeTypePath)
-            : null;
+        if (string.IsNullOrEmpty(nodeTypePath))
+            return Observable.Return<string?>(null);
+
+        // Fast path: the input node already IS the NodeType MeshNode and its
+        // Content is the strongly-typed NodeTypeDefinition. Read the error
+        // straight off it — no extra round-trip.
+        if (isNodeTypeDef && node.Content is Graph.Configuration.NodeTypeDefinition ownDef)
+            return Observable.Return<string?>(ownDef.CompilationError);
+
+        // Slow path: read the NodeType MeshNode fresh from its owning per-node
+        // hub. Take(1) — single-emission read of the live CompilationError
+        // off the NodeType definition.
+        return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Select(n => (n!.Content as Graph.Configuration.NodeTypeDefinition)?.CompilationError)
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(null));
     }
 
     /// <summary>
@@ -211,12 +225,12 @@ public class MeshOperations
                     {
                         if (node is null)
                             return GetWithBrokenNodeTypeFallback(resolvedPath);
-                        var compileError = LookupCompilationError(node);
-                        return Observable.Return(compileError != null
-                            ? JsonSerializer.Serialize(
-                                new { node, compilationError = compileError },
-                                hub.JsonSerializerOptions)
-                            : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
+                        return LookupCompilationError(node)
+                            .Select(compileError => compileError != null
+                                ? JsonSerializer.Serialize(
+                                    new { node, compilationError = compileError },
+                                    hub.JsonSerializerOptions)
+                                : JsonSerializer.Serialize(node, hub.JsonSerializerOptions));
                     }))
             .Catch((Exception ex) =>
             {
@@ -242,27 +256,37 @@ public class MeshOperations
     /// </summary>
     private IObservable<string> GetWithBrokenNodeTypeFallback(string resolvedPath)
     {
-        var compileError = nodeTypeService?.GetCompilationError(resolvedPath);
-        if (string.IsNullOrEmpty(compileError))
-            return Observable.Return($"Not found: {resolvedPath}");
-
-        // Live ObserveQuery — first emission carries the snapshot; the catalog
-        // is the source of truth here (the per-node hub is broken by
-        // definition, so live content is unreachable).
-        return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
-            .Select(c => c.Items.FirstOrDefault())
-            .Select(node => node is null
-                ? $"Not found: {resolvedPath}"
-                : JsonSerializer.Serialize(
-                    new { node, compilationError = compileError },
-                    hub.JsonSerializerOptions))
-            .Catch((Exception ex) =>
+        // Read the NodeType MeshNode directly — the snapshot carries the
+        // CompilationError if compilation has failed at least once.
+        return hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .SelectMany(node =>
             {
-                logger.LogWarning(ex,
-                    "Catalog fallback for broken NodeType at {Path} failed", resolvedPath);
-                return Observable.Return(JsonSerializer.Serialize(
-                    new { compilationError = compileError, error = "Catalog read failed: " + ex.Message },
-                    hub.JsonSerializerOptions));
+                var compileError = (node?.Content as Graph.Configuration.NodeTypeDefinition)?.CompilationError;
+                if (string.IsNullOrEmpty(compileError))
+                    return Observable.Return($"Not found: {resolvedPath}");
+
+                // Live ObserveQuery — first emission carries the snapshot; the catalog
+                // is the source of truth here (the per-node hub is broken by
+                // definition, so live content is unreachable).
+                return mesh.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+                    .Select(c => c.Items.FirstOrDefault())
+                    .Select(qn => qn is null
+                        ? $"Not found: {resolvedPath}"
+                        : JsonSerializer.Serialize(
+                            new { node = qn, compilationError = compileError },
+                            hub.JsonSerializerOptions))
+                    .Catch((Exception ex) =>
+                    {
+                        logger.LogWarning(ex,
+                            "Catalog fallback for broken NodeType at {Path} failed", resolvedPath);
+                        return Observable.Return(JsonSerializer.Serialize(
+                            new { compilationError = compileError, error = "Catalog read failed: " + ex.Message },
+                            hub.JsonSerializerOptions));
+                    });
             });
     }
 
@@ -1369,7 +1393,19 @@ public class MeshOperations
 
         try
         {
-            nodeTypeService?.InvalidateCache(resolvedPath);
+            // Trigger a fresh compile by flipping CompilationStatus = Pending on
+            // the NodeType MeshNode. The per-NodeType hub's CompileWatcher (see
+            // NodeTypeCompilationHelpers.InstallCompileWatcher) picks up the
+            // Pending flip and runs Roslyn — the MeshNode IS the cache, so we
+            // don't need a side cache to invalidate.
+            hub.GetWorkspace().GetMeshNodeStream(resolvedPath).Update(curr =>
+                    curr.Content is Graph.Configuration.NodeTypeDefinition def
+                        ? curr with { Content = def with { CompilationStatus = CompilationStatus.Pending } }
+                        : curr)
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogWarning(ex,
+                        "Recycle: failed to flip CompilationStatus=Pending for {Path}", resolvedPath));
 
             var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
             if (changeFeed != null)
@@ -1419,13 +1455,11 @@ public class MeshOperations
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
-        if (nodeTypeService == null)
-            return Observable.Return(JsonSerializer.Serialize(
-                new { status = "Unknown", message = "INodeTypeService not registered on this hub" },
-                hub.JsonSerializerOptions));
 
-        // Content read via GetDataRequest + MeshNodeReference — queries are set-only.
-        return FetchNode(resolvedPath).Select(node =>
+        // Diagnostics are read directly off the NodeType MeshNode — the
+        // owner-driven status/error/timestamps live on NodeTypeDefinition,
+        // populated by the per-NodeType hub's CompileWatcher.
+        return FetchNode(resolvedPath).SelectMany(node =>
             {
                 // Match LookupCompilationError: node.Content arrives as JsonElement
                 // when the per-node hub doesn't have NodeTypeDefinition in its
@@ -1435,19 +1469,43 @@ public class MeshOperations
                 var nodeTypePath = isNodeTypeDef ? node!.Path : node?.NodeType;
 
                 if (string.IsNullOrEmpty(nodeTypePath))
-                    return JsonSerializer.Serialize(
+                    return Observable.Return(JsonSerializer.Serialize(
                         new { status = "Unknown", message = $"Not found: {resolvedPath}" },
-                        hub.JsonSerializerOptions);
+                        hub.JsonSerializerOptions));
 
-                var status = nodeTypeService.GetStatus(nodeTypePath);
-                return FormatDiagnostics(
-                    status,
-                    nodeTypePath,
-                    error: status == CompilationStatus.Error ? nodeTypeService.GetCompilationError(nodeTypePath) : null,
-                    startedAt: status == CompilationStatus.Compiling ? nodeTypeService.GetCompilationStartedAt(nodeTypePath) : null,
-                    lastCompiledAt: status == CompilationStatus.Ok ? nodeTypeService.GetLastSuccessfulCompileAt(nodeTypePath) : null,
-                    hub.JsonSerializerOptions);
+                // Fast path: the input node already IS the NodeType MeshNode.
+                if (isNodeTypeDef && node!.Content is Graph.Configuration.NodeTypeDefinition ownDef)
+                    return Observable.Return(FormatDiagnosticsFromDef(ownDef, nodeTypePath));
+
+                // Slow path: pull the live NodeType MeshNode (single emission).
+                return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
+                    .Where(n => n is not null)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                    .Select(typeNode =>
+                    {
+                        var def = typeNode?.Content as Graph.Configuration.NodeTypeDefinition;
+                        if (def is null)
+                            return JsonSerializer.Serialize(
+                                new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
+                                hub.JsonSerializerOptions);
+                        return FormatDiagnosticsFromDef(def, nodeTypePath);
+                    });
             });
+    }
+
+    private string FormatDiagnosticsFromDef(
+        Graph.Configuration.NodeTypeDefinition def, string nodeTypePath)
+    {
+        var status = def.CompilationStatus ?? CompilationStatus.Unknown;
+        return FormatDiagnostics(
+            status,
+            nodeTypePath,
+            error: status == CompilationStatus.Error ? def.CompilationError : null,
+            startedAt: status == CompilationStatus.Compiling ? def.LastCompileStartedAt : null,
+            lastCompiledAt: status == CompilationStatus.Ok ? def.LastCompileSucceededAt : null,
+            hub.JsonSerializerOptions);
     }
 
     /// <summary>
