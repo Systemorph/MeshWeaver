@@ -154,29 +154,38 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
         }
 
-        // Apply skip/limit and project. The effective limit is the FIRST query's
-        // explicit `limit:N` override (if any) AND/OR request.Limit — whichever
-        // is smaller wins, so callers can't escape a request-level cap.
-        var effectiveLimit = MinLimit(request.Limit, parsedQuery.Limit);
-        int skipped = 0;
+        // Yield with a "Skip + Limit" load buffer. The engine is one bucket in
+        // the MeshQuery.MergeProviderObservables fan-out — request.Skip /
+        // request.Limit are applied POST-MERGE in ClipMergedInitial.
+        // Applying request.Skip here too would double-skip (engine skips N,
+        // then merge skips another N → empty page 2). What we DO cap here is
+        // the load: yield at most (Skip + Limit) items so a deep walk over a
+        // 10 000-row subtree doesn't materialise everything when the caller
+        // only wants 3 items at offset 0. parsedQuery.Limit (the explicit
+        // `limit:N` in the query string) is still honoured per-query — it's
+        // a hint to each provider, not the cross-provider cap.
+        var loadCap = LoadCap(request, parsedQuery);
         int yielded = 0;
         foreach (var node in sorted)
         {
-            if (request.Skip.HasValue && request.Skip.Value > 0 && skipped < request.Skip.Value)
-            {
-                skipped++;
-                continue;
-            }
-
             yield return parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
                 : node;
 
             yielded++;
-            if (effectiveLimit.HasValue && effectiveLimit.Value > 0
-                && yielded >= effectiveLimit.Value)
+            if (loadCap.HasValue && loadCap.Value > 0 && yielded >= loadCap.Value)
                 yield break;
         }
+    }
+
+    private static int? LoadCap(MeshQueryRequest request, ParsedQuery parsedQuery)
+    {
+        // Engine load cap = (Skip ?? 0) + (request.Limit ?? parsedQuery.Limit).
+        // parsedQuery.Limit is the per-query limit:N hint and is still honoured
+        // separately if no request-level limit was set.
+        var skip = request.Skip ?? 0;
+        int? limit = request.Limit ?? parsedQuery.Limit;
+        return limit is int l ? skip + l : null;
     }
 
     private static int? MinLimit(int? a, int? b) =>
@@ -212,20 +221,19 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
         }
 
-        var effectiveLimit = MinLimit(request.Limit, parsedQuery.Limit);
-        int skipped = 0, yielded = 0;
+        // See QueryAsync for the rationale: request.Skip is applied post-merge
+        // in ClipMergedInitial; the engine loads up to (Skip + Limit) items
+        // and yields without an in-engine skip to avoid double-skipping.
+        var loadCap = LoadCap(request, parsedQuery);
+        int yielded = 0;
         foreach (var node in sorted)
         {
-            if (request.Skip.HasValue && request.Skip.Value > 0 && skipped < request.Skip.Value)
-            { skipped++; continue; }
-
             yield return parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
                 : node;
 
             yielded++;
-            if (effectiveLimit.HasValue && effectiveLimit.Value > 0
-                && yielded >= effectiveLimit.Value)
+            if (loadCap.HasValue && loadCap.Value > 0 && yielded >= loadCap.Value)
                 yield break;
         }
     }
