@@ -342,14 +342,37 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
         // Exact-path probes — pure-observable read+match for each path. The
         // IAsyncEnumerable surface above iterates via Subscribe-pump
         // (Observable.ToAsyncEnumerable), no inner await on hub-routed reads.
+        // Skip empty/null entries — persistence.Read("") on some adapters throws NRE
+        // before the observable starts (RoutingPersistenceServiceCore tolerates it,
+        // but FileSystemStorageAdapter doesn't), so a bare "scope:descendants" query
+        // with no namespace would otherwise blow up the whole pipeline.
         var exactPathNodes = pathsToSearch.ToObservable()
-            .SelectMany(searchPath => persistence.Read(searchPath, options).Take(1))
+            .Where(searchPath => !string.IsNullOrEmpty(searchPath))
+            .SelectMany(searchPath => Observable.Defer(() =>
+                {
+                    try { return persistence.Read(searchPath, options); }
+                    catch (Exception ex)
+                    {
+                        logger?.LogWarning(ex,
+                            "[Engine.ExactRead] read threw synchronously path={Path}", searchPath);
+                        return Observable.Return<MeshNode?>(null);
+                    }
+                })
+                .Take(1)
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
             .Where(node => node != null)
             .Select(node => node!)
             .Where(node => _evaluator.Matches(node, parsedQuery)
                 && !IsExcludedByContext(node, context)
                 && !IsExcludedByIsMain(node, parsedQuery))
-            .Do(node => { if (!string.IsNullOrEmpty(node.Path)) emittedPaths.Add(node.Path); });
+            .Do(node => { if (!string.IsNullOrEmpty(node.Path)) emittedPaths.Add(node.Path); })
+            .Catch<MeshNode, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[Engine.ExactScope] pipeline threw query=[{Query}] basePath={BasePath}",
+                    string.Join(" | ", request.EffectiveQueries), basePath);
+                return Observable.Empty<MeshNode>();
+            });
 
         await foreach (var node in exactPathNodes.ToAsyncEnumerableSequence(ct))
             yield return node;
