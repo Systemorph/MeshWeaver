@@ -16,12 +16,13 @@ namespace MeshWeaver.Hosting.Persistence;
 /// </summary>
 internal sealed class MeshConfigurationStaticNodeProvider : IStaticNodeProvider
 {
-    private readonly MeshConfiguration _configuration;
+    private readonly MeshConfiguration? _configuration;
 
-    public MeshConfigurationStaticNodeProvider(MeshConfiguration configuration)
+    public MeshConfigurationStaticNodeProvider(MeshConfiguration? configuration = null)
     {
         _configuration = configuration;
     }
 
-    public IEnumerable<MeshNode> GetStaticNodes() => _configuration.Nodes.Values;
+    public IEnumerable<MeshNode> GetStaticNodes()
+        => _configuration?.Nodes.Values ?? Enumerable.Empty<MeshNode>();
 }
