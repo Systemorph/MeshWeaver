@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -58,7 +59,49 @@ internal static class NodeTypeCompilationHelpers
         // again. Cleared by the post-compile write-back to Ok/Error.
         var triggered = 0;
 
-        return workspace.GetMeshNodeStream()
+        // Eager kickoff on hub activation: when the per-NodeType hub starts and
+        // sees its own NodeTypeDefinition with no compile state and no assembly
+        // on disk, flip CompilationStatus = Pending so the watcher fires Roslyn
+        // immediately (instead of waiting for the first GetCompilationPathRequest
+        // from an instance lookup). This is the "router-accessed-the-NodeType
+        // kicks off compilation" behaviour that pre-dates the watcher.
+        var ownStream = workspace.GetMeshNodeStream();
+        var kicked = 0;
+        var kickoffSub = ownStream
+            .Where(node => node?.Content is NodeTypeDefinition)
+            .Take(1)
+            .Subscribe(
+                node =>
+                {
+                    if (node?.Content is not NodeTypeDefinition def) return;
+                    if (def.CompilationStatus is not null
+                        && def.CompilationStatus != CompilationStatus.Unknown) return;
+                    if (!string.IsNullOrEmpty(node.AssemblyLocation)) return;
+                    if (System.Threading.Interlocked.CompareExchange(ref kicked, 1, 0) != 0) return;
+
+                    logger?.LogDebug(
+                        "Compile kickoff: flipping Pending for {HubPath} (no status, no assembly)",
+                        hub.Address.Path);
+                    workspace.GetMeshNodeStream().Update(curr =>
+                        curr.Content is NodeTypeDefinition d
+                            && (d.CompilationStatus is null
+                                || d.CompilationStatus == CompilationStatus.Unknown)
+                            && string.IsNullOrEmpty(curr.AssemblyLocation)
+                            ? curr with
+                            {
+                                Content = d with { CompilationStatus = CompilationStatus.Pending }
+                            }
+                            : curr)
+                        .Subscribe(
+                            _ => { },
+                            ex => logger?.LogWarning(ex,
+                                "Compile kickoff: failed to flip Pending for {HubPath}",
+                                hub.Address.Path));
+                },
+                ex => logger?.LogWarning(ex,
+                    "Compile kickoff: own-stream faulted for {HubPath}", hub.Address.Path));
+
+        var watcherSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus == CompilationStatus.Pending)
             .Subscribe(
@@ -87,6 +130,8 @@ internal static class NodeTypeCompilationHelpers
                 },
                 ex => logger?.LogWarning(ex,
                     "Compile watcher faulted for {HubPath}", hub.Address.Path));
+
+        return new CompositeDisposable(kickoffSub, watcherSub);
     }
 
     /// <summary>
