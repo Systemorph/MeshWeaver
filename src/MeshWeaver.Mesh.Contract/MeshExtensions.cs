@@ -1402,7 +1402,13 @@ public static class MeshExtensions
                             LastModified = DateTimeOffset.UtcNow,
                             LastModifiedBy = capturedRequest.UpdatedBy
                                 ?? updatedNode.LastModifiedBy
-                                ?? existingNode.LastModifiedBy
+                                ?? existingNode.LastModifiedBy,
+                            // Monotonically bump Version per Update so version-history snapshots
+                            // land in distinct files. Without this, every Update reused the seed
+                            // Version=1 the Create handler stamped and overwrote the V1 snapshot
+                            // instead of creating V2/V3/... — VersionQuery_GetVersionBefore /
+                            // GetVersions never saw the intermediate states.
+                            Version = Math.Max(existingNode.Version, updatedNode.Version) + 1
                         };
 
                         // Use the hub's data layer as the synchronization point: post a

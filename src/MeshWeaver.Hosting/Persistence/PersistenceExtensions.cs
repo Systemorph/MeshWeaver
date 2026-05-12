@@ -22,6 +22,63 @@ namespace MeshWeaver.Hosting.Persistence;
 public static class PersistenceExtensions
 {
     /// <summary>
+    /// Keyed-service key used to expose the un-decorated <see cref="IStorageAdapter"/>
+    /// to the version-writing decorator (and to <see cref="IVersionQuery"/> factory
+    /// type-sniffing for <see cref="FileSystemStorageAdapter"/>).
+    /// </summary>
+    private const string InnerStorageAdapterKey = "inner";
+
+    /// <summary>
+    /// Finds the last <see cref="IStorageAdapter"/> registration, re-exposes it as a
+    /// keyed singleton with key "inner", then re-registers the default
+    /// <see cref="IStorageAdapter"/> service as a <see cref="VersionWritingStorageAdapter"/>
+    /// that wraps the inner. Replaces the historical
+    /// <c>FileSystemPersistenceService.SaveNodeAsync</c> chokepoint deleted in the
+    /// persistence cull (2026-05-12) — without this, every save path skipped the
+    /// version-history snapshot.
+    /// </summary>
+    private static void DecorateStorageAdapterWithVersionWriting(IServiceCollection services)
+    {
+        var descriptor = services.LastOrDefault(d => d.ServiceType == typeof(IStorageAdapter));
+        if (descriptor == null) return;
+        // Already decorated — bail out (idempotent for callers that compose
+        // AddCoreAndWrapperServices into AddPartitionedCoreAndWrapperServices).
+        if (descriptor.ImplementationType == typeof(VersionWritingStorageAdapter)) return;
+
+        services.Remove(descriptor);
+
+        // Republish the original descriptor under the keyed slot so the
+        // decorator (and IVersionQuery factory) can resolve the inner.
+        if (descriptor.ImplementationInstance is IStorageAdapter instance)
+        {
+            services.AddKeyedSingleton(InnerStorageAdapterKey, instance);
+        }
+        else if (descriptor.ImplementationFactory != null)
+        {
+            services.AddKeyedSingleton<IStorageAdapter>(
+                InnerStorageAdapterKey,
+                (sp, _) => (IStorageAdapter)descriptor.ImplementationFactory(sp));
+        }
+        else if (descriptor.ImplementationType != null)
+        {
+            services.AddKeyedSingleton<IStorageAdapter>(
+                InnerStorageAdapterKey,
+                (sp, _) => (IStorageAdapter)ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType));
+        }
+        else
+        {
+            // Unknown descriptor shape — put it back as-is and bail.
+            services.Add(descriptor);
+            return;
+        }
+
+        services.AddSingleton<IStorageAdapter>(sp =>
+            new VersionWritingStorageAdapter(
+                sp.GetRequiredKeyedService<IStorageAdapter>(InnerStorageAdapterKey),
+                sp.GetService<IVersionQuery>()));
+    }
+
+    /// <summary>
     /// Adds persistence configured from Graph:Storage section.
     /// Uses the Type field to select the appropriate storage adapter factory.
     /// </summary>
@@ -455,6 +512,8 @@ public static class PersistenceExtensions
             return routingVersionQuery;
         });
 
+        DecorateStorageAdapterWithVersionWriting(services);
+
         // Always add static node provider
         services.AddSingleton<IMeshQueryProvider>(sp =>
         {
@@ -532,11 +591,17 @@ public static class PersistenceExtensions
 
         services.TryAddSingleton<IVersionQuery>(sp =>
         {
-            var adapter = sp.GetService<IStorageAdapter>();
-            if (adapter is FileSystemStorageAdapter fsAdapter)
+            // Resolve through the keyed "inner" registration set up by
+            // DecorateStorageAdapterWithVersionWriting — otherwise the lookup
+            // recurses into the decorator and stack-overflows.
+            var inner = sp.GetKeyedService<IStorageAdapter>(InnerStorageAdapterKey)
+                        ?? sp.GetService<IStorageAdapter>();
+            if (inner is FileSystemStorageAdapter fsAdapter)
                 return new FileSystemVersionStore(fsAdapter.BaseDirectory);
             return new NoOpVersionQuery();
         });
+
+        DecorateStorageAdapterWithVersionWriting(services);
 
         services.AddMeshCatalog();
 

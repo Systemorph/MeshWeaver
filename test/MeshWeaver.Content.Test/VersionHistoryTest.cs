@@ -48,6 +48,27 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
+    /// <summary>
+    /// Polls <see cref="IVersionQuery.GetVersions"/> at a short interval and emits the
+    /// first observation that satisfies <paramref name="predicate"/>, then completes.
+    /// Treats <c>GetVersions</c> as a benchmark/snapshot stream and uses
+    /// <see cref="Observable.Where"/> to wait for the post-write settled state — the
+    /// raw call returns whatever's on disk at the moment of invocation and can
+    /// race the WriteVersion side of the just-completed save.
+    /// </summary>
+    private async Task<IList<MeshNodeVersion>> WaitForVersionsAsync(
+        string path, Func<IList<MeshNodeVersion>, bool> predicate)
+    {
+        var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
+        return await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => versionQuery.GetVersions(path).ToList())
+            .Where(predicate)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
+    }
+
     [Fact(Timeout = 20000)]
     public async Task VersionQuery_GetVersions_ReturnsHistory()
     {
@@ -65,12 +86,9 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var updated3 = updated2 with { Name = "V4" };
         await NodeFactory.UpdateNode(updated3);
 
-        // Act
-        var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
-        var versions = await versionQuery.GetVersions("test/mynode")
-            .ToList()
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        // Act — wait for at least one snapshot to land (writes are async via the
+        // version-writing storage decorator; polling Where() avoids racing them).
+        var versions = await WaitForVersionsAsync("test/mynode", v => v.Count >= 1);
 
         // Assert
         versions.Should().NotBeEmpty("node was created and updated 3 times");
@@ -84,14 +102,11 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var node = MeshNode.FromPath("test/snapshot") with { Name = "V1", State = MeshNodeState.Active, NodeType = "Markdown" };
         var created = await CreateNodeAsync(node);
 
-        // Get the version of the first save
+        // Get the version of the first save — wait for it to land
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
         var options = Mesh.JsonSerializerOptions;
 
-        var versionsAfterCreate = await versionQuery.GetVersions("test/snapshot")
-            .ToList()
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        var versionsAfterCreate = await WaitForVersionsAsync("test/snapshot", v => v.Count >= 1);
 
         // Update to V2
         var updated = created with { Name = "V2" };
@@ -120,11 +135,8 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
         var options = Mesh.JsonSerializerOptions;
 
-        // Capture version after v1 create
-        var versionsAfterV1 = await versionQuery.GetVersions("test/before")
-            .ToList()
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        // Capture version after v1 create — wait for snapshot to land
+        var versionsAfterV1 = await WaitForVersionsAsync("test/before", v => v.Count >= 1);
         var v1Version = versionsAfterV1.LastOrDefault();
         v1Version.Should().NotBeNull("there should be a version after create");
         Output.WriteLine($"After Create: versions = [{string.Join(", ", versionsAfterV1.Select(v => v.Version))}]");
@@ -135,11 +147,8 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Update to V3
         await NodeFactory.UpdateNode(created with { Name = "V3" });
 
-        // Capture all versions
-        var allVersions = await versionQuery.GetVersions("test/before")
-            .ToList()
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        // Capture all versions — wait for all three snapshots to land
+        var allVersions = await WaitForVersionsAsync("test/before", v => v.Count >= 3);
         Output.WriteLine($"After all updates: versions = [{string.Join(", ", allVersions.Select(v => v.Version))}]");
         foreach (var v in allVersions)
         {
@@ -187,12 +196,8 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.UpdateNode(created with { Name = "Satellite V2" });
         await NodeFactory.UpdateNode(created with { Name = "Satellite V3" });
 
-        // Act
-        var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
-        var versions = await versionQuery.GetVersions("test/satellite")
-            .ToList()
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        // Act — wait for the satellite's snapshot to land
+        var versions = await WaitForVersionsAsync("test/satellite", v => v.Count >= 1);
 
         // Assert - satellite content should now be included in version history
         versions.Should().NotBeEmpty("satellite content nodes should now have version history");
@@ -208,12 +213,9 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
         var options = Mesh.JsonSerializerOptions;
 
-        // Capture the original version
+        // Capture the original version — wait for snapshot to land
         var nodePath = $"{TestPartition}/rollback";
-        var versionsAfterCreate = await versionQuery.GetVersions(nodePath)
-            .ToList()
-            .FirstAsync()
-            .ToTask(TestContext.Current.CancellationToken);
+        var versionsAfterCreate = await WaitForVersionsAsync(nodePath, v => v.Count >= 1);
         var originalVersion = versionsAfterCreate.LastOrDefault();
         originalVersion.Should().NotBeNull("there should be a version after create");
 
