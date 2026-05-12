@@ -377,12 +377,22 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
                 .SelectMany(walkBase => WalkAdapter(walkBase, effectiveScope))
                 .Where(path => !string.IsNullOrEmpty(path))
                 .Where(path => emittedPaths.Add(path))
-                .SelectMany(path => persistence.Read(path, options).Take(1))
+                .SelectMany(path =>
+                    persistence.Read(path, options)
+                        .Take(1)
+                        .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
                 .Where(node => node != null)
                 .Select(node => node!)
                 .Where(node => _evaluator.Matches(node, parsedQuery)
                     && !IsExcludedByContext(node, context)
-                    && !IsExcludedByIsMain(node, parsedQuery));
+                    && !IsExcludedByIsMain(node, parsedQuery))
+                .Catch<MeshNode, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[Engine.MatchScope] pipeline threw query=[{Query}] basePath={BasePath}",
+                        string.Join(" | ", request.EffectiveQueries), basePath);
+                    return Observable.Empty<MeshNode>();
+                });
 
             await foreach (var node in matchedScopeNodes.ToAsyncEnumerableSequence(ct))
                 yield return node;
@@ -426,20 +436,36 @@ internal class MeshQueryEngine : IMeshQueryProvider, IMeshQueryCore
     }
 
     private IObservable<string> WalkLevel(string? parent, bool recursive)
-        => persistence.ListChildPaths(parent)
+        => Observable.Defer(() =>
+            {
+                try
+                {
+                    return persistence.ListChildPaths(parent);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex,
+                        "[Engine.WalkLevel] ListChildPaths threw parent={Parent}", parent);
+                    return Observable.Empty<(IEnumerable<string>, IEnumerable<string>)>();
+                }
+            })
             .Take(1)
             .SelectMany(level =>
             {
-                var nodePaths = level.NodePaths.ToObservable();
+                var nodePaths = (level.Item1 ?? Enumerable.Empty<string>()).ToObservable();
                 if (!recursive)
                     return nodePaths;
                 var nodesAndDeeper = nodePaths.SelectMany(p =>
                     Observable.Return(p).Concat(WalkLevel(p, recursive: true)));
-                var dirs = level.DirectoryPaths.ToObservable()
+                var dirs = (level.Item2 ?? Enumerable.Empty<string>()).ToObservable()
                     .SelectMany(d => WalkLevel(d, recursive: true));
                 return nodesAndDeeper.Concat(dirs);
             })
-            .Catch<string, Exception>(_ => Observable.Empty<string>());
+            .Catch<string, Exception>(ex =>
+            {
+                logger?.LogWarning(ex, "[Engine.WalkLevel] parent={Parent} failed", parent);
+                return Observable.Empty<string>();
+            });
 
     private static bool StaticNodeMatchesScope(MeshNode node, string basePath, QueryScope scope)
     {
