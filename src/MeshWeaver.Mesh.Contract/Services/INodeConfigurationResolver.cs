@@ -10,8 +10,10 @@ namespace MeshWeaver.Mesh.Services;
 public interface INodeConfigurationResolver
 {
     /// <summary>
-    /// Enriches a MeshNode with its NodeType's HubConfiguration.
-    /// Triggers compilation if needed.
+    /// Enriches a MeshNode with its NodeType's <see cref="MeshNode.HubConfiguration"/> +
+    /// <see cref="MeshNode.AssemblyLocation"/>. Triggers compilation if needed.
+    /// Returns a cold observable that emits exactly one enriched node — callers
+    /// Subscribe on the hub dispatcher; no <c>await</c>, no <c>.ToTask()</c>.
     /// </summary>
-    Task<MeshNode> ResolveConfigurationAsync(MeshNode node, CancellationToken ct = default);
+    IObservable<MeshNode> ResolveConfiguration(MeshNode node);
 }
