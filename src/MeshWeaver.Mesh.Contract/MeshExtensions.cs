@@ -782,24 +782,31 @@ public static class MeshExtensions
         if (!recursive)
         {
             // Non-recursive: only delete the root if it has no children. The
-            // children-scope query with `select:path` is the cheapest way to
-            // answer "are there children" — never loads Content.
+            // children-scope query with `select:path` projects each match to a
+            // dict — use `ObserveQuery<object>` so the projected items survive
+            // the type filter (a `MeshNode` cast would drop every dict).
             return meshService
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{path} scope:children select:path"))
+                .ObserveQuery<object>(MeshQueryRequest.FromQuery($"namespace:{path} scope:children select:path"))
                 .Take(1)
                 .Select(change => (RootExists: true, empty.Add(path), change.Items.Count > 0))
                 .Timeout(timeout);
         }
 
-        // Recursive: enumerate strict descendants via `scope:descendants`. Root
-        // is added explicitly so it is deleted last (after its subtree).
+        // Recursive: enumerate strict descendants via `scope:descendants`.
+        // `select:path` projects each result to a dict (`{ "path": "..." }`),
+        // so ObserveQuery<object> is required — `ObserveQuery<MeshNode>` would
+        // silently drop every dict at the type filter. Root is added
+        // explicitly so it is deleted last (after its subtree).
         return meshService
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{path} scope:descendants select:path"))
+            .ObserveQuery<object>(MeshQueryRequest.FromQuery($"namespace:{path} scope:descendants select:path"))
             .Take(1)
             .Select(change =>
             {
                 var set = empty
-                    .Union(change.Items.Select(n => n.Path).Where(p => !string.IsNullOrEmpty(p)))
+                    .Union(change.Items
+                        .OfType<IDictionary<string, object?>>()
+                        .Select(d => d.TryGetValue("path", out var v) ? v as string : null)
+                        .Where(p => !string.IsNullOrEmpty(p))!)
                     .Add(path);
                 logger.LogDebug("[DeleteNode] collected path={Path} total={Count}", path, set.Count);
                 return (RootExists: true, set, false);

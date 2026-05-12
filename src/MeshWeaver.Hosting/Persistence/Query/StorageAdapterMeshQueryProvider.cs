@@ -419,28 +419,44 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             yield return node;
 
         // Children / Descendants / Hierarchy / Subtree / AncestorsAndSelf scopes —
-        // walk via the adapter. AncestorsAndSelf walks only the DIRECT children of
-        // each ancestor (one level), which surfaces "sibling agents" the test
-        // expects without dragging in unrelated subtree branches.
+        // walk via the adapter. Each scope expands to a list of (root, scope)
+        // pairs the walker iterates over.
+        //  AncestorsAndSelf → Children of each ancestor (one level each).
+        //  Hierarchy       → Subtree from self + Children of each ancestor
+        //                    (siblings of self and uncles, but not entire
+        //                    sibling subtrees — that's the "hierarchy" semantic).
+        //  Children / Descendants / Subtree → just basePath, with the scope as-is.
         if (effectiveScope is QueryScope.Children
             or QueryScope.Descendants
             or QueryScope.Hierarchy
             or QueryScope.Subtree
             or QueryScope.AncestorsAndSelf)
         {
-            IEnumerable<string> walkRoots = effectiveScope == QueryScope.AncestorsAndSelf
-                ? GetPathsForScope(basePath, QueryScope.AncestorsAndSelf)
-                : new[] { basePath };
-            var walkScope = effectiveScope == QueryScope.AncestorsAndSelf
-                ? QueryScope.Children
-                : effectiveScope;
+            var walkPairs = new List<(string Root, QueryScope Scope)>();
+            if (effectiveScope == QueryScope.AncestorsAndSelf)
+            {
+                foreach (var ancestor in GetPathsForScope(basePath, QueryScope.AncestorsAndSelf))
+                    walkPairs.Add((ancestor, QueryScope.Children));
+            }
+            else if (effectiveScope == QueryScope.Hierarchy)
+            {
+                // descendants of self
+                walkPairs.Add((basePath, QueryScope.Subtree));
+                // children of each strict ancestor (skip self — already covered)
+                foreach (var ancestor in GetPathsForScope(basePath, QueryScope.Ancestors))
+                    walkPairs.Add((ancestor, QueryScope.Children));
+            }
+            else
+            {
+                walkPairs.Add((basePath, effectiveScope));
+            }
 
             // Compose pure-observable walk + read + match — no inner await.
             // The IAsyncEnumerable boundary at the top of QueryAsync still
             // needs to iterate; Subscribe-collect into a channel for that.
-            var matchedScopeNodes = walkRoots
+            var matchedScopeNodes = walkPairs
                 .ToObservable()
-                .SelectMany(walkBase => WalkAdapter(walkBase, walkScope))
+                .SelectMany(pair => WalkAdapter(pair.Root, pair.Scope))
                 .Where(path => !string.IsNullOrEmpty(path))
                 .Where(path => emittedPaths.Add(path))
                 .SelectMany(path =>
@@ -642,14 +658,18 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // returns fully-populated MeshNodes; here we just score them against
         // the prefix.
         //
-        // Empty basePath: partition fan-out is RoutingMeshQueryProvider's job,
-        // so this provider has nothing to contribute at the mesh root.
-        if (string.IsNullOrEmpty(normalizedPath))
-            yield break;
+        // Empty basePath: walk this adapter's full subtree from the root —
+        // the per-adapter is its own boss for "find anything matching prefix"
+        // inside its data. In routed setups, RoutingMeshQueryProvider has
+        // already narrowed basePath to a partition key before calling here,
+        // so the per-adapter never sees a truly empty basePath in routed mode.
+        var queryString = string.IsNullOrEmpty(normalizedPath)
+            ? "scope:subtree"
+            : $"path:{normalizedPath} scope:subtree";
 
         var queryRequest = new MeshQueryRequest
         {
-            Query = $"path:{normalizedPath} scope:subtree",
+            Query = queryString,
             Context = context,
             ContextPath = contextPath,
             UserId = userId,
@@ -932,7 +952,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             if (!string.IsNullOrEmpty(path))
                                 currentItems[path] = item;
                         }
-
                         // Wire up the LIVE change pipeline before emitting Initial so that
                         // any node mutation triggered by a subscriber reacting to Initial
                         // is guaranteed to be captured by the changeBuffer.
