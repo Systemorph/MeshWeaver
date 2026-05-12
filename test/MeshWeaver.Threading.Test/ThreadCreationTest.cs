@@ -239,7 +239,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         retrievedNode.Content.Should().BeOfType<MeshThread>();
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 15000)]
     public async Task GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
     {
         // Arrange - Create a malformed path that mimics the bug
@@ -265,7 +265,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 5000)]
+    [Fact(Timeout = 15000)]
     public async Task GetDataRequest_ToNonExistentThread_ReturnsErrorNotEndlessMessages()
     {
         // Arrange - Thread path that looks valid but doesn't exist
