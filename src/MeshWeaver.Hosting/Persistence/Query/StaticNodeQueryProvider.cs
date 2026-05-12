@@ -271,7 +271,21 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))
             return items;
 
-        if (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path))
+        // Emit static nodes when:
+        //  - a field filter is set (nodeType:, name:, etc.),
+        //  - a path is set,
+        //  - or an explicit scope walks the static set (Children/Descendants/
+        //    Subtree/Hierarchy/AncestorsAndSelf). The last branch is what makes
+        //    a bare "scope:descendants" against an empty namespace return the
+        //    full static catalog instead of nothing.
+        var scopeWalks = parsed.Scope is QueryScope.Children
+            or QueryScope.Descendants
+            or QueryScope.Subtree
+            or QueryScope.Hierarchy
+            or QueryScope.AncestorsAndSelf;
+        var hasQualifier = HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path) || scopeWalks;
+
+        if (hasQualifier)
         {
             foreach (var node in _providerNodes)
             {
@@ -284,7 +298,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         }
 
         var isSearch = string.Equals(context, "search", StringComparison.OrdinalIgnoreCase);
-        if (!isSearch && (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path)))
+        if (!isSearch && hasQualifier)
         {
             foreach (var node in _configNodes)
             {
