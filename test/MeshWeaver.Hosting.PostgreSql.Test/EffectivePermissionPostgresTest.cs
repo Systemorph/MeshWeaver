@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using Memex.Portal.Shared;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -57,10 +58,31 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
             .AddOrganizationType();
     }
 
+    /// <summary>
+    /// Seeds the runtime Admin grant and waits for it to be visible in the
+    /// workspace before completing. The post-create
+    /// <see cref="MeshWeaver.Data.IWorkspace.GetMeshNodeStream"/> probe
+    /// with <c>Where(n => n != null).Take(1)</c> is the deterministic
+    /// "wait until visible" primitive recommended by
+    /// <c>Doc/Architecture/CqrsAndContentAccess.md</c>; without it the
+    /// validator's per-scope synced query races the workspace update from
+    /// the pg_notify pipeline and the Admin grant is invisible on the
+    /// initial subscription.
+    /// </summary>
     protected override async Task SetupAccessRightsAsync()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNode(AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null)).FirstAsync().ToTask(TestTimeout);
+        var adminGrant = AssignmentNodeFactory.UserRole(TestUsers.Admin.ObjectId, "Admin", null);
+        var workspace = Mesh.GetWorkspace();
+
+        await meshService.CreateNode(adminGrant)
+            .SelectMany(_ => workspace
+                .GetMeshNodeStream(adminGrant.Path)
+                .Where(n => n != null)
+                .Take(1))
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync()
+            .ToTask(TestTimeout);
     }
 
     [Fact(Timeout = 120000)]
