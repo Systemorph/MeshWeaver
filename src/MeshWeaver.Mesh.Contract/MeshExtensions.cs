@@ -705,19 +705,30 @@ public static class MeshExtensions
                     var isTimeout = ex is TimeoutException;
                     var partial = ex.Data["DeletedPaths"] as IReadOnlyList<string>
                         ?? Array.Empty<string>();
+                    // "Node not found" pulled from the inner DeliveryFailureException —
+                    // when the subscribe call hits a non-existent owner address the
+                    // sync stream surfaces "No node found at '<path>'". Normalise to
+                    // a NodeNotFound rejection with a "not found" phrase callers can
+                    // match (Should().WithMessage("*not found*")).
+                    var isNotFound = ex.Message.IndexOf("No node found", StringComparison.OrdinalIgnoreCase) >= 0
+                        || ex.Message.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0;
                     logger.LogError(ex, "[DeleteNode] {Kind} path={Path} partial-deleted={Partial}",
-                        isTimeout ? "timeout" : "unexpected", path, partial.Count);
+                        isTimeout ? "timeout" : (isNotFound ? "not-found" : "unexpected"), path, partial.Count);
                     var failMsgs = collectedMessages.ToImmutable()
                         .Add(new LogMessage(ex.Message, LogLevel.Error));
                     PostFailed(
                         isTimeout
                             ? $"Delete of '{path}' exceeded {opts.Timeout.TotalSeconds:0}s timeout"
-                            : $"Unexpected error: {ex.Message}",
+                            : (isNotFound
+                                ? $"Node not found at path '{path}'"
+                                : $"Unexpected error: {ex.Message}"),
                         isTimeout
                             ? NodeDeletionRejectionReason.Unknown
-                            : (ex is InvalidOperationException
-                                ? NodeDeletionRejectionReason.ValidationFailed
-                                : NodeDeletionRejectionReason.Unknown),
+                            : (isNotFound
+                                ? NodeDeletionRejectionReason.NodeNotFound
+                                : (ex is InvalidOperationException
+                                    ? NodeDeletionRejectionReason.ValidationFailed
+                                    : NodeDeletionRejectionReason.Unknown)),
                         failMsgs,
                         partial.ToImmutableList());
                 });
