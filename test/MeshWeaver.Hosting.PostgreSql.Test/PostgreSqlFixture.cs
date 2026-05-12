@@ -122,5 +122,29 @@ public class PostgreSqlFixture : IAsyncLifetime
     }
 }
 
+/// <summary>
+/// Isolated PostgreSQL container reserved for tests that observe the
+/// change feed (pg_notify LISTEN/NOTIFY pipeline). The default shared
+/// fixture is used by ~25 test classes; some of those write data to
+/// partition schemas (acme/futur/contoso/…) and trigger pg_notify events
+/// on the same DataSource a LISTEN-based test is subscribed to. The
+/// listener then receives changes from those neighbour tests and
+/// ObserveQuery's "scope" filter — which guards on namespace prefix —
+/// is challenged in ways the test was not designed for (e.g. extra
+/// emissions on rapid cross-namespace writes). Splitting these tests
+/// into their own collection gives them a clean container and a
+/// LISTEN session that only ever sees their own writes.
+/// </summary>
+public class IsolatedPostgreSqlFixture : PostgreSqlFixture;
+
+/// <summary>
+/// Dedicated collection definition for LISTEN/NOTIFY-sensitive tests so
+/// they get an <see cref="IsolatedPostgreSqlFixture"/> separate from the
+/// shared one used by write-heavy partition tests. See
+/// <see cref="IsolatedPostgreSqlFixture"/> for motivation.
+/// </summary>
+[CollectionDefinition("PostgreSqlIsolated")]
+public class IsolatedPostgreSqlCollection : ICollectionFixture<IsolatedPostgreSqlFixture>;
+
 [CollectionDefinition("PostgreSql")]
 public class PostgreSqlCollection : ICollectionFixture<PostgreSqlFixture>;

@@ -17,16 +17,16 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// through the full PostgreSQL LISTEN/NOTIFY pipeline:
 /// DB trigger → pg_notify → PostgreSqlChangeListener → DataChangeNotifier → ObserveQuery
 /// </summary>
-[Collection("PostgreSql")]
+[Collection("PostgreSqlIsolated")]
 public class ObserveQueryTests : IAsyncLifetime
 {
-    private readonly PostgreSqlFixture _fixture;
+    private readonly IsolatedPostgreSqlFixture _fixture;
     private readonly JsonSerializerOptions _options = new();
     private DataChangeNotifier _notifier = null!;
     private PostgreSqlChangeListener _listener = null!;
     private PostgreSqlMeshQuery _query = null!;
 
-    public ObserveQueryTests(PostgreSqlFixture fixture)
+    public ObserveQueryTests(IsolatedPostgreSqlFixture fixture)
     {
         _fixture = fixture;
     }
