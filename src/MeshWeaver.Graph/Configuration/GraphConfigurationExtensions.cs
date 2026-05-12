@@ -148,6 +148,11 @@ public static class GraphConfigurationExtensions
                     services.AddSingleton<INodeTypeService, NodeTypeService>();
                     services.AddSingleton<INodeConfigurationResolver, NodeConfigurationResolver>();
                     services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
+                    // Shared per-NodeType MeshNode streams (Replay(1).RefCount + 1h
+                    // sliding eviction). Consumers that previously called
+                    // workspace.GetMeshNodeStream(nodeTypePath) directly route
+                    // through this cache so subscribers share one upstream.
+                    services.AddSingleton<NodeTypeStreamCache>();
                     // Replay-cached PartitionDefinition lookups, used by
                     // CodeNodeType.HandleExecuteScript to resolve
                     // PartitionDefinition.DefaultActivityParentPath without
