@@ -286,10 +286,18 @@ internal sealed class MeshCatalog(
             // Path-only existence probe via the query engine — `select:path` keeps
             // it light, never reads stale `Content`. Persistence.GetChildren was
             // deleted in the persistence-cull (2026-05-11).
+            // Per-probe timeout: ObserveQuery's MergeProviderObservables waits for
+            // every provider's Initial frame before firing the merged Initial, so
+            // a single stuck provider hangs the whole path-resolution chain. Cap
+            // each probe so we fall through to the next (or to the catalog null
+            // result) instead of blocking the caller indefinitely.
             probes.Add(meshQuery
                 .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{testPath} scope:children select:path"))
                 .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<QueryResultChange<MeshNode>, TimeoutException>(_ =>
+                    Observable.Return(new QueryResultChange<MeshNode> { Items = [] }))
                 .Select(change =>
                 {
                     if (change.Items.Count == 0)
@@ -307,11 +315,23 @@ internal sealed class MeshCatalog(
 
     private IObservable<AddressResolution?> ResolveFromConfigNode(MeshNode matchedNode, string[] segments)
     {
+        // Pre-compute the config-only fallback resolution: matchedNode + remaining
+        // segments as Remainder. Used both as the SelectMany target when persistence
+        // returns no deeper match, and as the Timeout fallback below.
+        AddressResolution? configResolution() =>
+            new AddressResolution(matchedNode.Path,
+                segments.Length > matchedNode.Segments.Count
+                    ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
+                    : null);
+
         // When path goes deeper than the config node, check persistence for a deeper match
         if (segments.Length > matchedNode.Segments.Count &&
             matchedNode.Segments.Count > 0 &&
             segments[0].Equals(matchedNode.Segments[0], StringComparison.OrdinalIgnoreCase))
         {
+            // Persistence walk is best-effort: if no deeper match exists (or the chain
+            // stalls — see WalkSegmentsForVirtualNamespace), fall back to the config
+            // resolution rather than blocking the live consumer.
             return FindBestPersistenceMatch(segments)
                 .Select(match =>
                 {
@@ -322,17 +342,19 @@ internal sealed class MeshCatalog(
                             : null;
                         return new AddressResolution(match.Node.Path, persistenceRemainder);
                     }
-                    var remainder = segments.Length > matchedNode.Segments.Count
-                        ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
-                        : null;
-                    return new AddressResolution(matchedNode.Path, remainder);
+                    return configResolution();
+                })
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<AddressResolution?, TimeoutException>(_ =>
+                {
+                    logger?.LogWarning(
+                        "[RESOLVE] Persistence walk timed out for {Path} — falling back to config match {ConfigPath}",
+                        string.Join("/", segments), matchedNode.Path);
+                    return Observable.Return(configResolution());
                 });
         }
 
-        var simpleRemainder = segments.Length > matchedNode.Segments.Count
-            ? string.Join("/", segments.Skip(matchedNode.Segments.Count))
-            : null;
-        return Observable.Return<AddressResolution?>(new AddressResolution(matchedNode.Path, simpleRemainder));
+        return Observable.Return(configResolution());
     }
 
     private static int ScoreMatch(MeshNode node, string[] pathSegments)
