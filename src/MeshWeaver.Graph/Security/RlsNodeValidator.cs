@@ -15,17 +15,14 @@ public class RlsNodeValidator : INodeValidator
     private readonly ISecurityService _securityService;
     private readonly ILogger<RlsNodeValidator> _logger;
     private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
-    private readonly INodeTypeService? _nodeTypeService;
 
     public RlsNodeValidator(
         ISecurityService securityService,
         ILogger<RlsNodeValidator> logger,
-        IEnumerable<INodeTypeAccessRule> accessRules,
-        INodeTypeService? nodeTypeService = null)
+        IEnumerable<INodeTypeAccessRule> accessRules)
     {
         _securityService = securityService;
         _logger = logger;
-        _nodeTypeService = nodeTypeService;
         _accessRules = accessRules
             .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
@@ -102,23 +99,11 @@ public class RlsNodeValidator : INodeValidator
         if (string.IsNullOrEmpty(context.Node.NodeType))
             return Observable.Return<NodeValidationResult?>(null);
 
-        var hubRule = _nodeTypeService?.GetAccessRule(context.Node.NodeType);
-        if (hubRule == null
-            || (hubRule.SupportedOperations.Count != 0
-                && !hubRule.SupportedOperations.Contains(context.Operation)))
-            return Observable.Return<NodeValidationResult?>(null);
-
-        return hubRule.HasAccess(context, userId).Select<bool, NodeValidationResult?>(hasAccess =>
-        {
-            if (hasAccess)
-            {
-                _logger.LogTrace(
-                    "RLS: Hub-config rule granted {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
-                    userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
-                return NodeValidationResult.Valid();
-            }
-            return null; // fall through to next rule
-        });
+        // _nodeTypeService.GetAccessRule was always returning null
+        // (the underlying _accessRules dict in NodeTypeService was never
+        // populated). Removed in Stage 4 of the NodeTypeService deletion —
+        // hub-rule path falls through to the next rule in the chain.
+        return Observable.Return<NodeValidationResult?>(null);
     }
 
     private IObservable<NodeValidationResult?> CheckCustomRule(NodeValidationContext context, string? userId)
