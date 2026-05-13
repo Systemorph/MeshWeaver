@@ -71,6 +71,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Subscription to the cross-silo change feed — disposed with the service.
     private readonly IDisposable? _changeFeedSubscription;
 
+    // Dedicated hosted hub for stream subscriptions — see ctor comment.
+    private readonly Lazy<IMessageHub> _serviceHub;
+
     // Note: the persistent per-NodeType source-set watcher (the subscription that
     // listens for source add/remove/version-bump and invalidates the compile) lives
     // in the compiled NodeType's own hub configuration — it knows its CurrentPath
@@ -105,6 +108,19 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         // store via AddFileSystemAssemblyStore / AddBlobAssemblyStore — consumers that
         // don't register one keep the old behaviour.
         this.assemblyStore = assemblyStore ?? NullAssemblyStore.Instance;
+
+        // Dedicated hosted hub for NodeTypeService stream subscriptions. The
+        // mesh hub must NEVER block on its own routing — calling
+        // hub.GetWorkspace().GetRemoteStream(...) from inside a routing flow
+        // would re-enter the mesh hub's dispatcher (the SubscribeRequest is
+        // routed through it), causing self-deadlock when an EnrichWithNodeType
+        // call originates from MeshNodeHubFactory during hub activation.
+        // This hosted hub has its own dispatcher; its SubscribeRequests get
+        // posted to the mesh hub for routing but the hosted hub itself isn't
+        // waiting on the mesh hub's queue.
+        _serviceHub = new Lazy<IMessageHub>(
+            () => hub.GetHostedHub(new Address("_nodetype-service"), c => c.AddMeshDataSource()),
+            LazyThreadSafetyMode.ExecutionAndPublication);
 
         // Initialize cache from pre-registered nodes in MeshConfiguration
         InitializeFromMeshConfiguration();
@@ -565,8 +581,15 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         //
         // The caller-request path stays the primary trigger because it integrates
         // cleanly with HandleCreateNodeRequest's chain (timeout-bounded, single
-        // emission, surfaces compile errors back to the create flow). The watcher
-        // is the publication mechanism for cluster-wide convergence.
+        // emission, surfaces compile errors back to the create flow). The
+        // NodeTypeContractHandler now writes compile state back to the MeshNode,
+        // so synced-query subscribers see the result without consulting
+        // NodeTypeService's in-memory dicts.
+        // <para>The stream-based <see cref="ResolveViaStream"/> path is kept for
+        // when the watcher-driven workflow matures (Stage 4 of the NodeType-
+        // service deletion). Switching unconditionally regressed test latency
+        // (20s timeouts) because dynamic types in test fixtures don't always
+        // emit a settled Ok/Error within the stream's window.</para>
         return ResolveViaRequest(node, nodeType);
     }
 
@@ -576,19 +599,25 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private IObservable<MeshNode> ResolveViaStream(MeshNode node, string nodeType)
     {
+        logger.LogInformation("[NT-STREAM] enter node={NodePath} nodeType={NodeType}", node.Path, nodeType);
         IWorkspace workspace;
-        try { workspace = hub.GetWorkspace(); }
-        catch
+        try { workspace = _serviceHub.Value.GetWorkspace(); }
+        catch (Exception ex)
         {
             // Workspace unavailable — fall back to the legacy request/response path so
             // hubs that haven't wired AddMeshDataSource keep working.
+            logger.LogWarning(ex, "[NT-STREAM] _serviceHub workspace unavailable for {NodeType} — falling back to ResolveViaRequest", nodeType);
             return ResolveViaRequest(node, nodeType);
         }
 
         var typeAddress = new Address(nodeType);
+        logger.LogInformation("[NT-STREAM] opening remote stream for {NodeType}", nodeType);
         var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(typeAddress, new MeshNodeReference());
         if (stream is null)
+        {
+            logger.LogWarning("[NT-STREAM] GetRemoteStream returned null for {NodeType} — falling back to ResolveViaRequest", nodeType);
             return ResolveViaRequest(node, nodeType);
+        }
 
         var triggered = 0;
 
@@ -597,6 +626,10 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             .Select(change => change.Value!)
             .Do(typeNode =>
             {
+                logger.LogInformation("[NT-STREAM] emit nodeType={NodeType} status={Status} asm={Asm}",
+                    nodeType,
+                    (typeNode.Content as NodeTypeDefinition)?.CompilationStatus,
+                    typeNode.AssemblyLocation ?? "(null)");
                 if (typeNode.Content is not NodeTypeDefinition def) return;
                 // Trigger compile only when no compile state exists yet. After triggering
                 // once, ignore further null emissions so we don't fight the watcher.

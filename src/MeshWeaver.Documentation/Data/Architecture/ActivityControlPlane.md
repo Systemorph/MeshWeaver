@@ -7,6 +7,20 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The default pattern: drive activities through their content
 
+> ## 🚨 Absolute rule
+>
+> **Every long-running operation runs on an Activity hub.**
+> Not on the mesh hub, not on the per-NodeType hub, not on a singleton service's
+> captured `IMessageHub`. The mesh hub must stay responsive — if it spends
+> seconds running Roslyn, scoring queries, or waiting for an HTTP call, it
+> blocks routing for every other delivery in the silo.
+>
+> The activity hub is the **execution sandbox**: created by the owner when it
+> needs to launch work, holding the work's state in its own MeshNode
+> (`ActivityLog`), and writing back to the owner via the synchronization
+> protocol when done. The owner stays responsive throughout — it watches its
+> own MeshNode for updates and otherwise serves traffic.
+
 In MeshWeaver, **every operation on an activity is a patch on the activity's content**, not a separate message type. The owning hub watches its own `MeshNodeReference` stream and reacts to property changes. This is the canonical pattern for any node type that has a state machine — Activity, but also any custom NodeType you build.
 
 If you find yourself reaching for `Cancel<ThingHappening>Request`, `Pause<ThingHappening>Request`, `Retry<ThingHappening>Request`, or any verb-based message type, **stop and use a property instead**.
