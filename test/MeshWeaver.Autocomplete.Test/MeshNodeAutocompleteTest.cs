@@ -257,9 +257,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task FilterByCreatableType_ReturnsOnlyMatchingNodes()
     {
-        // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
+        var ct = TestContext.Current.CancellationToken;
 
         // First, find a node type that exists
         var allSuggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 50).ToListAsync();
@@ -278,7 +276,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
         // Get creatable types for the first data node
         var firstDataNode = dataSuggestions.First();
-        var creatableTypes = await nodeTypeService!.GetCreatableTypesAsync(firstDataNode.Path).ToListAsync();
+        var creatableTypes = await GetCreatableTypesAt(firstDataNode.Path, ct);
 
         Output.WriteLine($"\nCreatable types at '{firstDataNode.Path}': {creatableTypes.Count}");
         foreach (var t in creatableTypes.Take(5))
@@ -298,7 +296,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
         foreach (var suggestion in dataSuggestions.Take(10))
         {
-            var types = await nodeTypeService.GetCreatableTypesAsync(suggestion.Path).ToListAsync();
+            var types = await GetCreatableTypesAt(suggestion.Path, ct);
             if (types.Any(t => t.NodeTypePath.Equals(targetType, StringComparison.OrdinalIgnoreCase)))
             {
                 filteredSuggestions.Add(suggestion);
@@ -322,17 +320,16 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     public async Task CanCreateTypeAtPath_ReturnsTrueForValidType()
     {
         // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
+        var ct = TestContext.Current.CancellationToken;
 
         // Get a node that has creatable types
         var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 20).ToListAsync();
         QuerySuggestion? nodeWithTypes = null;
-        List<CreatableTypeInfo> nodeCreatableTypes = new();
+        IReadOnlyList<CreatableTypeInfo> nodeCreatableTypes = [];
 
         foreach (var suggestion in suggestions)
         {
-            var types = await nodeTypeService!.GetCreatableTypesAsync(suggestion.Path).ToListAsync();
+            var types = await GetCreatableTypesAt(suggestion.Path, ct);
             if (types.Count > 0)
             {
                 nodeWithTypes = suggestion;
@@ -352,7 +349,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
         // Act - check if the node can create one of its types
         var targetType = nodeCreatableTypes.First().NodeTypePath;
-        var canCreate = await CanCreateTypeAtPathAsync(nodeTypeService!, nodeWithTypes.Path, targetType);
+        var canCreate = await CanCreateTypeAtPathAsync(nodeWithTypes.Path, targetType, ct);
 
         // Assert
         canCreate.Should().BeTrue($"Node '{nodeWithTypes.Path}' should be able to create type '{targetType}'");
@@ -362,9 +359,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     public async Task CanCreateTypeAtPath_ReturnsFalseForInvalidType()
     {
         // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
-
+        var ct = TestContext.Current.CancellationToken;
         var suggestions = await MeshQuery.AutocompleteAsync("", "", AutocompleteMode.RelevanceFirst, 10).ToListAsync();
         var firstSuggestion = suggestions.FirstOrDefault();
 
@@ -375,29 +370,21 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         }
 
         // Act - check for a type that definitely doesn't exist
-        var canCreate = await CanCreateTypeAtPathAsync(nodeTypeService!, firstSuggestion.Path, "NonExistent/FakeType/ThatDoesNotExist");
+        var canCreate = await CanCreateTypeAtPathAsync(firstSuggestion.Path, "NonExistent/FakeType/ThatDoesNotExist", ct);
 
         // Assert
         canCreate.Should().BeFalse("Node should not be able to create a non-existent type");
     }
 
     /// <summary>
-    /// Helper method to check if a type can be created at a path.
-    /// This mirrors the logic in MeshNodeAutocomplete.
+    /// Mirror of <c>MeshNodeAutocomplete</c>'s reactive can-create check
+    /// against <see cref="ICreatableTypesProvider"/>.
     /// </summary>
-    private static async Task<bool> CanCreateTypeAtPathAsync(
-        INodeTypeService nodeTypeService,
-        string nodePath,
-        string nodeTypePath)
+    private async Task<bool> CanCreateTypeAtPathAsync(
+        string nodePath, string nodeTypePath, CancellationToken ct)
     {
-        await foreach (var creatableType in nodeTypeService.GetCreatableTypesAsync(nodePath))
-        {
-            if (creatableType.NodeTypePath.Equals(nodeTypePath, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-        return false;
+        var types = await GetCreatableTypesAt(nodePath, ct);
+        return types.Any(t => t.NodeTypePath.Equals(nodeTypePath, StringComparison.OrdinalIgnoreCase));
     }
 
     #endregion
@@ -411,9 +398,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         // 1. User selects a type to create
         // 2. Namespace autocomplete filters to nodes that support that type
 
-        // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
+        var ct = TestContext.Current.CancellationToken;
 
         // Get all autocomplete suggestions
         var allSuggestions = await MeshQuery.AutocompleteAsync(
@@ -431,7 +416,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
         foreach (var suggestion in allSuggestions)
         {
-            var types = await nodeTypeService!.GetCreatableTypesAsync(suggestion.Path).ToListAsync();
+            var types = await GetCreatableTypesAt(suggestion.Path, ct);
             foreach (var type in types)
             {
                 if (targetType == null)
@@ -463,7 +448,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         var filteredSuggestions = new List<QuerySuggestion>();
         foreach (var suggestion in allSuggestions)
         {
-            if (await CanCreateTypeAtPathAsync(nodeTypeService!, suggestion.Path, targetType))
+            if (await CanCreateTypeAtPathAsync(suggestion.Path, targetType, ct))
             {
                 filteredSuggestions.Add(suggestion);
             }
