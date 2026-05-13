@@ -41,3 +41,27 @@ public record RunTestsRequest : IRequest<RunTestsResponse>;
 /// could not run.</param>
 /// <param name="Error">Failure reason when no activities were dispatched.</param>
 public record RunTestsResponse(IReadOnlyList<string> ActivityPaths, string? Error = null);
+
+/// <summary>
+/// Posted to a compile-activity hub to run the Roslyn compile for the NodeType
+/// at <see cref="ParentNodeTypePath"/>. The activity hub is the **execution
+/// sandbox**: it owns the long-running Roslyn invocation while the per-NodeType
+/// hub and the mesh hub stay responsive. The handler reads the parent's
+/// NodeTypeDefinition, runs <c>compilationService.CompileAndGetConfigurations</c>,
+/// updates the activity's <c>ActivityLog</c> with progress, and finally writes
+/// the terminal compile state back to the parent's MeshNode.
+///
+/// <para>Activity Control Plane doctrine — see
+/// <c>Doc/Architecture/ActivityControlPlane.md</c>: "every long-running
+/// operation runs on an Activity hub."</para>
+/// </summary>
+/// <param name="ParentNodeTypePath">Path of the parent NodeType MeshNode whose
+/// compile state this activity will update on completion.</param>
+public record RunCompileRequest(string ParentNodeTypePath) : IRequest<RunCompileResponse>;
+
+/// <summary>
+/// Result of <see cref="RunCompileRequest"/>. Reports whether the compile
+/// was dispatched (the activity is now running); subscribers observe the
+/// activity's <c>ActivityLog</c> for the final outcome.
+/// </summary>
+public record RunCompileResponse(bool Dispatched, string? Error = null);

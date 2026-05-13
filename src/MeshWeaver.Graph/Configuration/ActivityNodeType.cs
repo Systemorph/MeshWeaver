@@ -46,5 +46,10 @@ public static class ActivityNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<ActivityLog>())
             .AddKernelSubHubHandlers()
+            // Per ActivityControlPlane doctrine: every long-running operation
+            // runs on an Activity hub. Compile activities accept the
+            // RunCompileRequest and own the Roslyn invocation here, leaving the
+            // mesh hub and the parent NodeType hub responsive.
+            .WithHandler<RunCompileRequest>(NodeTypeCompileActivityHandler.Handle)
     };
 }
