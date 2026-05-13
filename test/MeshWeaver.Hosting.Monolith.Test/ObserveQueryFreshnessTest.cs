@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -214,5 +215,150 @@ public class ObserveQueryFreshnessTest(ITestOutputHelper output) : MonolithMeshT
 
         updChange.Items.Should().ContainSingle(n => n.Name == "v2",
             "the debounce subscription must deliver an Updated event after UpdateNode");
+    }
+
+    /// <summary>
+    /// Isolated repro for the WaitForPermissionAsync timeout pattern observed
+    /// in CreateNodeViaEventTest / EffectivePermissionPostgresTest:
+    /// 1. Subscribe to a synced query for AccessAssignment nodes under a
+    ///    given _Access namespace BEFORE any are created.
+    /// 2. CreateNode an AccessAssignment via meshService.CreateNode.
+    /// 3. Verify the subscription receives an Added event with the new node.
+    ///
+    /// If this fails, the cross-hub change propagation (assignment write on
+    /// its owning per-node hub → IDataChangeNotifier mesh singleton → synced
+    /// query subscriber on the test mesh hub) is broken — that's the
+    /// production-side bug behind the test cluster, not a test-pattern flaw.
+    /// </summary>
+    [Fact(Timeout = 15_000)]
+    public async Task ObserveQuery_AccessAssignment_AddedEventArrives_AfterCreateNode()
+    {
+        const string scope = "RepoTest";
+        const string ns = scope + "/_Access";
+        var ct = TestContext.Current.CancellationToken;
+
+        // Hot subscription on the AccessAssignment-namespace query — same shape
+        // as SecurityService.ObserveScopeAssignments uses internally.
+        var hot = MeshService.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"namespace:{ns} nodeType:AccessAssignment"))
+            .Replay();
+        using var conn = hot.Connect();
+
+        // Wait for Initial (empty — no AccessAssignments at this scope yet).
+        var initial = await hot.Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .FirstAsync().ToTask(ct);
+        initial.Items.Should().BeEmpty("no AccessAssignments seeded at this scope");
+
+        // Now create an AccessAssignment via the standard CreateNode flow.
+        await MeshService.CreateNode(AssignmentNodeFactory.UserRole(
+                "test-user", "Admin", scope))
+            .FirstAsync()
+            .ToTask(ct);
+
+        // The hot subscription must receive an Added event with the new node.
+        var added = await hot
+            .Where(c => c.ChangeType == QueryChangeType.Added
+                && c.Items.Any(n => n.Path == $"{ns}/test-user_Access"))
+            .Timeout(TimeSpan.FromSeconds(8))
+            .FirstAsync().ToTask(ct);
+
+        added.Items.Should().ContainSingle(n => n.Path == $"{ns}/test-user_Access",
+            "the cross-hub change propagation (write on the AccessAssignment's own per-node " +
+            "hub → mesh-singleton IDataChangeNotifier → synced-query subscriber on this hub) " +
+            "must deliver the Added event after meshService.CreateNode completes.");
+    }
+
+    /// <summary>
+    /// The OPPOSITE order — the pattern that CreateNodeViaEventTest /
+    /// EffectivePermissionPostgresTest actually use:
+    /// 1. CreateNode an AccessAssignment FIRST.
+    /// 2. THEN subscribe to a synced query for AccessAssignments at that scope.
+    /// 3. Initial emission must include the just-created node.
+    ///
+    /// If this fails, it means the storage adapter completed the write but the
+    /// synced query's Initial query reads a stale snapshot — exactly the
+    /// production-side bug behind the test cluster.
+    /// </summary>
+    [Fact(Timeout = 15_000)]
+    public async Task ObserveQuery_AccessAssignment_InitialIncludesPriorCreate()
+    {
+        const string scope = "RepoTest2";
+        const string ns = scope + "/_Access";
+        var ct = TestContext.Current.CancellationToken;
+
+        // Create FIRST.
+        await MeshService.CreateNode(AssignmentNodeFactory.UserRole(
+                "test-user", "Admin", scope))
+            .FirstAsync()
+            .ToTask(ct);
+
+        // THEN subscribe — Initial must reflect the prior write.
+        var initial = await MeshService.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery($"namespace:{ns} nodeType:AccessAssignment"))
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .FirstAsync()
+            .ToTask(ct);
+
+        initial.Items.Should().ContainSingle(n => n.Path == $"{ns}/test-user_Access",
+            "the synced query's Initial must include AccessAssignments written before subscribe.");
+    }
+
+    /// <summary>
+    /// End-to-end repro using SecurityService.GetEffectivePermissions, the
+    /// API that WaitForPermissionAsync (and AccessControlPipeline) actually
+    /// consume. If the same write-then-observe pattern works with SecurityService,
+    /// then the failing CreateNodeViaEventTest cluster is a test-pattern bug,
+    /// not a framework bug.
+    /// </summary>
+    [Fact(Timeout = 15_000)]
+    public async Task SecurityService_AfterCreate_GrantsPermission_OnFirstSubscribe()
+    {
+        const string scope = "RepoTest3";
+        const string userId = "test-user-3";
+        var ct = TestContext.Current.CancellationToken;
+        var sec = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Security.ISecurityService>();
+
+        // Create AccessAssignment first.
+        await MeshService.CreateNode(AssignmentNodeFactory.UserRole(userId, "Admin", scope))
+            .FirstAsync().ToTask(ct);
+
+        // SecurityService subscribe — must emit a permission-set with Create within 5s.
+        // This is the EXACT chain WaitForPermissionAsync depends on.
+        var perm = await sec.GetEffectivePermissions(scope, userId)
+            .Where(p => p.HasFlag(MeshWeaver.Mesh.Security.Permission.Create))
+            .Timeout(TimeSpan.FromSeconds(5))
+            .FirstAsync()
+            .ToTask(ct);
+
+        perm.HasFlag(MeshWeaver.Mesh.Security.Permission.Create).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Reproduces the EXACT pattern from CreateNodeViaEventTest using the
+    /// hub address (with @ + / separators) as the userId — that's the only
+    /// thing different from <see cref="SecurityService_AfterCreate_GrantsPermission_OnFirstSubscribe"/>.
+    /// If THIS fails, the AccessObject vs. userId matching breaks for hub-shaped IDs.
+    /// </summary>
+    [Fact(Timeout = 15_000)]
+    public async Task SecurityService_HubAddressUserId_GrantsPermission()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var meshAddress = Mesh.Address.ToFullString();
+        var sec = Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Security.ISecurityService>();
+
+        Output.WriteLine($"meshAddress = '{meshAddress}'");
+
+        await MeshService.CreateNode(AssignmentNodeFactory.UserRole(meshAddress, "Admin", "Impersonate"))
+            .FirstAsync().ToTask(ct);
+
+        var perm = await sec.GetEffectivePermissions("Impersonate", meshAddress)
+            .Where(p => p.HasFlag(MeshWeaver.Mesh.Security.Permission.Create))
+            .Timeout(TimeSpan.FromSeconds(5))
+            .FirstAsync()
+            .ToTask(ct);
+
+        perm.HasFlag(MeshWeaver.Mesh.Security.Permission.Create).Should().BeTrue();
     }
 }

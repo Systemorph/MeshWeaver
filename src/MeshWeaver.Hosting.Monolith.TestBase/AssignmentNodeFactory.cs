@@ -30,7 +30,14 @@ public static class AssignmentNodeFactory
     {
         var ns = string.IsNullOrEmpty(scope) ? "_Access" : $"{scope}/_Access";
         var subject = accessObject ?? userId;
-        return new MeshNode($"{userId}_Access", ns)
+        // Sanitise the userId for the node id only — '/' in a hub address (e.g.
+        // "mesh/abc123") would otherwise leak into the path as an extra segment,
+        // pushing the AccessAssignment from {scope}/_Access/{id} to a deeper
+        // namespace and making it invisible to SecurityService's per-scope
+        // synced query. AccessObject keeps the unsanitised value so role
+        // matching against the runtime user identity still works.
+        var idSafe = userId.Replace('/', '_').Replace('@', '_');
+        return new MeshNode($"{idSafe}_Access", ns)
         {
             NodeType = "AccessAssignment",
             Name = $"{userId} Access",
