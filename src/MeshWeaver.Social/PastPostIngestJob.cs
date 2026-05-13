@@ -1,8 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -40,41 +44,51 @@ public sealed class PastPostIngestJob : BackgroundService
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    // BackgroundService boundary — single .ToTask() bridge for the framework's Task
+    // contract. Inside is one observable chain; the rest of the file is reactive.
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger?.LogInformation("PastPostIngestJob started (interval {Interval})", _options.PastPostIngestInterval);
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                await foreach (var target in _source.GetIngestTargetsAsync(stoppingToken))
+        return Observable.Interval(_options.PastPostIngestInterval)
+            .StartWith(-1L)
+            .SelectMany(_ => IngestOnce(stoppingToken)
+                .Catch((Exception ex) =>
                 {
-                    var publisher = _publishers.FirstOrDefault(p =>
-                        string.Equals(p.Platform, target.Platform, StringComparison.OrdinalIgnoreCase));
-                    if (publisher is null) continue;
+                    if (ex is OperationCanceledException) return Observable.Empty<Unit>();
+                    _logger?.LogError(ex, "PastPostIngestJob tick failed");
+                    return Observable.Empty<Unit>();
+                }))
+            .ToTask(stoppingToken);
+    }
 
-                    var imported = 0;
-                    await foreach (var past in publisher.ListPastPostsAsync(
-                        target.Credential, target.SinceInclusive, _options.PastPostIngestPageSize, stoppingToken))
-                    {
-                        var created = await _sink.UpsertAsync(target, past, stoppingToken);
-                        if (created) imported++;
-                    }
+    private IObservable<Unit> IngestOnce(CancellationToken stoppingToken) =>
+        _source.GetIngestTargetsAsync(stoppingToken)
+            .ToObservableSequence()
+            .SelectMany(target => IngestTargetOnce(target, stoppingToken))
+            .DefaultIfEmpty(Unit.Default);
 
-                    if (imported > 0)
-                        _logger?.LogInformation("Ingested {Count} past posts from {Platform} for {ProfilePath}",
-                            imported, target.Platform, target.ProfilePath);
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+    private IObservable<Unit> IngestTargetOnce(IngestTarget target, CancellationToken stoppingToken)
+    {
+        var publisher = _publishers.FirstOrDefault(p =>
+            string.Equals(p.Platform, target.Platform, StringComparison.OrdinalIgnoreCase));
+        if (publisher is null) return Observable.Return(Unit.Default);
+
+        return Observable.FromAsync(async ct =>
+        {
+            var imported = 0;
+            await foreach (var past in publisher.ListPastPostsAsync(
+                target.Credential, target.SinceInclusive, _options.PastPostIngestPageSize, ct))
             {
-                _logger?.LogError(ex, "PastPostIngestJob tick failed");
+                var created = await _sink.UpsertAsync(target, past, ct);
+                if (created) imported++;
             }
 
-            try { await Task.Delay(_options.PastPostIngestInterval, stoppingToken); }
-            catch (OperationCanceledException) { break; }
-        }
+            if (imported > 0)
+                _logger?.LogInformation("Ingested {Count} past posts from {Platform} for {ProfilePath}",
+                    imported, target.Platform, target.ProfilePath);
+            return Unit.Default;
+        });
     }
 }
 
