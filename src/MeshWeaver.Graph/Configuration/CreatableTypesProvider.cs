@@ -87,9 +87,13 @@ internal sealed class CreatableTypesProvider(
             .Catch<QueryResultChange<MeshNode>, Exception>(
                 _ => Observable.Empty<QueryResultChange<MeshNode>>()));
 
+        // Aggregate (not Scan) — Scan only emits per input, so an empty
+        // result-set produces zero emissions and the downstream CombineLatest
+        // gate stays closed forever. Aggregate emits the final accumulator
+        // exactly once at OnCompleted; for an empty stream that's the seed.
         return Observable.Merge(observables)
             .SelectMany(change => change.Items)
-            .Scan(
+            .Aggregate(
                 ImmutableDictionary<string, MeshNode>.Empty
                     .WithComparers(StringComparer.OrdinalIgnoreCase),
                 (acc, node) => acc.ContainsKey(node.Path) ? acc : acc.Add(node.Path, node))

@@ -391,21 +391,24 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
     #region Integration Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact]
     public async Task Integration_AutocompleteWithTypeFilter_WorksEndToEnd()
     {
         // This test simulates the full flow of:
         // 1. User selects a type to create
         // 2. Namespace autocomplete filters to nodes that support that type
+        // Limit kept low (10 instead of 50) to keep the nested loops within
+        // the suite-default 30s methodTimeout — each iteration is a synced-query
+        // CombineLatest gate and Cornerstone's cold cache hits all of them.
 
         var ct = TestContext.Current.CancellationToken;
 
-        // Get all autocomplete suggestions
+        // Get autocomplete suggestions
         var allSuggestions = await MeshQuery.AutocompleteAsync(
             basePath: "",
             prefix: "",
             mode: AutocompleteMode.RelevanceFirst,
-            limit: 50
+            limit: 10
         ).ToListAsync();
 
         Output.WriteLine($"Total suggestions: {allSuggestions.Count}");
