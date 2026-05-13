@@ -149,11 +149,13 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         // `OrderBy(Path.Length).Then(Score).Then(Name).Take(limit)`). Fast
         // partitions don't wait for slow ones; the comparer guarantees deep
         // "loose match" candidates can't displace top-level partitions in
-        // the final snapshot. We `LastOrDefaultAsync` to surface the final
-        // snapshot at the IAsyncEnumerable boundary; consumers that want
-        // streaming snapshots can subscribe to ScanTopN themselves at the
-        // observable surface (see BlazorAutocompleteService for the live-
-        // databinding shape).
+        // the final snapshot. We surface the snapshot once the stream has
+        // quiesced (200 ms of silence) rather than waiting for OnCompleted —
+        // a single slow partition can stall the IAsyncEnumerable indefinitely
+        // and starve callers of the otherwise-ready top-N. Bounded by the
+        // caller's CT; consumers that want streaming snapshots subscribe to
+        // ScanTopN themselves at the observable surface (see
+        // BlazorAutocompleteService for the live-databinding shape).
         var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var snapshot = await StreamFanOutAsync(_router.QueryProviders, searchableSchemas,
                 (partitionKey, p, partitionCt) =>
@@ -162,7 +164,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                     return p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, partitionCt);
                 }, ct)
             .ScanTopN(limit, AutocompleteByPathLengthThenScore)
-            .LastOrDefaultAsync()
+            .Throttle(TimeSpan.FromMilliseconds(200))
+            .Take(1)
             .ToTask(ct);
         foreach (var s in snapshot ?? Array.Empty<QuerySuggestion>())
         {
@@ -232,7 +235,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                     return p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, partitionCt);
                 }, ct)
             .ScanTopN(limit, comparer)
-            .LastOrDefaultAsync()
+            .Throttle(TimeSpan.FromMilliseconds(200))
+            .Take(1)
             .ToTask(ct);
         foreach (var s in snapshot ?? Array.Empty<QuerySuggestion>())
         {
