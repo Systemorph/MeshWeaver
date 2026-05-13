@@ -148,6 +148,9 @@ public static class GraphConfigurationExtensions
                     services.AddSingleton<INodeTypeService, NodeTypeService>();
                     services.AddSingleton<INodeConfigurationResolver, NodeConfigurationResolver>();
                     services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
+                    // Replacement for INodeTypeService.GetCreatableTypesAsync — synced-query
+                    // based, namespace-bounded (no global nodeType:NodeType scan).
+                    services.AddSingleton<ICreatableTypesProvider, CreatableTypesProvider>();
                     // Dedicated hosted hub for NodeType stream subscriptions —
                     // mesh hub must never be the requesting workspace for
                     // cross-hub remote streams during routing/activation.
