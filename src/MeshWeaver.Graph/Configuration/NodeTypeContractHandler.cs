@@ -153,7 +153,53 @@ internal static class NodeTypeContractHandler
                     .Select(result => BuildResponse(hubPath, node, result));
             })
             .Subscribe(
-                response => hub.Post(response!, o => o.ResponseFor(request)),
+                response =>
+                {
+                    // Write compile state back to the MeshNode so any consumer
+                    // reading off NodeTypeDefinition (Stage 3b diagnostics,
+                    // synced-query subscribers, cross-silo cache propagation)
+                    // sees the result without consulting NodeTypeService's
+                    // in-memory dicts. Fire-and-forget; the response post is
+                    // unchanged.
+                    try
+                    {
+                        hub.GetWorkspace().GetMeshNodeStream().Update(curr =>
+                        {
+                            if (curr.Content is not NodeTypeDefinition def)
+                                return curr;
+                            if (response!.Success && !string.IsNullOrEmpty(response.AssemblyLocation))
+                                return curr with
+                                {
+                                    Content = def with
+                                    {
+                                        CompilationStatus = CompilationStatus.Ok,
+                                        CompilationError = null,
+                                        LastCompileSucceededAt = DateTimeOffset.UtcNow
+                                    },
+                                    AssemblyLocation = response.AssemblyLocation
+                                };
+                            return curr with
+                            {
+                                Content = def with
+                                {
+                                    CompilationStatus = CompilationStatus.Error,
+                                    CompilationError = response.Error ?? "Compilation failed"
+                                }
+                            };
+                        }).Subscribe(
+                            _ => { },
+                            updEx => logger?.LogDebug(updEx,
+                                "GetCompilationPathRequest at {HubPath}: failed to write-back compile state",
+                                hubPath));
+                    }
+                    catch (Exception writeEx)
+                    {
+                        logger?.LogDebug(writeEx,
+                            "GetCompilationPathRequest at {HubPath}: write-back faulted",
+                            hubPath);
+                    }
+                    hub.Post(response!, o => o.ResponseFor(request));
+                },
                 ex =>
                 {
                     logger?.LogWarning(ex,
