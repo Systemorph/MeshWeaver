@@ -51,6 +51,22 @@ internal static class NodeTypeEnrichmentHelpers
                 staticTypeNode.HubConfiguration, nodeType, meshConfiguration));
         }
 
+        // Static-provider fast-path: IStaticNodeProvider-registered NodeTypes
+        // ship HubConfiguration + AssemblyLocation in-process (the delegate
+        // doesn't survive serialisation, so we MUST find them locally before
+        // opening a remote stream). Look up the provider that owns the
+        // requested NodeType path and apply its config directly.
+        var providerNode = serviceHub.ServiceProvider
+            .GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .FirstOrDefault(n => string.Equals(n.Path, nodeType, StringComparison.OrdinalIgnoreCase));
+        if (providerNode is { HubConfiguration: { } hubCfg }
+            && !string.IsNullOrEmpty(providerNode.AssemblyLocation))
+        {
+            return Observable.Return(ApplyEntry(
+                node, providerNode.AssemblyLocation!, hubCfg, nodeType, meshConfiguration));
+        }
+
         // Slow path: dedicated NodeTypeService hub workspace + remote stream.
         IWorkspace workspace;
         try { workspace = serviceHub.GetWorkspace(); }
