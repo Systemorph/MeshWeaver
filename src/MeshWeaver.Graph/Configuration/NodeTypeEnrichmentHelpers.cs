@@ -79,6 +79,15 @@ internal static class NodeTypeEnrichmentHelpers
             .Do(typeNode =>
             {
                 if (typeNode.Content is not NodeTypeDefinition def) return;
+                // Static-provider NodeTypes (IStaticNodeProvider — see
+                // NodeOperationsTestSeedProviders.TypeDefinition) arrive with
+                // HubConfiguration + AssemblyLocation already set and no
+                // CompilationStatus. There's nothing for the CompileWatcher to
+                // do; flipping Pending only wastes a Roslyn round-trip and
+                // strands the slow path waiting on a Compiling → Ok/Error
+                // transition that may never happen. Don't trigger.
+                if (typeNode.HubConfiguration != null
+                    && !string.IsNullOrEmpty(typeNode.AssemblyLocation)) return;
                 if (def.CompilationStatus is not null
                     && def.CompilationStatus != CompilationStatus.Unknown) return;
                 if (System.Threading.Interlocked.CompareExchange(ref triggered, 1, 0) != 0) return;
@@ -98,9 +107,13 @@ internal static class NodeTypeEnrichmentHelpers
                         Updates: null);
                 });
             })
-            .Where(typeNode => typeNode.Content is NodeTypeDefinition def
-                && (def.CompilationStatus == CompilationStatus.Ok
-                    || def.CompilationStatus == CompilationStatus.Error))
+            // Settled state OR an already-configured static-provider node
+            // (HubConfiguration + AssemblyLocation pre-populated, no compile).
+            .Where(typeNode => (typeNode.HubConfiguration != null
+                                && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
+                || (typeNode.Content is NodeTypeDefinition def
+                    && (def.CompilationStatus == CompilationStatus.Ok
+                        || def.CompilationStatus == CompilationStatus.Error)))
             .Take(1)
             .Timeout(SlowPathTimeout)
             .SelectMany(typeNode => ApplyStreamResult(
@@ -124,6 +137,18 @@ internal static class NodeTypeEnrichmentHelpers
         ILogger? logger)
     {
         var def = typeNode.Content as NodeTypeDefinition;
+
+        // Static-provider NodeType: HubConfiguration + AssemblyLocation pre-populated,
+        // no Roslyn compile to run. Use them directly — no reflection round-trip.
+        if (typeNode.HubConfiguration != null
+            && !string.IsNullOrEmpty(typeNode.AssemblyLocation)
+            && (def?.CompilationStatus is null
+                || def.CompilationStatus == CompilationStatus.Unknown))
+        {
+            return Observable.Return(ApplyEntry(
+                node, typeNode.AssemblyLocation!, typeNode.HubConfiguration,
+                nodeType, meshConfiguration));
+        }
 
         if (def?.CompilationStatus == CompilationStatus.Ok
             && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
