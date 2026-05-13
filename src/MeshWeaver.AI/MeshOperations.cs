@@ -75,19 +75,29 @@ public class MeshOperations
 
         // Fast path: the input node already IS the NodeType MeshNode and its
         // Content is the strongly-typed NodeTypeDefinition. Read the error
-        // straight off it — no extra round-trip.
+        // straight off it — no extra round-trip. Bridge during the
+        // NodeTypeService deletion transition: a compile that ran through
+        // NodeTypeService's own path records the error in the service's
+        // in-memory cache without writing it back to the MeshNode; fall back
+        // to the service getter when the MeshNode's own field is null.
         if (isNodeTypeDef && node.Content is Graph.Configuration.NodeTypeDefinition ownDef)
-            return Observable.Return<string?>(ownDef.CompilationError);
+            return Observable.Return<string?>(ownDef.CompilationError
+                ?? nodeTypeService?.GetCompilationError(nodeTypePath));
 
         // Slow path: read the NodeType MeshNode fresh from its owning per-node
         // hub. Take(1) — single-emission read of the live CompilationError
-        // off the NodeType definition.
+        // off the NodeType definition. Bridge during the NodeTypeService
+        // deletion transition: a compile that ran through NodeTypeService's
+        // own path records the error in the service's in-memory cache without
+        // writing back to the MeshNode. Fall back to the service getter when
+        // the MeshNode has no recorded error.
         return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
             .Where(n => n is not null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Select(n => (n!.Content as Graph.Configuration.NodeTypeDefinition)?.CompilationError)
-            .Catch<string?, Exception>(_ => Observable.Return<string?>(null));
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
+            .Select(error => error ?? nodeTypeService?.GetCompilationError(nodeTypePath));
     }
 
     /// <summary>
