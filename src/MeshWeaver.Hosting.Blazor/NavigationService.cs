@@ -496,11 +496,10 @@ internal class NavigationService : INavigationService
     private IDisposable? _creatableLoadSub;
 
     /// <summary>
-    /// Comparer for incremental CreatableTypeInfo emission. Primary key is
-    /// <see cref="CreatableTypeInfo.Order"/> (ascending), secondary keys are
-    /// <c>DisplayName</c>/<c>NodeTypePath</c> for stable ordering. Used with
-    /// <c>ScanTopN(int.MaxValue, …)</c> so the IAsyncEnumerable source is folded
-    /// into a stream of immutable snapshots without await foreach.
+    /// Stable ordering for the rendered list. The synced-query stream is
+    /// path-keyed; consumers want a deterministic order:
+    /// <see cref="CreatableTypeInfo.Order"/> asc, then
+    /// <c>DisplayName</c>/<c>NodeTypePath</c>.
     /// </summary>
     private static readonly IComparer<CreatableTypeInfo> _creatableComparer =
         Comparer<CreatableTypeInfo>.Create((a, b) =>
@@ -515,29 +514,36 @@ internal class NavigationService : INavigationService
 
     private void LoadCreatableTypes(string nodePath)
     {
-        // INodeTypeService is registered at the Hub level, not in the main DI container
-        var nodeTypeService = _hub.ServiceProvider.GetService<INodeTypeService>();
-        if (nodeTypeService == null)
+        // ICreatableTypesProvider replaces the legacy INodeTypeService.GetCreatableTypesAsync.
+        // It's backed by workspace.GetQuery (synced mesh node queries) —
+        // namespace-bounded, no global scan, deduped + Initial-gated.
+        var provider = _hub.ServiceProvider.GetService<ICreatableTypesProvider>();
+        if (provider == null)
             return;
 
-        // Cancel any previous loading by disposing the previous subscription;
-        // the IAsyncEnumerable bridge in ToObservableSequence flips its
-        // CancellationToken when Dispose runs.
         _creatableLoadSub?.Dispose();
         _lastLoadedNodePath = nodePath;
         _creatableTypes.OnNext(CreatableTypesSnapshot.Loading([]));
 
-        IReadOnlyList<CreatableTypeInfo> latest = [];
-        _creatableLoadSub = nodeTypeService.GetCreatableTypesAsync(nodePath)
-            .ScanTopN(int.MaxValue, _creatableComparer)
+        // Look up the resolved parent node so the provider can scope the
+        // synced query by the parent's NodeType (see CreatableTypesProvider).
+        // Short Take(1) timeout — when the node isn't readable in budget,
+        // proceed with parent=null (the provider falls back to the path-only
+        // namespace query).
+        var workspace = _hub.GetWorkspace();
+        var parentObs = string.IsNullOrEmpty(nodePath)
+            ? Observable.Return<MeshNode?>(null)
+            : workspace.GetMeshNodeStream(nodePath)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(2))
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+
+        _creatableLoadSub = parentObs
+            .SelectMany(parent => provider.GetCreatableTypes(nodePath, parent))
+            .Select(items => items.OrderBy(i => i, _creatableComparer).ToArray())
             .Subscribe(
-                snapshot =>
-                {
-                    latest = snapshot;
-                    _creatableTypes.OnNext(CreatableTypesSnapshot.Loading(snapshot));
-                },
-                _ => _creatableTypes.OnNext(CreatableTypesSnapshot.Done(latest)),
-                () => _creatableTypes.OnNext(CreatableTypesSnapshot.Done(latest)));
+                snapshot => _creatableTypes.OnNext(CreatableTypesSnapshot.Done(snapshot)),
+                ex => _creatableTypes.OnNext(CreatableTypesSnapshot.Done([])));
     }
 
     /// <inheritdoc />

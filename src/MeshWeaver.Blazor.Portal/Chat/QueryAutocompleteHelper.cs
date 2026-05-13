@@ -1,5 +1,5 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
-using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -8,13 +8,17 @@ namespace MeshWeaver.Blazor.Portal.Chat;
 /// <summary>
 /// Helper for <see cref="MeshNodeAutocomplete"/>: composes per-query
 /// <see cref="IMeshService.ObserveQuery{T}"/> streams into a single deduped
-/// suggestion list. Lives in a .cs file (not the .razor) so the IObservable
-/// extension methods resolve cleanly — the razor file's combined LINQ/Async
-/// namespaces make <c>Take</c>/<c>Catch</c> ambiguous against Rx.
+/// suggestion list. Pure reactive — caller subscribes to the observable.
 /// </summary>
 internal static class QueryAutocompleteHelper
 {
-    public static async Task<List<QuerySuggestion>> LoadSuggestionsAsync(
+    /// <summary>
+    /// Returns a folded, path-deduped list of <see cref="QuerySuggestion"/>
+    /// for the given queries + user search text. Emits a fresh snapshot
+    /// whenever a new path arrives. Per-path dedup via
+    /// <see cref="ImmutableDictionary{TKey,TValue}"/> Scan.
+    /// </summary>
+    public static IObservable<IReadOnlyList<QuerySuggestion>> LoadSuggestions(
         IMeshService meshQuery,
         IReadOnlyList<string> queries,
         string? searchText)
@@ -32,12 +36,13 @@ internal static class QueryAutocompleteHelper
                     _ => Observable.Empty<QueryResultChange<MeshNode>>());
         });
 
-        var merged = await Observable.Merge(observables).ToList();
-        return merged
-            .SelectMany(c => c.Items)
+        return Observable.Merge(observables)
+            .SelectMany(change => change.Items)
             .Select(n => new QuerySuggestion(n.Path, n.Name ?? n.Id, n.NodeType, 1.0, n.Icon))
-            .GroupBy(s => s.Path, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First())
-            .ToList();
+            .Scan(
+                ImmutableDictionary<string, QuerySuggestion>.Empty
+                    .WithComparers(StringComparer.OrdinalIgnoreCase),
+                (acc, s) => acc.ContainsKey(s.Path) ? acc : acc.Add(s.Path, s))
+            .Select(acc => (IReadOnlyList<QuerySuggestion>)acc.Values.ToArray());
     }
 }
