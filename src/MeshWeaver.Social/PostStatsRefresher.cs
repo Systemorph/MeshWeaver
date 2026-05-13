@@ -2,10 +2,12 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -60,68 +62,63 @@ public sealed class PostStatsRefresher : BackgroundService
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    // BackgroundService boundary — single .ToTask() bridge for the framework's Task
+    // contract. Inside is one observable chain; the rest of the file is reactive.
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger?.LogInformation(
             "PostStatsRefresher started (interval {Interval}, window {Window}, parallelism {Dop}, backoff {Backoff})",
             _options.StatsTickInterval, _options.StatsRefreshWindow,
             _options.StatsRefreshDegreeOfParallelism, _options.StatsRefreshFailureBackoff);
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                // Materialise the due-refresh set first so we can drive
-                // Parallel.ForEachAsync with a known-size IAsyncEnumerable.
-                // The set is typically small (recent-window only).
-                var dop = Math.Max(1, _options.StatsRefreshDegreeOfParallelism);
-                await Parallel.ForEachAsync(
-                    _source.GetDueRefreshesAsync(_options.StatsRefreshWindow, stoppingToken),
-                    new ParallelOptions
-                    {
-                        MaxDegreeOfParallelism = dop,
-                        CancellationToken = stoppingToken
-                    },
-                    async (target, ct) => await ProcessTargetAsync(target, ct));
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger?.LogError(ex, "PostStatsRefresher tick failed");
-            }
+        var dop = Math.Max(1, _options.StatsRefreshDegreeOfParallelism);
 
-            try { await Task.Delay(_options.StatsTickInterval, stoppingToken); }
-            catch (OperationCanceledException) { break; }
-        }
+        return Observable.Interval(_options.StatsTickInterval)
+            .StartWith(-1L)
+            .SelectMany(_ => _source.GetDueRefreshesAsync(_options.StatsRefreshWindow, stoppingToken)
+                .ToObservableSequence()
+                .Select(target => ProcessTarget(target))
+                .Merge(maxConcurrent: dop)
+                .Catch((Exception ex) =>
+                {
+                    if (ex is OperationCanceledException) return Observable.Empty<Unit>();
+                    _logger?.LogError(ex, "PostStatsRefresher tick failed");
+                    return Observable.Empty<Unit>();
+                }))
+            .ToTask(stoppingToken);
     }
 
-    private async ValueTask ProcessTargetAsync(StatsRefreshTarget target, CancellationToken ct)
+    private IObservable<Unit> ProcessTarget(StatsRefreshTarget target)
     {
         // Per-target backoff: skip if last failure is within the backoff window.
         var backoffKey = $"{target.Platform}|{target.PostPath}";
         if (_failureBackoff.TryGetValue(backoffKey, out var lastFail)
             && DateTimeOffset.UtcNow - lastFail < _options.StatsRefreshFailureBackoff)
         {
-            return;
+            return Observable.Return(Unit.Default);
         }
 
         var publisher = _publishers.FirstOrDefault(p =>
             string.Equals(p.Platform, target.Platform, StringComparison.OrdinalIgnoreCase));
-        if (publisher is null) return;
+        if (publisher is null) return Observable.Return(Unit.Default);
 
-        try
-        {
-            var stats = await publisher.GetStatsAsync(target.Urn, target.Credential, ct);
-            await _bridge.ApplyStats(target.PostPath, stats).FirstAsync().ToTask(ct);
-            // Success — clear any prior failure so the target rejoins normal cadence.
-            _failureBackoff.TryRemove(backoffKey, out _);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _failureBackoff[backoffKey] = DateTimeOffset.UtcNow;
-            _logger?.LogWarning(ex,
-                "Stats refresh failed for {PostPath} (next retry no sooner than {NextRetry:O})",
-                target.PostPath, DateTimeOffset.UtcNow + _options.StatsRefreshFailureBackoff);
-        }
+        return Observable.FromAsync(ct => publisher.GetStatsAsync(target.Urn, target.Credential, ct))
+            .SelectMany(stats => _bridge.ApplyStats(target.PostPath, stats))
+            .Do(_ =>
+            {
+                // Success — clear any prior failure so the target rejoins normal cadence.
+                _failureBackoff.TryRemove(backoffKey, out var _ignored);
+            })
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                if (ex is OperationCanceledException) return Observable.Empty<Unit>();
+                _failureBackoff[backoffKey] = DateTimeOffset.UtcNow;
+                _logger?.LogWarning(ex,
+                    "Stats refresh failed for {PostPath} (next retry no sooner than {NextRetry:O})",
+                    target.PostPath, DateTimeOffset.UtcNow + _options.StatsRefreshFailureBackoff);
+                return Observable.Return(Unit.Default);
+            });
     }
 }
 

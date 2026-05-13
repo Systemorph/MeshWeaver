@@ -33,9 +33,11 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         var hub = context.RequestServices.GetRequiredService<PortalApplication>().Hub;
         var userService = hub.ServiceProvider.GetRequiredService<AccessService>();
 
-        // Try OAuth first (browser sessions), then Bearer token (MCP / API clients)
+        // Try OAuth first (browser sessions), then Bearer token (MCP / API clients).
+        // The bearer-token bridge to Task happens once at the ASP.NET middleware boundary —
+        // production surface is IObservable end-to-end (see ExtractFromBearerToken).
         var userContext = ExtractUserContext(context.User)
-                          ?? await ExtractFromBearerTokenAsync(context.Request, hub);
+                          ?? await ExtractFromBearerToken(context.Request, hub).FirstAsync().ToTask(context.RequestAborted);
 
         if (userContext is not null)
         {
@@ -117,38 +119,37 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// The ApiToken node type handler validates hash/expiry/revocation and returns user info.
     /// This gives the token holder the exact same access rights as the user who created the token.
     /// </summary>
-    private async Task<AccessContext?> ExtractFromBearerTokenAsync(HttpRequest request, IMessageHub hub)
+    private static IObservable<AccessContext?> ExtractFromBearerToken(HttpRequest request, IMessageHub hub)
     {
         var authHeader = request.Headers.Authorization.ToString();
         if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
+            return Observable.Return<AccessContext?>(null);
 
         var rawToken = authHeader["Bearer ".Length..].Trim();
         if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(ValidateTokenRequest.TokenPrefix))
-            return null;
+            return Observable.Return<AccessContext?>(null);
 
-        var response = await ValidateTokenViaHubAsync(rawToken, hub);
-        if (response is not { Success: true })
-            return null;
-
-        return new AccessContext
-        {
-            // ObjectId must be the mesh User.Id (e.g. "rbuergi"), not the display name.
-            // RLS compares context.Node.Path against `User/{ObjectId}` for self-scope access —
-            // using UserName ("Roland Buergi") here would mismatch the `User/rbuergi/...` path.
-            ObjectId = response.UserId ?? response.UserEmail!,
-            Name = response.UserName ?? "",
-            Email = response.UserEmail!,
-            // Stamp the roles captured on the ApiToken at creation time so
-            // SecurityService.GetEffectivePermissions can resolve permissions via
-            // its claim-based role path (lines 166-174). Without this, API-token
-            // requests against per-node hubs see 0 roles → 0 perms → the
-            // IsApiToken gate strips → DENY — because per-node hubs intentionally
-            // don't register the synced AccessAssignment query
-            // (SecurityServiceExtensions:44-50, recursion avoidance).
-            Roles = response.Roles,
-            IsApiToken = true,
-        };
+        return ValidateTokenViaHub(rawToken, hub)
+            .Select(response => response is { Success: true }
+                ? new AccessContext
+                {
+                    // ObjectId must be the mesh User.Id (e.g. "rbuergi"), not the display name.
+                    // RLS compares context.Node.Path against `User/{ObjectId}` for self-scope access —
+                    // using UserName ("Roland Buergi") here would mismatch the `User/rbuergi/...` path.
+                    ObjectId = response.UserId ?? response.UserEmail!,
+                    Name = response.UserName ?? "",
+                    Email = response.UserEmail!,
+                    // Stamp the roles captured on the ApiToken at creation time so
+                    // SecurityService.GetEffectivePermissions can resolve permissions via
+                    // its claim-based role path (lines 166-174). Without this, API-token
+                    // requests against per-node hubs see 0 roles → 0 perms → the
+                    // IsApiToken gate strips → DENY — because per-node hubs intentionally
+                    // don't register the synced AccessAssignment query
+                    // (SecurityServiceExtensions:44-50, recursion avoidance).
+                    Roles = response.Roles,
+                    IsApiToken = true,
+                }
+                : null);
     }
 
     /// <summary>
@@ -156,25 +157,17 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
     /// The request is routed to ApiToken/{hashPrefix} where the handler validates the token.
     /// Public so tests can use the same flow.
     /// </summary>
-    public static async Task<ValidateTokenResponse?> ValidateTokenViaHubAsync(string rawToken, IMessageHub hub)
+    public static IObservable<ValidateTokenResponse?> ValidateTokenViaHub(string rawToken, IMessageHub hub)
     {
-        try
-        {
-            var hash = ValidateTokenRequest.HashToken(rawToken);
-            var hashPrefix = hash[..12];
-            var tokenAddress = new Address("ApiToken", hashPrefix);
+        var hash = ValidateTokenRequest.HashToken(rawToken);
+        var hashPrefix = hash[..12];
+        var tokenAddress = new Address("ApiToken", hashPrefix);
 
-            var response = await hub.Observe(
-                    new ValidateTokenRequest(rawToken),
-                    o => o.WithTarget(tokenAddress))
-                .FirstAsync()
-                .ToTask();
-            return response.Message;
-        }
-        catch
-        {
-            return null;
-        }
+        return hub.Observe(
+                new ValidateTokenRequest(rawToken),
+                o => o.WithTarget(tokenAddress))
+            .Select(d => (ValidateTokenResponse?)d.Message)
+            .Catch((Exception _) => Observable.Return<ValidateTokenResponse?>(null));
     }
 
     /// <summary>

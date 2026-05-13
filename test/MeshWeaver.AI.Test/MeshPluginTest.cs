@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -562,7 +564,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         // The Worker agent uses explicit Plugins (Mesh, WebSearch, etc.)
         // which gives it all tools including write operations
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync("ACME/ProductLaunch");
+        await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 
@@ -577,7 +579,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     public async Task WriteToolWiring_OrchestratorAgent_DoesNotGetWriteTools()
     {
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync("ACME/ProductLaunch");
+        await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 

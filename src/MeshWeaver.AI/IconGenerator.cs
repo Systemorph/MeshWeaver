@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -24,35 +25,35 @@ public sealed class IconGenerator : IIconGenerator
     }
 
     public IObservable<string> GenerateSvgAsync(string name, string? description, CancellationToken ct = default)
-        => Observable.FromAsync(async cancellation =>
+    {
+        var chat = new AgentChatClient(services);
+        // NodeInitializer is registered under the built-in "Agent" namespace.
+        chat.Initialize(contextPath: "Agent");
+        return chat.WhenInitialized.Take(1).SelectMany(_ =>
         {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellation);
-            var token = linked.Token;
-
-            var chat = new AgentChatClient(services);
-            // NodeInitializer is registered under the built-in "Agent" namespace.
-            await chat.InitializeAsync(contextPath: "Agent");
             chat.SetSelectedAgent("NodeInitializer");
-
             var prompt = BuildPrompt(name, description);
             var messages = new[] { new ChatMessage(ChatRole.User, prompt) };
-
-            var sb = new StringBuilder();
-            await foreach (var msg in chat.GetResponseAsync(messages, token))
-            {
-                foreach (var content in msg.Contents.OfType<TextContent>())
-                    sb.Append(content.Text);
-            }
-
-            var raw = sb.ToString();
-            var svg = ExtractSvg(raw);
-            if (string.IsNullOrEmpty(svg))
-            {
-                logger?.LogWarning("NodeInitializer response did not contain a parsable Svg line. Raw: {Raw}", raw);
-                throw new InvalidOperationException("Agent did not return an SVG.");
-            }
-            return svg;
+            return chat.GetResponseAsync(messages, ct).ToObservableSequence()
+                .Aggregate(new StringBuilder(), (sb, msg) =>
+                {
+                    foreach (var content in msg.Contents.OfType<TextContent>())
+                        sb.Append(content.Text);
+                    return sb;
+                })
+                .Select(sb =>
+                {
+                    var raw = sb.ToString();
+                    var svg = ExtractSvg(raw);
+                    if (string.IsNullOrEmpty(svg))
+                    {
+                        logger?.LogWarning("NodeInitializer response did not contain a parsable Svg line. Raw: {Raw}", raw);
+                        throw new InvalidOperationException("Agent did not return an SVG.");
+                    }
+                    return svg;
+                });
         });
+    }
 
     private static string BuildPrompt(string name, string? description)
     {

@@ -47,7 +47,7 @@ public static class ImportExtensions
     {
         return configuration
             .WithHandler<ImportRequest>(
-                (h, d, ct) =>
+                (h, d) =>
                 {
                     var logger = h.ServiceProvider.GetRequiredService<ILogger<ImportManager>>();
                     logger.LogDebug("ImportRequest handler called for message {MessageId} on hub {HubAddress}", d.Id, h.Address);
@@ -56,7 +56,7 @@ public static class ImportExtensions
                     {
                         var importManager = h.ServiceProvider.GetRequiredService<ImportManager>();
                         logger.LogDebug("ImportManager resolved successfully for message {MessageId}", d.Id);
-                        return importManager.HandleImportRequest(d, ct);
+                        return importManager.HandleImportRequest(d, CancellationToken.None);
                     }
                     catch (Exception ex)
                     {

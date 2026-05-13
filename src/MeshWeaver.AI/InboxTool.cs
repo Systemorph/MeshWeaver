@@ -142,8 +142,10 @@ public static class InboxTool
     {
         ArgumentNullException.ThrowIfNull(threadHub);
 
+        // MEAI AIFunction surface requires Task<string>; CheckInbox is the IObservable<string>
+        // production surface. The .FirstAsync().ToTask() bridge runs only at this boundary.
         return AIFunctionFactory.Create(
-            method: () => CheckInboxAsync(threadHub, logger),
+            method: () => CheckInbox(threadHub, logger).FirstAsync().ToTask(),
             name: ToolName,
             description: ToolDescription);
     }
@@ -151,13 +153,11 @@ public static class InboxTool
     /// <summary>
     /// Reads the current thread MeshNode, computes the drain, applies it to the
     /// thread workspace via <c>UpdateMeshNode</c>, and returns the formatted
-    /// tool result. Errors are caught and returned as the tool result so the
-    /// agent sees a non-fatal failure message instead of throwing.
+    /// tool result. Errors flow through .Catch and are returned as the tool result
+    /// so the agent sees a non-fatal failure message instead of throwing.
     /// </summary>
-    [Description("Internal — invoked by the AIFunction wrapper.")]
-    public static Task<string> CheckInboxAsync(IMessageHub threadHub, ILogger? logger)
-    {
-        try
+    public static IObservable<string> CheckInbox(IMessageHub threadHub, ILogger? logger) =>
+        Observable.Defer(() =>
         {
             var workspace = threadHub.GetWorkspace();
             // Read the current thread node once. `GetMeshNodeStream()` reads the
@@ -208,14 +208,11 @@ public static class InboxTool
                                 threadHub.Address.Path));
 
                     return FormatToolResult(drain);
-                })
-                .ToTask();
-        }
-        catch (Exception ex)
+                });
+        })
+        .Catch((Exception ex) =>
         {
-            logger?.LogWarning(ex, "[InboxTool] CheckInboxAsync failed for {Path}",
-                threadHub.Address.Path);
-            return Task.FromResult($"(error reading inbox: {ex.Message})");
-        }
-    }
+            logger?.LogWarning(ex, "[InboxTool] CheckInbox failed for {Path}", threadHub.Address.Path);
+            return Observable.Return($"(error reading inbox: {ex.Message})");
+        });
 }

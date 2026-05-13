@@ -88,7 +88,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     /// </summary>
     private async Task LoginWithToken(string rawToken)
     {
-        var response = await UserContextMiddleware.ValidateTokenViaHubAsync(rawToken, Mesh);
+        var response = await UserContextMiddleware.ValidateTokenViaHub(rawToken, Mesh).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         response.Should().NotBeNull("token validation should return a response");
         response!.Success.Should().BeTrue("token should be valid, got error: {0}", response.Error);
 

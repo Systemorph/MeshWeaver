@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph;
@@ -75,7 +76,7 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
         async Task RunOne(int idx)
         {
             var client = new AgentChatClient(Mesh.ServiceProvider);
-            await client.InitializeAsync(ContextPath);
+            await client.Initialize(ContextPath).WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
             client.SetContext(new AgentContext
             {
                 Address = new Address("ACME", "ProductLaunch"),
@@ -104,8 +105,9 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
         contextNode.Should().NotBeNull();
 
         var client = new AgentChatClient(Mesh.ServiceProvider);
-        await client.InitializeAsync(ContextPath).WaitAsync(TimeSpan.FromSeconds(15),
-            TestContext.Current.CancellationToken);
+        await client.Initialize(ContextPath).WhenInitialized
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
         client.SetContext(new AgentContext
         {
             Address = new Address("ACME", "ProductLaunch"),
@@ -137,8 +139,9 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
         // and applies the filter; that's the path we want to guard. So we skip the
         // assertion on contextNode existing and focus on the deadlock guard.
         var client = new AgentChatClient(Mesh.ServiceProvider);
-        await client.InitializeAsync(ContextPath).WaitAsync(TimeSpan.FromSeconds(15),
-            TestContext.Current.CancellationToken);
+        await client.Initialize(ContextPath).WhenInitialized
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
         client.SetContext(new AgentContext
         {
             Address = new Address("TestDoc", "ParentDoc"),

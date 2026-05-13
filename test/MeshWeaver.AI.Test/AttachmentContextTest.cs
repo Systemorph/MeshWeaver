@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -156,7 +158,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var factory = (CapturingChatClientFactory)Mesh.ServiceProvider.GetRequiredService<IChatClientFactory>();
 
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.InitializeAsync("ACME");
+        await agentChat.Initialize("ACME").WhenInitialized.FirstAsync().ToTask(ct);
 
         // Static node read — no write before, catalog read is correct (no CQRS lag).
         var contextNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME", null, ct).FirstOrDefaultAsync(ct);

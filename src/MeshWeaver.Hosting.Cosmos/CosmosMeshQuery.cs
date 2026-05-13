@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive;
 
 namespace MeshWeaver.Hosting.Cosmos;
 
@@ -319,17 +320,8 @@ public class CosmosMeshQuery : IMeshQueryProvider
             var debounceSubscription = changeBuffer
                 .Buffer(DefaultDebounceInterval)
                 .Where(batch => batch.Count > 0)
-                .Subscribe(async batch =>
-                {
-                    try
-                    {
-                        await ProcessChangeBatchAsync(batch, request, options, parsedQuery, currentItems, observer, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        observer.OnError(ex);
-                    }
-                });
+                .SelectMany(batch => ProcessChangeBatch(batch, request, options, parsedQuery, currentItems))
+                .Subscribe(observer.OnNext, observer.OnError);
             subscription.Add(debounceSubscription);
             subscription.Add(changeBuffer);
 
@@ -337,92 +329,87 @@ public class CosmosMeshQuery : IMeshQueryProvider
         });
     }
 
-    private async Task ProcessChangeBatchAsync<T>(
+    private IObservable<QueryResultChange<T>> ProcessChangeBatch<T>(
         IList<DataChangeNotification> batch,
         MeshQueryRequest request,
         JsonSerializerOptions options,
         ParsedQuery parsedQuery,
-        Dictionary<string, T> currentItems,
-        IObserver<QueryResultChange<T>> observer,
-        CancellationToken ct)
+        Dictionary<string, T> currentItems)
     {
         var changesByPath = batch
             .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
 
-        var newItems = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var item in QueryAsync(request, options, ct))
-        {
-            if (item is T typedItem)
+        return QueryAsync(request, options, default).ToObservableSequence()
+            .Aggregate(new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase), (newItems, item) =>
             {
-                var itemPath = (item as MeshNode)?.Path;
-                if (!string.IsNullOrEmpty(itemPath))
-                    newItems[itemPath] = typedItem;
-            }
-        }
-
-        var addedItems = new List<T>();
-        var updatedItems = new List<T>();
-        var removedItems = new List<T>();
-
-        foreach (var (path, item) in newItems)
-        {
-            if (currentItems.ContainsKey(path))
+                if (item is T typedItem)
+                {
+                    var itemPath = (item as MeshNode)?.Path;
+                    if (!string.IsNullOrEmpty(itemPath))
+                        newItems[itemPath] = typedItem;
+                }
+                return newItems;
+            })
+            .SelectMany(newItems =>
             {
-                if (changesByPath.ContainsKey(path))
-                    updatedItems.Add(item);
-            }
-            else
-            {
-                addedItems.Add(item);
-            }
-        }
+                var addedItems = new List<T>();
+                var updatedItems = new List<T>();
+                var removedItems = new List<T>();
 
-        foreach (var (path, item) in currentItems)
-        {
-            if (!newItems.ContainsKey(path))
-                removedItems.Add(item);
-        }
+                foreach (var (path, item) in newItems)
+                {
+                    if (currentItems.ContainsKey(path))
+                    {
+                        if (changesByPath.ContainsKey(path))
+                            updatedItems.Add(item);
+                    }
+                    else
+                    {
+                        addedItems.Add(item);
+                    }
+                }
 
-        currentItems.Clear();
-        foreach (var (path, item) in newItems)
-            currentItems[path] = item;
+                foreach (var (path, item) in currentItems)
+                {
+                    if (!newItems.ContainsKey(path))
+                        removedItems.Add(item);
+                }
 
-        if (addedItems.Count > 0)
-        {
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Added,
-                Items = addedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
+                currentItems.Clear();
+                foreach (var (path, item) in newItems)
+                    currentItems[path] = item;
+
+                var emissions = new List<QueryResultChange<T>>();
+                if (addedItems.Count > 0)
+                    emissions.Add(new QueryResultChange<T>
+                    {
+                        ChangeType = QueryChangeType.Added,
+                        Items = addedItems,
+                        Query = parsedQuery,
+                        Version = Interlocked.Increment(ref _version),
+                        Timestamp = DateTimeOffset.UtcNow
+                    });
+                if (updatedItems.Count > 0)
+                    emissions.Add(new QueryResultChange<T>
+                    {
+                        ChangeType = QueryChangeType.Updated,
+                        Items = updatedItems,
+                        Query = parsedQuery,
+                        Version = Interlocked.Increment(ref _version),
+                        Timestamp = DateTimeOffset.UtcNow
+                    });
+                if (removedItems.Count > 0)
+                    emissions.Add(new QueryResultChange<T>
+                    {
+                        ChangeType = QueryChangeType.Removed,
+                        Items = removedItems,
+                        Query = parsedQuery,
+                        Version = Interlocked.Increment(ref _version),
+                        Timestamp = DateTimeOffset.UtcNow
+                    });
+                return emissions.ToObservable();
             });
-        }
-
-        if (updatedItems.Count > 0)
-        {
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Updated,
-                Items = updatedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
-            });
-        }
-
-        if (removedItems.Count > 0)
-        {
-            observer.OnNext(new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Removed,
-                Items = removedItems,
-                Query = parsedQuery,
-                Version = Interlocked.Increment(ref _version),
-                Timestamp = DateTimeOffset.UtcNow
-            });
-        }
     }
 
     /// <summary>

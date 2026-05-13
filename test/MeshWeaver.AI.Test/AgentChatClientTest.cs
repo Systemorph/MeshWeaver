@@ -3,6 +3,8 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI;
@@ -79,7 +81,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
 
         // 1. Initialize - this should load agents including TodoAgent from NodeType namespace
-        await chatClient.InitializeAsync(contextPath);
+        await chatClient.Initialize(contextPath).WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // 2. Set context with the actual node from file system
         var context = new AgentContext
@@ -120,7 +122,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
 
         // Act
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync(contextPath);
+        await chatClient.Initialize(contextPath).WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var context = new AgentContext
         {

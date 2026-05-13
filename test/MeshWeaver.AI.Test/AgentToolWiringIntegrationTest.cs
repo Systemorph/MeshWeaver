@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -71,7 +73,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync("ACME/ProductLaunch");
+        await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
         chatClient.SetSelectedAgent("Orchestrator");
 
         // Send a message to trigger agent creation and tool wiring
@@ -103,7 +105,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync("ACME/ProductLaunch");
+        await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
         chatClient.SetSelectedAgent("Worker");
 
         // Send a message to trigger agent creation and tool wiring
@@ -135,7 +137,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync("ACME/ProductLaunch");
+        await chatClient.Initialize("ACME/ProductLaunch").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
         chatClient.SetSelectedAgent("Orchestrator");
 
         // Send a message to trigger agent creation

@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -136,7 +138,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
 
         // Arrange: Create AgentChatClient from the mesh service provider
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync(null, "gpt-4o-mini");
+        await chatClient.Initialize(null, "gpt-4o-mini").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Verify agents were loaded
         var agents = await chatClient.GetOrderedAgentsAsync();
@@ -229,7 +231,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
 
         // Arrange
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync(null, "gpt-4o-mini");
+        await chatClient.Initialize(null, "gpt-4o-mini").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Act
         var messages = new List<ChatMessage>
@@ -294,7 +296,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
 
         // Arrange & Act
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.InitializeAsync(null, "gpt-4o-mini");
+        await chatClient.Initialize(null, "gpt-4o-mini").WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 

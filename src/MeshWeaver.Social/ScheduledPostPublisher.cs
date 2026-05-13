@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
@@ -45,31 +46,32 @@ public sealed class ScheduledPostPublisher : BackgroundService
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    // BackgroundService boundary — single .ToTask() bridge for the framework's Task
+    // contract. Inside is one observable chain; the rest of the file is reactive.
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger?.LogInformation("ScheduledPostPublisher started (interval {Interval})", _options.PublishTickInterval);
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                var due = _queue.DrainDue(DateTimeOffset.UtcNow);
-                foreach (var snapshot in due)
+        return Observable.Interval(_options.PublishTickInterval)
+            .StartWith(-1L)
+            .SelectMany(_ => DrainAndPublishOnce()
+                .Catch((Exception ex) =>
                 {
-                    await PublishWithRetryAsync(snapshot, stoppingToken);
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger?.LogError(ex, "ScheduledPostPublisher tick failed");
-            }
-
-            try { await Task.Delay(_options.PublishTickInterval, stoppingToken); }
-            catch (OperationCanceledException) { break; }
-        }
+                    if (ex is OperationCanceledException) return Observable.Empty<Unit>();
+                    _logger?.LogError(ex, "ScheduledPostPublisher tick failed");
+                    return Observable.Empty<Unit>();
+                }))
+            .ToTask(stoppingToken);
     }
 
-    private async Task PublishWithRetryAsync(PublishableSnapshot snapshot, CancellationToken ct)
+    private IObservable<Unit> DrainAndPublishOnce() =>
+        Observable.Defer(() =>
+        {
+            var due = _queue.DrainDue(DateTimeOffset.UtcNow);
+            return due.ToObservable().SelectMany(PublishWithRetry);
+        });
+
+    private IObservable<Unit> PublishWithRetry(PublishableSnapshot snapshot)
     {
         var publisher = _publishers.FirstOrDefault(p =>
             string.Equals(p.Platform, snapshot.Platform, StringComparison.OrdinalIgnoreCase));
@@ -77,45 +79,49 @@ public sealed class ScheduledPostPublisher : BackgroundService
         {
             _logger?.LogWarning("No IPlatformPublisher registered for {Platform} — dropping {PostPath}",
                 snapshot.Platform, snapshot.PostPath);
-            return;
+            return Observable.Return(Unit.Default);
         }
 
         var request = new PlatformPublishRequest(
             snapshot.PostPath, snapshot.AuthorHandle, snapshot.Text,
             snapshot.MediaUrls, snapshot.Credential);
 
-        PublishResult? lastResult = null;
-        for (var attempt = 1; attempt <= _options.MaxPublishAttempts; attempt++)
-        {
-            try
-            {
-                lastResult = await publisher.PublishAsync(request, ct);
-                if (lastResult.Urn is not null && lastResult.Error is null)
+        return AttemptPublish(publisher, request, snapshot, attempt: 1)
+            .SelectMany(result => _bridge.ApplyPublish(snapshot.PostPath, result)
+                .Do(_ =>
                 {
-                    await _bridge.ApplyPublish(snapshot.PostPath, lastResult).FirstAsync().ToTask(ct);
-                    _logger?.LogInformation("Published {PostPath} → {Platform} {Urn}",
-                        snapshot.PostPath, snapshot.Platform, lastResult.Urn);
-                    return;
-                }
-                _logger?.LogWarning("Publish attempt {Attempt}/{Max} failed for {PostPath}: {Error}",
-                    attempt, _options.MaxPublishAttempts, snapshot.PostPath, lastResult.Error ?? "no urn");
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+                    if (result.Urn is not null && result.Error is null)
+                        _logger?.LogInformation("Published {PostPath} → {Platform} {Urn}",
+                            snapshot.PostPath, snapshot.Platform, result.Urn);
+                })
+                .Select(_ => Unit.Default));
+    }
+
+    private IObservable<PublishResult> AttemptPublish(
+        IPlatformPublisher publisher,
+        PlatformPublishRequest request,
+        PublishableSnapshot snapshot,
+        int attempt) =>
+        Observable.FromAsync(ct => publisher.PublishAsync(request, ct))
+            .Catch((Exception ex) =>
             {
                 _logger?.LogWarning(ex, "Publish attempt {Attempt}/{Max} threw for {PostPath}",
                     attempt, _options.MaxPublishAttempts, snapshot.PostPath);
-                lastResult = new PublishResult(null, null, DateTimeOffset.UtcNow, Error: ex.Message);
-            }
-
-            if (attempt < _options.MaxPublishAttempts)
+                return Observable.Return(new PublishResult(null, null, DateTimeOffset.UtcNow, Error: ex.Message));
+            })
+            .SelectMany(result =>
             {
-                var backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
-                await Task.Delay(backoff, ct);
-            }
-        }
+                if (result.Urn is not null && result.Error is null)
+                    return Observable.Return(result);
 
-        // All attempts exhausted — record the failure on the post.
-        if (lastResult is not null)
-            await _bridge.ApplyPublish(snapshot.PostPath, lastResult).FirstAsync().ToTask(ct);
-    }
+                _logger?.LogWarning("Publish attempt {Attempt}/{Max} failed for {PostPath}: {Error}",
+                    attempt, _options.MaxPublishAttempts, snapshot.PostPath, result.Error ?? "no urn");
+
+                if (attempt >= _options.MaxPublishAttempts)
+                    return Observable.Return(result);
+
+                var backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+                return Observable.Timer(backoff)
+                    .SelectMany(_ => AttemptPublish(publisher, request, snapshot, attempt + 1));
+            });
 }

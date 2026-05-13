@@ -1078,21 +1078,6 @@ public class AgentChatClient : IAgentChat
     }
 
 
-    /// <summary>
-    /// Task-shaped bridge for callers that pre-date the sync surface
-    /// (utility flows like <see cref="IconGenerator"/>/<see cref="DescriptionGenerator"/>
-    /// and the existing test base). Triggers the synced-query subscription
-    /// via <see cref="Initialize"/> and resolves on the first
-    /// <see cref="WhenInitialized"/> emission. All hub-reachable code should
-    /// use the sync <see cref="Initialize"/> + <see cref="WhenInitialized"/>
-    /// surface directly — no <c>await</c> in the hub flow.
-    /// </summary>
-    public Task InitializeAsync(string? contextPath, string? modelName = null)
-    {
-        Initialize(contextPath, modelName);
-        return WhenInitialized.Take(1).ToTask();
-    }
-
     // (Legacy LoadOrderedAgentsAsync removed — its 5 parallel QueryAsync calls
     // were the source of the chat-load deadlock. Agents are now sourced
     // exclusively from the workspace synced query subscription wired up in

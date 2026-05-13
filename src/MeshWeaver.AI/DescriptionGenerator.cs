@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -24,34 +25,34 @@ public sealed class DescriptionGenerator : IDescriptionGenerator
     }
 
     public IObservable<string> GenerateDescriptionAsync(string name, string? category, CancellationToken ct = default)
-        => Observable.FromAsync(async cancellation =>
+    {
+        var chat = new AgentChatClient(services);
+        chat.Initialize(contextPath: "Agent");
+        return chat.WhenInitialized.Take(1).SelectMany(_ =>
         {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellation);
-            var token = linked.Token;
-
-            var chat = new AgentChatClient(services);
-            await chat.InitializeAsync(contextPath: "Agent");
             chat.SetSelectedAgent("DescriptionWriter");
-
             var prompt = BuildPrompt(name, category);
             var messages = new[] { new ChatMessage(ChatRole.User, prompt) };
-
-            var sb = new StringBuilder();
-            await foreach (var msg in chat.GetResponseAsync(messages, token))
-            {
-                foreach (var content in msg.Contents.OfType<TextContent>())
-                    sb.Append(content.Text);
-            }
-
-            var raw = sb.ToString();
-            var description = ExtractDescription(raw);
-            if (string.IsNullOrEmpty(description))
-            {
-                logger?.LogWarning("DescriptionWriter response did not contain a parsable Description line. Raw: {Raw}", raw);
-                throw new InvalidOperationException("Agent did not return a description.");
-            }
-            return description;
+            return chat.GetResponseAsync(messages, ct).ToObservableSequence()
+                .Aggregate(new StringBuilder(), (sb, msg) =>
+                {
+                    foreach (var content in msg.Contents.OfType<TextContent>())
+                        sb.Append(content.Text);
+                    return sb;
+                })
+                .Select(sb =>
+                {
+                    var raw = sb.ToString();
+                    var description = ExtractDescription(raw);
+                    if (string.IsNullOrEmpty(description))
+                    {
+                        logger?.LogWarning("DescriptionWriter response did not contain a parsable Description line. Raw: {Raw}", raw);
+                        throw new InvalidOperationException("Agent did not return a description.");
+                    }
+                    return description;
+                });
         });
+    }
 
     private static string BuildPrompt(string name, string? category)
     {

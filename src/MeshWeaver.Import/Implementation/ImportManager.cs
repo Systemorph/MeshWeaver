@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Reactive.Linq;
+using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
@@ -28,89 +29,99 @@ public class ImportManager
         logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
     }
 
-    public async Task<IMessageDelivery> HandleImportRequest(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
+    public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
-        // Create cancellation token with timeout if specified in the import request
+        // Create cancellation token with timeout if specified in the import request.
+        // Disposed in the Subscribe handlers so the lifetime spans the whole pipeline.
         var cancellationTokenSource = request.Message.Timeout.HasValue
             ? new CancellationTokenSource(request.Message.Timeout.Value)
             : new CancellationTokenSource();
+        var combined = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cancellationTokenSource.Token);
 
-        // Combine the provided cancellation token with our timeout token
-        using var combined = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cancellationTokenSource.Token);
         var activity = new Activity(ActivityCategory.Import, Hub, autoClose: false);
         var importActivity = activity.StartSubActivity(ActivityCategory.Import);
-        try
-        {
+        activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
 
-            activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
-
-            var imported = await ImportInstancesAsync(request.Message, importActivity, combined.Token);
-            importActivity.Complete(log =>
-            {
-                if (log.HasErrors())
+        Observable.FromAsync(_ => ImportInstancesAsync(request.Message, importActivity, combined.Token))
+            .Subscribe(
+                imported =>
                 {
-                    Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-                    return;
-                }
-
-                // Collect all objects to save
-                var objectsToSave = imported.Collections.Values.SelectMany(x => x.Instances.Values).ToList();
-
-                if (objectsToSave.Count == 0)
-                {
-                    var reason = request.Message.Configuration is null
-                        ? (request.Message.Format is null
-                            ? "No format nor configuration is specified."
-                            : $"Is the format {request.Message.Format} correct for this file?")
-                        : "Is the provided configuration correct?";
-                    activity.LogWarning("Import {ImportId} for {RequestId} resulted in no objects to save. Did you omit specifying configuration or format?", activity.Id, request.Id);
-                    activity.Complete();
-                    Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-                    return;
-                }
-                Configuration.Workspace.RequestChange(
-                    DataChangeRequest.Update(
-                        objectsToSave.ToArray(),
-                        null,
-                        request.Message.UpdateOptions),
-                    activity,
-                    request
-                );
-
-                // Check if ImportConfiguration should be saved
-                if (request.Message.Configuration != null)
-                {
-                    var configToSave = TryGetSaveableConfiguration(request.Message.Configuration, activity);
-                    if (configToSave != null)
+                    try
                     {
-                        Configuration.Workspace.RequestChange(
-                            DataChangeRequest.Update([configToSave]),
-                            activity,
-                            request
-                        );
-                        activity.LogInformation("Including ImportConfiguration in save operation: {ConfigType}", configToSave.GetType().Name);
+                        importActivity.Complete(log =>
+                        {
+                            if (log.HasErrors())
+                            {
+                                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+                                return;
+                            }
+
+                            // Collect all objects to save
+                            var objectsToSave = imported.Collections.Values.SelectMany(x => x.Instances.Values).ToList();
+
+                            if (objectsToSave.Count == 0)
+                            {
+                                var reason = request.Message.Configuration is null
+                                    ? (request.Message.Format is null
+                                        ? "No format nor configuration is specified."
+                                        : $"Is the format {request.Message.Format} correct for this file?")
+                                    : "Is the provided configuration correct?";
+                                activity.LogWarning("Import {ImportId} for {RequestId} resulted in no objects to save. Did you omit specifying configuration or format?", activity.Id, request.Id);
+                                activity.Complete();
+                                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+                                return;
+                            }
+                            Configuration.Workspace.RequestChange(
+                                DataChangeRequest.Update(
+                                    objectsToSave.ToArray(),
+                                    null,
+                                    request.Message.UpdateOptions),
+                                activity,
+                                request
+                            );
+
+                            // Check if ImportConfiguration should be saved
+                            if (request.Message.Configuration != null)
+                            {
+                                var configToSave = TryGetSaveableConfiguration(request.Message.Configuration, activity);
+                                if (configToSave != null)
+                                {
+                                    Configuration.Workspace.RequestChange(
+                                        DataChangeRequest.Update([configToSave]),
+                                        activity,
+                                        request
+                                    );
+                                    activity.LogInformation("Including ImportConfiguration in save operation: {ConfigType}", configToSave.GetType().Name);
+                                }
+                            }
+
+                            activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
+                            Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+                        });
                     }
-                }
+                    finally
+                    {
+                        combined.Dispose();
+                        cancellationTokenSource.Dispose();
+                    }
+                },
+                ex =>
+                {
+                    try
+                    {
+                        importActivity.LogError(ex.Message);
+                        importActivity.Complete();
+                        activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, ex.Message);
+                        FinishWithException(request, ex, activity);
+                    }
+                    finally
+                    {
+                        combined.Dispose();
+                        cancellationTokenSource.Dispose();
+                    }
+                });
 
-                activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
-
-                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-            });
-            return request.Processed();
-
-        }
-        catch (Exception e)
-        {
-            importActivity.LogError(e.Message);
-            importActivity.Complete();
-
-            activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, e.Message);
-            FinishWithException(request, e, activity);
-
-            return request.Failed(e.Message);
-        }
-
-
+        return request.Processed();
     }
 
     private void FailImport(Exception exception, IMessageDelivery<ImportRequest> request)

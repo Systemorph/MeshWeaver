@@ -369,7 +369,7 @@ public class InboxToolIntegrationTest : AITestBase
 
     /// <summary>
     /// Resolves the thread hub via the in-process MeshService. Required because
-    /// <see cref="InboxTool.CheckInboxAsync"/> reads the OWN node from the
+    /// <see cref="InboxTool.CheckInbox"/> reads the OWN node from the
     /// hub's workspace.
     /// </summary>
     private async Task<IMessageHub> GetThreadHubAsync(string threadPath, CancellationToken ct)

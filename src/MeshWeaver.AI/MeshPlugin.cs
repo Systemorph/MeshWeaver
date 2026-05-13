@@ -23,101 +23,71 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes: content/, data/, schema/, model/, collection/, area/.")]
     public Task<string> Get(
         [Description("Path to data. Relative: @content/file.docx, @MyChild/*. Absolute: @/OrgA/Doc, @/OrgA/content/file.docx. For spaces: \"@content/My File.docx\"")] string path)
-    {
-        RestoreAccessContext();
-        return ops.Get(ResolveContextPath(path)).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Get(ResolveContextPath(path))).FirstAsync().ToTask();
 
     [Description("Searches the mesh using GitHub-style query syntax.")]
     public Task<string> Search(
         [Description("Query string (e.g., 'nodeType:Agent', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
-    {
-        RestoreAccessContext();
-        return ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Search(query, basePath != null ? ResolveContextPath(basePath) : null)).FirstAsync().ToTask();
 
     [Description("Creates a new node in the mesh. ALWAYS set the 'name' property to a human-readable display name.")]
     public Task<string> Create(
         [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
-    {
-        RestoreAccessContext();
-        return ops.Create(node).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Create(node)).FirstAsync().ToTask();
 
     [Description("Full replacement update of existing nodes. ALWAYS Get the node first, modify the returned object, then send it back here unchanged-except-for-edits. The 'content' field MUST be present and non-null — null content is rejected and the response will include the expected schema. Prefer Patch for small changes.")]
     public Task<string> Update(
         [Description("JSON array of complete MeshNode objects fetched via Get and then modified")] string nodes)
-    {
-        RestoreAccessContext();
-        return ops.Update(nodes).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Update(nodes)).FirstAsync().ToTask();
 
     [Description("Partial update of a single node. Only the keys present in 'fields' are changed; omitted keys preserve existing values. Do NOT include 'content' unless you intend to overwrite it — and never set 'content' to null (will be rejected with the schema). Prefer this over Update for small edits like icon/name/category.")]
     public Task<string> Patch(
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
         [Description("JSON object with ONLY the fields to change. Examples: {\"icon\": \"<svg>...</svg>\"}, {\"name\": \"New Name\"}. Include 'content' only if overwriting — and never as null.")] string fields)
-    {
-        RestoreAccessContext();
-        return ops.Patch(ResolveContextPath(path), fields).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Patch(ResolveContextPath(path), fields)).FirstAsync().ToTask();
 
     [Description("Deletes nodes from the mesh by path. Recursive: deleting a parent removes all descendants — pass the subtree root, no need to enumerate children.")]
     public Task<string> Delete(
         [Description("JSON array of path strings to delete")] string paths)
-    {
-        RestoreAccessContext();
-        return ops.Delete(paths).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Delete(paths)).FirstAsync().ToTask();
 
     [Description("Returns compilation diagnostics for a NodeType or an instance of one. Status is 'Ok' when the type compiled cleanly, 'Error' with a detailed message when it failed, or 'Unknown' when no compile has happened yet. Use this after creating/updating a NodeType to verify it actually compiles — a NodeType that doesn't compile is not 'done'.")]
     public Task<string> GetDiagnostics(
         [Description("Path to a NodeType (e.g., @Systemorph/SocialMedia/Profile) or to any instance of one")] string path)
-    {
-        RestoreAccessContext();
-        return ops.GetDiagnostics(ResolveContextPath(path)).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.GetDiagnostics(ResolveContextPath(path))).FirstAsync().ToTask();
 
     [Description("Recycles the hub at the given path by posting DisposeRequest. Forces a fresh hub initialization on the next access — use this after fixing a broken NodeType, after editing the `sources` list, or whenever a grain is stuck. Returns {status:'Recycled', path}. Wait ~100ms before the next access so the grain teardown completes.")]
     public Task<string> Recycle(
         [Description("Path to the node (e.g., @Systemorph/SocialMedia/Profile). Use the NodeType path to recycle the whole type; use an instance path to recycle just that instance's hub.")] string path)
-    {
-        RestoreAccessContext();
-        return ops.Recycle(ResolveContextPath(path)).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Recycle(ResolveContextPath(path))).FirstAsync().ToTask();
 
     [Description("Moves a node and its descendants to a new path. Equivalent to the Move menu item. Requires Delete on the source namespace and Create on the target. Source and target are full paths (namespace + id), e.g. 'OrgA/Child' -> 'OrgB/Child'.")]
     public Task<string> Move(
         [Description("Current path of the node (e.g., @OrgA/Child)")] string sourcePath,
         [Description("New path for the node (e.g., @OrgB/Child)")] string targetPath)
-    {
-        RestoreAccessContext();
-        return ops.Move(ResolveContextPath(sourcePath), ResolveContextPath(targetPath)).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Move(ResolveContextPath(sourcePath), ResolveContextPath(targetPath))).FirstAsync().ToTask();
 
     [Description("Copies a node and all its descendants to a target namespace. Equivalent to the Copy menu item. Source ids are preserved; paths are rewritten under the target namespace.")]
     public Task<string> Copy(
         [Description("Current path of the node to copy (e.g., @OrgA/Child)")] string sourcePath,
         [Description("Target namespace to copy under (e.g., @OrgB)")] string targetNamespace,
         [Description("Overwrite existing nodes at the target. Default: false (skip if any target path already exists).")] bool force = false)
-    {
-        RestoreAccessContext();
-        return ops.Copy(ResolveContextPath(sourcePath), ResolveContextPath(targetNamespace), force).FirstAsync().ToTask();
-    }
+        => WithContext(() => ops.Copy(ResolveContextPath(sourcePath), ResolveContextPath(targetNamespace), force)).FirstAsync().ToTask();
 
-    /// <summary>
-    /// Restores the user's AccessContext from <see cref="IAgentChat.ExecutionContext"/>.
-    /// AsyncLocal doesn't flow reliably through the AI framework's streaming + tool
-    /// invocation pipeline, so every plugin entry point must explicitly re-seed the
-    /// context before it hits downstream hub-backed operations. Idempotent when the
-    /// AccessContextAIFunction wrapper has already run.
-    /// </summary>
-    private void RestoreAccessContext()
-    {
-        var userCtx = chat.ExecutionContext?.UserAccessContext;
-        if (userCtx != null)
-            accessService?.SetContext(userCtx);
-    }
+    // MCP adapter helper: re-seeds the user's AccessContext on Subscribe, then runs the
+    // observable. AsyncLocal doesn't flow reliably through the AI framework's streaming +
+    // tool invocation pipeline, so each plugin entry point must explicitly re-seed before
+    // hitting hub-backed ops. Defer ensures the seed runs on Subscribe (same call as ToTask),
+    // keeping each public method a strict one-line MCP adapter per AsynchronousCalls.md.
+    private IObservable<T> WithContext<T>(Func<IObservable<T>> work) =>
+        Observable.Defer(() =>
+        {
+            var userCtx = chat.ExecutionContext?.UserAccessContext;
+            if (userCtx != null)
+                accessService?.SetContext(userCtx);
+            return work();
+        });
 
     [Description("Displays a node's visual layout in the chat UI.")]
     public string NavigateTo(
