@@ -148,6 +148,10 @@ public static class GraphConfigurationExtensions
                     services.AddSingleton<INodeTypeService, NodeTypeService>();
                     services.AddSingleton<INodeConfigurationResolver, NodeConfigurationResolver>();
                     services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
+                    // Dedicated hosted hub for NodeType stream subscriptions —
+                    // mesh hub must never be the requesting workspace for
+                    // cross-hub remote streams during routing/activation.
+                    services.AddSingleton<NodeTypeServiceHub>();
                     // Shared per-NodeType MeshNode streams (Replay(1).RefCount + 1h
                     // sliding eviction). Consumers that previously called
                     // workspace.GetMeshNodeStream(nodeTypePath) directly route

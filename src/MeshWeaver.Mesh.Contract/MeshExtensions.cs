@@ -346,14 +346,16 @@ public static class MeshExtensions
                                 Version = node.Version > 0 ? node.Version : 1,
                             };
 
-                            // 5. Enrich (optional service). EnrichWithNodeType returns
-                            //    IObservable<MeshNode> directly — no Observable.FromAsync
-                            //    wrapper, no Task-await deadlock risk in the hub flow.
-                            logger.LogDebug("[CreateNode] step=enrich-start path={Path} nodeTypeService={HasService}",
-                                newNode.Path, hub.ServiceProvider.GetService<INodeTypeService>() != null);
-                            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-                            var enrichedObs = nodeTypeService != null
-                                ? nodeTypeService.EnrichWithNodeType(newNode)
+                            // 5. Enrich (optional service). ResolveConfiguration returns
+                            //    IObservable<MeshNode> directly — no Observable.FromAsync,
+                            //    no Task-await deadlock risk. Uses INodeConfigurationResolver
+                            //    (Mesh.Contract surface) which delegates to
+                            //    NodeTypeEnrichmentHelpers in Graph.
+                            var configResolver = hub.ServiceProvider.GetService<INodeConfigurationResolver>();
+                            logger.LogDebug("[CreateNode] step=enrich-start path={Path} resolver={HasResolver}",
+                                newNode.Path, configResolver != null);
+                            var enrichedObs = configResolver != null
+                                ? configResolver.ResolveConfiguration(newNode)
                                     .Do(_ => logger.LogDebug("[CreateNode] step=enrich-emit path={Path}", newNode.Path))
                                 : Observable.Return(newNode);
 
