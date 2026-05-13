@@ -93,33 +93,23 @@ public static class PermissionTestExtensions
 
     /// <summary>
     /// Wait until <paramref name="userId"/> has <paramref name="permission"/>
-    /// on <paramref name="path"/>. Re-subscribes to
-    /// <c>GetEffectivePermissions</c> via <see cref="Observable.Interval"/>
-    /// (no <c>Task.Delay</c>) — each tick gets a fresh emission of the
-    /// per-scope synced AccessAssignment cache, so a new satellite landing
-    /// at the partition surfaces on the next tick. A single long-lived
-    /// subscription doesn't work: the cross-partition synced query path
-    /// emits via the mesh-query aggregator and doesn't always re-push to
-    /// held subscribers on slow CI, so we replicate the polling shape via
-    /// observables instead. Throws <see cref="TimeoutException"/> if the
-    /// permission never arrives within <paramref name="timeout"/>.
+    /// on <paramref name="path"/>. Single long-lived subscription —
+    /// <c>SecurityService.GetEffectivePermissions</c> is hot
+    /// (<c>Replay(1).RefCount()</c> per-scope synced AccessAssignment
+    /// cache) so a runtime AccessAssignment write surfaces here on the
+    /// synced-query Updated emission. No polling, no <c>Interval</c> —
+    /// if a held subscriber misses the update, the framework's
+    /// cross-hub change propagation has a real bug and the workaround
+    /// would just hide it.
     /// </summary>
-    public static async Task WaitForPermissionAsync(
+    public static Task WaitForPermissionAsync(
         this IMessageHub hub, string path, string userId, Permission permission,
         CancellationToken ct = default,
         TimeSpan? timeout = null)
     {
         var sec = hub.ServiceProvider.GetRequiredService<ISecurityService>();
         var t = timeout ?? TimeSpan.FromSeconds(40);
-        // Polling-via-observables: each Interval tick subscribes fresh to
-        // GetEffectivePermissions and takes the latest cached Replay(1)
-        // value. Once the synced AccessAssignment query catches the new
-        // satellite, the next tick observes the updated permission.
-        // Pure IObservable, no Task.Delay — matches the 99.4%-green
-        // baseline of the previous Task.Delay polling loop.
-        await Observable.Interval(TimeSpan.FromMilliseconds(100))
-            .StartWith(-1L)
-            .SelectMany(_ => sec.GetEffectivePermissions(path, userId).Take(1))
+        return sec.GetEffectivePermissions(path, userId)
             .Where(p => p.HasFlag(permission))
             .Timeout(t)
             .FirstAsync()
