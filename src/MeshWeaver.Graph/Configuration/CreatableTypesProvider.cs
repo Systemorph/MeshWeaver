@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -10,29 +11,32 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Builds a reactive list of <see cref="CreatableTypeInfo"/> for a given
-/// navigation context. The canonical replacement for
-/// <c>INodeTypeService.GetCreatableTypesAsync</c>: subscribes to
-/// <see cref="MeshNodeStreamExtensions.GetQuery(IWorkspace, object, string[])"/>
-/// for namespace-scoped queries — never a global <c>nodeType:NodeType</c>
-/// scan. Per <c>Doc/Architecture/SyncedMeshNodeQueries.md</c>.
+/// navigation context. Canonical replacement for the legacy
+/// <c>INodeTypeService.GetCreatableTypesAsync</c>.
 ///
-/// <para>Sources merged into the result:</para>
+/// <para>Queries run against <see cref="IMeshQueryCore"/> directly so the
+/// "what types exist?" lookup is NOT access-control-filtered. The list
+/// of candidate types is independent of the user's permissions on
+/// individual instances — visibility of an instance has nothing to do
+/// with whether a type is offered to a user who has Create permission
+/// at <paramref name="nodePath"/>. The Create-permission gate runs at
+/// the outer level via <see cref="ISecurityService.HasPermission"/>.</para>
+///
+/// <para>Sources merged into the result (deduped by NodeType path):</para>
 /// <list type="number">
-///   <item>Child NodeTypes under the current <paramref name="nodePath"/>
-///     (<c>namespace:{nodePath} nodeType:NodeType</c>).</item>
-///   <item>Child NodeTypes under the parent's NodeType — e.g. an
-///     <c>ACME/ProductLaunch</c> node with <c>NodeType=ACME/Project</c>
-///     creates <c>ACME/Project/Todo</c>.</item>
+///   <item>NodeType MeshNodes returned by the query (dynamic NodeTypes
+///     persisted as <c>nodeType:NodeType</c> rows + static NodeTypes
+///     surfaced by <see cref="IStaticNodeProvider"/>).</item>
+///   <item>Static <see cref="MeshConfiguration.Nodes"/> entries with
+///     <c>NodeType = "NodeType"</c> — for AddMeshNodes registrations
+///     that aren't persisted (built-in types like Markdown, Thread).</item>
 ///   <item>Explicit <c>CreatableTypes</c> JSON on the parent NodeType
 ///     definition (read from
 ///     <see cref="NodeTypeDefinition.CreatableTypes"/>).</item>
 ///   <item><see cref="MeshConfiguration.GlobalCreatableTypes"/> when
-///     <c>IncludeGlobalTypes</c> is true (default).</item>
+///     <c>IncludeGlobalTypes</c> on the parent's NodeTypeDefinition is
+///     true (default).</item>
 /// </list>
-///
-/// <para>The provider deliberately does NOT scan <c>nodeType:NodeType</c>
-/// without a namespace bound — the "collect everything" pattern that
-/// pre-empted this refactor.</para>
 /// </summary>
 internal sealed class CreatableTypesProvider(
     IMessageHub hub,
@@ -42,49 +46,74 @@ internal sealed class CreatableTypesProvider(
     public IObservable<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypes(
         string? nodePath, MeshNode? parentNode)
     {
-        var workspace = hub.GetWorkspace();
+        var meshQueryCore = hub.ServiceProvider.GetService<IMeshQueryCore>();
         var currentType = parentNode?.NodeType;
-        var queries = BuildQueries(nodePath, currentType);
 
-        IObservable<IReadOnlyList<CreatableTypeInfo>> typesObs;
-        if (queries.Length == 0)
-        {
-            // Root case: no live query. Static types + globals from in-memory
-            // MeshConfiguration only — no DB scan.
-            typesObs = Observable.Return(BuildRootInfos(meshConfiguration));
-        }
-        else
-        {
-            typesObs = workspace.GetQuery($"creatable-types:{nodePath ?? ""}", queries)
-                .Select(snapshot => BuildInfos(snapshot, meshConfiguration, parentNode, currentType));
-        }
+        var typeNodesObs = meshQueryCore is null
+            ? Observable.Return<IReadOnlyList<MeshNode>>([])
+            : QueryTypeNodes(meshQueryCore, nodePath, currentType);
 
-        // Filter by Create permission on the parent path — combined with the
-        // live synced access-control query inside ISecurityService.HasPermission
-        // (which itself binds to workspace.GetQuery on AccessAssignment). If the
-        // user can't create at this namespace, return empty regardless of
-        // candidate types.
+        var typesObs = typeNodesObs.Select(typeNodes =>
+            BuildInfos(typeNodes, meshConfiguration, currentType));
+
+        // Outer security gate: only apply Create-permission filter for a
+        // specific parent path. Root listing (nodePath == "") is global
+        // metadata — anyone navigating to "Create" at root sees the full
+        // type set; the Create operation itself is gated at the receiver.
         if (securityService is null || string.IsNullOrEmpty(nodePath))
             return typesObs;
 
         return securityService.HasPermission(nodePath, Permission.Create)
-            .CombineLatest(typesObs, (canCreate, types) => canCreate ? types : (IReadOnlyList<CreatableTypeInfo>)[]);
+            .CombineLatest(typesObs, (canCreate, types) =>
+                canCreate ? types : (IReadOnlyList<CreatableTypeInfo>)[]);
+    }
+
+    /// <summary>
+    /// Run the right shape of query for the given <paramref name="nodePath"/>
+    /// + <paramref name="currentType"/> against <see cref="IMeshQueryCore"/>
+    /// — no access control on the result set. Path-deduped via
+    /// <c>ImmutableDictionary&lt;string, MeshNode&gt;</c> Scan.
+    /// </summary>
+    private static IObservable<IReadOnlyList<MeshNode>> QueryTypeNodes(
+        IMeshQueryCore meshQueryCore, string? nodePath, string? currentType)
+    {
+        var queries = BuildQueries(nodePath, currentType);
+        if (queries.Length == 0)
+            return Observable.Return<IReadOnlyList<MeshNode>>([]);
+
+        var observables = queries.Select(q => meshQueryCore
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q), options: null!)
+            .Take(1)
+            .Catch<QueryResultChange<MeshNode>, Exception>(
+                _ => Observable.Empty<QueryResultChange<MeshNode>>()));
+
+        return Observable.Merge(observables)
+            .SelectMany(change => change.Items)
+            .Scan(
+                ImmutableDictionary<string, MeshNode>.Empty
+                    .WithComparers(StringComparer.OrdinalIgnoreCase),
+                (acc, node) => acc.ContainsKey(node.Path) ? acc : acc.Add(node.Path, node))
+            .Select(acc => (IReadOnlyList<MeshNode>)acc.Values.ToArray());
     }
 
     private static string[] BuildQueries(string? nodePath, string? currentType)
     {
         if (string.IsNullOrEmpty(nodePath))
-            return [];
+        {
+            // Root listing: no namespace bound. Surface every NodeType
+            // definition so the create UI can offer the full menu.
+            return ["nodeType:NodeType"];
+        }
 
         // Q1: NodeTypes along the ancestor chain of <myself> — picks up
         // types defined under any namespace in the path's hierarchy.
-        // Q2 (when applicable): NodeTypes under the parent's NodeType so
-        // an instance can offer the children its type defines (e.g. an
-        // ACME/Project instance can create ACME/Project/Todo).
         var list = new List<string>(2)
         {
             $"nodeType:NodeType scope:selfAndAncestors namespace:{nodePath}",
         };
+        // Q2 (when applicable): NodeTypes under the parent's NodeType so
+        // an instance can offer the children its type defines (e.g. an
+        // ACME/Project instance can create ACME/Project/Todo).
         if (!string.IsNullOrEmpty(currentType)
             && !string.Equals(currentType, MeshNode.NodeTypePath, StringComparison.Ordinal))
         {
@@ -93,36 +122,34 @@ internal sealed class CreatableTypesProvider(
         return list.ToArray();
     }
 
-    private static IReadOnlyList<CreatableTypeInfo> BuildRootInfos(MeshConfiguration meshConfiguration)
-    {
-        var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<CreatableTypeInfo>();
-        foreach (var typePath in meshConfiguration.GlobalCreatableTypes)
-        {
-            if (!added.Add(typePath)) continue;
-            var info = BuildInfoFromConfig(typePath, meshConfiguration);
-            if (info is not null) result.Add(info);
-        }
-        return result;
-    }
-
     private static IReadOnlyList<CreatableTypeInfo> BuildInfos(
-        IEnumerable<MeshNode> snapshot,
+        IReadOnlyList<MeshNode> queryNodes,
         MeshConfiguration meshConfiguration,
-        MeshNode? parentNode,
         string? currentType)
     {
         var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<CreatableTypeInfo>();
 
-        // 1. Synced-query child NodeTypes (deduped by Path).
-        foreach (var typeNode in snapshot)
+        // 1. Query-returned NodeTypes (already deduped by Path upstream).
+        foreach (var typeNode in queryNodes)
         {
             if (!added.Add(typeNode.Path)) continue;
             result.Add(BuildInfoFromMeshNode(typeNode));
         }
 
-        // 2. JSON-based CreatableTypes from the parent's NodeType definition.
+        // 2. Static AddMeshNodes-registered NodeType MeshNodes that aren't
+        //    persisted (don't show up in the query). Filter on
+        //    NodeType == MeshNode.NodeTypePath to grab only NodeType
+        //    definitions, not arbitrary static nodes.
+        foreach (var (path, typeNode) in meshConfiguration.Nodes)
+        {
+            if (!string.Equals(typeNode.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+                continue;
+            if (!added.Add(path)) continue;
+            result.Add(BuildInfoFromMeshNode(typeNode));
+        }
+
+        // 3. JSON-based CreatableTypes from the parent's NodeType definition.
         var includeGlobal = true;
         if (!string.IsNullOrEmpty(currentType)
             && !string.Equals(currentType, MeshNode.NodeTypePath, StringComparison.Ordinal)
@@ -141,7 +168,7 @@ internal sealed class CreatableTypesProvider(
             }
         }
 
-        // 3. Global types — opt-out via parent's IncludeGlobalTypes.
+        // 4. Global types — opt-out via parent's IncludeGlobalTypes.
         if (includeGlobal)
         {
             foreach (var typePath in meshConfiguration.GlobalCreatableTypes)
