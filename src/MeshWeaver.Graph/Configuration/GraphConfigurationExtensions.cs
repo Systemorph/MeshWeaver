@@ -142,14 +142,12 @@ public static class GraphConfigurationExtensions
                 .WithServices(services =>
                 {
                     // Register MeshNodeCompilationService as both concrete and interface
-                    // NodeTypeService needs the concrete type for internal CompileToReleaseAsync method
+                    // for callers that need the concrete CompileAndGetConfigurations entry point.
                     services.AddSingleton<MeshNodeCompilationService>();
                     services.AddSingleton<IMeshNodeCompilationService>(sp => sp.GetRequiredService<MeshNodeCompilationService>());
-                    services.AddSingleton<INodeTypeService, NodeTypeService>();
                     services.AddSingleton<INodeConfigurationResolver, NodeConfigurationResolver>();
                     services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
-                    // Replacement for INodeTypeService.GetCreatableTypesAsync — synced-query
-                    // based, namespace-bounded (no global nodeType:NodeType scan).
+                    // Synced-query / namespace-bounded creatable-types lookup.
                     services.AddSingleton<ICreatableTypesProvider, CreatableTypesProvider>();
                     // Dedicated hosted hub for NodeType stream subscriptions —
                     // mesh hub must never be the requesting workspace for
