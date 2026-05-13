@@ -152,54 +152,62 @@ internal static class NodeTypeContractHandler
                 return compilationService.CompileAndGetConfigurations(node)
                     .Select(result => BuildResponse(hubPath, node, result));
             })
-            .Subscribe(
-                response =>
+            .SelectMany(response =>
+            {
+                // Write compile state back to the MeshNode FIRST, then post the
+                // response. Sequencing matters: callers that bridge
+                // GetCompilationPathRequest → Get the MeshNode immediately must
+                // see the post-compile state. Previously this was fire-and-forget
+                // — the response was posted before the .Update landed, leaving
+                // a race window where the MeshNode still showed Pending/null.
+                IObservable<GetCompilationPathResponse> writeBack;
+                try
                 {
-                    // Write compile state back to the MeshNode so any consumer
-                    // reading off NodeTypeDefinition (Stage 3b diagnostics,
-                    // synced-query subscribers, cross-silo cache propagation)
-                    // sees the result without consulting NodeTypeService's
-                    // in-memory dicts. Fire-and-forget; the response post is
-                    // unchanged.
-                    try
+                    writeBack = hub.GetWorkspace().GetMeshNodeStream().Update(curr =>
                     {
-                        hub.GetWorkspace().GetMeshNodeStream().Update(curr =>
-                        {
-                            if (curr.Content is not NodeTypeDefinition def)
-                                return curr;
-                            if (response!.Success && !string.IsNullOrEmpty(response.AssemblyLocation))
-                                return curr with
-                                {
-                                    Content = def with
-                                    {
-                                        CompilationStatus = CompilationStatus.Ok,
-                                        CompilationError = null,
-                                        LastCompileSucceededAt = DateTimeOffset.UtcNow
-                                    },
-                                    AssemblyLocation = response.AssemblyLocation
-                                };
+                        if (curr.Content is not NodeTypeDefinition def)
+                            return curr;
+                        if (response!.Success && !string.IsNullOrEmpty(response.AssemblyLocation))
                             return curr with
                             {
                                 Content = def with
                                 {
-                                    CompilationStatus = CompilationStatus.Error,
-                                    CompilationError = response.Error ?? "Compilation failed"
-                                }
+                                    CompilationStatus = CompilationStatus.Ok,
+                                    CompilationError = null,
+                                    LastCompileSucceededAt = DateTimeOffset.UtcNow
+                                },
+                                AssemblyLocation = response.AssemblyLocation
                             };
-                        }).Subscribe(
-                            _ => { },
-                            updEx => logger?.LogDebug(updEx,
-                                "GetCompilationPathRequest at {HubPath}: failed to write-back compile state",
-                                hubPath));
-                    }
-                    catch (Exception writeEx)
+                        return curr with
+                        {
+                            Content = def with
+                            {
+                                CompilationStatus = CompilationStatus.Error,
+                                CompilationError = response.Error ?? "Compilation failed"
+                            }
+                        };
+                    })
+                    .Take(1)
+                    .Select(_ => response!)
+                    .Catch<GetCompilationPathResponse, Exception>(updEx =>
                     {
-                        logger?.LogDebug(writeEx,
-                            "GetCompilationPathRequest at {HubPath}: write-back faulted",
+                        logger?.LogDebug(updEx,
+                            "GetCompilationPathRequest at {HubPath}: failed to write-back compile state",
                             hubPath);
-                    }
-                    hub.Post(response!, o => o.ResponseFor(request));
-                },
+                        return Observable.Return(response!);
+                    });
+                }
+                catch (Exception writeEx)
+                {
+                    logger?.LogDebug(writeEx,
+                        "GetCompilationPathRequest at {HubPath}: write-back faulted",
+                        hubPath);
+                    writeBack = Observable.Return(response!);
+                }
+                return writeBack;
+            })
+            .Subscribe(
+                response => hub.Post(response, o => o.ResponseFor(request)),
                 ex =>
                 {
                     logger?.LogWarning(ex,

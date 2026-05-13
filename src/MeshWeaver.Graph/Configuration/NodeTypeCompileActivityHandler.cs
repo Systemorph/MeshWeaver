@@ -70,14 +70,17 @@ internal static class NodeTypeCompileActivityHandler
 
         // 1. Activity owns the "Compiling" transition. The watcher only
         //    flipped Pending → no state on the parent until the activity
-        //    writes it. Pre-existing watcher code that wrote Compiling is now
-        //    redundant (kept for backwards compat with the inline fallback).
+        //    writes it. Single-writer = no race vs the watcher's previous
+        //    Compiling write.
         WriteToParent(parentStream, def => def with
         {
             CompilationStatus = CompilationStatus.Compiling,
             LastCompileStartedAt = DateTimeOffset.UtcNow,
             LastCompilationActivityPath = activityPath
         }, logger, parentPath, "Compiling");
+        NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+            $"Compile started for {parentPath} (activity hub: {activityHub.Address.Path})",
+            logger!);
 
         parentStream
             .Where(change => change?.Value?.Content is NodeTypeDefinition)
@@ -86,8 +89,11 @@ internal static class NodeTypeCompileActivityHandler
             .SelectMany(change =>
             {
                 var pendingNode = change.Value!;
-                logger?.LogInformation("[NTCA] starting compile for {ParentPath} (activity={ActivityPath})",
+                logger?.LogInformation("[NTCA] starting Roslyn for {ParentPath} (activity={ActivityPath})",
                     parentPath, activityPath);
+                NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+                    $"Read NodeType MeshNode snapshot (version={pendingNode.Version}). Invoking Roslyn…",
+                    logger!);
 
                 return compilationService.CompileAndGetConfigurations(pendingNode, sourcesOverride: null)
                     .Take(1)
@@ -101,19 +107,24 @@ internal static class NodeTypeCompileActivityHandler
                     var ok = outcome.Error is null
                         && !string.IsNullOrEmpty(outcome.Result?.AssemblyLocation);
 
-                    // 2. Activity terminal state lands on its own ActivityLog
-                    //    (observability) before the parent gets the success/error.
                     if (ok)
-                        NodeTypeCompilationActivity.MarkSucceeded(activityHub, activityPath, logger!);
-                    else
-                        NodeTypeCompilationActivity.MarkFailed(activityHub, activityPath,
-                            outcome.Error?.Message
-                                ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
-                                    ? string.Join("; ", errs.Select(m => m.Message))
-                                    : "Compilation produced no assembly"),
+                    {
+                        NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+                            $"Roslyn produced assembly at: {outcome.Result!.AssemblyLocation}",
                             logger!);
+                    }
+                    else
+                    {
+                        var errMsg = outcome.Error?.Message
+                            ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
+                                ? string.Join("; ", errs.Select(m => m.Message))
+                                : "Compilation produced no assembly");
+                        NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+                            $"Roslyn failed: {errMsg}", logger!,
+                            Microsoft.Extensions.Logging.LogLevel.Error);
+                    }
 
-                    // 3. Release MeshNode created BEFORE the parent's Ok write
+                    // 2. Release MeshNode created BEFORE the parent's Ok write
                     //    so the parent's LatestReleasePath points at an existing
                     //    node. Release.CompilationActivityPath links back to
                     //    this activity for full build-detail traceability —
@@ -124,7 +135,39 @@ internal static class NodeTypeCompileActivityHandler
                     {
                         newReleasePath = MeshDataSourceExtensions.TryCreateReleaseNode(
                             activityHub, parentPath, outcome.Result!, outcome.PendingNode, activityPath, logger);
+                        // Assert the Release was created AND linked correctly.
+                        // TryCreateReleaseNode returns the path on success or
+                        // null when CreateNode couldn't be dispatched (no
+                        // IMeshService — e.g. early bootstrap).
+                        if (newReleasePath is not null)
+                        {
+                            NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+                                $"Release created: {newReleasePath} → assembly={outcome.Result!.AssemblyLocation}, activity={activityPath}",
+                                logger!);
+                            logger?.LogInformation(
+                                "[NTCA] Release {ReleasePath} linked to activity {ActivityPath} + assembly {AssemblyLocation}",
+                                newReleasePath, activityPath, outcome.Result.AssemblyLocation);
+                        }
+                        else
+                        {
+                            NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
+                                "Release node NOT created (no IMeshService available) — assembly still usable directly",
+                                logger!, Microsoft.Extensions.Logging.LogLevel.Warning);
+                        }
                     }
+
+                    // 3. Activity terminal state lands on its own ActivityLog
+                    //    AFTER the release-creation log so subscribers see
+                    //    "release linked" before the activity closes.
+                    if (ok)
+                        NodeTypeCompilationActivity.MarkSucceeded(activityHub, activityPath, logger!);
+                    else
+                        NodeTypeCompilationActivity.MarkFailed(activityHub, activityPath,
+                            outcome.Error?.Message
+                                ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
+                                    ? string.Join("; ", errs.Select(m => m.Message))
+                                    : "Compilation produced no assembly"),
+                            logger!);
 
                     // 4. Activity writes terminal state to parent MeshNode via the
                     //    same long-lived stream. AssemblyLocation, CompiledSources,
