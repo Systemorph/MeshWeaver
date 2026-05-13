@@ -91,7 +91,9 @@ public static class AgentPickerProjection
     public static IObservable<IReadOnlyList<AgentDisplayInfo>> ObserveAgents(
         IWorkspace workspace, IMessageHub hub,
         string? currentPath = null, string? nodeTypePath = null)
-        => ObserveSnapshot(workspace, hub, AgentsQueryId, BuildAgentQueries(currentPath, nodeTypePath))
+        => ObserveSnapshot(workspace, hub,
+                BuildQueryId(AgentsQueryId, currentPath, nodeTypePath),
+                BuildAgentQueries(currentPath, nodeTypePath))
             .Select(snapshot => ProjectAgents(snapshot, hub.JsonSerializerOptions));
 
     /// <summary>
@@ -102,8 +104,21 @@ public static class AgentPickerProjection
     public static IObservable<IReadOnlyList<ModelInfo>> ObserveModels(
         IWorkspace workspace, IMessageHub hub,
         string? currentPath = null, string? nodeTypePath = null)
-        => ObserveSnapshot(workspace, hub, ModelsQueryId, BuildModelQueries(currentPath, nodeTypePath))
+        => ObserveSnapshot(workspace, hub,
+                BuildQueryId(ModelsQueryId, currentPath, nodeTypePath),
+                BuildModelQueries(currentPath, nodeTypePath))
             .Select(snapshot => ProjectModels(snapshot, hub.JsonSerializerOptions));
+
+    /// <summary>
+    /// The workspace.GetQuery registry caches by id — first call wins, every
+    /// subsequent call with the same id but different queries returns the cached
+    /// observable. So agent / model queries that vary by context (currentPath +
+    /// nodeTypePath) MUST use a context-scoped id; otherwise re-init after
+    /// SetContext returns the stale snapshot from the first subscribe and
+    /// NodeType-defined agents stay invisible.
+    /// </summary>
+    private static string BuildQueryId(string baseId, string? currentPath, string? nodeTypePath) =>
+        $"{baseId}|p={currentPath ?? ""}|t={nodeTypePath ?? ""}";
 
     /// <summary>
     /// Live MeshNode snapshot for one of the named picker queries — single

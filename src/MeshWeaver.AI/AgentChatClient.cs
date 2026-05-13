@@ -34,6 +34,7 @@ public class AgentChatClient : IAgentChat
     private HandoffRequest? pendingHandoff;
     private ImmutableList<AgentDisplayInfo> loadedAgents = ImmutableList<AgentDisplayInfo>.Empty;
     private string? lastLoadedContextPath;
+    private string? lastLoadedNodeTypePath;
     private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
     private AgentSession? sharedThread;
@@ -935,10 +936,19 @@ public class AgentChatClient : IAgentChat
         if (applicationContext is { Path: { Length: > 0 } p })
         {
             var normalized = NormalizeContextPath(p);
-            if (!string.Equals(normalized, p, StringComparison.Ordinal))
+            if (!string.IsNullOrEmpty(normalized) && !string.Equals(normalized, p, StringComparison.Ordinal))
                 applicationContext = applicationContext with { Path = normalized };
         }
         Context = applicationContext;
+
+        // Re-initialise the synced-agent subscription whenever the context node's
+        // NodeType changes — that's what determines the third per-NodeType query
+        // in BuildAgentQueries (`namespace:{nodeTypePath} ... scope:selfAndAncestors`).
+        // Without this, agents defined under the NodeType path (e.g. TodoAgent at
+        // ACME/Project) never surface for an instance whose NodeType points at it.
+        var newNodeTypePath = applicationContext?.Node?.NodeType;
+        if (lastLoadedContextPath != null && newNodeTypePath != lastLoadedNodeTypePath)
+            Initialize(lastLoadedContextPath, currentModelName, newNodeTypePath);
     }
 
     /// <summary>
@@ -959,13 +969,20 @@ public class AgentChatClient : IAgentChat
     /// load. Callers that need an explicit ready-gate should subscribe to
     /// <see cref="WhenInitialized"/>.
     /// </summary>
-    public AgentChatClient Initialize(string? contextPath, string? modelName = null)
+    public AgentChatClient Initialize(string? contextPath, string? modelName = null, string? nodeTypePath = null)
     {
         // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
         // their main-node path before any downstream query/cache key uses them.
         contextPath = NormalizeContextPath(contextPath);
         currentModelName = modelName;
         lastLoadedContextPath = contextPath;
+        // Default the NodeType-search namespace to the context node's NodeType when the
+        // caller didn't supply one. AgentPickerProjection.BuildAgentQueries will only
+        // emit the third query (`namespace:{nodeTypePath} scope:selfAndAncestors`) when
+        // this is non-null — that's what surfaces NodeType-defined agents (e.g. TodoAgent
+        // at ACME/Project for an instance with NodeType=ACME/Project).
+        nodeTypePath ??= Context?.Node?.NodeType;
+        lastLoadedNodeTypePath = nodeTypePath;
 
         // First-time init or context switch: subscribe to the SAME synced-query
         // pipe the chat picker UI uses (AgentPickerProjection.ObserveAgents/
@@ -996,7 +1013,7 @@ public class AgentChatClient : IAgentChat
         // The 5-min no-progress watchdog in ThreadExecution is the canonical
         // safety net for genuinely stuck pipelines.
         var readinessFired = false;
-        agentsSubscription = AgentPickerProjection.ObserveAgents(workspace, hub, contextPath)
+        agentsSubscription = AgentPickerProjection.ObserveAgents(workspace, hub, contextPath, nodeTypePath)
             .Subscribe(
                 agents =>
                 {
@@ -1040,7 +1057,7 @@ public class AgentChatClient : IAgentChat
         // Same shape: live subscription with no Timeout fallback —
         // the synced query emits Initial then quiesces, so a Timeout(8s,
         // empty) wrapper would wipe loadedModels 8s after the real Initial.
-        modelsSubscription = AgentPickerProjection.ObserveModels(workspace, hub, contextPath)
+        modelsSubscription = AgentPickerProjection.ObserveModels(workspace, hub, contextPath, nodeTypePath)
             .Subscribe(
                 models =>
                 {
@@ -1328,8 +1345,11 @@ public class AgentChatClient : IAgentChat
     public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
     {
         var currentContextPath = Context?.Address?.ToString();
-        if (currentContextPath != null && currentContextPath != lastLoadedContextPath)
-            Initialize(currentContextPath, currentModelName);
+        var currentNodeTypePath = Context?.Node?.NodeType;
+        if (currentContextPath != null
+            && (currentContextPath != lastLoadedContextPath
+                || currentNodeTypePath != lastLoadedNodeTypePath))
+            Initialize(currentContextPath, currentModelName, currentNodeTypePath);
 
         return Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(loadedAgents);
     }

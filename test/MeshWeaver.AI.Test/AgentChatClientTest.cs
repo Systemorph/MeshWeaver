@@ -44,11 +44,11 @@ public class AgentChatClientTest : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddFileSystemPersistence(TestDataPath)
-            .ConfigureServices(services =>
-            {
-                return services;
-            })
             .AddGraph()
+            // AddAI registers Agent NodeType + AgentConfiguration content type so
+            // .md files with `nodeType: Agent` deserialise into AgentConfiguration —
+            // without this AgentPickerProjection.ProjectAgents filters them all out.
+            .AddAI()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
@@ -80,18 +80,22 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Act - Create AgentChatClient using the mesh's service provider
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
 
-        // 1. Initialize - this should load agents including TodoAgent from NodeType namespace
-        await chatClient.Initialize(contextPath).WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        // 2. Set context with the actual node from file system
-        var context = new AgentContext
+        // 1. Initialize then SetContext — SetContext re-inits the subscription with
+        //    the context node's NodeType as nodeTypePath, which is what brings in
+        //    agents at namespace:{NodeType} via scope:selfAndAncestors.
+        chatClient.Initialize(contextPath);
+        chatClient.SetContext(new AgentContext
         {
             Address = new Address("ACME", "ProductLaunch"),
             Node = productLaunchNode
-        };
-        chatClient.SetContext(context);
+        });
 
-        // 3. Get ordered agents - this should return TodoAgent
+        // Wait until the synced query emits with the NodeType-scoped agents.
+        await chatClient.WhenInitialized
+            .Where(c => c.GetOrderedAgentsAsync().Result.Any(a => a.Path == expectedTodoAgentPath))
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+
         var orderedAgents = await chatClient.GetOrderedAgentsAsync();
 
         // Assert
@@ -100,7 +104,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // CRITICAL: TodoAgent should be FIRST because it has order: -10
         // (lower order = higher priority)
         var firstAgent = orderedAgents.First();
-        firstAgent.Name.Should().Be("TodoAgent",
+        firstAgent.Name.Should().Be("Todo Agent",
             "TodoAgent should be FIRST agent because it has order: -10 (lowest)");
         firstAgent.Path.Should().Be(expectedTodoAgentPath,
             "TodoAgent should come from the NodeType path (ACME/Project)");
@@ -122,14 +126,18 @@ public class AgentChatClientTest : MonolithMeshTestBase
 
         // Act
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
-        await chatClient.Initialize(contextPath).WhenInitialized.FirstAsync().ToTask(TestContext.Current.CancellationToken);
-
-        var context = new AgentContext
+        chatClient.Initialize(contextPath);
+        chatClient.SetContext(new AgentContext
         {
             Address = new Address("ACME"),
             Node = acmeNode
-        };
-        chatClient.SetContext(context);
+        });
+
+        // Wait for the synced query to emit a non-empty agent set.
+        await chatClient.WhenInitialized
+            .Where(c => c.GetOrderedAgentsAsync().Result.Count > 0)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var orderedAgents = await chatClient.GetOrderedAgentsAsync();
 
