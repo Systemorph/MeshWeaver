@@ -579,17 +579,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         //    cross-silo request — that is the cluster-wide cache-propagation
         //    benefit of the watcher.
         //
-        // The caller-request path stays the primary trigger because it integrates
-        // cleanly with HandleCreateNodeRequest's chain (timeout-bounded, single
-        // emission, surfaces compile errors back to the create flow). The
-        // NodeTypeContractHandler now writes compile state back to the MeshNode,
-        // so synced-query subscribers see the result without consulting
-        // NodeTypeService's in-memory dicts.
-        // <para>The stream-based <see cref="ResolveViaStream"/> path is kept for
-        // when the watcher-driven workflow matures (Stage 4 of the NodeType-
-        // service deletion). Switching unconditionally regressed test latency
-        // (20s timeouts) because dynamic types in test fixtures don't always
-        // emit a settled Ok/Error within the stream's window.</para>
+        // ResolveViaRequest stays primary while ResolveViaStream's convergence
+        // budget is tuned. The watcher now dispatches compile to the Activity
+        // hub (per ActivityControlPlane doctrine), but the round-trip latency
+        // through the activity → parent MeshNode write-back → stream emission
+        // is currently >20 s for some dynamic NodeTypes, breaking test
+        // fixtures with [Fact(Timeout = 20000)]. ResolveViaRequest stays
+        // bounded by the 30-s GetCompilationPathRequest timeout and is
+        // proven-stable.
         return ResolveViaRequest(node, nodeType);
     }
 
