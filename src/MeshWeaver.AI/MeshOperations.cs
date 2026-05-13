@@ -35,7 +35,6 @@ public class MeshOperations
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
     private readonly IMeshService mesh;
-    private readonly INodeTypeService? nodeTypeService;
 
     /// <summary>
     /// Callback invoked when a node is created, updated, or patched.
@@ -48,7 +47,6 @@ public class MeshOperations
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
         this.mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        this.nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
     }
 
     /// <summary>
@@ -75,29 +73,19 @@ public class MeshOperations
 
         // Fast path: the input node already IS the NodeType MeshNode and its
         // Content is the strongly-typed NodeTypeDefinition. Read the error
-        // straight off it — no extra round-trip. Bridge during the
-        // NodeTypeService deletion transition: a compile that ran through
-        // NodeTypeService's own path records the error in the service's
-        // in-memory cache without writing it back to the MeshNode; fall back
-        // to the service getter when the MeshNode's own field is null.
+        // straight off it — no extra round-trip.
         if (isNodeTypeDef && node.Content is Graph.Configuration.NodeTypeDefinition ownDef)
-            return Observable.Return<string?>(ownDef.CompilationError
-                ?? nodeTypeService?.GetCompilationError(nodeTypePath));
+            return Observable.Return<string?>(ownDef.CompilationError);
 
         // Slow path: read the NodeType MeshNode fresh from its owning per-node
         // hub. Take(1) — single-emission read of the live CompilationError
-        // off the NodeType definition. Bridge during the NodeTypeService
-        // deletion transition: a compile that ran through NodeTypeService's
-        // own path records the error in the service's in-memory cache without
-        // writing back to the MeshNode. Fall back to the service getter when
-        // the MeshNode has no recorded error.
+        // off the NodeType definition.
         return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
             .Where(n => n is not null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Select(n => (n!.Content as Graph.Configuration.NodeTypeDefinition)?.CompilationError)
-            .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
-            .Select(error => error ?? nodeTypeService?.GetCompilationError(nodeTypePath));
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(null));
     }
 
     /// <summary>
@@ -254,8 +242,9 @@ public class MeshOperations
     /// broken-NodeType path whose per-node hub couldn't activate (compilation
     /// failed) and whose <see cref="GetDataRequest"/> timed out after 10s.
     ///
-    /// <para>If <see cref="INodeTypeService.GetCompilationError"/> has a recorded
-    /// error for this path, the catalog still has the node's stored definition
+    /// <para>If the NodeType MeshNode carries a recorded
+    /// <see cref="Graph.Configuration.NodeTypeDefinition.CompilationError"/>,
+    /// the catalog still has the node's stored definition
     /// even though its hub is broken. We read it via
     /// <see cref="IMeshService.QueryAsync"/> as the documented exception to
     /// "queries are for sets only" (see <c>Doc/Architecture/CqrsAndContentAccess.md</c>):
@@ -1514,7 +1503,7 @@ public class MeshOperations
 
                 // Fast path: the input node already IS the NodeType MeshNode.
                 if (isNodeTypeDef && node!.Content is Graph.Configuration.NodeTypeDefinition ownDef)
-                    return Observable.Return(FormatDiagnosticsFromDef(ownDef, nodeTypePath, nodeTypeService));
+                    return Observable.Return(FormatDiagnosticsFromDef(ownDef, nodeTypePath));
 
                 // Static fast path: NodeType registered via AddMeshNodes — there is
                 // no per-NodeType hub or persisted MeshNode, so the runtime status
@@ -1535,56 +1524,18 @@ public class MeshOperations
                     {
                         var def = typeNode?.Content as Graph.Configuration.NodeTypeDefinition;
                         if (def is null)
-                        {
-                            // No NodeTypeDefinition on the resolved MeshNode — fall
-                            // back to nodeTypeService getters (the legacy in-memory
-                            // cache may still hold the status from a compile that
-                            // didn't write through to the MeshNode).
-                            return FallbackToNodeTypeService(nodeTypePath);
-                        }
-                        return FormatDiagnosticsFromDef(def, nodeTypePath, nodeTypeService);
+                            return JsonSerializer.Serialize(
+                                new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
+                                hub.JsonSerializerOptions);
+                        return FormatDiagnosticsFromDef(def, nodeTypePath);
                     });
             });
     }
 
-    private string FallbackToNodeTypeService(string nodeTypePath)
-    {
-        if (nodeTypeService is null)
-            return JsonSerializer.Serialize(
-                new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
-                hub.JsonSerializerOptions);
-
-        var status = nodeTypeService.GetStatus(nodeTypePath);
-        return FormatDiagnostics(
-            status,
-            nodeTypePath,
-            error: status == CompilationStatus.Error ? nodeTypeService.GetCompilationError(nodeTypePath) : null,
-            startedAt: status == CompilationStatus.Compiling ? nodeTypeService.GetCompilationStartedAt(nodeTypePath) : null,
-            lastCompiledAt: status == CompilationStatus.Ok ? nodeTypeService.GetLastSuccessfulCompileAt(nodeTypePath) : null,
-            hub.JsonSerializerOptions);
-    }
-
     private string FormatDiagnosticsFromDef(
-        Graph.Configuration.NodeTypeDefinition def, string nodeTypePath,
-        INodeTypeService? nodeTypeServiceFallback)
+        Graph.Configuration.NodeTypeDefinition def, string nodeTypePath)
     {
         var status = def.CompilationStatus ?? CompilationStatus.Unknown;
-        // Bridge during the NodeTypeService deletion transition: a compile that
-        // ran through NodeTypeService's own path (EnrichWithNodeTypeAsync slow
-        // path) records the error in the service's in-memory cache without
-        // writing back to the MeshNode. While both paths still coexist, fall
-        // back to the service getters when the MeshNode has no compile state.
-        if (status == CompilationStatus.Unknown && nodeTypeServiceFallback is not null)
-        {
-            var svcStatus = nodeTypeServiceFallback.GetStatus(nodeTypePath);
-            if (svcStatus != CompilationStatus.Unknown)
-                return FormatDiagnostics(
-                    svcStatus, nodeTypePath,
-                    error: svcStatus == CompilationStatus.Error ? nodeTypeServiceFallback.GetCompilationError(nodeTypePath) : null,
-                    startedAt: svcStatus == CompilationStatus.Compiling ? nodeTypeServiceFallback.GetCompilationStartedAt(nodeTypePath) : null,
-                    lastCompiledAt: svcStatus == CompilationStatus.Ok ? nodeTypeServiceFallback.GetLastSuccessfulCompileAt(nodeTypePath) : null,
-                    hub.JsonSerializerOptions);
-        }
         return FormatDiagnostics(
             status,
             nodeTypePath,
