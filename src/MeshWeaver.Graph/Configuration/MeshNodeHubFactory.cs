@@ -8,22 +8,19 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Resolves HubConfiguration for a MeshNode via
-/// <see cref="INodeTypeService.EnrichWithNodeType"/>, then composes with
-/// <c>DefaultNodeHubConfiguration</c>.
-///
-/// <para>Stage 4 of the NodeTypeService deletion still routes the hot path
-/// through INodeTypeService because the service populates internal caches
-/// (<c>_creatableTypesRules</c>, <c>_notCreatableTypes</c>) consumed by
-/// other code paths. Once those caches are eliminated, this factory will
-/// switch to <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>.</para>
+/// <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>, then composes
+/// with <c>DefaultNodeHubConfiguration</c>. Stateless — the persisted
+/// NodeType MeshNode is the cache.
 /// </summary>
 internal class MeshNodeHubFactory(
+    NodeTypeServiceHub serviceHub,
     MeshConfiguration meshConfiguration,
-    INodeTypeService nodeTypeService,
+    IMeshNodeCompilationService? compilationService,
     ILogger<MeshNodeHubFactory> logger) : IMeshNodeHubFactory
 {
     public IObservable<MeshNode> ResolveHubConfiguration(MeshNode node)
-        => nodeTypeService.EnrichWithNodeType(node)
+        => NodeTypeEnrichmentHelpers.EnrichWithNodeType(
+                serviceHub.Hub, meshConfiguration, compilationService, node, logger)
             .Take(1)
             .Select(enriched =>
             {
