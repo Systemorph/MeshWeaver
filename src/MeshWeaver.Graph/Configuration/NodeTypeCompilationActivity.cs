@@ -80,6 +80,45 @@ internal static class NodeTypeCompilationActivity
     }
 
     /// <summary>
+    /// Append an Information-level <see cref="LogMessage"/> to the activity
+    /// log so callers can see progress in real time. No-op when
+    /// <paramref name="activityPath"/> is null. Best-effort: failures log and
+    /// swallow — observability must never break a compile.
+    /// </summary>
+    public static void AppendLog(IMessageHub hub, string? activityPath, string message, ILogger logger,
+        Microsoft.Extensions.Logging.LogLevel level = Microsoft.Extensions.Logging.LogLevel.Information)
+    {
+        if (string.IsNullOrEmpty(activityPath)) return;
+        try
+        {
+            var workspace = hub.GetWorkspace();
+            workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                    new Address(activityPath!), new MeshNodeReference())
+                .Take(1)
+                .Subscribe(change =>
+                {
+                    var current = change.Value;
+                    if (current?.Content is not ActivityLog log) return;
+                    var updated = log with
+                    {
+                        Messages = log.Messages.Add(new LogMessage(message, level))
+                    };
+                    var updatedNode = current with { Content = updated };
+                    hub.Post(
+                        new UpdateNodeRequest(updatedNode),
+                        o => o.WithTarget(new Address(activityPath!)));
+                },
+                ex => logger.LogDebug(ex,
+                    "Compile-activity AppendLog failed for {Path} (best-effort, ignored)", activityPath));
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Compile-activity AppendLog threw for {Path} (best-effort, ignored)", activityPath);
+        }
+    }
+
+    /// <summary>
     /// Flip the activity content to <see cref="ActivityStatus.Succeeded"/>.
     /// No-op when <paramref name="activityPath"/> is <c>null</c>.
     /// </summary>
