@@ -71,17 +71,19 @@ public class MeshOperations
         if (string.IsNullOrEmpty(nodeTypePath))
             return Observable.Return<string?>(null);
 
-        // Fast path: the input node already IS the NodeType MeshNode and its
-        // Content is the strongly-typed NodeTypeDefinition. Read the error
-        // straight off it — no extra round-trip.
-        if (isNodeTypeDef && node.Content is Graph.Configuration.NodeTypeDefinition ownDef)
+        // Fast path: the input node IS the settled NodeType MeshNode. Pre-settle
+        // states (Pending/Compiling/Unknown) fall through to the stream so we
+        // wait for the CompileWatcher's write-back rather than report a stale
+        // null error.
+        if (isNodeTypeDef
+            && node.Content is Graph.Configuration.NodeTypeDefinition ownDef
+            && IsSettled(ownDef))
             return Observable.Return<string?>(ownDef.CompilationError);
 
-        // Slow path: read the NodeType MeshNode fresh from its owning per-node
-        // hub. Take(1) — single-emission read of the live CompilationError
-        // off the NodeType definition.
+        // Slow path: subscribe to the NodeType's live stream, wait for a
+        // settled CompilationStatus emission, then read the CompilationError.
         return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
-            .Where(n => n is not null)
+            .Where(n => n?.Content is Graph.Configuration.NodeTypeDefinition d && IsSettled(d))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .Select(n => (n!.Content as Graph.Configuration.NodeTypeDefinition)?.CompilationError)
@@ -1501,8 +1503,13 @@ public class MeshOperations
                         new { status = "Unknown", message = $"Not found: {resolvedPath}" },
                         hub.JsonSerializerOptions));
 
-                // Fast path: the input node already IS the NodeType MeshNode.
-                if (isNodeTypeDef && node!.Content is Graph.Configuration.NodeTypeDefinition ownDef)
+                // Fast path: the input node already IS the NodeType MeshNode
+                // AND its compile has settled (Ok/Error). Compiling/Pending/Unknown
+                // states fall through to the stream so we wait for the
+                // CompileWatcher's write-back instead of returning a stale snapshot.
+                if (isNodeTypeDef
+                    && node!.Content is Graph.Configuration.NodeTypeDefinition ownDef
+                    && IsSettled(ownDef))
                     return Observable.Return(FormatDiagnosticsFromDef(ownDef, nodeTypePath));
 
                 // Static fast path: NodeType registered via AddMeshNodes — there is
@@ -1514,9 +1521,12 @@ public class MeshOperations
                         error: null, startedAt: null, lastCompiledAt: null,
                         hub.JsonSerializerOptions));
 
-                // Slow path: pull the live NodeType MeshNode (single emission).
+                // Slow path: subscribe to the NodeType's live stream and wait for
+                // the CompileWatcher to settle. Where(settled).Take(1) keeps the
+                // read in lockstep with the writer; without it we'd race against
+                // the Compiling → Ok/Error write-back and return stale state.
                 return hub.GetWorkspace().GetMeshNodeStream(nodeTypePath)
-                    .Where(n => n is not null)
+                    .Where(n => n?.Content is Graph.Configuration.NodeTypeDefinition d && IsSettled(d))
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
@@ -1530,6 +1540,19 @@ public class MeshOperations
                         return FormatDiagnosticsFromDef(def, nodeTypePath);
                     });
             });
+    }
+
+    /// <summary>
+    /// True when the NodeType's <see cref="NodeTypeDefinition.CompilationStatus"/>
+    /// has reached a terminal state (<see cref="CompilationStatus.Ok"/> or
+    /// <see cref="CompilationStatus.Error"/>). Pending and Compiling are
+    /// transient — readers should keep waiting for the watcher's settle
+    /// write rather than report a half-baked state.
+    /// </summary>
+    private static bool IsSettled(Graph.Configuration.NodeTypeDefinition def)
+    {
+        var status = def.CompilationStatus;
+        return status == CompilationStatus.Ok || status == CompilationStatus.Error;
     }
 
     private string FormatDiagnosticsFromDef(

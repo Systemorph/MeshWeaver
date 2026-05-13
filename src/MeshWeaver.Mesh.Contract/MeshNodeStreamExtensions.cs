@@ -190,6 +190,11 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             $"MeshNode '{targetPath ?? "<own>"}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
 
                     var updated = update(current);
+                    // Framework-driven Version: stamp the owning hub's monotonic
+                    // logical clock so subscribers can distinguish a real change
+                    // from a routing-stream echo. Lambdas no longer have to
+                    // remember to bump — the framework owns the clock.
+                    updated = updated with { Version = _workspace.Hub.Version };
                     var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
                     return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
                         [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],
@@ -293,6 +298,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     observer.OnCompleted();
                                     return null;
                                 }
+                                // Framework-driven Version: see UpdateOwn.
+                                updated = updated with { Version = _workspace.Hub.Version };
                                 return new ChangeItem<MeshNode>(
                                     updated,
                                     remoteStream.StreamId,
