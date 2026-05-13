@@ -36,7 +36,25 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     private string? _testDirectory;
     private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
-    private INodeTypeService NodeTypeService => Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+    private ICreatableTypesProvider CreatableTypesProvider
+        => Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
+
+    private async Task<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypesAt(string nodePath, CancellationToken ct)
+    {
+        var workspace = Mesh.GetWorkspace();
+        MeshNode? parent = null;
+        if (!string.IsNullOrEmpty(nodePath))
+        {
+            parent = await workspace.GetMeshNodeStream(nodePath)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                .ToTask(ct);
+        }
+        return await CreatableTypesProvider.GetCreatableTypes(nodePath, parent)
+            .FirstAsync()
+            .ToTask(ct);
+    }
 
     private string GetOrCreateTestDirectory()
     {
@@ -179,7 +197,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task ACME_CreatableTypes_IncludesProjectAndGlobalTypes()
     {
         // Act - ACME is an Organization, should be able to create ACME/Project
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await GetCreatableTypesAt("ACME", TestContext.Current.CancellationToken);
 
         // Assert - Should include ACME/Project (defined under ACME)
         creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project");
@@ -484,7 +502,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task ProductLaunch_CreatableTypes_IncludesTodo()
     {
         // Act - ProductLaunch is an instance of ACME/Project, should be able to create ACME/Project/Todo
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/ProductLaunch", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await GetCreatableTypesAt("ACME/ProductLaunch", TestContext.Current.CancellationToken);
 
         // Assert
         creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Project/Todo");
@@ -516,7 +534,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         todoTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project/Todo should be a NodeType");
 
         // Act - Get creatable types for ProductLaunch
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/ProductLaunch", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await GetCreatableTypesAt("ACME/ProductLaunch", TestContext.Current.CancellationToken);
 
         // Assert - Should include Todo (from ACME/Project's children) and global types
         Output.WriteLine($"Found {creatableTypes.Count} creatable types for ACME/ProductLaunch:");
@@ -578,7 +596,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         await NodeFactory.CreateNode(restrictedInstance);
 
         // Act
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/MyRestrictedProject", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await GetCreatableTypesAt("ACME/MyRestrictedProject", TestContext.Current.CancellationToken);
 
         // Assert - Should only include explicitly configured types
         creatableTypes.Should().HaveCount(1);
@@ -591,7 +609,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task CreatableTypes_SortedByOrder()
     {
         // Act
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await GetCreatableTypesAt("ACME", TestContext.Current.CancellationToken);
 
         // Assert - Global types should be at the end (display order 1000 and 1001)
         var lastTwo = creatableTypes.TakeLast(2).ToList();
@@ -810,21 +828,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Output.WriteLine($"WARNING: 'Markdown' NOT found in Configuration.Nodes!");
         }
 
-        // Diagnostic: Check if NodeTypeService is available from different service providers
-        var nodeTypeServiceFromMesh = Mesh.ServiceProvider.GetService<INodeTypeService>();
-        Output.WriteLine($"INodeTypeService from Mesh.ServiceProvider: {(nodeTypeServiceFromMesh != null ? "AVAILABLE" : "NULL")}");
+        // Diagnostic: ICreatableTypesProvider availability.
+        var providerFromMesh = Mesh.ServiceProvider.GetService<ICreatableTypesProvider>();
+        Output.WriteLine($"ICreatableTypesProvider from Mesh.ServiceProvider: {(providerFromMesh != null ? "AVAILABLE" : "NULL")}");
 
-        // Get the hub that MeshCatalog uses (should be injected during construction)
         var meshHub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
-        var nodeTypeServiceFromMeshHub = meshHub.ServiceProvider.GetService<INodeTypeService>();
-        Output.WriteLine($"INodeTypeService from MeshHub.ServiceProvider: {(nodeTypeServiceFromMeshHub != null ? "AVAILABLE" : "NULL")}");
+        var providerFromMeshHub = meshHub.ServiceProvider.GetService<ICreatableTypesProvider>();
+        Output.WriteLine($"ICreatableTypesProvider from MeshHub.ServiceProvider: {(providerFromMeshHub != null ? "AVAILABLE" : "NULL")}");
         Output.WriteLine($"Same service provider? {ReferenceEquals(Mesh.ServiceProvider, meshHub.ServiceProvider)}");
-
-        if (nodeTypeServiceFromMesh != null)
-        {
-            var cachedConfig = nodeTypeServiceFromMesh.GetCachedConfiguration("Markdown");
-            Output.WriteLine($"NodeTypeService.GetCachedConfiguration('Markdown'): {(cachedConfig?.HubConfiguration != null ? "HubConfig=SET" : "NULL or no HubConfig")}");
-        }
 
         // Step 3: Verify via stream (CQRS-correct)
         Output.WriteLine($"Step 3: Getting node via per-node stream");
@@ -873,8 +884,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     {
         // Step 1: Get creatable types (like the create page does)
         Output.WriteLine("Step 1: Getting creatable types for root");
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("", TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await GetCreatableTypesAt("", TestContext.Current.CancellationToken);
 
         creatableTypes.Should().NotBeEmpty("Should have creatable types");
         Output.WriteLine($"Found {creatableTypes.Count} creatable types");
@@ -988,7 +998,25 @@ public class CreatableTypesIntegrationTestsCollection
 public class CreatableTypesFileSystemTest : MonolithMeshTestBase
 {
     private new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-    private INodeTypeService NodeTypeService => Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+    private ICreatableTypesProvider CreatableTypesProvider
+        => Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
+
+    private async Task<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypesAt(string nodePath, CancellationToken ct)
+    {
+        var workspace = Mesh.GetWorkspace();
+        MeshNode? parent = null;
+        if (!string.IsNullOrEmpty(nodePath))
+        {
+            parent = await workspace.GetMeshNodeStream(nodePath)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                .ToTask(ct);
+        }
+        return await CreatableTypesProvider.GetCreatableTypes(nodePath, parent)
+            .FirstAsync()
+            .ToTask(ct);
+    }
 
     public CreatableTypesFileSystemTest(ITestOutputHelper output) : base(output)
     {
@@ -1065,8 +1093,9 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     [Fact(Timeout = 20000)]
     public async Task FileSystem_ProductLaunch_CreatableTypes_ShouldIncludeTodo()
     {
-        // Use the NodeTypeService from DI - it properly gets JsonSerializerOptions from IMessageHub
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/ProductLaunch").ToListAsync();
+        // Use the synced-query provider to enumerate creatable types.
+        var creatableTypes = await GetCreatableTypesAt(
+            "ACME/ProductLaunch", TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Creatable types for ACME/ProductLaunch ({creatableTypes.Count} total):");
         foreach (var ct in creatableTypes)

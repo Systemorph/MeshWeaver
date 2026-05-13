@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Memex.Portal.Shared;
@@ -12,6 +15,7 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -24,7 +28,7 @@ namespace MeshWeaver.Autocomplete.Test;
 /// Tests for MeshNodeAutocomplete functionality including:
 /// 1. Basic autocomplete returns suggestions
 /// 2. Filtering by creatable type works correctly
-/// 3. Integration with INodeTypeService.GetCreatableTypesAsync
+/// 3. Integration with ICreatableTypesProvider
 /// </summary>
 [Collection("MeshNodeAutocompleteTest")]
 public class MeshNodeAutocompleteTest : MonolithMeshTestBase
@@ -183,15 +187,33 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
     #region CreatableTypes Tests
 
+    private async Task<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypesAt(string nodePath, CancellationToken ct)
+    {
+        var provider = Hub.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
+        var workspace = Hub.GetWorkspace();
+        MeshNode? parent = null;
+        if (!string.IsNullOrEmpty(nodePath))
+        {
+            parent = await workspace.GetMeshNodeStream(nodePath)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                .ToTask(ct);
+        }
+        return await provider.GetCreatableTypes(nodePath, parent)
+            .FirstAsync()
+            .ToTask(ct);
+    }
+
     [Fact(Timeout = 10000)]
     public async Task GetCreatableTypes_ReturnsTypesForNode()
     {
         // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull("INodeTypeService should be registered");
+        var provider = Hub.ServiceProvider.GetService<ICreatableTypesProvider>();
+        provider.Should().NotBeNull("ICreatableTypesProvider should be registered");
 
-        // Act - get creatable types for Systemorph (should include types defined in ACME)
-        var creatableTypes = await nodeTypeService!.GetCreatableTypesAsync("Systemorph").ToListAsync();
+        // Act - get creatable types for Systemorph (should include types defined in ACME).
+        var creatableTypes = await GetCreatableTypesAt("Systemorph", TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Creatable types at 'Systemorph': {creatableTypes.Count}");
@@ -207,13 +229,9 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task GetCreatableTypes_DifferentNodesDifferentTypes()
     {
-        // Arrange
-        var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull();
-
-        // Act - get creatable types for different nodes
-        var rootTypes = await nodeTypeService!.GetCreatableTypesAsync("").ToListAsync();
-        var systemorphTypes = await nodeTypeService.GetCreatableTypesAsync("Systemorph").ToListAsync();
+        // Act - get creatable types for different nodes.
+        var rootTypes = await GetCreatableTypesAt("", TestContext.Current.CancellationToken);
+        var systemorphTypes = await GetCreatableTypesAt("Systemorph", TestContext.Current.CancellationToken);
 
         // Assert
         Output.WriteLine($"Root creatable types: {rootTypes.Count}");
