@@ -23,7 +23,7 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private List<MeshNode> _results = new();
     private List<MeshNode>? _cachedResults;
     private CancellationTokenSource? _loadCts;
-    private CancellationTokenSource? _debounceCts;
+    private IDisposable? _debounceSub;
     private int _inputKey;
     private const int DebounceMs = 200;
 
@@ -119,17 +119,12 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
         // Debounce remote queries. Do NOT call StateHasChanged here — typing must never
         // trigger a component re-render. LoadResultsAsync will render when results arrive.
-        _debounceCts?.Cancel();
-        var cts = _debounceCts = new CancellationTokenSource();
-        _ = DebouncedSearchAsync(cts.Token);
-    }
-
-    private async Task DebouncedSearchAsync(CancellationToken ct)
-    {
-        try { await Task.Delay(DebounceMs, ct); }
-        catch (TaskCanceledException) { return; }
-        if (ct.IsCancellationRequested) return;
-        LoadResultsAsync();
+        // Reactive debounce: each keystroke disposes the prior pending Observable.Timer
+        // and arms a new one — same semantics as the old CTS-cancel + Task.Delay loop,
+        // but stays on Rx scheduling rather than ad-hoc CancellationTokenSource churn.
+        _debounceSub?.Dispose();
+        _debounceSub = Observable.Timer(TimeSpan.FromMilliseconds(DebounceMs))
+            .Subscribe(_ => LoadResultsAsync());
     }
 
     private void LoadResultsAsync()

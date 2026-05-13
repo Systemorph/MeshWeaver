@@ -15,11 +15,8 @@ public class ChatSubmissionHandler : IDisposable
         WaitingForResponse
     }
 
-    private readonly TimeSpan _timeout;
     private readonly TimeSpan _dedupWindow;
     private readonly Func<DateTime> _now;
-    private readonly Func<TimeSpan, Action, IDisposable> _scheduleTimeout;
-    private IDisposable? _timeoutDisposable;
     private bool _disposed;
     private DateTime? _lastAcceptedAt;
 
@@ -43,19 +40,10 @@ public class ChatSubmissionHandler : IDisposable
     /// </summary>
     public int SubmissionCount { get; private set; }
 
-    /// <summary>
-    /// Creates a ChatSubmissionHandler with a configurable timeout.
-    /// </summary>
-    /// <param name="timeout">Timeout after which a stuck submission auto-releases. Default 30s.</param>
-    /// <param name="scheduleTimeout">Optional scheduler for testing. If null, uses Task.Delay.</param>
     public ChatSubmissionHandler(
-        TimeSpan? timeout = null,
-        Func<TimeSpan, Action, IDisposable>? scheduleTimeout = null,
         TimeSpan? dedupWindow = null,
         Func<DateTime>? now = null)
     {
-        _timeout = timeout ?? TimeSpan.FromSeconds(30);
-        _scheduleTimeout = scheduleTimeout ?? DefaultScheduleTimeout;
         _dedupWindow = dedupWindow ?? TimeSpan.FromMilliseconds(500);
         _now = now ?? (() => DateTime.UtcNow);
     }
@@ -100,7 +88,6 @@ public class ChatSubmissionHandler : IDisposable
 
     /// <summary>
     /// Transitions from Submitting to WaitingForResponse after the message has been posted.
-    /// Starts the timeout timer.
     /// </summary>
     public void OnMessagePosted()
     {
@@ -108,7 +95,6 @@ public class ChatSubmissionHandler : IDisposable
             return;
 
         State = SubmissionState.WaitingForResponse;
-        StartTimeout();
     }
 
     /// <summary>
@@ -117,7 +103,6 @@ public class ChatSubmissionHandler : IDisposable
     /// </summary>
     public void OnResponseAppeared()
     {
-        CancelTimeout();
         State = SubmissionState.Idle;
     }
 
@@ -126,47 +111,11 @@ public class ChatSubmissionHandler : IDisposable
     /// </summary>
     public void ForceRelease()
     {
-        CancelTimeout();
         State = SubmissionState.Idle;
-    }
-
-    private void StartTimeout()
-    {
-        CancelTimeout();
-        _timeoutDisposable = _scheduleTimeout(_timeout, OnTimeout);
-    }
-
-    private void OnTimeout()
-    {
-        if (State != SubmissionState.Idle)
-        {
-            State = SubmissionState.Idle;
-        }
-    }
-
-    private void CancelTimeout()
-    {
-        _timeoutDisposable?.Dispose();
-        _timeoutDisposable = null;
-    }
-
-    private static IDisposable DefaultScheduleTimeout(TimeSpan delay, Action callback)
-    {
-        var cts = new CancellationTokenSource();
-        _ = Task.Delay(delay, cts.Token).ContinueWith(t =>
-        {
-            if (!t.IsCanceled)
-                callback();
-        }, TaskScheduler.Default);
-        return cts;
     }
 
     public void Dispose()
     {
-        if (_disposed)
-            return;
-
         _disposed = true;
-        CancelTimeout();
     }
 }
