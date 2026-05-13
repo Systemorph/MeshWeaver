@@ -114,38 +114,21 @@ internal static class NodeTypeCompilationHelpers
                     {
                         // Activity Control Plane: every long-running operation runs
                         // on an Activity hub (Doc/Architecture/ActivityControlPlane.md).
-                        // Create the activity MeshNode, then dispatch RunCompileRequest
-                        // to its hub address. The activity hub owns the Roslyn work,
-                        // updates its own ActivityLog with progress, and writes the
-                        // terminal CompilationStatus back to this NodeType MeshNode.
+                        // Create the activity MeshNode and dispatch RunCompileRequest
+                        // to its hub address. The activity OWNS the parent's compile
+                        // state: it writes Compiling at start (same pattern as
+                        // ThreadExecution.responseStream.Update) and Ok/Error +
+                        // AssemblyLocation + CompiledSources at end. The watcher does
+                        // NOT touch the parent MeshNode here — single-writer
+                        // (the activity) avoids races.
                         var activityPath = NodeTypeCompilationActivity.Start(hub, hubPath, logger!);
-
-                        // Flip parent CompilationStatus → Compiling so subsequent
-                        // emissions don't refire the watcher and so observers see
-                        // the right intermediate state. The activity will write
-                        // Ok/Error back on completion.
-                        workspace.GetMeshNodeStream().Update(curr =>
-                            curr.Content is NodeTypeDefinition d
-                                ? curr with
-                                {
-                                    Content = d with
-                                    {
-                                        CompilationStatus = CompilationStatus.Compiling,
-                                        LastCompileStartedAt = DateTimeOffset.UtcNow,
-                                        LastCompilationActivityPath = activityPath
-                                    }
-                                }
-                                : curr)
-                            .Subscribe(
-                                _ => { },
-                                ex => logger?.LogWarning(ex,
-                                    "Compile: failed to flip status to Compiling for {HubPath}", hubPath));
 
                         if (activityPath is null)
                         {
-                            // No mesh service to create the activity — fall back to
-                            // inline compile so the system still works in tests /
-                            // early bootstrap. Logged so it's auditable.
+                            // Inline fallback only when no IMeshService can create
+                            // the activity (early bootstrap / minimal test fixture).
+                            // RunCompile writes Compiling itself, no risk of races
+                            // because no activity exists.
                             logger?.LogDebug("Compile watcher: activity unavailable for {HubPath}, running inline", hubPath);
                             RunCompile(workspace, hub, compilationService, pendingNode!, request: null);
                             return;
