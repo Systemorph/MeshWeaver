@@ -185,6 +185,17 @@ public static class MeshExtensions
 
         var createRequest = request.Message;
 
+        // Surface the AccessContext that travelled with the message delivery.
+        // Local diagnostic: flip MeshWeaver.Mesh.IMeshCatalog to Debug in
+        // appsettings to read which identity each CreateNodeRequest carries.
+        // Stays off CI by default — test/appsettings.json keeps Warning.
+        logger.LogDebug(
+            "[CreateNode] received path={Path} accessCtx.ObjectId={Caller} accessCtx.Name={Name} accessCtx.IsVirtual={Virtual}",
+            createRequest.Node.Path,
+            request.AccessContext?.ObjectId ?? "(null)",
+            request.AccessContext?.Name ?? "(null)",
+            request.AccessContext?.IsVirtual);
+
         // Identity resolution: if no explicit CreatedBy, use the sender's AccessContext identity.
         if (string.IsNullOrEmpty(createRequest.CreatedBy)
             && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
