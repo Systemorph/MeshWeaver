@@ -1,6 +1,12 @@
+@using System.Reactive.Linq
+@using MeshWeaver.Data
+@using MeshWeaver.Graph
+@using MeshWeaver.Graph.Configuration
+@using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
 @implements IDisposable
-@inject INodeTypeService? NodeTypeService
+@inject IMessageHub Hub
 
 @if (CompilingPath is not null)
 {
@@ -19,57 +25,75 @@
 
 @code {
     /// <summary>
-    /// Optional: restrict polling to a specific NodeType path. When set, the
-    /// indicator only shows compilation progress for that exact path. When null,
-    /// it shows the first path reported by <c>INodeTypeService.GetCompilingPaths</c>.
+    /// Optional: restrict the indicator to a specific NodeType path. When set,
+    /// the indicator only surfaces compilation progress for that exact path.
+    /// When null, it watches the synced <c>nodeType:NodeType</c> query and
+    /// reports the first NodeType whose
+    /// <see cref="NodeTypeDefinition.CompilationStatus"/> is
+    /// <see cref="CompilationStatus.Compiling"/>.
     /// </summary>
     [Parameter] public string? NodeTypePath { get; set; }
 
-    private string? CompilingPath { get; set; }
-    private int Seconds { get; set; }
-    private System.Threading.Timer? _timer;
+    private string? CompilingPath;
+    private int Seconds;
+    private IDisposable? _statusSub;
+    private IDisposable? _tickSub;
 
     protected override void OnInitialized()
     {
-        if (NodeTypeService is null) return;
-        _timer = new System.Threading.Timer(_ =>
+        var workspace = Hub.GetWorkspace();
+
+        IObservable<string?> compilingPathObs;
+        if (!string.IsNullOrEmpty(NodeTypePath))
         {
-            try
-            {
-                string? first = null;
-                if (NodeTypePath is not null)
-                {
-                    if (NodeTypeService.IsCompiling(NodeTypePath))
-                        first = NodeTypePath;
-                }
-                else
-                {
-                    var paths = NodeTypeService.GetCompilingPaths();
-                    first = paths?.FirstOrDefault();
-                }
+            // Single-NodeType mode: subscribe to that node's live stream.
+            // Compile status lives on Content as a NodeTypeDefinition.
+            compilingPathObs = workspace.GetMeshNodeStream(NodeTypePath)
+                .Select(n => (n?.Content is NodeTypeDefinition def
+                              && def.CompilationStatus == CompilationStatus.Compiling)
+                    ? NodeTypePath
+                    : null);
+        }
+        else
+        {
+            // Global mode: synced NodeType query — replaces the old 1-second
+            // INodeTypeService.GetCompilingPaths poll.
+            compilingPathObs = workspace.GetQuery("nodetypes-compiling", "nodeType:NodeType")
+                .Select(snapshot => snapshot
+                    .FirstOrDefault(n => n.Content is NodeTypeDefinition def
+                                         && def.CompilationStatus == CompilationStatus.Compiling)
+                    ?.Path);
+        }
 
-                if (first != CompilingPath)
+        _statusSub = compilingPathObs
+            .DistinctUntilChanged()
+            .Subscribe(
+                path =>
                 {
-                    CompilingPath = first;
+                    CompilingPath = path;
                     Seconds = 0;
-                }
-                else if (first is not null)
-                {
-                    Seconds++;
-                }
+                    StartOrStopTicker(path is not null);
+                    InvokeAsync(StateHasChanged);
+                },
+                _ => { /* swallow — best-effort UI signal */ });
+    }
 
-                InvokeAsync(StateHasChanged);
-            }
-            catch
+    private void StartOrStopTicker(bool active)
+    {
+        _tickSub?.Dispose();
+        _tickSub = null;
+        if (!active) return;
+        _tickSub = Observable.Interval(TimeSpan.FromSeconds(1))
+            .Subscribe(_ =>
             {
-                // Poll best-effort; keep the UI alive.
-            }
-        }, null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+                Seconds++;
+                InvokeAsync(StateHasChanged);
+            });
     }
 
     public void Dispose()
     {
-        _timer?.Dispose();
-        _timer = null;
+        _statusSub?.Dispose();
+        _tickSub?.Dispose();
     }
 }
