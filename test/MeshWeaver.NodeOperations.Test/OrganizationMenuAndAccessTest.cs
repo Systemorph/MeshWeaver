@@ -135,9 +135,11 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         };
         await NodeFactory.CreateNode(orgNode);
 
-        // Check creatable types for the organization
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-        var creatableTypes = await nodeTypeService.GetCreatableTypesAsync(orgId, TestTimeout).ToListAsync(TestTimeout);
+        // Check creatable types for the organization via the synced-query provider.
+        var provider = Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
+        var creatableTypes = await provider.GetCreatableTypes(orgId, orgNode)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
         var typeNames = creatableTypes.Select(t => t.NodeTypePath).ToList();
 
         Output.WriteLine($"Creatable types at {orgId}: {string.Join(", ", typeNames)}");

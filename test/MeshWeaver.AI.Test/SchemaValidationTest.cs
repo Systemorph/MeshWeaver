@@ -78,8 +78,9 @@ public class SchemaValidationTest : MonolithMeshTestBase
     public void SchemaGeneration_ForTestProduct_ReturnsValidSchema()
     {
         // Use the NodeType's hub config to create a temporary hub and generate the schema
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-        var hubConfig = nodeTypeService.GetCachedHubConfiguration(TestNodeType);
+        var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        meshConfig.Nodes.TryGetValue(TestNodeType, out var typeNode);
+        var hubConfig = typeNode?.HubConfiguration;
         hubConfig.Should().NotBeNull("TestProduct should have a cached hub configuration");
 
         var tempHub = Mesh.GetHostedHub(new Address("_schema_test"), hubConfig!);
@@ -106,8 +107,9 @@ public class SchemaValidationTest : MonolithMeshTestBase
     [Fact]
     public void SchemaGeneration_ContainsExpectedProperties()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-        var hubConfig = nodeTypeService.GetCachedHubConfiguration(TestNodeType);
+        var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        meshConfig.Nodes.TryGetValue(TestNodeType, out var typeNode);
+        var hubConfig = typeNode?.HubConfiguration;
         var tempHub = Mesh.GetHostedHub(new Address("_schema_test2"), hubConfig!);
 
         try

@@ -529,9 +529,12 @@ internal class NavigationService : INavigationService
         // synced query by the parent's NodeType (see CreatableTypesProvider).
         // Short Take(1) timeout — when the node isn't readable in budget,
         // proceed with parent=null (the provider falls back to the path-only
-        // namespace query).
-        var workspace = _hub.GetWorkspace();
-        var parentObs = string.IsNullOrEmpty(nodePath)
+        // namespace query). Defensive: hub.GetWorkspace() may not be wired in
+        // unit tests with a substitute hub, in which case skip the lookup.
+        IWorkspace? workspace;
+        try { workspace = _hub.GetWorkspace(); }
+        catch { workspace = null; }
+        var parentObs = workspace is null || string.IsNullOrEmpty(nodePath)
             ? Observable.Return<MeshNode?>(null)
             : workspace.GetMeshNodeStream(nodePath)
                 .Take(1)

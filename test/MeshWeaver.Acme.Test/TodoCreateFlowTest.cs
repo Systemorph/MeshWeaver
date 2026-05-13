@@ -458,8 +458,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var nodeFactory = Mesh.ServiceProvider.GetService<IMeshService>();
         nodeFactory.Should().NotBeNull("IMeshService should be registered");
 
-        var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull("INodeTypeService should be registered");
+        var provider = Mesh.ServiceProvider.GetService<ICreatableTypesProvider>();
+        provider.Should().NotBeNull("ICreatableTypesProvider should be registered");
 
         var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         meshConfig.DefaultNodeHubConfiguration.Should().NotBeNull("DefaultNodeHubConfiguration should be set");
@@ -468,16 +468,24 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that INodeTypeService returns creatable types for ProductLaunch.
+    /// Test that the synced-query CreatableTypes provider returns the
+    /// expected types for ProductLaunch.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task NodeTypeService_ReturnsCreatableTypes()
+    public async Task CreatableTypesProvider_ReturnsCreatableTypes()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        var provider = Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
+        var workspace = Mesh.GetWorkspace();
+        var parent = await workspace.GetMeshNodeStream("ACME/ProductLaunch")
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .ToTask(TestContext.Current.CancellationToken);
 
-        var creatableTypes = await nodeTypeService
-            .GetCreatableTypesAsync("ACME/ProductLaunch", TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await provider
+            .GetCreatableTypes("ACME/ProductLaunch", parent)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {creatableTypes.Count} creatable types:");
         foreach (var typeInfo in creatableTypes)

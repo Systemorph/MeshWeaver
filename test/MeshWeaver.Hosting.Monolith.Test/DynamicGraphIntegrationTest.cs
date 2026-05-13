@@ -902,9 +902,11 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
 
-        // Enrich via NodeTypeService to trigger compilation and populate HubConfiguration
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-        node = await nodeTypeService.EnrichWithNodeTypeAsync(node!, TestContext.Current.CancellationToken);
+        // Resolve via INodeConfigurationResolver to trigger compilation and populate HubConfiguration.
+        var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
+        node = await resolver.ResolveConfiguration(node!)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         node.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +

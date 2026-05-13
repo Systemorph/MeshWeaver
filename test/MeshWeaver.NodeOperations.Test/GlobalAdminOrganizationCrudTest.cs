@@ -242,10 +242,10 @@ public class GlobalAdminOrganizationCrudTest(ITestOutputHelper output) : Monolit
     public async Task OrganizationType_IsVisibleToGlobalAdmin()
     {
         // Global admin should be able to see Organization in node types
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-        var creatableTypes = await nodeTypeService
-            .GetCreatableTypesAsync("", TestTimeout)
-            .ToListAsync(TestTimeout);
+        var provider = Mesh.ServiceProvider.GetRequiredService<ICreatableTypesProvider>();
+        var creatableTypes = await provider.GetCreatableTypes("", parentNode: null)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
 
         var typeNames = creatableTypes.Select(t => t.NodeTypePath).ToList();
         Output.WriteLine($"Root creatable types: {string.Join(", ", typeNames)}");

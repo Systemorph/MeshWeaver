@@ -30,7 +30,7 @@ public class NavigationServiceTest
     private readonly IMeshQueryCore _meshQuery;
     private readonly IMessageHub _hub;
     private readonly IServiceProvider _hubServiceProvider;
-    private readonly INodeTypeService _nodeTypeService;
+    private readonly ICreatableTypesProvider _creatableTypesProvider;
 
     public NavigationServiceTest()
     {
@@ -39,13 +39,27 @@ public class NavigationServiceTest
         _meshQuery = Substitute.For<IMeshQueryCore>();
         _hub = Substitute.For<IMessageHub>();
         _hubServiceProvider = Substitute.For<IServiceProvider>();
-        _nodeTypeService = Substitute.For<INodeTypeService>();
+        _creatableTypesProvider = Substitute.For<ICreatableTypesProvider>();
 
-        // INodeTypeService and IMeshQueryCore are registered at Hub level, not main
-        // DI — NavigationService resolves both through hub.ServiceProvider lazily.
+        // ICreatableTypesProvider and IMeshQueryCore are registered at Hub level,
+        // not main DI — NavigationService resolves both through
+        // hub.ServiceProvider lazily.
         _hub.ServiceProvider.Returns(_hubServiceProvider);
-        _hubServiceProvider.GetService(typeof(INodeTypeService)).Returns(_nodeTypeService);
+        _hubServiceProvider.GetService(typeof(ICreatableTypesProvider))
+            .Returns(_creatableTypesProvider);
         _hubServiceProvider.GetService(typeof(IMeshQueryCore)).Returns(_meshQuery);
+    }
+
+    /// <summary>
+    /// Helper to stub <see cref="ICreatableTypesProvider.GetCreatableTypes"/>
+    /// with the given items for any <c>parentNode</c>. The provider returns
+    /// the entire snapshot as one emission.
+    /// </summary>
+    private void StubCreatableTypes(string nodePath, params CreatableTypeInfo[] items)
+    {
+        _creatableTypesProvider
+            .GetCreatableTypes(nodePath, Arg.Any<MeshNode?>())
+            .Returns(System.Reactive.Linq.Observable.Return((IReadOnlyList<CreatableTypeInfo>)items));
     }
 
     private NavigationService CreateService() =>
@@ -404,8 +418,7 @@ public class NavigationServiceTest
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
 
-        _nodeTypeService.GetCreatableTypesAsync("ACME", Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(new CreatableTypeInfo("ACME/Todo")));
+        StubCreatableTypes("ACME", new CreatableTypeInfo("ACME/Todo"));
 
         await service.InitializeAsync();
         await Task.Delay(100, TestContext.Current.CancellationToken);
@@ -414,10 +427,9 @@ public class NavigationServiceTest
         _pathResolver.ResolvePath("ACME/Project")
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
-        _nodeTypeService.GetCreatableTypesAsync("ACME/Project", Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(
-                new CreatableTypeInfo("ACME/Project/Story"),
-                new CreatableTypeInfo("ACME/Project/Todo")));
+        StubCreatableTypes("ACME/Project",
+            new CreatableTypeInfo("ACME/Project/Story"),
+            new CreatableTypeInfo("ACME/Project/Todo"));
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
@@ -439,11 +451,13 @@ public class NavigationServiceTest
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
         var loadCount = 0;
-        _nodeTypeService.GetCreatableTypesAsync("ACME/Project", Arg.Any<CancellationToken>())
+        _creatableTypesProvider
+            .GetCreatableTypes("ACME/Project", Arg.Any<MeshNode?>())
             .Returns(_ =>
             {
                 loadCount++;
-                return ToAsyncEnumerable(new CreatableTypeInfo("ACME/Project/Todo"));
+                return System.Reactive.Linq.Observable.Return(
+                    (IReadOnlyList<CreatableTypeInfo>)new[] { new CreatableTypeInfo("ACME/Project/Todo") });
             });
 
         await service.InitializeAsync();
@@ -462,7 +476,7 @@ public class NavigationServiceTest
     }
 
     [Fact]
-    public async Task LoadCreatableTypes_EmitsIncrementalSnapshots()
+    public async Task LoadCreatableTypes_EmitsLoadingThenDoneSnapshots()
     {
         // Arrange
         var service = CreateService();
@@ -473,10 +487,9 @@ public class NavigationServiceTest
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME/Project", null)));
 
-        _nodeTypeService.GetCreatableTypesAsync("ACME/Project", Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerableWithDelay(
-                new CreatableTypeInfo("ACME/Project/Story"),
-                new CreatableTypeInfo("ACME/Project/Todo")));
+        StubCreatableTypes("ACME/Project",
+            new CreatableTypeInfo("ACME/Project/Story"),
+            new CreatableTypeInfo("ACME/Project/Todo"));
 
         // Set URI so InitializeAsync triggers ProcessLocationChange
         // (PublishPath skips empty initial paths in production).
@@ -486,10 +499,11 @@ public class NavigationServiceTest
         await service.InitializeAsync();
         await Task.Delay(300, TestContext.Current.CancellationToken);
 
-        // Assert - should see incremental updates: 0 (loading), 1 (loading), 2 (loading), 2 (done)
-        snapshots.Should().Contain(s => s.Items.Count == 0 && s.IsLoading); // Initial clear
-        snapshots.Should().Contain(s => s.Items.Count == 1 && s.IsLoading); // First item
-        snapshots.Should().Contain(s => s.Items.Count == 2 && !s.IsLoading); // Final
+        // Assert — observable provider emits the whole snapshot:
+        // Loading (empty) is published synchronously before the subscription
+        // resolves; Done (with items) lands after the first emission.
+        snapshots.Should().Contain(s => s.Items.Count == 0 && s.IsLoading);
+        snapshots.Should().Contain(s => s.Items.Count == 2 && !s.IsLoading);
     }
 
     [Fact]
@@ -504,8 +518,7 @@ public class NavigationServiceTest
         _pathResolver.ResolvePath(Arg.Any<string>())
             .Returns(System.Reactive.Linq.Observable.Return<AddressResolution?>(new AddressResolution("ACME", null)));
 
-        _nodeTypeService.GetCreatableTypesAsync("ACME", Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerableWithDelay(new CreatableTypeInfo("ACME/Todo")));
+        StubCreatableTypes("ACME", new CreatableTypeInfo("ACME/Todo"));
 
         // Set URI so InitializeAsync triggers ProcessLocationChange
         // (PublishPath skips empty initial paths in production).
@@ -634,9 +647,8 @@ public class NavigationServiceTest
         _meshQuery.ObserveQuery<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
             .Returns(System.Reactive.Linq.Observable.Return(QueryChange(threadNode)));
 
-        _nodeTypeService
-            .GetCreatableTypesAsync("PartnerRe/AIConsulting", Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable(new CreatableTypeInfo("PartnerRe/AIConsulting/Story")));
+        StubCreatableTypes("PartnerRe/AIConsulting",
+            new CreatableTypeInfo("PartnerRe/AIConsulting/Story"));
 
         CreatableTypesSnapshot? lastSnapshot = null;
         service.CreatableTypes.Subscribe(s => lastSnapshot = s);
@@ -648,23 +660,14 @@ public class NavigationServiceTest
         await service.InitializeAsync();
         await Task.Delay(150, TestContext.Current.CancellationToken);
 
-        _nodeTypeService.Received().GetCreatableTypesAsync(
-            "PartnerRe/AIConsulting", Arg.Any<CancellationToken>());
+        _creatableTypesProvider.Received().GetCreatableTypes(
+            "PartnerRe/AIConsulting", Arg.Any<MeshNode?>());
         lastSnapshot!.Items.Should().Contain(t => t.NodeTypePath == "PartnerRe/AIConsulting/Story");
     }
 
     #endregion
 
     #region Helper Methods
-
-    private static async IAsyncEnumerable<CreatableTypeInfo> ToAsyncEnumerable(params CreatableTypeInfo[] items)
-    {
-        foreach (var item in items)
-        {
-            yield return item;
-        }
-        await Task.CompletedTask;
-    }
 
     private static QueryResultChange<MeshNode> QueryChange(params MeshNode[] items) =>
         new()
@@ -674,16 +677,6 @@ public class NavigationServiceTest
             Version = 1,
             Timestamp = DateTimeOffset.UtcNow,
         };
-
-    private static async IAsyncEnumerable<CreatableTypeInfo> ToAsyncEnumerableWithDelay(
-        params CreatableTypeInfo[] items)
-    {
-        foreach (var item in items)
-        {
-            await Task.Delay(30, TestContext.Current.CancellationToken);
-            yield return item;
-        }
-    }
 
     #endregion
 

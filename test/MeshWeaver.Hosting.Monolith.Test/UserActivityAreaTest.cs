@@ -92,10 +92,9 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public void UserNodeType_IsRegistered()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-
-        var cachedConfig = nodeTypeService.GetCachedHubConfiguration("User");
-        cachedConfig.Should().NotBeNull(
+        var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        meshConfig.Nodes.TryGetValue("User", out var typeNode).Should().BeTrue();
+        typeNode!.HubConfiguration.Should().NotBeNull(
             "User node type should be registered via AddGraph() Ã¢â€ â€™ AddUserType() with HubConfiguration");
     }
 
@@ -103,13 +102,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Verify that NodeTypeService returns cached HubConfiguration for the "User" node type.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public void NodeTypeService_HasCachedConfig_ForUserType()
+    public void UserNodeType_HasHubConfig_InMeshConfiguration()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-
-        var cachedConfig = nodeTypeService.GetCachedHubConfiguration("User");
-        cachedConfig.Should().NotBeNull(
-            "NodeTypeService should have cached HubConfiguration for 'User' node type");
+        var meshConfig = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        meshConfig.Nodes.TryGetValue("User", out var typeNode).Should().BeTrue();
+        typeNode!.HubConfiguration.Should().NotBeNull(
+            "User node type should have HubConfiguration in static MeshConfiguration");
     }
 
     /// <summary>
@@ -118,16 +116,18 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 20000)]
     public async Task UserNode_Roland_CanBeLoaded()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
 
         var node = await ReadNodeAsync("User/TestUser");
         node.Should().NotBeNull("Oliver user node should exist in samples/Graph/Data/User/TestUser.json");
         node!.NodeType.Should().Be("User");
 
         // Enrich with node type Ã¢â‚¬â€ this should attach HubConfiguration
-        var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(node);
+        var enriched = await resolver.ResolveConfiguration(node)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
         enriched.HubConfiguration.Should().NotBeNull(
-            "After enrichment, User node should have HubConfiguration from UserNodeType");
+            "After resolution, User node should have HubConfiguration from UserNodeType");
     }
 
     /// <summary>

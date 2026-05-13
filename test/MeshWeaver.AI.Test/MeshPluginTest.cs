@@ -753,19 +753,21 @@ public class MeshPluginTest : MonolithMeshTestBase
         await plugin.Create(createJson);
 
         // Force compilation via the hub. Touching the NodeType path via the hub
-        // triggers compile; the error is then cached in NodeTypeService.
+        // triggers compile; the error is then recorded on the NodeType MeshNode.
         var nodeTypePath = $"ACME/{nodeTypeId}";
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
         try
         {
-            await nodeTypeService.EnrichWithNodeTypeAsync(
-                new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath },
-                ct: TestContext.Current.CancellationToken);
+            await resolver.ResolveConfiguration(
+                    new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath })
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
         }
         catch
         {
-            // Expected: compilation throws; NodeTypeService still records the error.
+            // Expected: compilation throws; the NodeType MeshNode records the error.
         }
+        // Done in the test-only "force compile" preamble.
 
         var diagnosticsJson = await plugin.GetDiagnostics($"@{nodeTypePath}");
         diagnosticsJson.Should().NotBeNullOrEmpty();
@@ -810,12 +812,13 @@ public class MeshPluginTest : MonolithMeshTestBase
         }).Replace("\"type\":", "\"$type\":");
         await plugin.Create(createJson);
 
-        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
         try
         {
-            await nodeTypeService.EnrichWithNodeTypeAsync(
-                new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath },
-                ct: TestContext.Current.CancellationToken);
+            await resolver.ResolveConfiguration(
+                    new MeshNode(nodeTypeId, "ACME") { NodeType = nodeTypePath })
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
         }
         catch { /* expected */ }
 

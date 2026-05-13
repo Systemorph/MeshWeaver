@@ -184,13 +184,13 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
-    /// Test that INodeTypeService service is available for CreateLayoutArea.
+    /// Test that ICreatableTypesProvider is available for CreateLayoutArea.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task NodeTypeService_IsRegistered()
+    public async Task CreatableTypesProvider_IsRegistered()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull("INodeTypeService should be registered for type selection");
+        var provider = Mesh.ServiceProvider.GetService<ICreatableTypesProvider>();
+        provider.Should().NotBeNull("ICreatableTypesProvider should be registered for type selection");
 
         await Task.CompletedTask;
     }

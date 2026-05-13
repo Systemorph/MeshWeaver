@@ -36,7 +36,7 @@ public class NavigationProgressTest
     private readonly IMeshQueryCore _meshQuery;
     private readonly IMessageHub _hub;
     private readonly IServiceProvider _hubServiceProvider;
-    private readonly INodeTypeService _nodeTypeService;
+    private readonly ICreatableTypesProvider _creatableTypesProvider;
 
     public NavigationProgressTest()
     {
@@ -45,10 +45,11 @@ public class NavigationProgressTest
         _meshQuery = Substitute.For<IMeshQueryCore>();
         _hub = Substitute.For<IMessageHub>();
         _hubServiceProvider = Substitute.For<IServiceProvider>();
-        _nodeTypeService = Substitute.For<INodeTypeService>();
+        _creatableTypesProvider = Substitute.For<ICreatableTypesProvider>();
 
         _hub.ServiceProvider.Returns(_hubServiceProvider);
-        _hubServiceProvider.GetService(typeof(INodeTypeService)).Returns(_nodeTypeService);
+        _hubServiceProvider.GetService(typeof(ICreatableTypesProvider))
+            .Returns(_creatableTypesProvider);
         // IMeshQueryCore is resolved through hub.ServiceProvider.GetRequiredService
         // (the lazy pattern that VUserHelper / SyncedQueryMeshNodes also use), so
         // wire the substitute through the hub's service provider rather than
