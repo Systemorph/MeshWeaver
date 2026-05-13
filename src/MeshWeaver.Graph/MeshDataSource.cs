@@ -209,6 +209,14 @@ public static class MeshDataSourceExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
         var node = request.Message.Node;
+        // Persist with Version >= 1 — JsonSerializerOptions has
+        // DefaultIgnoreCondition=WhenWritingDefault, so Version=0 is omitted on
+        // serialisation, which breaks downstream readers that rely on the field
+        // for optimistic concurrency. Static-init writes of AddMeshNodes-
+        // registered types hit this path with Version=0; bump to 1 here so the
+        // persisted JSON always carries the field.
+        if (node.Version == 0)
+            node = node with { Version = 1 };
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
             node.Path, node.Version);
         persistence.Write(node, hub.JsonSerializerOptions)
