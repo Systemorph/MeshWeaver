@@ -579,15 +579,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         //    cross-silo request — that is the cluster-wide cache-propagation
         //    benefit of the watcher.
         //
-        // ResolveViaRequest stays primary while ResolveViaStream's convergence
-        // budget is tuned. The watcher now dispatches compile to the Activity
-        // hub (per ActivityControlPlane doctrine), but the round-trip latency
-        // through the activity → parent MeshNode write-back → stream emission
-        // is currently >20 s for some dynamic NodeTypes, breaking test
-        // fixtures with [Fact(Timeout = 20000)]. ResolveViaRequest stays
-        // bounded by the 30-s GetCompilationPathRequest timeout and is
-        // proven-stable.
-        return ResolveViaRequest(node, nodeType);
+        // Stream slow-path on the dedicated NodeTypeService hub. The Activity
+        // hub is the single writer of the parent NodeType's compile state —
+        // it writes Compiling → Ok/Error through a long-lived stream, so this
+        // ResolveViaStream subscriber sees the settled status quickly. The
+        // dedicated _serviceHub workspace prevents re-entry on the mesh hub.
+        return ResolveViaStream(node, nodeType);
     }
 
     /// <summary>
