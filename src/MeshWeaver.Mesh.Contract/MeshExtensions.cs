@@ -185,6 +185,20 @@ public static class MeshExtensions
 
         var createRequest = request.Message;
 
+        // Surface the AccessContext that travelled with the message delivery so
+        // CI/test runs make the identity chain visible without a debugger
+        // attach. Logged at Information so it survives the default Warning
+        // filter in test/appsettings.json. Read by every "permission times
+        // out / access denied unexpectedly" investigation — if this line
+        // shows ObjectId=(null), the caller forgot to set AccessContext on
+        // the post.
+        logger.LogInformation(
+            "[CreateNode] received path={Path} accessCtx.ObjectId={Caller} accessCtx.Name={Name} accessCtx.IsVirtual={Virtual}",
+            createRequest.Node.Path,
+            request.AccessContext?.ObjectId ?? "(null)",
+            request.AccessContext?.Name ?? "(null)",
+            request.AccessContext?.IsVirtual);
+
         // Identity resolution: if no explicit CreatedBy, use the sender's AccessContext identity.
         if (string.IsNullOrEmpty(createRequest.CreatedBy)
             && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
