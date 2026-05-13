@@ -126,21 +126,6 @@ internal class MeshNodeCompilationService(
     /// </summary>
     private static readonly Regex CodeIncludePattern = new(@"@@([^\s#\]]+)", RegexOptions.Compiled);
 
-    /// <summary>
-    /// Resolves @@path references in code content by fetching the referenced
-    /// node's CodeConfiguration via <see cref="IStorageAdapter"/> directly. Used by
-    /// <c>NodeTypeService</c> during compilation to bypass routing and avoid
-    /// circular hub creation. Resolution is transitive: if a resolved include
-    /// itself contains @@references, those are resolved too.
-    /// For the production reactive path, see <see cref="ResolveCodeIncludes"/>.
-    /// </summary>
-    internal async Task<string> ResolveCodeIncludesAsync(
-        string code, IStorageAdapter meshStorage, CancellationToken ct)
-    {
-        var resolved = new HashSet<string>();
-        return await ResolveCodeIncludesAsync(code, meshStorage, resolved, ct);
-    }
-
     private IObservable<string> ResolveCodeIncludes(string code, HashSet<string> resolved)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
@@ -181,49 +166,6 @@ internal class MeshNodeCompilationService(
         }
 
         return chain;
-    }
-
-    private async Task<string> ResolveCodeIncludesAsync(
-        string code, IStorageAdapter meshStorage, HashSet<string> resolved, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
-            return code;
-
-        var matches = CodeIncludePattern.Matches(code);
-        if (matches.Count == 0)
-            return code;
-
-        var result = code;
-        foreach (Match match in matches)
-        {
-            var path = match.Groups[1].Value;
-            if (!resolved.Add(path))
-            {
-                result = result.Replace(match.Value, string.Empty);
-                continue;
-            }
-
-            // Use IStorageAdapter directly to bypass routing
-            var referencedNode = await meshStorage.Read(path, hub.JsonSerializerOptions).FirstAsync().ToTask(ct);
-            string? resolvedCode = null;
-            if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
-            {
-                resolvedCode = cf.Code;
-            }
-
-            if (resolvedCode != null)
-            {
-                logger.LogDebug("Resolved code include @@{Path}", path);
-                resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshStorage, resolved, ct);
-                result = result.Replace(match.Value, resolvedCode);
-            }
-            else
-            {
-                logger.LogWarning("Could not resolve code include @@{Path}", path);
-            }
-        }
-
-        return result;
     }
 
     /// <inheritdoc />
