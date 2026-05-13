@@ -196,7 +196,6 @@
         try
         {
             var meshConfig = Hub.ServiceProvider.GetService<MeshConfiguration>();
-            var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
 
             var defaultNs = NamespaceParam ?? ParentParam ?? NavigationService.CurrentNamespace ?? "";
 
