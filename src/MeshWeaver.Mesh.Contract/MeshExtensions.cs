@@ -185,14 +185,11 @@ public static class MeshExtensions
 
         var createRequest = request.Message;
 
-        // Surface the AccessContext that travelled with the message delivery so
-        // CI/test runs make the identity chain visible without a debugger
-        // attach. Logged at Information so it survives the default Warning
-        // filter in test/appsettings.json. Read by every "permission times
-        // out / access denied unexpectedly" investigation — if this line
-        // shows ObjectId=(null), the caller forgot to set AccessContext on
-        // the post.
-        logger.LogInformation(
+        // Surface the AccessContext that travelled with the message delivery.
+        // Local diagnostic: flip MeshWeaver.Mesh.IMeshCatalog to Debug in
+        // appsettings to read which identity each CreateNodeRequest carries.
+        // Stays off CI by default — test/appsettings.json keeps Warning.
+        logger.LogDebug(
             "[CreateNode] received path={Path} accessCtx.ObjectId={Caller} accessCtx.Name={Name} accessCtx.IsVirtual={Virtual}",
             createRequest.Node.Path,
             request.AccessContext?.ObjectId ?? "(null)",
