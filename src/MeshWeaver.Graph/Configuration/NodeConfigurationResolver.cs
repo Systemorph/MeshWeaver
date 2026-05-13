@@ -1,16 +1,25 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Resolves hub configuration for MeshNodes by delegating to <see cref="INodeTypeService.EnrichWithNodeType"/>.
-/// Registered as singleton. Pure observable surface — no Task bridge, no <c>.ToTask()</c>; callers
-/// Subscribe on the hub dispatcher. The legacy <c>Task</c>-returning interface
-/// <c>ResolveConfigurationAsync</c> is gone — every caller observes directly.
+/// Resolves hub configuration via <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>.
+/// Pure observable surface — no Task bridge.
 /// </summary>
-internal class NodeConfigurationResolver(INodeTypeService nodeTypeService) : INodeConfigurationResolver
+internal class NodeConfigurationResolver(
+    IMessageHub hub,
+    MeshConfiguration meshConfiguration,
+    NodeTypeServiceHub serviceHub,
+    ILogger<NodeConfigurationResolver> logger) : INodeConfigurationResolver
 {
+    private readonly IMeshNodeCompilationService? _compilationService =
+        hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
+
     public IObservable<MeshNode> ResolveConfiguration(MeshNode node)
-        => nodeTypeService.EnrichWithNodeType(node);
+        => NodeTypeEnrichmentHelpers.EnrichWithNodeType(
+            serviceHub.Hub, meshConfiguration, _compilationService, node, logger);
 }
