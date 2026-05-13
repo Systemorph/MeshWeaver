@@ -733,7 +733,9 @@ public static class MeshExtensions
                     logger.LogError(ex, "[DeleteNode] {Kind} path={Path} partial-deleted={Partial}",
                         isTimeout ? "timeout" : (isNotFound ? "not-found" : "unexpected"), path, partial.Count);
                     var failMsgs = collectedMessages.ToImmutable()
-                        .Add(new LogMessage(ex.Message, LogLevel.Error));
+                        .Add(new LogMessage(
+                            isNotFound ? $"Node not found at path '{path}'" : ex.Message,
+                            LogLevel.Error));
                     PostFailed(
                         isTimeout
                             ? $"Delete of '{path}' exceeded {opts.Timeout.TotalSeconds:0}s timeout"
