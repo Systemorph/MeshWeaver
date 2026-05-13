@@ -1,25 +1,17 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Resolves hub configuration via <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>.
-/// Pure observable surface — no Task bridge.
+/// Resolves hub configuration via <see cref="INodeTypeService.EnrichWithNodeType"/>.
+/// Stage 4 of the NodeTypeService deletion still delegates to the service so
+/// its internal CreatableTypesRules cache stays populated for consumers
+/// downstream (NavigationService, MeshNodeAutocomplete). Once those move off
+/// the cache, this resolver will switch to NodeTypeEnrichmentHelpers.
 /// </summary>
-internal class NodeConfigurationResolver(
-    IMessageHub hub,
-    MeshConfiguration meshConfiguration,
-    NodeTypeServiceHub serviceHub,
-    ILogger<NodeConfigurationResolver> logger) : INodeConfigurationResolver
+internal class NodeConfigurationResolver(INodeTypeService nodeTypeService) : INodeConfigurationResolver
 {
-    private readonly IMeshNodeCompilationService? _compilationService =
-        hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-
     public IObservable<MeshNode> ResolveConfiguration(MeshNode node)
-        => NodeTypeEnrichmentHelpers.EnrichWithNodeType(
-            serviceHub.Hub, meshConfiguration, _compilationService, node, logger);
+        => nodeTypeService.EnrichWithNodeType(node);
 }

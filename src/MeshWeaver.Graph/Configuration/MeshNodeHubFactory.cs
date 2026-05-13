@@ -2,30 +2,28 @@ using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Resolves HubConfiguration for a MeshNode via
-/// <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/> (static fast-path
-/// for built-in types; Activity-hub-driven stream slow-path for dynamic types).
-/// Composes the result with <c>DefaultNodeHubConfiguration</c> so per-node
-/// hubs inherit cross-cutting concerns (security pipeline, layout areas).
+/// <see cref="INodeTypeService.EnrichWithNodeType"/>, then composes with
+/// <c>DefaultNodeHubConfiguration</c>.
+///
+/// <para>Stage 4 of the NodeTypeService deletion still routes the hot path
+/// through INodeTypeService because the service populates internal caches
+/// (<c>_creatableTypesRules</c>, <c>_notCreatableTypes</c>) consumed by
+/// other code paths. Once those caches are eliminated, this factory will
+/// switch to <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>.</para>
 /// </summary>
 internal class MeshNodeHubFactory(
-    IMessageHub hub,
     MeshConfiguration meshConfiguration,
-    NodeTypeServiceHub serviceHub,
+    INodeTypeService nodeTypeService,
     ILogger<MeshNodeHubFactory> logger) : IMeshNodeHubFactory
 {
-    private readonly IMeshNodeCompilationService? _compilationService =
-        hub.ServiceProvider.GetService<IMeshNodeCompilationService>();
-
     public IObservable<MeshNode> ResolveHubConfiguration(MeshNode node)
-        => NodeTypeEnrichmentHelpers.EnrichWithNodeType(
-                serviceHub.Hub, meshConfiguration, _compilationService, node, logger)
+        => nodeTypeService.EnrichWithNodeType(node)
             .Take(1)
             .Select(enriched =>
             {
