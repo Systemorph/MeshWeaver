@@ -89,6 +89,16 @@ public record NodeTypeDefinition
     /// If true, includes global types (Markdown, NodeType) in creatable list.
     /// Default: true.
     /// </summary>
+    /// <remarks>
+    /// <see cref="System.Text.Json.Serialization.JsonIgnoreCondition.Never"/> is
+    /// required: the property initializer defaults to <c>true</c>, so an
+    /// explicit <c>false</c> equals <c>default(bool)</c> and the hub's global
+    /// <c>WhenWritingDefault</c> policy would omit it — the value then
+    /// round-trips back to <c>true</c> via the initializer, silently
+    /// re-enabling global types on a type that opted out.
+    /// </remarks>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool IncludeGlobalTypes { get; init; } = true;
 
     /// <summary>
