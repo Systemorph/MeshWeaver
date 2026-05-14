@@ -59,63 +59,91 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
     protected override bool ShareMeshAcrossTests => true;
 
+    private static void SaveNode(InMemoryStorageAdapter persistence, MeshNode node)
+        => persistence.SaveNode(node, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Seeds two compilable NodeTypes the legal way (see
+    /// <c>MeshNodeCompilationIntegrationTest</c>): a NodeType MeshNode whose
+    /// <see cref="NodeTypeDefinition.Configuration"/> wires the content type,
+    /// plus the source as a child <c>Code</c> MeshNode at
+    /// <c>{type}/Source/code</c>. The compile pipeline pulls source from
+    /// <c>namespace:$self/Source scope:subtree</c> — NOT from a
+    /// <c>SavePartitionObjects</c> blob on the NodeType's own path, which is
+    /// an obsolete shape the current pipeline can't read.
+    /// </summary>
     private static void SetupTestConfiguration(InMemoryStorageAdapter persistence)
     {
-        // Create Story type for testing content changes
-        var storyCodeConfig = new CodeConfiguration
+        // Story NodeType + its source Code node. Both Active — the compile
+        // pipeline's source query (namespace:$self/Source scope:subtree) only
+        // sees Active nodes.
+        SaveNode(persistence, MeshNode.FromPath("type/story") with
         {
-            Code = @"
+            Name = "Story",
+            NodeType = MeshNode.NodeTypePath,
+            Icon = "Document",
+            Order = 30,
+            State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition
+            {
+                Description = "A user story",
+                Configuration = "config => config.WithContentType<Story>()"
+            }
+        });
+        SaveNode(persistence, MeshNode.FromPath("type/story/Source/code") with
+        {
+            Name = "code",
+            NodeType = "Code",
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration
+            {
+                Language = "csharp",
+                Code = @"
 public record Story
 {
-    [Key]
     public string Id { get; init; } = string.Empty;
     public string Title { get; init; } = string.Empty;
     public string? Description { get; init; }
     public int Points { get; init; }
 }
 "
-        };
+            }
+        });
 
-        var storyNode = MeshNode.FromPath("type/story") with
+        // Graph NodeType + its source Code node. The content record is named
+        // GraphRoot, NOT Graph — a bare "Graph" collides with the
+        // MeshWeaver.Graph namespace in the compile context
+        // ('Graph' is a namespace but is used like a type).
+        SaveNode(persistence, MeshNode.FromPath("type/graph") with
         {
-            Name = "Story",
-            NodeType = "NodeType",
-            Icon = "Document",
-            Order = 30,
+            Name = "Graph",
+            NodeType = MeshNode.NodeTypePath,
+            Icon = "Diagram",
+            Order = 0,
+            State = MeshNodeState.Active,
             Content = new NodeTypeDefinition
             {
-                Description = "A user story"
+                Description = "The graph root",
+                Configuration = "config => config.WithContentType<GraphRoot>()"
             }
-        };
-        persistence.SaveNode(storyNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
-        persistence.SavePartitionObjects("type/story", null, [storyCodeConfig], SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
-
-        // Create Graph type
-        var graphCodeConfig = new CodeConfiguration
+        });
+        SaveNode(persistence, MeshNode.FromPath("type/graph/Source/code") with
         {
-            Code = @"
-public record Graph
+            Name = "code",
+            NodeType = "Code",
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration
+            {
+                Language = "csharp",
+                Code = @"
+public record GraphRoot
 {
-    [Key]
     public string Id { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
 }
 "
-        };
-
-        var graphTypeNode = MeshNode.FromPath("type/graph") with
-        {
-            Name = "Graph",
-            NodeType = "NodeType",
-            Icon = "Diagram",
-            Order = 0,
-            Content = new NodeTypeDefinition
-            {
-                Description = "The graph root"
             }
-        };
-        persistence.SaveNode(graphTypeNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
-        persistence.SavePartitionObjects("type/graph", null, [graphCodeConfig], SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        });
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -129,13 +157,12 @@ public record Graph
         SetupTestConfiguration(persistence);
 
         // Pre-seed the graph node (Version should be 0 initially)
-        var graphNode = MeshNode.FromPath("graph") with
+        SaveNode(persistence, MeshNode.FromPath("graph") with
         {
             Name = "Graph",
             NodeType = "type/graph",
             Version = 0
-        };
-        persistence.SaveNode(graphNode, SetupJsonOptions).FirstAsync().ToTask().GetAwaiter().GetResult();
+        });
 
         return builder
             .UseMonolithMesh()

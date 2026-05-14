@@ -51,20 +51,17 @@ internal static class NodeTypeCompileActivityHandler
         activityHub.Post(new RunCompileResponse(Dispatched: true),
             o => o.ResponseFor(request));
 
-        // Long-lived remote stream to the parent NodeType MeshNode — same
-        // pattern as ThreadExecution.responseStream. Every state transition
-        // (Compiling → Ok/Error with AssemblyLocation + CompiledSources) is
-        // a single `parentStream.Update(...)` on this stream so the parent
-        // hub's MeshNodeReference reducer sees one continuous patch series
-        // instead of repeated point-reads.
-        var activityWorkspace = activityHub.GetWorkspace();
-        var parentAddress = new Address(parentPath);
-        var parentStream = activityWorkspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            parentAddress, new MeshNodeReference());
-
-        if (parentStream is null)
+        // The parent NodeType MeshNode is reached ONLY through the shared
+        // INodeTypeStreamCache — never an ad-hoc activityWorkspace.GetRemoteStream.
+        // An ad-hoc remote stream from the activity hub is a separate instance;
+        // its updates are "lost" — never seen by the readers of the cached
+        // stream (NodeTypeEnrichmentHelpers, every per-instance hub). Reads AND
+        // writes both go through the one cached handle so the terminal compile
+        // state actually lands and propagates.
+        var streamCache = activityHub.ServiceProvider.GetService<INodeTypeStreamCache>();
+        if (streamCache is null)
         {
-            logger?.LogWarning("[NTCA] Parent stream null for {ParentPath}", parentPath);
+            logger?.LogWarning("[NTCA] INodeTypeStreamCache not registered — cannot compile {ParentPath}", parentPath);
             return request.Processed();
         }
 
@@ -72,7 +69,7 @@ internal static class NodeTypeCompileActivityHandler
         //    flipped Pending → no state on the parent until the activity
         //    writes it. Single-writer = no race vs the watcher's previous
         //    Compiling write.
-        WriteToParent(parentStream, def => def with
+        WriteToParent(streamCache, parentPath, def => def with
         {
             CompilationStatus = CompilationStatus.Compiling,
             LastCompileStartedAt = DateTimeOffset.UtcNow,
@@ -82,13 +79,12 @@ internal static class NodeTypeCompileActivityHandler
             $"Compile started for {parentPath} (activity hub: {activityHub.Address.Path})",
             logger!);
 
-        parentStream
-            .Where(change => change?.Value?.Content is NodeTypeDefinition)
+        streamCache.GetStream(parentPath)
+            .Where(node => node?.Content is NodeTypeDefinition)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(30))
-            .SelectMany(change =>
+            .SelectMany(pendingNode =>
             {
-                var pendingNode = change.Value!;
                 logger?.LogInformation("[NTCA] starting Roslyn for {ParentPath} (activity={ActivityPath})",
                     parentPath, activityPath);
                 NodeTypeCompilationActivity.AppendLog(activityHub, activityPath,
@@ -169,10 +165,11 @@ internal static class NodeTypeCompileActivityHandler
                                     : "Compilation produced no assembly"),
                             logger!);
 
-                    // 4. Activity writes terminal state to parent MeshNode via the
-                    //    same long-lived stream. AssemblyLocation, CompiledSources,
-                    //    LatestReleasePath all land in a single Update.
-                    WriteToParent(parentStream, def =>
+                    // 4. Activity writes terminal state to parent MeshNode via
+                    //    the shared cached stream. AssemblyLocation,
+                    //    CompiledSources, LatestReleasePath all land in a
+                    //    single Update.
+                    WriteToParent(streamCache, parentPath, def =>
                     {
                         if (ok)
                             return def with
@@ -209,44 +206,42 @@ internal static class NodeTypeCompileActivityHandler
 
     /// <summary>
     /// Helper: apply a <see cref="NodeTypeDefinition"/> transformation to the
-    /// parent MeshNode via the long-lived <paramref name="parentStream"/>. One
-    /// <see cref="ChangeItem{T}"/> patch per call. <paramref name="extraAssemblyLocation"/>
-    /// (when non-null) is written to <see cref="MeshNode.AssemblyLocation"/>;
+    /// parent MeshNode through the shared <see cref="INodeTypeStreamCache"/> —
+    /// the ONE cached handle every reader of the parent stream shares, so the
+    /// write actually lands and propagates (an ad-hoc remote stream would be a
+    /// lost separate instance). <paramref name="extraAssemblyLocation"/> (when
+    /// non-null) is written to <see cref="MeshNode.AssemblyLocation"/>;
     /// <paramref name="extraLastCompiledVersion"/> stamps <c>LastCompiledVersion</c>
-    /// from the current MeshNode version. Mirrors the
-    /// <c>ThreadExecution.responseStream.Update(...)</c> pattern.
+    /// from the current MeshNode version.
     /// </summary>
     private static void WriteToParent(
-        ISynchronizationStream<MeshNode> parentStream,
+        INodeTypeStreamCache streamCache,
+        string parentPath,
         Func<NodeTypeDefinition, NodeTypeDefinition> transform,
         ILogger? logger,
-        string parentPath,
+        string parentPathForLog,
         string transitionTag,
         string? extraAssemblyLocation = null,
         bool extraLastCompiledVersion = false)
     {
-        parentStream.Update(curr =>
-        {
-            if (curr?.Content is not NodeTypeDefinition def)
-                return null;
-            var nextDef = transform(def);
-            if (extraLastCompiledVersion)
-                nextDef = nextDef with { LastCompiledVersion = curr.Version };
-            var next = curr with
+        streamCache.Update(parentPath, curr =>
             {
-                Content = nextDef,
-                AssemblyLocation = extraAssemblyLocation ?? curr.AssemblyLocation
-            };
-            return new ChangeItem<MeshNode>(
-                Value: next,
-                ChangedBy: WellKnownUsers.System,
-                StreamId: parentStream.StreamId,
-                ChangeType: ChangeType.Full,
-                Version: parentStream.Hub.Version,
-                Updates: null);
-        }, ex => logger?.LogWarning(ex,
-            "[NTCA] failed to write {Transition} state to parent {ParentPath}",
-            transitionTag, parentPath));
+                if (curr?.Content is not NodeTypeDefinition def)
+                    return curr!;
+                var nextDef = transform(def);
+                if (extraLastCompiledVersion)
+                    nextDef = nextDef with { LastCompiledVersion = curr.Version };
+                return curr with
+                {
+                    Content = nextDef,
+                    AssemblyLocation = extraAssemblyLocation ?? curr.AssemblyLocation
+                };
+            })
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[NTCA] failed to write {Transition} state to parent {ParentPath}",
+                    transitionTag, parentPathForLog));
     }
 
     /// <summary>Per-NodeType compile outcome — either the compiler's result or the exception that aborted it.</summary>

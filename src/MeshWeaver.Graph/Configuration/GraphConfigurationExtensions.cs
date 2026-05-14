@@ -88,8 +88,16 @@ public static class GraphConfigurationExtensions
                     return table != null ? new QueryRoutingHints { Table = table } : null;
                 });
 
-            // Register Graph content types in the hub's type registry for polymorphic JSON serialization
+            // Register Graph content types in the type registry for polymorphic
+            // JSON serialization — on the mesh hub AND on every per-node hub.
+            // The per-node overlay is essential: a NodeType definition hub posts
+            // RunCompileRequest to its compile-activity hub and must deserialise
+            // the RunCompileResponse that routes back; both hubs are per-node
+            // hubs, so without the ConfigureDefaultNodeHub overlay the compile
+            // round-trip fails with "type 'RunCompileResponse' is not registered
+            // in this hub's TypeRegistry" and the compile never settles.
             builder.ConfigureHub(config => config.WithGraphTypes());
+            builder.ConfigureDefaultNodeHub(config => config.WithGraphTypes());
 
             // Seed the built-in NodeCopy + Mirror script templates as Code MeshNodes
             // at Templates/Import/{NodeCopy,Mirror}. ImportLayoutArea fires

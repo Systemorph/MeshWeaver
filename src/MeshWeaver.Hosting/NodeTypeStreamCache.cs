@@ -9,33 +9,41 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Default <see cref="INodeTypeStreamCache"/> — wraps
-/// <c>workspace.GetMeshNodeStream(path)</c> with <c>Replay(1).RefCount()</c>
-/// per path so multiple subscribers share one upstream subscription and new
-/// subscribers receive the cached snapshot instantly.
+/// Default <see cref="INodeTypeStreamCache"/> — a pure per-path stream cache.
+/// Holds ONE shared <see cref="MeshNodeStreamHandle"/> per path in a concurrent
+/// dictionary. Every consumer — the routing path, every per-instance hub of
+/// that NodeType, <c>NodeTypeEnrichmentHelpers</c>, and compile-activity hubs
+/// writing terminal state — goes through that ONE handle. Reads
+/// (<see cref="GetStream"/>) and writes (<see cref="Update"/>) share the same
+/// underlying stream, so an update is always visible to every reader.
 ///
-/// <para>The subscription is opened on the mesh hub's workspace. That is
-/// safe because <c>GetMeshNodeStream</c> for a non-own path returns an
-/// <c>ISynchronizationStream</c> — which runs on its OWN hub/scheduler, not
-/// the caller's. The requesting workspace's hub only dispatches the initial
-/// <c>SubscribeRequest</c>; the ongoing stream never blocks it. So a
-/// dedicated "node-type service hub" buys nothing here — the sync stream is
-/// already its own hub.</para>
+/// <para>The handle is opened on the mesh hub's workspace. That is safe:
+/// <c>GetMeshNodeStream</c> for a non-own path returns an
+/// <c>ISynchronizationStream</c> which runs on its OWN hub/scheduler, not the
+/// caller's — the requesting workspace's hub only dispatches the initial
+/// <c>SubscribeRequest</c>.</para>
 ///
-/// <para>Side-channel <see cref="MaybeKickCompile"/> on every emission: if the
-/// emitted MeshNode is a NodeType definition that has neither a
-/// <c>LatestReleasePath</c> nor an <c>AssemblyLocation</c> and isn't already
-/// pending/compiling, post a <c>CreateReleaseRequest</c> to its per-NodeType
-/// hub. <c>HandleCreateRelease</c> runs Roslyn, writes the Release MeshNode,
-/// and updates the NodeType's <c>LatestReleasePath</c> +
-/// <c>AssemblyLocation</c>. The cache then re-emits through the same
-/// observable so subscribers see the update without a resubscribe.</para>
+/// <para><b>Never go around the cache.</b> An ad-hoc
+/// <c>workspace.GetRemoteStream(...)</c> from some other hub is a SEPARATE
+/// stream instance; updating it is "lost" — never seen by the readers of the
+/// cached stream (this was the bug behind compile state never landing on a
+/// NodeType's MeshNode). Non-owning hubs MUST use <see cref="Update"/>.</para>
+///
+/// <para><b>No side-effects on emission.</b> The cache does not kick
+/// compilation — opening the stream activates the per-NodeType hub via the
+/// <c>SubscribeRequest</c>, and that hub's OWN compile watcher kickoff
+/// (<c>NodeTypeCompilationHelpers.InstallCompileWatcher</c>) flips
+/// <c>CompilationStatus = Pending</c> on its OWN stream and runs Roslyn.</para>
 /// </summary>
 internal sealed class NodeTypeStreamCache : INodeTypeStreamCache
 {
+    /// <summary>One cache entry: the updatable handle plus the shared,
+    /// replay-cached read view over it.</summary>
+    private sealed record Entry(MeshNodeStreamHandle Handle, IObservable<MeshNode> Shared);
+
     private readonly IMessageHub meshHub;
     private readonly ILogger<NodeTypeStreamCache> logger;
-    private readonly ConcurrentDictionary<string, IObservable<MeshNode>> _streams = new();
+    private readonly ConcurrentDictionary<string, Entry> _streams = new();
 
     public NodeTypeStreamCache(IMessageHub meshHub, ILogger<NodeTypeStreamCache> logger)
     {
@@ -43,62 +51,18 @@ internal sealed class NodeTypeStreamCache : INodeTypeStreamCache
         this.logger = logger;
     }
 
-    public IObservable<MeshNode> GetStream(string path) =>
+    private Entry GetEntry(string path) =>
         _streams.GetOrAdd(path, p =>
-            meshHub.GetWorkspace()
-                .GetMeshNodeStream(p)
-                .Do(node => MaybeKickCompile(p, node))
-                .Replay(1)
-                .RefCount());
-
-    /// <summary>
-    /// First touch of a NodeType MeshNode that has no usable artefact — kick
-    /// off compilation. Repeated emissions where the node is already pending,
-    /// compiling, or has a release are no-ops.
-    /// </summary>
-    private void MaybeKickCompile(string path, MeshNode node)
-    {
-        // Only NodeType definitions need compilation. Any other content type
-        // (Activity, Release, Markdown, etc.) is just observed.
-        if (node.NodeType != MeshNode.NodeTypePath) return;
-
-        // Already has an assembly path — built-in NodeTypes set this at
-        // registration; dynamic NodeTypes get it after a successful release.
-        // No need to kick.
-        if (!string.IsNullOrEmpty(node.AssemblyLocation)) return;
-
-        if (node.Content is not Graph.Configuration.NodeTypeDefinition def)
-            return;
-
-        if (!string.IsNullOrEmpty(def.LatestReleasePath)) return;
-        if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling) return;
-
-        // Don't auto-compile error-state NodeTypes — the user has to fix the
-        // source and click Create Release explicitly. Auto-flipping Pending
-        // on every emission would create a tight retry loop.
-        if (def.CompilationStatus == CompilationStatus.Error) return;
-
-        try
         {
-            logger.LogInformation(
-                "First touch of NodeType {Path} with no release — sending CreateReleaseRequest",
-                path);
-            // Post CreateReleaseRequest to the per-NodeType hub. HandleCreateRelease
-            // runs the compile machinery (StartCompile) and writes back Ok +
-            // AssemblyLocation. Replaces the CompilationStatus = Pending flip that
-            // relied on InstallCompileWatcher (removed in 86b34707d when compile
-            // became explicit-only). meshHub.Post is fire-and-forget — the response
-            // arrives later but the only thing this code path cares about is that
-            // the request reaches the per-NodeType hub.
-            meshHub.Post(new CreateReleaseRequest(), o => o.WithTarget(new Address(path)));
-        }
-        catch (Exception ex)
-        {
-            // Best-effort — failing to kick the compile is observability, not
-            // correctness. The next emission will retry, and the explicit
-            // Create-Release click path still works regardless.
-            logger.LogWarning(ex,
-                "MaybeKickCompile failed for NodeType {Path} (best-effort, ignored)", path);
-        }
-    }
+            logger.LogDebug("NodeTypeStreamCache: opening shared stream for {Path}", p);
+            var handle = meshHub.GetWorkspace().GetMeshNodeStream(p);
+            // Replay(1).RefCount() so new readers get the current snapshot
+            // instantly and all readers share one upstream subscription.
+            return new Entry(handle, handle.Replay(1).RefCount());
+        });
+
+    public IObservable<MeshNode> GetStream(string path) => GetEntry(path).Shared;
+
+    public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update) =>
+        GetEntry(path).Handle.Update(update);
 }

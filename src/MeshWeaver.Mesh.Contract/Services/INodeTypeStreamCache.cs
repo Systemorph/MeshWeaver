@@ -28,11 +28,21 @@ public interface INodeTypeStreamCache
     /// Returns the cached observable for the MeshNode at <paramref name="path"/>.
     /// First call subscribes to <c>workspace.GetMeshNodeStream(path)</c> and
     /// installs <c>Replay(1).RefCount()</c>; subsequent calls return the same
-    /// instance. The implementation may also fire side-effects on emission —
-    /// e.g. flipping <c>CompilationStatus = Pending</c> on a NodeType MeshNode
-    /// that has no <c>LatestReleasePath</c> / <c>AssemblyLocation</c> set, so
-    /// the first message routed to a never-compiled NodeType bootstraps its
-    /// compilation.
+    /// instance — one shared upstream subscription, instant snapshot for new
+    /// subscribers.
     /// </summary>
     IObservable<MeshNode> GetStream(string path);
+
+    /// <summary>
+    /// Applies <paramref name="update"/> to the MeshNode at
+    /// <paramref name="path"/> through the SAME cached
+    /// <c>MeshNodeStreamHandle</c> that <see cref="GetStream"/> reads. This is
+    /// the canonical way for a non-owning hub (e.g. a compile-activity hub) to
+    /// write a NodeType's terminal compile state: it MUST go through the one
+    /// shared handle, not an ad-hoc <c>GetRemoteStream</c> — an ad-hoc stream
+    /// is a separate instance, so its update is "lost" (never seen by the
+    /// readers of the cached stream). Returns the post-update MeshNode; caller
+    /// MUST Subscribe (the side effect runs on Subscribe).
+    /// </summary>
+    IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update);
 }
