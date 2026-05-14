@@ -225,7 +225,15 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// The data model content for this node.
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>
+    /// <remarks>
+    /// <see cref="PreventLoggingAttribute"/>: Content is an arbitrary, potentially
+    /// large payload (whole documents, compiled NodeType definitions, activity
+    /// logs, …). It is excluded from log serialization so a message carrying a
+    /// MeshNode logs the node's identity/shape but not its body. Turn on Debug/
+    /// Trace and inspect the node directly when you actually need the content.
+    /// </remarks>
     [Editable(false)]
+    [PreventLogging]
     public object? Content { get; init; }
 
     /// <summary>
