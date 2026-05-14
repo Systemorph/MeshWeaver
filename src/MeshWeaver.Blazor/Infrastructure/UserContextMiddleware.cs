@@ -204,19 +204,21 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                     ?? user.FindFirstValue("email")
                     ?? string.Empty;
 
-        // ObjectId = the User MeshNode's Id (e.g., "rbuergi"), NOT the email.
-        // ApiTokenAuthenticationHandler puts UserId in preferred_username
-        // explicitly so the principal already carries the resolved username;
-        // OIDC providers (Microsoft, Google) use preferred_username for the
-        // tenant-scoped UPN. Prefer that, fall back to NameIdentifier (also
-        // set by the API token handler), then email as a last resort.
-        // Without this, downstream code routes to User/<email> instead of
-        // User/<username> ("Delivery failed to User/rbuergi@systemorph.com").
-        // CircuitAccessHandler.TryLoadMeshUser then re-resolves email→username
-        // when needed (interactive OIDC flows that don't pre-set this claim).
+        // ObjectId = the User MeshNode's Id (e.g., "rbuergi") = the user's
+        // mesh partition key, NEVER the email. ApiTokenAuthenticationHandler
+        // and the dev login put the username in preferred_username; OIDC
+        // providers (Microsoft, Google) use preferred_username for the
+        // tenant-scoped UPN — which IS email-shaped. Prefer the claim, fall
+        // back to NameIdentifier, then email. Whatever we land on, normalise
+        // an email-shaped value to its local part: post-v10 the username ==
+        // email local-part and the partition is keyed by username, so without
+        // this downstream routing targets `rbuergi@systemorph.com` instead of
+        // the `rbuergi` partition ("No node found at 'rbuergi@systemorph.com'").
+        // The mesh User-node lookup below still wins when the cache has it.
         var objectId = user.FindFirstValue("preferred_username")
                     ?? user.FindFirstValue(ClaimTypes.NameIdentifier)
                     ?? email;
+        objectId = UsernameFromEmail(objectId);
 
         return new AccessContext
         {
@@ -225,5 +227,18 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             Email = email,
             Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
         };
+    }
+
+    /// <summary>
+    /// Normalises an email-shaped identifier to its local part — the post-v10
+    /// username / mesh-partition key (e.g. <c>rbuergi@systemorph.com → rbuergi</c>).
+    /// Returns the input unchanged when there's no <c>@</c>.
+    /// </summary>
+    private static string UsernameFromEmail(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value;
+        var at = value.IndexOf('@');
+        return at > 0 ? value[..at] : value;
     }
 }

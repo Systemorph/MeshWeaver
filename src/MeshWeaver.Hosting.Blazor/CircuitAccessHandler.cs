@@ -112,17 +112,26 @@ public class CircuitAccessHandler : CircuitHandler
                         ?? user.FindFirstValue("preferred_username")
                         ?? string.Empty;
 
+            // ObjectId must be the username (= the user's partition key), never
+            // the email. Seed it from the email's local part so that even if the
+            // UserIdentityCache hasn't hydrated yet, routing targets the user's
+            // partition (`rbuergi`) instead of the raw email
+            // (`rbuergi@systemorph.com` → "No node found at ...").
             var context = new AccessContext
             {
                 Name = user.FindFirstValue(ClaimTypes.Name)
                        ?? user.FindFirstValue("name")
                        ?? string.Empty,
-                ObjectId = email,
+                ObjectId = UsernameFromEmail(email),
                 Email = email,
                 Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
             };
 
-            // Resolve email -> ObjectId via mesh User node lookup
+            // Authoritative resolution: the mesh User node's Id. The cache is a
+            // hot snapshot — when it has the node, prefer its Id + Name over the
+            // email-local-part heuristic. When it misses (circuit opened before
+            // the nodeType:User query hydrated), the local-part fallback above
+            // still resolves to the correct partition.
             if (!string.IsNullOrEmpty(email))
             {
                 var meshUser = TryLoadMeshUser(email);
@@ -143,6 +152,23 @@ public class CircuitAccessHandler : CircuitHandler
             _logger.LogWarning(ex, "Failed to resolve user context from AuthenticationState");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Derives the username (= the user's mesh partition key) from an email
+    /// address. Post-v10 each user owns a partition keyed by username and the
+    /// User node sits at its root (<c>path = username</c>). The portal's
+    /// convention is <c>username == email local-part</c> (e.g.
+    /// <c>rbuergi@systemorph.com → rbuergi</c>), so the local part is the
+    /// correct partition match when the <see cref="UserIdentityCache"/> hasn't
+    /// hydrated yet. Falls back to the input unchanged when there's no <c>@</c>.
+    /// </summary>
+    private static string UsernameFromEmail(string email)
+    {
+        if (string.IsNullOrEmpty(email))
+            return email;
+        var at = email.IndexOf('@');
+        return at > 0 ? email[..at] : email;
     }
 
     /// <summary>

@@ -44,7 +44,15 @@ public class DevAuthController : ControllerBase
             return BadRequest("Could not extract person info");
         }
 
-        // Create claims: username is the node ID, email in content
+        // Create claims: username is the node ID, email in content.
+        // 🚨 preferred_username MUST be the username (node Id), NOT the email.
+        // UserContextMiddleware.ExtractUserContext takes ObjectId from
+        // preferred_username first; if that's the email, every downstream
+        // route targets `<email>` instead of the user's partition and the
+        // portal renders "No node found at 'rbuergi@systemorph.com'".
+        // ApiTokenAuthenticationHandler already puts the username here — keep
+        // the dev login consistent so the user's partition (path = node Id)
+        // is the resolved home.
         var email = person.Email ?? "";
         var username = node.Id;
         var claims = new List<Claim>
@@ -52,13 +60,13 @@ public class DevAuthController : ControllerBase
             new(ClaimTypes.NameIdentifier, username),
             new(ClaimTypes.Name, username),
             new("name", username),
+            new("preferred_username", username),
         };
 
         if (!string.IsNullOrEmpty(email))
         {
             claims.Add(new Claim(ClaimTypes.Email, email));
             claims.Add(new Claim("email", email));
-            claims.Add(new Claim("preferred_username", email));
         }
 
         if (!string.IsNullOrEmpty(person.Role))
