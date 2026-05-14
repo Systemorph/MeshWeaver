@@ -90,12 +90,19 @@ internal static class NodeTypeEnrichmentHelpers
         return streamCache.GetStream(nodeType)
             // Settled compile (Ok/Error) OR an already-configured node
             // (HubConfiguration + AssemblyLocation pre-populated — static
-            // provider, or a built-in that ships its assembly).
+            // provider, or a built-in that ships its assembly) OR the
+            // NodeType path resolves to something that is NOT a
+            // NodeTypeDefinition at all — a plain node (or a node mis-used
+            // as a type path). The latter is a terminal state: there is
+            // nothing to compile and nothing to wait for, so match it here
+            // and let ApplyStreamResult fall through to the default config
+            // instead of stranding the wait for the full SlowPathTimeout.
             .Where(typeNode => (typeNode.HubConfiguration != null
                                 && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
                 || (typeNode.Content is NodeTypeDefinition def
                     && (def.CompilationStatus == CompilationStatus.Ok
-                        || def.CompilationStatus == CompilationStatus.Error)))
+                        || def.CompilationStatus == CompilationStatus.Error))
+                || typeNode.Content is not NodeTypeDefinition)
             .Take(1)
             .Timeout(SlowPathTimeout)
             .SelectMany(typeNode => ApplyStreamResult(
@@ -131,6 +138,14 @@ internal static class NodeTypeEnrichmentHelpers
                 node, typeNode.AssemblyLocation!, typeNode.HubConfiguration,
                 nodeType, meshConfiguration));
         }
+
+        // The NodeType path does not resolve to a NodeTypeDefinition — it is a
+        // plain node (or a node mis-used as a type path). There is nothing to
+        // compile; apply the default hub config so the instance is still usable
+        // and queryable, rather than overlaying a (false) compilation error.
+        if (def is null)
+            return Observable.Return(CopyIconFromNodeType(
+                ApplyDefaultConfig(node, meshConfiguration), nodeType, meshConfiguration));
 
         if (def?.CompilationStatus == CompilationStatus.Ok
             && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
