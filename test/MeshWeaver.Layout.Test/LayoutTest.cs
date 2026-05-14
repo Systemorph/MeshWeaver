@@ -409,7 +409,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var enumReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be($"data").And.Subject;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
         var enumerableReference = new JsonPointerReference($"{itemTemplate.DataContext}/{enumReference}");
-        var filter = await stream.GetDataStream<IReadOnlyCollection<LabelAndBool>>(enumerableReference).Timeout(3.Seconds()).FirstAsync();
+        // Wait for the populated collection — the data stream's first emission
+        // can be the empty Initial snapshot; FirstAsync() without a predicate
+        // would grab that and the HaveCount(3) assertion would flake.
+        var filter = await stream.GetDataStream<IReadOnlyCollection<LabelAndBool>>(enumerableReference)
+            .Where(x => x is { Count: 3 })
+            .Timeout(3.Seconds())
+            .FirstAsync();
 
         filter.Should().HaveCount(3);
         var pointer = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Subject;

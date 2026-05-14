@@ -205,7 +205,15 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         var waitBreakActive = sec.GetEffectivePermissions("SharedOrg/Confidential", User1)
             .Where(p => !p.HasFlag(Permission.Read))
             .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
-        await Task.WhenAll(waitUser1Read, waitUser2Update, waitBreakActive);
+        // 4. User2 has Read at PrivateOrg/Secret — the Admin-on-PrivateOrg
+        //    assignment has propagated AND inherited down to the Secret node.
+        //    Without this probe McpUpdate_User1CannotUpdatePrivateOrg_User2Can
+        //    races ahead and the User2 read of PrivateOrg/Secret returns null
+        //    because the AccessAssignment synced query hasn't landed yet.
+        var waitUser2PrivateOrg = sec.GetEffectivePermissions("PrivateOrg/Secret", User2)
+            .Where(p => p.HasFlag(Permission.Read))
+            .Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask(TestTimeout);
+        await Task.WhenAll(waitUser1Read, waitUser2Update, waitBreakActive, waitUser2PrivateOrg);
     }
 
     [Fact(Timeout = 30000)]
