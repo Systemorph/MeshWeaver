@@ -123,14 +123,12 @@ internal static class NodeTypeCompilationHelpers
                         // on an Activity hub (Doc/Architecture/ActivityControlPlane.md).
                         // Create the activity MeshNode and dispatch RunCompileRequest
                         // to its hub address. The activity OWNS the parent's compile
-                        // state: it writes Compiling at start (same pattern as
-                        // ThreadExecution.responseStream.Update) and Ok/Error +
+                        // state: it writes Compiling at start and Ok/Error +
                         // AssemblyLocation + CompiledSources at end. The watcher does
                         // NOT touch the parent MeshNode here — single-writer
                         // (the activity) avoids races.
-                        var activityPath = NodeTypeCompilationActivity.Start(hub, hubPath, logger!);
-
-                        if (activityPath is null)
+                        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+                        if (meshService is null)
                         {
                             // Inline fallback only when no IMeshService can create
                             // the activity (early bootstrap / minimal test fixture).
@@ -141,8 +139,15 @@ internal static class NodeTypeCompilationHelpers
                             return;
                         }
 
-                        hub.Post(new RunCompileRequest(hubPath),
-                            o => o.WithTarget(new Address(activityPath)));
+                        // Start returns the activity path ONLY after the activity
+                        // node's CreateNode completes — so the RunCompileRequest
+                        // never races a not-yet-routable activity.
+                        NodeTypeCompilationActivity.Start(hub, hubPath, logger!)
+                            .Subscribe(
+                                activityPath => hub.Post(new RunCompileRequest(hubPath),
+                                    o => o.WithTarget(new Address(activityPath))),
+                                ex => logger?.LogWarning(ex,
+                                    "Compile watcher: activity start faulted for {HubPath}", hubPath));
                     }
                     finally
                     {
