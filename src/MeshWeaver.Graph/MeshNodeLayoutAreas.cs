@@ -698,17 +698,23 @@ public static class MeshNodeLayoutAreas
                 // and filter by this NodeType (canonical group case — instances
                 // declare nodeType = path).
                 //
-                // Otherwise scope by namespace + descendants and exclude infrastructure
-                // node types (Code, NodeType, Markdown). The nodeType filter is dropped
-                // here because LOCAL NodeType nodes (e.g. FutuRe/EuropeRe/LineOfBusiness
-                // inside the FutuRe/LineOfBusiness root type) reuse the GROUP-level
-                // nodeType on their instances — filtering by the local NodeType node's
-                // own path matches zero instances. The namespace scope already restricts
-                // to children; the negative nodeType filters drop Source/index/Code
-                // satellites that would otherwise be included.
+                // Otherwise scope by namespace + descendants. The nodeType filter is
+                // dropped here because LOCAL NodeType nodes (e.g.
+                // FutuRe/EuropeRe/LineOfBusiness inside the FutuRe/LineOfBusiness root
+                // type) reuse the GROUP-level nodeType on their instances — filtering
+                // by the local NodeType node's own path matches zero instances.
+                //
+                // `is:main` drops satellites that carry an explicit MainNode pointer —
+                // _Activity compile-activity nodes (NodeType="Activity", MainNode=<owner>)
+                // are the case the old `-nodeType:Code` enumeration missed when
+                // compile-activity landed, surfacing a "Compile {path}" row. It does NOT
+                // catch Source/Code files: the file-system loader leaves their MainNode
+                // null, so they read as main nodes — hence `-nodeType:Code` stays.
+                // `-nodeType:NodeType -nodeType:Markdown` also stay: definition nodes
+                // are main nodes too.
                 var hiddenQuery = nodeTypeDefinition?.DefaultNamespace != null
                     ? $"nodeType:{nodeTypePath} namespace:{nodeTypeDefinition.DefaultNamespace}"
-                    : $"namespace:{nodeTypePath} scope:descendants -nodeType:Code -nodeType:NodeType -nodeType:Markdown";
+                    : $"namespace:{nodeTypePath} scope:descendants is:main -nodeType:Code -nodeType:NodeType -nodeType:Markdown";
                 var defaultNs = nodeTypeDefinition?.DefaultNamespace;
                 var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
 

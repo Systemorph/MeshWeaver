@@ -177,6 +177,15 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
+        // ACME/Project is a NESTED NodeType — the provider's root-scoped
+        // autocomplete fans out only to partitions the router has already
+        // discovered. Warm up the ACME partition first so this test is
+        // order-independent; without it the test only passed when an earlier
+        // test in the shared-mesh class happened to load ACME (it failed in
+        // CI's test order).
+        await MeshQuery.AutocompleteAsync("ACME", "Pro", 15, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
         // Act - query with "@Pro" (partial match for Project)
         var items = await provider.GetItems("@Pro", null).ToAsyncEnumerableSequence(TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
