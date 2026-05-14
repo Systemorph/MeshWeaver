@@ -809,7 +809,8 @@ public static class MeshExtensions
     /// live node use <c>workspace.GetMeshNodeStream(path)</c> downstream.
     ///
     /// <para>Uses <c>scope:descendants</c> (strictly children-and-below — root
-    /// excluded) so the bottom-up fan-out in <see cref="DeleteLeavesUpward"/>
+    /// excluded) so the bottom-up fan-out in
+    /// <see cref="HierarchicalPathDeletion.DeleteSubtree"/>
     /// terminates at the root rather than re-entering through it. The root
     /// path is added to the returned set after the query so it is deleted
     /// last (when it becomes a leaf).</para>
