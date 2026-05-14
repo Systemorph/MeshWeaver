@@ -300,18 +300,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 }
                                 // Framework-driven Version: see UpdateOwn.
                                 updated = updated with { Version = _workspace.Hub.Version };
-                                // Carry the EntityUpdate payload — the owner-forwarding
-                                // subscription in CreateExternalClient converts the
-                                // ChangeItem via ToDataChangeRequest, which reads
-                                // ChangeItem.Updates. A 3-arg ChangeItem leaves Updates
-                                // empty, so the .Where(has Creations/Updates/Deletions)
-                                // filter drops it and the patch never reaches the owner
-                                // (symptom: remote RequestedStatus patches silently lost).
+                                // Identical to the 3-arg ChangeItem ctor
+                                // (ChangedBy=null, ChangeType.Full) EXCEPT it carries the
+                                // EntityUpdate payload. The owner-forwarding subscription
+                                // in CreateExternalClient converts the ChangeItem via
+                                // ToDataChangeRequest, which reads ChangeItem.Updates; a
+                                // 3-arg ChangeItem leaves Updates empty, so the
+                                // .Where(has Creations/Updates/Deletions) filter drops it
+                                // and the patch never reaches the owner (symptom: remote
+                                // RequestedStatus patches silently lost). Keep ChangeType
+                                // Full / ChangedBy null so no other consumer's behaviour
+                                // shifts — only the missing payload is added.
                                 return new ChangeItem<MeshNode>(
                                     updated,
+                                    /* ChangedBy */ null,
                                     remoteStream.StreamId,
-                                    remoteStream.StreamId,
-                                    ChangeType.Patch,
+                                    ChangeType.Full,
                                     remoteStream.Hub.Version,
                                     [new EntityUpdate(nameof(MeshNode), updated.Id, updated)
                                         { OldValue = current }]);
