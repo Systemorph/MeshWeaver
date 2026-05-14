@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -216,6 +217,26 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         await Task.WhenAll(waitUser1Read, waitUser2Update, waitBreakActive, waitUser2PrivateOrg);
     }
 
+    /// <summary>
+    /// Waits until the access-FILTERED query path (the path
+    /// <c>McpMeshPlugin.Search</c> rides) reflects the supplied predicate for
+    /// the CURRENT ambient access context. The per-result <c>RlsNodeValidator</c>
+    /// is validated by the queried partition hub's own scoped
+    /// <see cref="ISecurityService"/> — distinct from the mesh-hub one settled
+    /// by <see cref="SetupTestData"/>'s probes, with per-scope synced
+    /// AccessAssignment/Policy queries that settle independently. Call after
+    /// <c>LoginWithToken</c> so the wait runs under the same context the
+    /// subsequent <c>plugin.Search</c> call uses.
+    /// </summary>
+    private Task WaitForFilteredQuery(
+        string query, Func<IReadOnlyList<MeshNode>, bool> until)
+        => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Where(c => until(c.Items))
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(TestTimeout);
+
     [Fact(Timeout = 30000)]
     public async Task McpGet_User1CannotReadConfidentialNode_User2Can()
     {
@@ -275,6 +296,13 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // User1 search under SharedOrg should only return Public, not Confidential
         await LoginWithToken(_tokenUser1!);
+        // Wait until the filtered query path (same path plugin.Search rides)
+        // has settled for User1's context — the partition hub's scoped
+        // SecurityService lags the mesh-hub one SetupTestData probes, so
+        // without this the search can still surface Confidential to the Viewer.
+        await WaitForFilteredQuery("namespace:SharedOrg nodeType:Markdown",
+            items => items.Any(n => n.Id == "Public")
+                     && items.All(n => n.Id != "Confidential"));
         var result1 = await plugin.Search("nodeType:Markdown namespace:", "SharedOrg");
         result1.Should().Contain("Public");
         result1.Should().NotContain("Confidential",
@@ -282,6 +310,9 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // User2 search under SharedOrg should return both
         await LoginWithToken(_tokenUser2!);
+        await WaitForFilteredQuery("namespace:SharedOrg nodeType:Markdown",
+            items => items.Any(n => n.Id == "Public")
+                     && items.Any(n => n.Id == "Confidential"));
         var result2 = await plugin.Search("nodeType:Markdown namespace:", "SharedOrg");
         result2.Should().Contain("Public");
         result2.Should().Contain("Confidential");
