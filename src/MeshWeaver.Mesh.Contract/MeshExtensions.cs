@@ -673,6 +673,36 @@ public static class MeshExtensions
                                             return Observable.Empty<System.Reactive.Unit>();
                                         }
 
+                                        // 3b. Bulk-atomic pre-validation (recursive only). Post
+                                        //     ValidateDeleteRequest at every descendant address and
+                                        //     wait for all responses; if any descendant rejects the
+                                        //     delete, abort the whole operation BEFORE any storage
+                                        //     side effects fire. Without this, sibling deletes that
+                                        //     pass validation would race ahead via Observable.Merge
+                                        //     in HierarchicalPathDeletion and physically delete
+                                        //     before the failing sibling reports — leaving the
+                                        //     subtree partially destroyed when the user expected an
+                                        //     all-or-nothing failure.
+                                        var preValidate = capturedRequest.Recursive
+                                            ? PreValidateDescendantsObs(meshHub, path, collected.ToDelete, opts.Timeout, logger)
+                                            : Observable.Return<(string Path, string Error)?>(null);
+
+                                        return preValidate.SelectMany(failure =>
+                                        {
+                                            if (failure is { } f)
+                                            {
+                                                logger.LogWarning(
+                                                    "[DeleteNode] pre-validation failed path={Root} blockedBy={Path} err={Err}",
+                                                    path, f.Path, f.Error);
+                                                var msg = $"Cannot delete '{f.Path}': {f.Error}";
+                                                PostFailed(
+                                                    msg,
+                                                    NodeDeletionRejectionReason.ValidationFailed,
+                                                    [new LogMessage(msg, LogLevel.Error)],
+                                                    collected.ToDelete.ToImmutableList());
+                                                return Observable.Empty<System.Reactive.Unit>();
+                                            }
+
                                         // 4. Bottom-up fan-out. Descendants → per-node hubs (each
                                         //    re-enters this handler with Recursive=false);
                                         //    root → local storage delete (already validated above,
@@ -713,6 +743,7 @@ public static class MeshExtensions
                                                         .WithProperty(PostOptions.RequestId, request.Id));
                                             })
                                             .Select(_ => System.Reactive.Unit.Default);
+                                        });
                                     });
                             });
                     });
@@ -894,6 +925,55 @@ public static class MeshExtensions
                             $"Delete failed for '{path}': {reason}"));
                     });
             });
+    }
+
+    /// <summary>
+    /// Bulk-atomic pre-flight: post <see cref="ValidateDeleteRequest"/> at every
+    /// descendant address (root excluded — already validated by the caller) and
+    /// return the FIRST validator failure as <c>(Path, Error)</c>, or <c>null</c>
+    /// if all descendants pass. Subscribed before any storage side effects fire,
+    /// so a single failing descendant aborts the whole subtree delete with no
+    /// partial state — sibling deletes that pass validation never run.
+    /// </summary>
+    private static IObservable<(string Path, string Error)?> PreValidateDescendantsObs(
+        IMessageHub meshHub,
+        string rootPath,
+        ImmutableHashSet<string> allPaths,
+        TimeSpan timeout,
+        ILogger logger)
+    {
+        var descendants = allPaths
+            .Where(p => !string.Equals(p, rootPath, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (descendants.Length == 0)
+            return Observable.Return<(string, string)?>(null);
+
+        var perPath = descendants.Select(p => meshHub
+            .Observe(new ValidateDeleteRequest(p), o => o.WithTarget(new Address(p)))
+            .Take(1)
+            .Select(d =>
+            {
+                var resp = d.Message as ValidateDeleteResponse;
+                if (resp is null || resp.IsValid)
+                    return ((string, string)?)null;
+                return (p, resp.Errors[0]);
+            })
+            .Catch<(string, string)?, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "[DeleteNode] pre-validate descendant failed {Path}", p);
+                return Observable.Return<(string, string)?>((p, ex.Message));
+            }));
+
+        // Collect every descendant's outcome; emit the first non-null failure
+        // (or null when all pass). Merge — not Concat — so independent
+        // per-leaf hubs validate in parallel; the failure with the lowest
+        // emission order wins via FirstOrDefault.
+        return Observable.Merge(perPath)
+            .Where(r => r.HasValue)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Timeout(timeout);
     }
 
     /// <summary>
