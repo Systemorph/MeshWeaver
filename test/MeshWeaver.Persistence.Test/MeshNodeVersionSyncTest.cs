@@ -21,11 +21,15 @@ using Xunit;
 namespace MeshWeaver.Persistence.Test;
 
 /// <summary>
-/// Tests for syncing MeshNode.Version with MessageHub.Version.
+/// Tests for the MeshNode.Version model — see
+/// <c>Doc/Architecture/MeshNodeVersioning.md</c> ("1 op = 1 change").
 /// Verifies that:
-/// - Initial version is 0
-/// - Version increments on operations
-/// - Version persists across hub restarts
+/// - A seeded, never-mutated node keeps its seed Version (0).
+/// - An explicitly-supplied Version round-trips through persistence.
+/// - <see cref="IMessageHub.SetInitialVersion"/> exists (the hub clock is
+///   the source of truth a mutated node's Version is stamped from).
+/// Version is the owning hub's logical clock at the moment of mutation,
+/// NOT a node-local "+1 per write" counter — monotonic, not contiguous.
 /// </summary>
 [Collection("MeshNodeVersionSyncTests")]
 public class MeshNodeVersionSyncTest : MonolithMeshTestBase

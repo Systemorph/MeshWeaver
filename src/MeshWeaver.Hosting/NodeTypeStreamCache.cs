@@ -14,16 +14,22 @@ namespace MeshWeaver.Hosting;
 /// per path so multiple subscribers share one upstream subscription and new
 /// subscribers receive the cached snapshot instantly.
 ///
+/// <para>The subscription is opened on the mesh hub's workspace. That is
+/// safe because <c>GetMeshNodeStream</c> for a non-own path returns an
+/// <c>ISynchronizationStream</c> — which runs on its OWN hub/scheduler, not
+/// the caller's. The requesting workspace's hub only dispatches the initial
+/// <c>SubscribeRequest</c>; the ongoing stream never blocks it. So a
+/// dedicated "node-type service hub" buys nothing here — the sync stream is
+/// already its own hub.</para>
+///
 /// <para>Side-channel <see cref="MaybeKickCompile"/> on every emission: if the
 /// emitted MeshNode is a NodeType definition that has neither a
 /// <c>LatestReleasePath</c> nor an <c>AssemblyLocation</c> and isn't already
-/// pending/compiling, flip its <c>CompilationStatus</c> to <c>Pending</c>. The
-/// existing <c>CompileWatcher</c> (in
-/// <c>src/MeshWeaver.Graph/MeshDataSource.cs</c>) reacts to <c>Pending</c>,
-/// runs Roslyn, writes the Release MeshNode, and updates the NodeType's
-/// <c>LatestReleasePath</c> + <c>AssemblyLocation</c>. The cache then re-emits
-/// through the same observable so subscribers see the update without a
-/// resubscribe.</para>
+/// pending/compiling, post a <c>CreateReleaseRequest</c> to its per-NodeType
+/// hub. <c>HandleCreateRelease</c> runs Roslyn, writes the Release MeshNode,
+/// and updates the NodeType's <c>LatestReleasePath</c> +
+/// <c>AssemblyLocation</c>. The cache then re-emits through the same
+/// observable so subscribers see the update without a resubscribe.</para>
 /// </summary>
 internal sealed class NodeTypeStreamCache : INodeTypeStreamCache
 {

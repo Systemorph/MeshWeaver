@@ -149,15 +149,6 @@ public static class GraphConfigurationExtensions
                     services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
                     // Synced-query / namespace-bounded creatable-types lookup.
                     services.AddSingleton<ICreatableTypesProvider, CreatableTypesProvider>();
-                    // Dedicated hosted hub for NodeType stream subscriptions —
-                    // mesh hub must never be the requesting workspace for
-                    // cross-hub remote streams during routing/activation.
-                    services.AddSingleton<NodeTypeServiceHub>();
-                    // Shared per-NodeType MeshNode streams (Replay(1).RefCount + 1h
-                    // sliding eviction). Consumers that previously called
-                    // workspace.GetMeshNodeStream(nodeTypePath) directly route
-                    // through this cache so subscribers share one upstream.
-                    services.AddSingleton<NodeTypeStreamCache>();
                     // Replay-cached PartitionDefinition lookups, used by
                     // CodeNodeType.HandleExecuteScript to resolve
                     // PartitionDefinition.DefaultActivityParentPath without

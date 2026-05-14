@@ -13,14 +13,14 @@ namespace MeshWeaver.Graph.Configuration;
 /// NodeType MeshNode is the cache.
 /// </summary>
 internal class MeshNodeHubFactory(
-    NodeTypeServiceHub serviceHub,
+    IMessageHub meshHub,
     MeshConfiguration meshConfiguration,
     IMeshNodeCompilationService? compilationService,
     ILogger<MeshNodeHubFactory> logger) : IMeshNodeHubFactory
 {
     public IObservable<MeshNode> ResolveHubConfiguration(MeshNode node)
         => NodeTypeEnrichmentHelpers.EnrichWithNodeType(
-                serviceHub.Hub, meshConfiguration, compilationService, node, logger)
+                meshHub, meshConfiguration, compilationService, node, logger)
             .Take(1)
             .Select(enriched =>
             {
