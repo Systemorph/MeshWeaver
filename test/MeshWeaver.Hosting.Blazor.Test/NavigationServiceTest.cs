@@ -660,7 +660,10 @@ public class NavigationServiceTest
         await service.InitializeAsync();
         await Task.Delay(150, TestContext.Current.CancellationToken);
 
-        _creatableTypesProvider.Received().GetCreatableTypes(
+        // Discard the IObservable result — this is an NSubstitute received-call
+        // verification, not a real invocation. The discard silences CS4014
+        // (System.Reactive's GetAwaiter makes IObservable<T> awaitable).
+        _ = _creatableTypesProvider.Received().GetCreatableTypes(
             "PartnerRe/AIConsulting", Arg.Any<MeshNode?>());
         lastSnapshot!.Items.Should().Contain(t => t.NodeTypePath == "PartnerRe/AIConsulting/Story");
     }

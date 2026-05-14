@@ -120,7 +120,7 @@ public class PartitionedSchemaTests
         await router.SaveNode(nodeB, _options).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         var children = new List<MeshNode>();
-        await foreach (var child in router.GetChildrenAsync(null, _options))
+        await foreach (var child in router.GetChildrenAsync(null, _options, TestContext.Current.CancellationToken))
             children.Add(child);
 
         children.Should().Contain(n => n.Path == "Epsilon");

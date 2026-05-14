@@ -124,7 +124,7 @@ public class HierarchicalPathDeletionTests
     }
 
     [Fact]
-    public void Siblings_run_in_parallel_neither_blocks_the_other()
+    public async Task Siblings_run_in_parallel_neither_blocks_the_other()
     {
         // Gate both siblings — neither delete completes until we release it.
         // Both Start() calls must happen BEFORE we release either, proving
@@ -143,12 +143,12 @@ public class HierarchicalPathDeletionTests
         fake.Release("a/b");
         fake.Release("a/c");
 
-        var deleted = resultTask.GetAwaiter().GetResult();
+        var deleted = await resultTask;
         deleted.Last().Should().Be("a");
     }
 
     [Fact]
-    public void Unrelated_branches_progress_independently()
+    public async Task Unrelated_branches_progress_independently()
     {
         // Tree:  root → branchA → leafA
         //         root → branchB → leafB
@@ -170,7 +170,7 @@ public class HierarchicalPathDeletionTests
 
         fake.Release("root/branchB/leafB");
 
-        var deleted = resultTask.GetAwaiter().GetResult();
+        var deleted = await resultTask;
         deleted.Should().HaveCount(5);
         deleted.Last().Should().Be("root");
     }

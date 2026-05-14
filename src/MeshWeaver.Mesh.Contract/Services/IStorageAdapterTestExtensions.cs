@@ -14,6 +14,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public static class IStorageAdapterTestExtensions
 {
+    /// <summary>Test bridge: <c>Read</c> → awaitable single node (or null).</summary>
     public static Task<MeshNode?> ReadAsync(this IStorageAdapter adapter, string path, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.Read(path, options).FirstAsync().ToTask(ct);
 
@@ -21,6 +22,7 @@ public static class IStorageAdapterTestExtensions
     public static Task<MeshNode?> GetNodeAsync(this IStorageAdapter adapter, string path, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.Read(path, options).FirstAsync().ToTask(ct);
 
+    /// <summary>Test bridge: <c>Write</c> → awaitable persisted node.</summary>
     public static Task<MeshNode> WriteAsync(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.Write(node, options).FirstAsync().ToTask(ct);
 
@@ -32,12 +34,15 @@ public static class IStorageAdapterTestExtensions
     public static Task<MeshNode> SaveNodeAsync(this IStorageAdapter adapter, MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.Write(node, options).FirstAsync().ToTask(ct);
 
+    /// <summary>Test bridge: <c>Delete</c> → awaitable deleted path.</summary>
     public static Task<string> DeleteAsync(this IStorageAdapter adapter, string path, CancellationToken ct = default)
         => adapter.Delete(path).FirstAsync().ToTask(ct);
 
+    /// <summary>Test bridge: <c>Exists</c> → awaitable bool.</summary>
     public static Task<bool> ExistsAsync(this IStorageAdapter adapter, string path, CancellationToken ct = default)
         => adapter.Exists(path).FirstAsync().ToTask(ct);
 
+    /// <summary>Test bridge: <c>ListChildPaths</c> → awaitable (node paths, directory paths).</summary>
     public static Task<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPathsAsync(
         this IStorageAdapter adapter, string? parentPath, CancellationToken ct = default)
         => adapter.ListChildPaths(parentPath).FirstAsync().ToTask(ct);
@@ -80,6 +85,7 @@ public static class IStorageAdapterTestExtensions
                 return adapter.Write(moved, options).SelectMany(_ => adapter.Delete(sourcePath).Select(_ => moved));
             });
 
+    /// <summary>Test bridge: <c>GetPartitionObjects</c> → async-enumerable of partition objects.</summary>
     public static async IAsyncEnumerable<object> GetPartitionObjectsAsync(
         this IStorageAdapter adapter, string nodePath, string? subPath, JsonSerializerOptions options,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
@@ -88,23 +94,28 @@ public static class IStorageAdapterTestExtensions
         foreach (var obj in list) yield return obj;
     }
 
+    /// <summary>Test bridge: <c>SavePartitionObjects</c> → awaitable completion.</summary>
     public static Task<System.Reactive.Unit> SavePartitionObjectsAsync(
         this IStorageAdapter adapter, string nodePath, string? subPath,
         IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.SavePartitionObjects(nodePath, subPath, objects, options).FirstAsync().ToTask(ct);
 
+    /// <summary>Test bridge: <c>DeletePartitionObjects</c> → awaitable completion.</summary>
     public static Task<System.Reactive.Unit> DeletePartitionObjectsAsync(
         this IStorageAdapter adapter, string nodePath, string? subPath = null, CancellationToken ct = default)
         => adapter.DeletePartitionObjects(nodePath, subPath).FirstAsync().ToTask(ct);
 
+    /// <summary>Test bridge: <c>GetPartitionMaxTimestamp</c> → awaitable timestamp (or null).</summary>
     public static Task<DateTimeOffset?> GetPartitionMaxTimestampAsync(
         this IStorageAdapter adapter, string nodePath, string? subPath = null, CancellationToken ct = default)
         => adapter.GetPartitionMaxTimestamp(nodePath, subPath).FirstAsync().ToTask(ct);
 
+    /// <summary>Test bridge: <c>ListPartitionSubPaths</c> → awaitable sub-path list.</summary>
     public static Task<IEnumerable<string>> ListPartitionSubPathsAsync(
         this IStorageAdapter adapter, string nodePath, CancellationToken ct = default)
         => adapter.ListPartitionSubPaths(nodePath).FirstAsync().ToTask(ct);
 
+    /// <summary>Test bridge: <c>FindBestPrefixMatch</c> → awaitable (node, matched-segment-count).</summary>
     public static Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
         this IStorageAdapter adapter, string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
         => adapter.FindBestPrefixMatch(fullPath, options).FirstAsync().ToTask(ct);

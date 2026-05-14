@@ -12,12 +12,12 @@ namespace MeshWeaver.Mesh;
 /// waits for them all to complete, then invokes the delegate for itself.
 ///
 /// <para>The grouping by common parent is implicit in the recursion: siblings
-/// share one <see cref="Observable.Merge"/>, but unrelated branches of the
+/// share one <c>Observable.Merge</c>, but unrelated branches of the
 /// tree progress independently — a leaf at depth 5 doesn't have to wait for
 /// an unrelated leaf at the same depth to finish.</para>
 ///
 /// <para>Fail-fast semantics: when the per-node delegate fires
-/// <c>OnError</c> for some descendant, the per-subtree <see cref="Observable.Merge"/>
+/// <c>OnError</c> for some descendant, the per-subtree <c>Observable.Merge</c>
 /// propagates the error, sibling subtrees cancel, and the parent is **not**
 /// deleted. Partial deletion (some leaves already gone) is the acceptable
 /// outcome per the actor model — there is no rollback.</para>

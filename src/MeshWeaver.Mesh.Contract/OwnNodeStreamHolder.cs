@@ -23,6 +23,11 @@ public sealed record OwnNodeStreamHolder(IObservable<MeshNode?> Stream);
 /// </summary>
 public static class OwnNodeStreamExtensions
 {
+    /// <summary>
+    /// Stashes the routing-supplied own-node stream on the hub configuration
+    /// so <c>MeshNodeTypeSource</c> can seed the workspace from it instead of
+    /// issuing a duplicate persistence read at init.
+    /// </summary>
     public static MessageHubConfiguration WithOwnNodeStream(
         this MessageHubConfiguration config,
         IObservable<MeshNode?> ownNodeStream)

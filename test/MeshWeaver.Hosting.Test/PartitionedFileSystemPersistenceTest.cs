@@ -133,7 +133,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         await _router.SaveNode(MeshNode.FromPath("Fabrikam") with { Name = "Fabrikam" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Act - root-level children
-        var children = await _router.GetChildrenAsync(null, _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
+        var children = await _router.GetChildrenAsync(null, _jsonOptions, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         children.Should().HaveCount(3);
@@ -151,7 +151,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         await _router.SaveNode(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
         await _router.SaveNode(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
-        var children = await _router.GetChildrenAsync("", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
+        var children = await _router.GetChildrenAsync("", _jsonOptions, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2);
     }
 
@@ -211,7 +211,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         await freshRouter.InitializeAsync(TestContext.Current.CancellationToken);
 
         // Assert - Partitions should be discovered
-        var children = await freshRouter.GetChildrenAsync(null, _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
+        var children = await freshRouter.GetChildrenAsync(null, _jsonOptions, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCountGreaterThanOrEqualTo(2);
     }
 
@@ -329,7 +329,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         await _router.SavePartitionObjects("ACME", "layoutAreas", objects, _jsonOptions).FirstAsync().ToTask(TestContext.Current.CancellationToken);
 
         // Assert
-        var retrieved = await _router.GetPartitionObjectsAsync("ACME", "layoutAreas", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
+        var retrieved = await _router.GetPartitionObjectsAsync("ACME", "layoutAreas", _jsonOptions, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         retrieved.Should().HaveCount(1);
     }
 

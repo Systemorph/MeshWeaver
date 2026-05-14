@@ -336,7 +336,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 13
             }
         };
-        await _persistence.SaveNode(updatedNode, SetupJsonOptions).FirstAsync().ToTask(ct);
+        await _persistence!.SaveNode(updatedNode, SetupJsonOptions).FirstAsync().ToTask(ct);
 
         var persistedNode = await _persistence.GetNodeAsync("graph/story1", SetupJsonOptions, ct);
         persistedNode.Should().NotBeNull();
