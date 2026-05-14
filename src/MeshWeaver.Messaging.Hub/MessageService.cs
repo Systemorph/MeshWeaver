@@ -62,6 +62,28 @@ public class MessageService : IMessageService
     private JsonSerializerOptions LoggingSerializerOptions =>
         loggingSerializerOptions ??= hub.CreateLoggingSerializerOptions();
 
+    /// <summary>
+    /// Renders a delivery for log output through <see cref="LoggingSerializerOptions"/>
+    /// so <c>[PreventLogging]</c> members — notably <c>MeshNode.Content</c> and
+    /// other large payloads — are stripped. The log keeps the message's
+    /// identity, target and routing shape; it does NOT dump the whole body
+    /// every time. Use this instead of a raw <c>{@Delivery}</c> destructure
+    /// (which bypasses the resolver and serialises everything). Falls back to a
+    /// type+id summary if serialisation throws — it is called from catch blocks.
+    /// </summary>
+    private string LogText(IMessageDelivery delivery)
+    {
+        try
+        {
+            return JsonSerializer.Serialize(delivery, LoggingSerializerOptions);
+        }
+        catch (Exception ex)
+        {
+            return $"{delivery.Message?.GetType().Name ?? "(null)"} (ID: {delivery.Id}) "
+                + $"[log-serialize failed: {ex.Message}]";
+        }
+    }
+
     public MessageService(
         Address address,
         ILogger<MessageService> logger,
@@ -520,10 +542,11 @@ public class MessageService : IMessageService
             if (traceEnabled)
                 logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                     messageTypeName, Address, delivery.Id);
-            // {@Delivery} destructures the delivery into log structure — expensive
-            // per message. Gate on Debug.
+            // LogText serialises through LoggingSerializerOptions ([PreventLogging]
+            // honoured — MeshNode.Content etc. stripped); still expensive per
+            // message, so gate on Debug.
             if (logger.IsEnabled(LogLevel.Debug))
-                logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
+                logger.LogDebug("Start processing {Delivery} in {Address}", LogText(delivery), Address);
 
             var executionStopwatch = Stopwatch.StartNew();
             var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
@@ -584,8 +607,8 @@ public class MessageService : IMessageService
                     await er.ExceptionCallback.Invoke(e);
                 else
                 {
-                    logger.LogError("An exception occurred during the processing of {@Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.",
-                        delivery, executionStopwatch.ElapsedMilliseconds, e, Address);
+                    logger.LogError("An exception occurred during the processing of {Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.",
+                        LogText(delivery), executionStopwatch.ElapsedMilliseconds, e, Address);
                     ReportFailure(delivery.Failed(e.ToString()));
                 }
             }
@@ -661,7 +684,8 @@ public class MessageService : IMessageService
     {
         if (delivery.Message is not RawJson rawJson)
             return delivery;
-        logger.LogDebug("Deserializing {@Delivery} in {Address}", delivery, Address);
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug("Deserializing {Delivery} in {Address}", LogText(delivery), Address);
         var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
         if (deserializedMessage == null)
             return delivery.Failed("Deserialization returned null");
