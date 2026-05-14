@@ -501,11 +501,22 @@ public static class MeshDataSourceExtensions
             // Version is unchanged — the workspace doesn't auto-bump Version
             // on every UpdateImpl, so a Version-only key would silently drop
             // edits that didn't go through a Version-bumping write path.
+            // 🚨 cache.IsDeleted gate is required: after a Delete, the workspace
+            // reducer can still emit the cached MeshNode (the reducer doesn't
+            // tombstone the value), and Sample buffers the last value through the
+            // 200 ms window. Without this guard, the per-node hub re-writes the
+            // node to storage ~150 ms after a recursive parent delete removes it,
+            // breaking Recursive_Delete_RemovesEntireSubtree (the sibling
+            // children-check then fails with "has children").
             var saveSub = ownStream
-                .Where(n => n != null)
+                .Where(n => n != null && !cache.IsDeleted)
                 .DistinctUntilChanged()
                 .Sample(SaveSampleInterval)
-                .Subscribe(node => hub.Post(new SaveMeshNodeRequest(node)));
+                .Subscribe(node =>
+                {
+                    if (cache.IsDeleted) return;
+                    hub.Post(new SaveMeshNodeRequest(node));
+                });
             hub.RegisterForDisposal(saveSub);
 
             // Per-NodeType compile auto-watcher: fires RunCompile whenever the own
