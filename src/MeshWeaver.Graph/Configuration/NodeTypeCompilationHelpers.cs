@@ -60,11 +60,18 @@ internal static class NodeTypeCompilationHelpers
         var triggered = 0;
 
         // Eager kickoff on hub activation: when the per-NodeType hub starts and
-        // sees its own NodeTypeDefinition with no compile state and no assembly
-        // on disk, flip CompilationStatus = Pending so the watcher fires Roslyn
-        // immediately (instead of waiting for the first GetCompilationPathRequest
-        // from an instance lookup). This is the "router-accessed-the-NodeType
-        // kicks off compilation" behaviour that pre-dates the watcher.
+        // sees its own NodeTypeDefinition with no compile state and no release,
+        // flip CompilationStatus = Pending on its OWN stream so the watcher
+        // below fires Roslyn immediately. This is a LOCAL UpdateOwn — it lands
+        // on the hub's own MeshNode, which the watcher (same hub) observes.
+        //
+        // The gate is purely the NodeTypeDefinition's compile state — NEVER
+        // MeshNode.AssemblyLocation. A NodeType definition node's own NodeType
+        // is "NodeType", so enrichment stamps MeshNode.AssemblyLocation with
+        // the FRAMEWORK assembly hosting the NodeType meta-type (e.g.
+        // MeshWeaver.Graph.dll). That is always set and says nothing about
+        // whether THIS NodeType's content type has been compiled. Gating on it
+        // made the kickoff skip every un-compiled NodeType forever.
         var ownStream = workspace.GetMeshNodeStream();
         var kicked = 0;
         var kickoffSub = ownStream
@@ -76,17 +83,17 @@ internal static class NodeTypeCompilationHelpers
                     if (node?.Content is not NodeTypeDefinition def) return;
                     if (def.CompilationStatus is not null
                         && def.CompilationStatus != CompilationStatus.Unknown) return;
-                    if (!string.IsNullOrEmpty(node.AssemblyLocation)) return;
+                    if (!string.IsNullOrEmpty(def.LatestReleasePath)) return;
                     if (System.Threading.Interlocked.CompareExchange(ref kicked, 1, 0) != 0) return;
 
                     logger?.LogDebug(
-                        "Compile kickoff: flipping Pending for {HubPath} (no status, no assembly)",
+                        "Compile kickoff: flipping Pending for {HubPath} (no status, no release)",
                         hub.Address.Path);
                     workspace.GetMeshNodeStream().Update(curr =>
                         curr.Content is NodeTypeDefinition d
                             && (d.CompilationStatus is null
                                 || d.CompilationStatus == CompilationStatus.Unknown)
-                            && string.IsNullOrEmpty(curr.AssemblyLocation)
+                            && string.IsNullOrEmpty(d.LatestReleasePath)
                             ? curr with
                             {
                                 Content = d with { CompilationStatus = CompilationStatus.Pending }

@@ -91,25 +91,26 @@ internal static class NodeTypeCompilationActivity
         if (string.IsNullOrEmpty(activityPath)) return;
         try
         {
-            var workspace = hub.GetWorkspace();
-            workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                    new Address(activityPath!), new MeshNodeReference())
-                .Take(1)
-                .Subscribe(change =>
-                {
-                    var current = change.Value;
-                    if (current?.Content is not ActivityLog log) return;
-                    var updated = log with
-                    {
-                        Messages = log.Messages.Add(new LogMessage(message, level))
-                    };
-                    var updatedNode = current with { Content = updated };
-                    hub.Post(
-                        new UpdateNodeRequest(updatedNode),
-                        o => o.WithTarget(new Address(activityPath!)));
-                },
-                ex => logger.LogDebug(ex,
-                    "Compile-activity AppendLog failed for {Path} (best-effort, ignored)", activityPath));
+            // Set the property on the activity's stream — GetMeshNodeStream
+            // auto-detects own vs remote (the compile-activity handler runs ON
+            // the activity hub, so this is its OWN stream — GetRemoteStream
+            // would throw "Owner cannot be the same as the subscriber"). The
+            // Update rides the synchronization protocol; no message post.
+            hub.GetWorkspace().GetMeshNodeStream(activityPath!)
+                .Update(current =>
+                    current?.Content is ActivityLog log
+                        ? current with
+                        {
+                            Content = log with
+                            {
+                                Messages = log.Messages.Add(new LogMessage(message, level))
+                            }
+                        }
+                        : current!)
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogDebug(ex,
+                        "Compile-activity AppendLog failed for {Path} (best-effort, ignored)", activityPath));
         }
         catch (Exception ex)
         {
@@ -141,35 +142,32 @@ internal static class NodeTypeCompilationActivity
 
         try
         {
-            var workspace = hub.GetWorkspace();
-            // Cross-hub update — the activity hub owns the MeshNodeReference reducer.
-            // Use GetRemoteStream + Update so the activity's own workspace ticks and
-            // subscribers see the terminal snapshot. Same pattern as
-            // Doc/Architecture/AsynchronousCalls.md → "Updating a remote MeshNode".
-            workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                    new Address(activityPath!), new MeshNodeReference())
-                .Take(1)
-                .Subscribe(change =>
-                {
-                    var current = change.Value;
-                    if (current?.Content is not ActivityLog log) return;
-
-                    var updated = log with
-                    {
-                        Status = status,
-                        End = DateTime.UtcNow,
-                        Messages = error is { Length: > 0 }
-                            ? log.Messages.Add(new LogMessage(error,
-                                Microsoft.Extensions.Logging.LogLevel.Error))
-                            : log.Messages
-                    };
-                    var updatedNode = current with { Content = updated };
-                    hub.Post(
-                        new UpdateNodeRequest(updatedNode),
-                        o => o.WithTarget(new Address(activityPath!)));
-                },
-                ex => logger.LogDebug(ex,
-                    "Compile-activity Update failed for {Path} (best-effort, ignored)", activityPath));
+            // Set the terminal status property on the activity's stream.
+            // GetMeshNodeStream auto-detects own vs remote — the compile-activity
+            // handler runs ON the activity hub, so this writes through its OWN
+            // stream (GetRemoteStream would throw "Owner cannot be the same as
+            // the subscriber"). The Update rides the synchronization protocol;
+            // no UpdateNodeRequest message post.
+            hub.GetWorkspace().GetMeshNodeStream(activityPath!)
+                .Update(current =>
+                    current?.Content is ActivityLog log
+                        ? current with
+                        {
+                            Content = log with
+                            {
+                                Status = status,
+                                End = DateTime.UtcNow,
+                                Messages = error is { Length: > 0 }
+                                    ? log.Messages.Add(new LogMessage(error,
+                                        Microsoft.Extensions.Logging.LogLevel.Error))
+                                    : log.Messages
+                            }
+                        }
+                        : current!)
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogDebug(ex,
+                        "Compile-activity Update failed for {Path} (best-effort, ignored)", activityPath));
         }
         catch (Exception ex)
         {
