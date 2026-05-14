@@ -16,19 +16,21 @@ namespace MeshWeaver.Graph.Configuration;
 /// supporting methods. Stateless: no in-memory dictionaries, no cross-silo
 /// change-feed subscription. The MeshNode IS the cache.
 ///
-/// <para>The slow path uses the dedicated <see cref="NodeTypeServiceHub"/>
-/// workspace to subscribe to the target NodeType's MeshNode stream — the
-/// mesh hub itself must never be the requesting workspace for cross-hub
-/// remote streams (causes re-entry deadlock during routing). When the
-/// Activity hub's auto-watcher writes Ok/Error back to the parent MeshNode,
-/// this subscriber sees the settled state and applies it.</para>
+/// <para>The slow path consumes the single shared NodeType stream from
+/// <see cref="INodeTypeStreamCache"/> — one <c>Replay(1).RefCount()</c>
+/// subscription per NodeType path, kept in the cache's concurrent
+/// dictionary. The cache's <c>MaybeKickCompile</c> side-effect fires the
+/// compile exactly once on first touch. There is no dedicated "node-type
+/// service hub": <c>GetMeshNodeStream</c> for a remote path already returns
+/// an <c>ISynchronizationStream</c> that runs on its own hub, so the mesh
+/// hub's workspace can request it without re-entry risk.</para>
 /// </summary>
 internal static class NodeTypeEnrichmentHelpers
 {
     private static readonly TimeSpan SlowPathTimeout = TimeSpan.FromSeconds(30);
 
     public static IObservable<MeshNode> EnrichWithNodeType(
-        IMessageHub serviceHub,
+        IMessageHub meshHub,
         MeshConfiguration meshConfiguration,
         IMeshNodeCompilationService? compilationService,
         MeshNode node,
@@ -56,7 +58,7 @@ internal static class NodeTypeEnrichmentHelpers
         // doesn't survive serialisation, so we MUST find them locally before
         // opening a remote stream). Look up the provider that owns the
         // requested NodeType path and apply its config directly.
-        var providerNode = serviceHub.ServiceProvider
+        var providerNode = meshHub.ServiceProvider
             .GetServices<IStaticNodeProvider>()
             .SelectMany(p => p.GetStaticNodes())
             .FirstOrDefault(n => string.Equals(n.Path, nodeType, StringComparison.OrdinalIgnoreCase));
@@ -67,64 +69,28 @@ internal static class NodeTypeEnrichmentHelpers
                 node, providerNode.AssemblyLocation!, hubCfg, nodeType, meshConfiguration));
         }
 
-        // Slow path: dedicated NodeTypeService hub workspace + remote stream.
-        IWorkspace workspace;
-        try { workspace = serviceHub.GetWorkspace(); }
-        catch (Exception ex)
+        // Slow path: consume the ONE shared NodeType stream from
+        // INodeTypeStreamCache — a Replay(1).RefCount() subscription per
+        // NodeType path held in the cache's concurrent dictionary. Its
+        // MaybeKickCompile side-effect fires the compile exactly once on
+        // first touch of an un-built NodeType. We do NOT roll our own remote
+        // stream or Pending-flip here — that produced a second, uncoordinated
+        // compile trigger and stranded the wait when neither trigger ran.
+        var streamCache = meshHub.ServiceProvider.GetService<INodeTypeStreamCache>();
+        if (streamCache is null)
         {
-            logger?.LogWarning(ex,
-                "EnrichWithNodeType: serviceHub workspace unavailable for {NodeType}", nodeType);
+            logger?.LogWarning(
+                "EnrichWithNodeType: INodeTypeStreamCache not registered — cannot resolve {NodeType}",
+                nodeType);
             return Observable.Return(
                 WithCompilationErrorOverlay(node, nodeType,
-                    "NodeType service workspace unavailable", meshConfiguration));
+                    "NodeType stream cache unavailable", meshConfiguration));
         }
 
-        var typeAddress = new Address(nodeType);
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            typeAddress, new MeshNodeReference());
-        if (stream is null)
-            return Observable.Return(
-                WithCompilationErrorOverlay(node, nodeType,
-                    $"No remote stream available for NodeType '{nodeType}'", meshConfiguration));
-
-        var triggered = 0;
-
-        return stream
-            .Where(change => change?.Value != null)
-            .Select(change => change.Value!)
-            .Do(typeNode =>
-            {
-                if (typeNode.Content is not NodeTypeDefinition def) return;
-                // Static-provider NodeTypes (IStaticNodeProvider — see
-                // NodeOperationsTestSeedProviders.TypeDefinition) arrive with
-                // HubConfiguration + AssemblyLocation already set and no
-                // CompilationStatus. There's nothing for the CompileWatcher to
-                // do; flipping Pending only wastes a Roslyn round-trip and
-                // strands the slow path waiting on a Compiling → Ok/Error
-                // transition that may never happen. Don't trigger.
-                if (typeNode.HubConfiguration != null
-                    && !string.IsNullOrEmpty(typeNode.AssemblyLocation)) return;
-                if (def.CompilationStatus is not null
-                    && def.CompilationStatus != CompilationStatus.Unknown) return;
-                if (System.Threading.Interlocked.CompareExchange(ref triggered, 1, 0) != 0) return;
-                logger?.LogDebug(
-                    "EnrichWithNodeType slow path: flipping Pending for {NodeType}", nodeType);
-                stream.Update(current =>
-                {
-                    if (current?.Content is not NodeTypeDefinition d) return null;
-                    if (d.CompilationStatus is not null && d.CompilationStatus != CompilationStatus.Unknown)
-                        return null;
-                    return new ChangeItem<MeshNode>(
-                        Value: current with { Content = d with { CompilationStatus = CompilationStatus.Pending } },
-                        ChangedBy: WellKnownUsers.System,
-                        StreamId: stream.StreamId,
-                        ChangeType: ChangeType.Full,
-                        Version: stream.Hub.Version,
-                        Updates: null);
-                });
-            })
-            // Settled state OR an already-configured static-provider node
-            // (HubConfiguration + AssemblyLocation pre-populated, no compile).
+        return streamCache.GetStream(nodeType)
+            // Settled compile (Ok/Error) OR an already-configured node
+            // (HubConfiguration + AssemblyLocation pre-populated — static
+            // provider, or a built-in that ships its assembly).
             .Where(typeNode => (typeNode.HubConfiguration != null
                                 && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
                 || (typeNode.Content is NodeTypeDefinition def
@@ -290,27 +256,4 @@ $@"> **⚠ {header}**
             .WithStyle("padding: 16px;")
             .WithView(Controls.Markdown(markdown));
     }
-}
-
-/// <summary>
-/// Singleton on the mesh hub that hosts a dedicated <see cref="IMessageHub"/>
-/// for NodeType stream subscriptions. The mesh hub itself must never be the
-/// requesting workspace for <c>GetRemoteStream</c> — when invoked from
-/// routing/activation, the SubscribeRequest re-enters the same dispatcher
-/// that's waiting on the EnrichWithNodeType result.
-/// </summary>
-public sealed class NodeTypeServiceHub
-{
-    private readonly Lazy<IMessageHub> _hub;
-
-    public NodeTypeServiceHub(IMessageHub meshHub)
-    {
-        _hub = new Lazy<IMessageHub>(
-            () => meshHub.GetHostedHub(
-                new Address("_nodetype-service"),
-                c => c.AddMeshDataSource()),
-            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
-    }
-
-    public IMessageHub Hub => _hub.Value;
 }

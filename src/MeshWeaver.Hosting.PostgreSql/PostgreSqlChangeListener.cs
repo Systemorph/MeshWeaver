@@ -76,6 +76,7 @@ public class PostgreSqlChangeListener : IAsyncDisposable
                 }
 
                 _logger?.LogInformation("PostgreSQL LISTEN started on mesh_node_changes");
+                try { System.IO.File.AppendAllText("C:\\tmp\\claude\\pg-diag.log", $"[{DateTime.UtcNow:HH:mm:ss.fff}] LISTEN started on mesh_node_changes\n"); } catch { }
 
                 // WaitAsync will block until a notification arrives or cancellation is requested
                 while (!ct.IsCancellationRequested)
@@ -112,6 +113,7 @@ public class PostgreSqlChangeListener : IAsyncDisposable
             var payload = JsonSerializer.Deserialize<JsonElement>(e.Payload);
             var path = payload.GetProperty("path").GetString() ?? "";
             var op = payload.GetProperty("op").GetString() ?? "";
+            try { System.IO.File.AppendAllText("C:\\tmp\\claude\\pg-diag.log", $"[{DateTime.UtcNow:HH:mm:ss.fff}] NOTIFY path={path} op={op}\n"); } catch { }
 
             var kind = op switch
             {
