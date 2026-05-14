@@ -404,8 +404,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
         yield return $"\n\n**Delegating to {targetId}…**\n\n";
 
-        // Open a channel fed by the sub-thread's response-cell remote stream. We yield
-        // each text delta as it arrives (computed against lastText so we never double-emit).
+        // Open a channel fed by the sub-thread's remote streams. We yield each text
+        // delta as it arrives (computed against lastText so we never double-emit).
+        // Communication is purely via remote streams — we never await a message
+        // from the sub-thread and never post one to it. Subscribing IS the trigger.
         var channel = System.Threading.Channels.Channel.CreateUnbounded<string>(
             new System.Threading.Channels.UnboundedChannelOptions
             {
@@ -415,7 +417,40 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
         var workspace = Hub.GetWorkspace();
         var lastText = "";
-        var subscription = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+
+        // 1. Subscribe to the SUB-THREAD's own remote stream. This does double duty:
+        //    (a) the SubscribeRequest activates the sub-thread hub — its
+        //        WatchForExecution WithInitialization hook then auto-runs the agent
+        //        (BuildThreadWithMessages set IsExecuting=true + PendingUserMessage).
+        //        Without this subscription nothing ever addresses the sub-thread
+        //        hub, so it never activates and the delegation hangs forever.
+        //    (b) IsExecuting is the completion signal — when it flips back to false
+        //        the sub-thread's turn is done. The node is created with
+        //        IsExecuting=true, so we only treat false as "done" once we've
+        //        actually observed it running (startedExecuting guard) — the first
+        //        emission can race ahead of the initial state.
+        var startedExecuting = false;
+        var subThreadSub = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(subThreadPath), new MeshNodeReference())
+            ?.Subscribe(
+                change =>
+                {
+                    if (change.Value?.Content is not MeshThread thread) return;
+                    if (thread.IsExecuting)
+                    {
+                        startedExecuting = true;
+                        return;
+                    }
+                    if (startedExecuting)
+                        channel.Writer.TryComplete();
+                },
+                ex => channel.Writer.TryComplete(ex));
+
+        // 2. Subscribe to the response-cell remote stream for incremental text.
+        //    CompletedAt on the cell is a secondary completion signal — covers the
+        //    case where the cell finalises before the thread node's IsExecuting=false
+        //    propagates.
+        var responseCellSub = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
                 new Address(responsePath), new MeshNodeReference())
             ?.Subscribe(
                 change =>
@@ -448,7 +483,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
         finally
         {
-            subscription?.Dispose();
+            subThreadSub?.Dispose();
+            responseCellSub?.Dispose();
             Logger.LogInformation("[Delegation] Stream closed for sub-thread {Path}", subThreadPath);
         }
     }
