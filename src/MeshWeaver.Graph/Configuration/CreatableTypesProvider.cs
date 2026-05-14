@@ -46,12 +46,32 @@ internal sealed class CreatableTypesProvider(
     public IObservable<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypes(
         string? nodePath, MeshNode? parentNode)
     {
+        // The parent node's NodeType drives the "child NodeTypes of the
+        // parent's type" query (Q2 — e.g. an ACME/Project instance offers
+        // ACME/Project/Todo). Callers MAY pass parentNode when they already
+        // hold it; when they don't, resolve it ourselves so the result is
+        // robust regardless of caller timing (a caller's short best-effort
+        // lookup could otherwise hand us null and silently drop Q2).
+        if (parentNode is null && !string.IsNullOrEmpty(nodePath))
+        {
+            return hub.GetWorkspace().GetMeshNodeStream(nodePath)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+                .SelectMany(resolved => GetCreatableTypesCore(nodePath, resolved));
+        }
+        return GetCreatableTypesCore(nodePath, parentNode);
+    }
+
+    private IObservable<IReadOnlyList<CreatableTypeInfo>> GetCreatableTypesCore(
+        string? nodePath, MeshNode? parentNode)
+    {
         var meshQueryCore = hub.ServiceProvider.GetService<IMeshQueryCore>();
         var currentType = parentNode?.NodeType;
 
         var typeNodesObs = meshQueryCore is null
             ? Observable.Return<IReadOnlyList<MeshNode>>([])
-            : QueryTypeNodes(meshQueryCore, nodePath, currentType);
+            : QueryTypeNodes(meshQueryCore, hub.JsonSerializerOptions, nodePath, currentType);
 
         var typesObs = typeNodesObs.Select(typeNodes =>
             BuildInfos(typeNodes, meshConfiguration, currentType));
@@ -75,14 +95,19 @@ internal sealed class CreatableTypesProvider(
     /// <c>ImmutableDictionary&lt;string, MeshNode&gt;</c> Scan.
     /// </summary>
     private static IObservable<IReadOnlyList<MeshNode>> QueryTypeNodes(
-        IMeshQueryCore meshQueryCore, string? nodePath, string? currentType)
+        IMeshQueryCore meshQueryCore,
+        System.Text.Json.JsonSerializerOptions jsonOptions,
+        string? nodePath, string? currentType)
     {
         var queries = BuildQueries(nodePath, currentType);
         if (queries.Length == 0)
             return Observable.Return<IReadOnlyList<MeshNode>>([]);
 
+        // Pass the hub's real JsonSerializerOptions — IMeshQueryCore.ObserveQuery
+        // deserialises rows with it; null would NRE inside the provider and the
+        // .Catch below would silently swallow every query result.
         var observables = queries.Select(q => meshQueryCore
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q), options: null!)
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q), jsonOptions)
             .Take(1)
             .Catch<QueryResultChange<MeshNode>, Exception>(
                 _ => Observable.Empty<QueryResultChange<MeshNode>>()));

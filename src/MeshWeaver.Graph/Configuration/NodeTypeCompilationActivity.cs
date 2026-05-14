@@ -32,19 +32,23 @@ internal static class NodeTypeCompilationActivity
 {
     /// <summary>
     /// Create the activity at <c>{nodeTypePath}/_Activity/compile-{guid}</c>
-    /// with <see cref="ActivityStatus.Running"/>. Returns the activity path so
-    /// the caller can hand it to <see cref="MarkSucceeded"/> /
-    /// <see cref="MarkFailed"/> on completion. Returns <c>null</c> when the
-    /// CreateNode dispatch couldn't even be posted (e.g. mesh service not
-    /// registered yet at startup).
+    /// with <see cref="ActivityStatus.Running"/>. Returns an observable that
+    /// emits the activity path <b>after</b> the activity MeshNode's
+    /// <c>CreateNode</c> completes — so the caller never races a
+    /// <c>RunCompileRequest</c> against a not-yet-routable activity (the
+    /// "NotFound for ...&#47;_Activity/compile..." routing warning). Emits
+    /// nothing (completes empty) when no <see cref="IMeshService"/> is
+    /// available or the create fails — the caller falls back to an inline
+    /// compile in that case.
     /// </summary>
-    public static string? Start(IMessageHub hub, string nodeTypePath, ILogger logger)
+    public static IObservable<string> Start(IMessageHub hub, string nodeTypePath, ILogger logger)
     {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Empty<string>();
+
         try
         {
-            var meshService = hub.ServiceProvider.GetService<IMeshService>();
-            if (meshService is null) return null;
-
             var activityId = $"compile-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}".AsActivityId();
             var activityNamespace = $"{nodeTypePath}/_Activity";
             var activityPath = $"{activityNamespace}/{activityId}";
@@ -63,19 +67,22 @@ internal static class NodeTypeCompilationActivity
                 }
             };
 
-            // Fire-and-forget — observability, not correctness.
-            meshService.CreateNode(node).Subscribe(
-                _ => { },
-                ex => logger.LogDebug(ex,
-                    "Compile-activity Start failed for {Path} (best-effort, ignored)", nodeTypePath));
-
-            return activityPath;
+            // Emit the path only once CreateNode has persisted + registered the
+            // activity node — then it is routable for the RunCompileRequest.
+            return meshService.CreateNode(node)
+                .Select(_ => activityPath)
+                .Catch<string, Exception>(ex =>
+                {
+                    logger.LogDebug(ex,
+                        "Compile-activity Start failed for {Path} (best-effort, ignored)", nodeTypePath);
+                    return Observable.Empty<string>();
+                });
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex,
                 "Compile-activity Start threw for {Path} (best-effort, ignored)", nodeTypePath);
-            return null;
+            return Observable.Empty<string>();
         }
     }
 
