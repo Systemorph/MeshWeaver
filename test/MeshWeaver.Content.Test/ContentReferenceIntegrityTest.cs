@@ -286,6 +286,17 @@ public class ContentReferenceIntegrityTest
         foreach (var filePath in jsonFiles)
         {
             var relativePath = Path.GetRelativePath(dataDir, filePath).Replace('\\', '/');
+
+            // Skip generated satellite artifacts (NodeType compile releases,
+            // activity logs, threads, …). These are produced at runtime — they
+            // are not hand-authored sample content, and their image refs are
+            // whatever the generator emitted, so validating them here is wrong
+            // (and flaky: a compile test running alongside this one drops fresh
+            // `_Release/*.json` files into the sample tree).
+            if (relativePath.Contains("/_Release/", StringComparison.Ordinal)
+                || relativePath.StartsWith("_Release/", StringComparison.Ordinal))
+                continue;
+
             var fileContent = File.ReadAllText(filePath);
 
             using var doc = JsonDocument.Parse(fileContent, new JsonDocumentOptions
