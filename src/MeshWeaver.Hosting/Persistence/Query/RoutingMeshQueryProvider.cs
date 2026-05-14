@@ -412,6 +412,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                         .ToList(),
                     (list, entry) => { list.Add(entry); return list; });
 
+            // Build the per-provider scoped request once — same shape used by
+            // the snapshot fan-out and the runtime-partition watcher below.
+            MeshQueryRequest ScopedReq() => string.IsNullOrEmpty(effectivePath)
+                ? request with { Query = fanOutQuery }
+                : request;
+
             outerDisposables.Add(collectProviders.Subscribe(
                 allProviders =>
                 {
@@ -421,26 +427,46 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                         return;
                     }
 
+                    // Keys this fan-out snapshot covers. A partition provisioned
+                    // AFTER this point (e.g. the write that creates the first
+                    // node under a brand-new org) is folded in by the
+                    // ProvidersAdded watcher below — without it a synced query
+                    // opened before its target partition existed stays frozen on
+                    // the empty snapshot forever (the
+                    // EffectivePermissionPostgresTest.RuntimeCreateNode_*
+                    // failure: the AccessAssignment write provisions the
+                    // partition ~0.4 s after SecurityService's synced query
+                    // subscribed). Each late provider's Initial is re-tagged
+                    // Added so consumers never see a second Initial.
+                    var covered = new HashSet<string>(
+                        allProviders.Select(p => p.Key), StringComparer.OrdinalIgnoreCase);
+                    var coveredGate = new object();
+
+                    outerDisposables.Add(_router.ProvidersAdded
+                        .Where(p =>
+                        {
+                            lock (coveredGate) return covered.Add(p.Key);
+                        })
+                        .Subscribe(
+                            p => outerDisposables.Add(
+                                p.Provider.ObserveQuery<T>(ScopedReq(), options)
+                                    .Select(c => c.ChangeType == QueryChangeType.Initial
+                                        ? c with { ChangeType = QueryChangeType.Added }
+                                        : c)
+                                    .Subscribe(observer.OnNext, observer.OnError)),
+                            observer.OnError));
+
                     if (allProviders.Count == 1)
                     {
                         var (_, prov) = allProviders[0];
                         // Don't inject DefaultPath — schema isolation already scopes data
                         // per partition, and lowercase keys don't match proper-cased paths.
-                        var scopedReq = string.IsNullOrEmpty(effectivePath)
-                            ? request with { Query = fanOutQuery }
-                            : request;
-                        outerDisposables.Add(prov.ObserveQuery<T>(scopedReq, options).Subscribe(observer));
+                        outerDisposables.Add(prov.ObserveQuery<T>(ScopedReq(), options).Subscribe(observer));
                         return;
                     }
 
                     var observables = allProviders
-                        .Select(entry =>
-                        {
-                            var scopedReq = string.IsNullOrEmpty(effectivePath)
-                                ? request with { Query = fanOutQuery }
-                                : request;
-                            return entry.Provider.ObserveQuery<T>(scopedReq, options);
-                        })
+                        .Select(entry => entry.Provider.ObserveQuery<T>(ScopedReq(), options))
                         .ToList();
 
                     var initialItems = new List<T>();

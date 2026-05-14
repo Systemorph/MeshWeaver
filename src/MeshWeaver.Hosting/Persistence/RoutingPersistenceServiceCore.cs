@@ -42,6 +42,33 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
     private volatile bool _initialized;
 
+    // Fires (key, provider) on EVERY query-provider registration — constructor
+    // seed, background DiscoverNewProviders, or write-triggered
+    // GetOrCreateAdapterAsync. RoutingMeshQueryProvider's fan-out rides this so
+    // a synced query opened BEFORE its target partition exists picks up that
+    // partition the moment it is provisioned, instead of staying frozen on the
+    // static provider snapshot captured at subscribe time. Replay so a
+    // subscriber that subscribes-then-reconciles can't miss a registration.
+    private readonly System.Reactive.Subjects.Subject<(string Key, IMeshQueryProvider Provider)> _providerAdded = new();
+
+    /// <summary>
+    /// Hot stream of query-provider registrations — one event per partition as
+    /// it is provisioned. Consumed by <see cref="RoutingMeshQueryProvider"/> to
+    /// keep an in-flight fan-out current with partitions created at runtime.
+    /// </summary>
+    internal IObservable<(string Key, IMeshQueryProvider Provider)> ProvidersAdded => _providerAdded;
+
+    /// <summary>
+    /// Single funnel for every <c>_queryProviders[…] = …</c> assignment so no
+    /// registration is silent — sets the dict entry then publishes on
+    /// <see cref="_providerAdded"/>.
+    /// </summary>
+    private void RegisterQueryProvider(string key, IMeshQueryProvider provider)
+    {
+        _queryProviders[key] = provider;
+        _providerAdded.OnNext((key, provider));
+    }
+
     public RoutingPersistenceServiceCore(
         IPartitionedStoreFactory factory,
         IDataChangeNotifier? changeNotifier = null,
@@ -65,8 +92,8 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
 
             if (_adapters.TryAdd(ns, provider.Adapter))
             {
-                _queryProviders[ns] =
-                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier);
+                RegisterQueryProvider(ns,
+                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier));
             }
         }
     }
@@ -173,7 +200,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
                             return ((string, IMeshQueryProvider)?)null;
                         var queryProvider = partition.QueryProvider
                             ?? new Query.StorageAdapterMeshQueryProvider(persistence: partition.StorageAdapter!, changeNotifier: _changeNotifier);
-                        _queryProviders[segment] = queryProvider;
+                        RegisterQueryProvider(segment, queryProvider);
                         if (partition.VersionQuery != null)
                             _versionQueries[segment] = partition.VersionQuery;
                         return (segment, queryProvider);
@@ -217,8 +244,8 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
             {
                 if (!provider.Matches(firstSegment)) continue;
                 _adapters[firstSegment] = provider.Adapter;
-                _queryProviders[firstSegment] =
-                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier);
+                RegisterQueryProvider(firstSegment,
+                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier));
                 return provider.Adapter;
             }
 
@@ -226,7 +253,7 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
             _adapters[firstSegment] = partition.StorageAdapter!;
             var queryProvider = partition.QueryProvider
                 ?? new Query.StorageAdapterMeshQueryProvider(persistence: partition.StorageAdapter!, changeNotifier: _changeNotifier);
-            _queryProviders[firstSegment] = queryProvider;
+            RegisterQueryProvider(firstSegment, queryProvider);
             if (partition.VersionQuery != null)
                 _versionQueries[firstSegment] = partition.VersionQuery;
             return partition.StorageAdapter!;
@@ -247,8 +274,8 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
 
             if (_adapters.TryAdd(ns, provider.Adapter))
             {
-                _queryProviders[ns] =
-                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier);
+                RegisterQueryProvider(ns,
+                    new Query.StorageAdapterMeshQueryProvider(persistence: provider.Adapter, changeNotifier: _changeNotifier));
             }
         }
 
@@ -285,7 +312,8 @@ internal class RoutingPersistenceServiceCore : IStorageAdapter
             var staticAdapter = new StaticNodeStorageAdapter(nodesInPartition);
             if (_adapters.TryAdd(def.Namespace, staticAdapter))
             {
-                _queryProviders[def.Namespace] = new Query.StorageAdapterMeshQueryProvider(persistence: staticAdapter, changeNotifier: _changeNotifier);
+                RegisterQueryProvider(def.Namespace,
+                    new Query.StorageAdapterMeshQueryProvider(persistence: staticAdapter, changeNotifier: _changeNotifier));
             }
         }
     }
