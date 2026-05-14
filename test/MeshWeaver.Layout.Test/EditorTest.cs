@@ -79,7 +79,8 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             });
         var editorAreas = await Task.WhenAll(
             editor.Areas.Select(async a =>
-                await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync())
+                await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds())
+                    .FirstAsync(x => x is not null))
         );
 
         editorAreas.Should().HaveCount(2);
