@@ -73,8 +73,15 @@ internal sealed class CreatableTypesProvider(
             ? Observable.Return<IReadOnlyList<MeshNode>>([])
             : QueryTypeNodes(meshQueryCore, hub.JsonSerializerOptions, nodePath, currentType);
 
-        var typesObs = typeNodesObs.Select(typeNodes =>
-            BuildInfos(typeNodes, meshConfiguration, currentType));
+        // Resolve the parent's NodeTypeDefinition — its CreatableTypes (when
+        // set) is an explicit whitelist that FILTERS auto-discovery on top of
+        // the synced query. For RUNTIME NodeTypes this def is not in
+        // meshConfiguration.Nodes (static config only), so layer a live
+        // GetMeshNodeStream lookup on top of the type-node query.
+        var parentDefObs = ResolveParentNodeTypeDefinition(currentType);
+
+        var typesObs = typeNodesObs.CombineLatest(parentDefObs, (typeNodes, parentDef) =>
+            BuildInfos(typeNodes, meshConfiguration, currentType, parentDef));
 
         // Outer security gate: only apply Create-permission filter for a
         // specific parent path. Root listing (nodePath == "") is global
@@ -151,17 +158,52 @@ internal sealed class CreatableTypesProvider(
         return list.ToArray();
     }
 
+    /// <summary>
+    /// Resolves the <see cref="NodeTypeDefinition"/> for <paramref name="currentType"/>.
+    /// Static config (built-in types) first, then a live
+    /// <c>GetMeshNodeStream</c> lookup so RUNTIME NodeTypes — which are not in
+    /// <see cref="MeshConfiguration.Nodes"/> — still surface their
+    /// <c>CreatableTypes</c> / <c>IncludeGlobalTypes</c> settings.
+    /// </summary>
+    private IObservable<NodeTypeDefinition?> ResolveParentNodeTypeDefinition(string? currentType)
+    {
+        if (string.IsNullOrEmpty(currentType)
+            || string.Equals(currentType, MeshNode.NodeTypePath, StringComparison.Ordinal))
+            return Observable.Return<NodeTypeDefinition?>(null);
+
+        if (meshConfiguration.Nodes.TryGetValue(currentType, out var staticNode)
+            && staticNode.Content is NodeTypeDefinition staticDef)
+            return Observable.Return<NodeTypeDefinition?>(staticDef);
+
+        return hub.GetWorkspace().GetMeshNodeStream(currentType)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .Select(n => n?.Content as NodeTypeDefinition);
+    }
+
     private static IReadOnlyList<CreatableTypeInfo> BuildInfos(
         IReadOnlyList<MeshNode> queryNodes,
         MeshConfiguration meshConfiguration,
-        string? currentType)
+        string? currentType,
+        NodeTypeDefinition? parentDef)
     {
         var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<CreatableTypeInfo>();
 
+        // When the parent NodeType defines an explicit CreatableTypes list it
+        // is an authoritative WHITELIST: auto-discovery (the synced-query rows
+        // + static NodeType registrations) is filtered down to that set. With
+        // no explicit list every discovered NodeType is offered.
+        var whitelist = parentDef?.CreatableTypes is { } ct
+            ? new HashSet<string>(ct, StringComparer.OrdinalIgnoreCase)
+            : null;
+        bool Allowed(string path) => whitelist is null || whitelist.Contains(path);
+
         // 1. Query-returned NodeTypes (already deduped by Path upstream).
         foreach (var typeNode in queryNodes)
         {
+            if (!Allowed(typeNode.Path)) continue;
             if (!added.Add(typeNode.Path)) continue;
             result.Add(BuildInfoFromMeshNode(typeNode));
         }
@@ -174,16 +216,16 @@ internal sealed class CreatableTypesProvider(
         {
             if (!string.Equals(typeNode.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
                 continue;
+            if (!Allowed(path)) continue;
             if (!added.Add(path)) continue;
             result.Add(BuildInfoFromMeshNode(typeNode));
         }
 
-        // 3. JSON-based CreatableTypes from the parent's NodeType definition.
+        // 3. JSON-based CreatableTypes from the parent's NodeType definition —
+        //    resolved live by ResolveParentNodeTypeDefinition (works for
+        //    runtime NodeTypes, not just static config).
         var includeGlobal = true;
-        if (!string.IsNullOrEmpty(currentType)
-            && !string.Equals(currentType, MeshNode.NodeTypePath, StringComparison.Ordinal)
-            && meshConfiguration.Nodes.TryGetValue(currentType, out var parentTypeNode)
-            && parentTypeNode.Content is NodeTypeDefinition parentDef)
+        if (parentDef is not null)
         {
             includeGlobal = parentDef.IncludeGlobalTypes;
             if (parentDef.CreatableTypes is not null)
@@ -208,7 +250,10 @@ internal sealed class CreatableTypesProvider(
             }
         }
 
-        return result;
+        // Order ascending — globals carry a high Order (e.g. 1000/1001) so they
+        // sort to the end of the create menu; OrderBy is stable so types with
+        // an equal Order keep their discovery sequence.
+        return result.OrderBy(x => x.Order).ToList();
     }
 
     private static CreatableTypeInfo BuildInfoFromMeshNode(MeshNode node)
