@@ -1,5 +1,6 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -60,18 +61,33 @@ internal static class NodeTypeCompilationHelpers
         var triggered = 0;
 
         // Eager kickoff on hub activation: when the per-NodeType hub starts and
-        // sees its own NodeTypeDefinition with no compile state and no release,
-        // flip CompilationStatus = Pending on its OWN stream so the watcher
-        // below fires Roslyn immediately. This is a LOCAL UpdateOwn — it lands
-        // on the hub's own MeshNode, which the watcher (same hub) observes.
+        // its own NodeTypeDefinition is NOT backed by a usable compiled
+        // assembly, flip CompilationStatus = Pending on its OWN stream so the
+        // watcher below fires Roslyn immediately. This is a LOCAL UpdateOwn —
+        // it lands on the hub's own MeshNode, which the watcher (same hub)
+        // observes.
         //
-        // The gate is purely the NodeTypeDefinition's compile state — NEVER
-        // MeshNode.AssemblyLocation. A NodeType definition node's own NodeType
-        // is "NodeType", so enrichment stamps MeshNode.AssemblyLocation with
-        // the FRAMEWORK assembly hosting the NodeType meta-type (e.g.
-        // MeshWeaver.Graph.dll). That is always set and says nothing about
-        // whether THIS NodeType's content type has been compiled. Gating on it
-        // made the kickoff skip every un-compiled NodeType forever.
+        // 🚨 Verify-before-skip — the kickoff must NOT trust a bare
+        // CompilationStatus == Ok. CompilationStatus + AssemblyLocation are
+        // runtime state, but they are persisted into the NodeType's own
+        // MeshNode JSON. A stale Ok therefore survives across process
+        // boundaries: it can be baked into seed/sample data by a previous run
+        // (the test-seed-pollution class of bug), or it can point at a temp /
+        // .mesh-cache assembly that has since been cleaned up. Trusting it
+        // strands the NodeType — the kickoff skips, no recompile runs, and
+        // every instance hub falls back to the default config (no
+        // MeshNodeReference reducer → "No reducer defined for
+        // MeshNodeReference" on every subscribe). The ONLY safe skip condition
+        // is "Ok AND the compiled assembly still exists on disk"
+        // (<see cref="HasUsableBuild"/>); everything else — null / Unknown /
+        // Compiling (interrupted) / Error / Ok-but-assembly-gone — recompiles.
+        //
+        // The AssemblyLocation check is sound precisely because it is gated on
+        // status == Ok. A never-compiled NodeType has a null status: enrichment
+        // stamps MeshNode.AssemblyLocation with the FRAMEWORK assembly hosting
+        // the NodeType meta-type (e.g. MeshWeaver.Graph.dll), but it never sets
+        // status to Ok — so a framework-dll AssemblyLocation can never falsely
+        // satisfy HasUsableBuild.
         var ownStream = workspace.GetMeshNodeStream();
         var kicked = 0;
         var kickoffSub = ownStream
@@ -81,19 +97,25 @@ internal static class NodeTypeCompilationHelpers
                 node =>
                 {
                     if (node?.Content is not NodeTypeDefinition def) return;
-                    if (def.CompilationStatus is not null
-                        && def.CompilationStatus != CompilationStatus.Unknown) return;
-                    if (!string.IsNullOrEmpty(def.LatestReleasePath)) return;
+                    if (HasUsableBuild(node, def))
+                    {
+                        logger?.LogDebug(
+                            "Compile kickoff: skip {HubPath} — Ok + compiled assembly present ({Assembly})",
+                            hub.Address.Path, node.AssemblyLocation);
+                        return;
+                    }
                     if (System.Threading.Interlocked.CompareExchange(ref kicked, 1, 0) != 0) return;
 
                     logger?.LogDebug(
-                        "Compile kickoff: flipping Pending for {HubPath} (no status, no release)",
-                        hub.Address.Path);
+                        "Compile kickoff: flipping Pending for {HubPath} (status={Status}, assemblyPresent={Present})",
+                        hub.Address.Path, def.CompilationStatus,
+                        !string.IsNullOrEmpty(node.AssemblyLocation)
+                            && System.IO.File.Exists(node.AssemblyLocation));
                     workspace.GetMeshNodeStream().Update(curr =>
                         curr.Content is NodeTypeDefinition d
-                            && (d.CompilationStatus is null
-                                || d.CompilationStatus == CompilationStatus.Unknown)
-                            && string.IsNullOrEmpty(d.LatestReleasePath)
+                            && !HasUsableBuild(curr, d)
+                            && d.CompilationStatus != CompilationStatus.Pending
+                            && d.CompilationStatus != CompilationStatus.Compiling
                             ? curr with
                             {
                                 Content = d with { CompilationStatus = CompilationStatus.Pending }
@@ -115,6 +137,7 @@ internal static class NodeTypeCompilationHelpers
             .Subscribe(
                 pendingNode =>
                 {
+                    logger?.LogDebug("Compile watcher: saw Pending for {HubPath} — dispatching compile", hubPath);
                     if (System.Threading.Interlocked.CompareExchange(ref triggered, 1, 0) != 0)
                         return;
                     try
@@ -163,6 +186,94 @@ internal static class NodeTypeCompilationHelpers
 
         return new CompositeDisposable(kickoffSub, watcherSub);
     }
+
+    /// <summary>
+    /// The live MeshWeaver framework version — the identity a compiled NodeType
+    /// release is pinned to. Two regimes, picked automatically:
+    /// <list type="bullet">
+    ///   <item><b>Deployed builds</b> — the NuGet pack process stamps a real
+    ///     semver into <c>AssemblyInformationalVersion</c> (e.g.
+    ///     <c>"3.0.0-preview2"</c>). That value is identical on every server
+    ///     running the same deployed build, so the version alone is the
+    ///     framework identity — a redeploy at a new version invalidates every
+    ///     release; a file write-time (which differs per machine) would not.</item>
+    ///   <item><b>Un-packed dev builds</b> — the version stays the frozen
+    ///     default (<c>"1.0.0"</c>) across every <c>dotnet build</c>, so a
+    ///     version-only check would never recompile a NodeType after the
+    ///     framework is rebuilt locally. There we append the
+    ///     <c>MeshWeaver.Graph</c> assembly's last-write time: on the single dev
+    ///     machine it is "frozen" per build (stable within a run, changes on
+    ///     rebuild) — exactly the dev-iteration signal we want.</item>
+    /// </list>
+    /// Computed once per process.
+    /// </summary>
+    internal static string FrameworkVersion => _frameworkVersion.Value;
+
+    private static readonly Lazy<string> _frameworkVersion = new(() =>
+    {
+        var asm = typeof(NodeTypeCompilationHelpers).Assembly;
+        var info = asm
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        // "{semver}+{gitSha}" → keep only the semver part.
+        string semver;
+        if (!string.IsNullOrEmpty(info))
+        {
+            var plus = info.IndexOf('+');
+            semver = plus >= 0 ? info[..plus] : info;
+        }
+        else
+        {
+            semver = asm.GetName().Version?.ToString() ?? "0.0.0";
+        }
+
+        // Un-packed dev default — the version never moves across local
+        // rebuilds, so fold in the assembly file's last-write time to keep
+        // dev iteration honest. Deployed builds carry a real version and
+        // skip this (stable across servers).
+        if (semver is "1.0.0" or "1.0.0.0" or "0.0.0")
+        {
+            var loc = asm.Location;
+            if (!string.IsNullOrEmpty(loc) && System.IO.File.Exists(loc))
+                return $"{semver}+{System.IO.File.GetLastWriteTimeUtc(loc):O}";
+        }
+        return semver;
+    });
+
+    /// <summary>
+    /// True when a NodeType's persisted compile state is backed by a compiled
+    /// assembly that (a) still exists on disk and (b) was compiled against the
+    /// CURRENT MeshWeaver framework version — the ONLY condition under which the
+    /// compile kickoff may safely skip a (re)compile.
+    ///
+    /// <para><c>CompilationStatus</c>, <c>MeshNode.AssemblyLocation</c> and
+    /// <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> are runtime
+    /// state, but they are persisted into the NodeType MeshNode's JSON. A stale
+    /// <c>Ok</c> therefore outlives the process — and the temp /
+    /// <c>.mesh-cache</c> assembly — that produced it (seed-data pollution,
+    /// cleaned-up caches, cross-machine checkouts, <b>and a redeployed
+    /// framework</b>). The two checks below make a cold hub start self-healing
+    /// instead of trusting a pointer into the void:</para>
+    /// <list type="number">
+    ///   <item><b>Assembly present</b> — the compiled DLL still exists on disk.</item>
+    ///   <item><b>Framework match</b> — it was compiled against the current
+    ///     <see cref="FrameworkVersion"/>. A MeshWeaver redeploy at a new version
+    ///     changes the framework assemblies the cached DLL bound against, so a
+    ///     mismatch forces a recompile (which mints a new release and leaves the
+    ///     old one as history for instances still loaded on it).</item>
+    /// </list>
+    ///
+    /// <para>Gating on <c>status == Ok</c> first is what makes the
+    /// <c>AssemblyLocation</c> check sound: a never-compiled NodeType has a
+    /// null status (enrichment stamps the FRAMEWORK assembly on
+    /// <c>AssemblyLocation</c> but never sets <c>Ok</c>), so a framework-dll
+    /// path can never falsely satisfy this predicate.</para>
+    /// </summary>
+    internal static bool HasUsableBuild(MeshNode node, NodeTypeDefinition def) =>
+        def.CompilationStatus == CompilationStatus.Ok
+        && !string.IsNullOrEmpty(node.AssemblyLocation)
+        && System.IO.File.Exists(node.AssemblyLocation)
+        && string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal);
 
     /// <summary>
     /// Compile-and-write-back loop for one NodeType. Runs Roslyn via
@@ -257,7 +368,12 @@ internal static class NodeTypeCompilationHelpers
                                     LatestReleasePath = newReleasePath ?? def.LatestReleasePath,
                                     ReleaseNotes = newReleasePath is not null ? null : def.ReleaseNotes,
                                     CompiledSources = outcome.Result.CompiledSources
-                                        ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty
+                                        ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+                                    // Stamp the framework version the assembly bound
+                                    // against — HasUsableBuild compares this to the live
+                                    // FrameworkVersion so a MeshWeaver redeploy forces a
+                                    // recompile instead of loading an ABI-stale DLL.
+                                    CompiledFrameworkVersion = FrameworkVersion
                                 },
                                 AssemblyLocation = outcome.Result.AssemblyLocation
                             };

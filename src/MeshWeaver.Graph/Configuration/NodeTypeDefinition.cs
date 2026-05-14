@@ -277,4 +277,28 @@ public record NodeTypeDefinition
     /// error-state NodeType always re-runs source discovery on the next compile.</para>
     /// </summary>
     public IReadOnlyDictionary<string, long>? CompiledSources { get; init; }
+
+    /// <summary>
+    /// The MeshWeaver framework version the most recent successful compile ran
+    /// against — the semver of the <c>MeshWeaver.Graph</c> assembly
+    /// (<c>AssemblyInformationalVersion</c> minus the <c>+gitSha</c> build
+    /// suffix, e.g. <c>"3.0.0-preview2"</c>). See
+    /// <c>NodeTypeCompilationHelpers.FrameworkVersion</c>.
+    ///
+    /// <para>A compiled NodeType assembly binds against the framework assemblies
+    /// present at compile time. When MeshWeaver is redeployed at a new version
+    /// those assemblies change and the cached DLL may be ABI-incompatible — so a
+    /// release is only "usable" if it was compiled against the <em>current</em>
+    /// framework version. The compile kickoff (<c>HasUsableBuild</c>) compares
+    /// this against the live framework version and forces a recompile on
+    /// mismatch; the recompile mints a NEW release, leaving the old one as
+    /// history for instances still bound to it.</para>
+    ///
+    /// <para>Version (not a file timestamp): the same release deployed to many
+    /// servers must compare equal everywhere — file write-times differ per
+    /// machine, the assembly version does not.</para>
+    ///
+    /// <para><c>null</c> until the first successful compile completes.</para>
+    /// </summary>
+    public string? CompiledFrameworkVersion { get; init; }
 }
