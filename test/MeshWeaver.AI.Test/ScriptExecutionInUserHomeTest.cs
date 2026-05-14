@@ -150,13 +150,18 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     {
         // Script uses Task.Delay(ms, Ct) so the Ct global (rebound per
         // submission) actually interrupts the wait mid-flight when the user
-        // patches RequestedStatus = Cancelled. The 800 ms is long enough for
-        // the test thread to subscribe + patch, but short enough not to slow
-        // the suite when the cancel mechanism breaks (the test would block on
-        // the cancellation timeout, not on this wait).
+        // patches RequestedStatus = Cancelled. The delay is generous (15 s)
+        // because it is interrupted the instant cancellation lands — when the
+        // cancel path works the script never sleeps the full duration, so a
+        // long delay costs ~nothing. The window has to cover the whole cancel
+        // round-trip (test observes "starting" → patch RequestedStatus →
+        // control-plane watcher → CancelScriptRequest → CTS trips); the prior
+        // 800 ms raced that chain, especially behind a cold Roslyn compile.
+        // When the cancel mechanism is genuinely broken the test still fails —
+        // via the Status assertion below, just after the delay elapses.
         var (codePath, _) = await SeedExecutableCodeAsync("""
             Log.LogInformation("starting");
-            await System.Threading.Tasks.Task.Delay(800, Ct);
+            await System.Threading.Tasks.Task.Delay(15000, Ct);
             Log.LogInformation("if you see this, cancel did not work");
             "should not get here"
         """);
@@ -172,11 +177,14 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             activityPath, new MeshNodeReference());
 
         // Wait until the script has actually started (first message landed).
+        // 30 s timeout: the first message is only published once the script
+        // body runs, which is gated behind a cold Roslyn compile that can take
+        // several seconds on a fresh kernel.
         await activityStream
             .Select(c => c.Value?.Content as ActivityLog)
             .Where(l => l is not null && l.Messages.Count >= 1)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync();
 
         // The canonical cancel: patch RequestedStatus on the activity content.
@@ -193,11 +201,15 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // The activity hub's control-plane watcher sees the patch, dispatches
         // the internal cancel, the script throws OperationCanceledException, and
         // the Activity Status flips out of Running.
+        // 30 s covers the broken-cancel case too: if cancellation never lands
+        // the script runs its full 15 s delay then completes — the terminal
+        // emission still arrives and the Status assertion below reports the
+        // real failure ("found Succeeded") instead of an opaque timeout.
         var terminal = await activityStream
             .Select(c => c.Value?.Content as ActivityLog)
             .Where(l => l is not null && l.Status != ActivityStatus.Running)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync();
 
         terminal!.Status.Should().Be(ActivityStatus.Cancelled,

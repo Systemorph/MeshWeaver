@@ -300,10 +300,21 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 }
                                 // Framework-driven Version: see UpdateOwn.
                                 updated = updated with { Version = _workspace.Hub.Version };
+                                // Carry the EntityUpdate payload — the owner-forwarding
+                                // subscription in CreateExternalClient converts the
+                                // ChangeItem via ToDataChangeRequest, which reads
+                                // ChangeItem.Updates. A 3-arg ChangeItem leaves Updates
+                                // empty, so the .Where(has Creations/Updates/Deletions)
+                                // filter drops it and the patch never reaches the owner
+                                // (symptom: remote RequestedStatus patches silently lost).
                                 return new ChangeItem<MeshNode>(
                                     updated,
                                     remoteStream.StreamId,
-                                    remoteStream.Hub.Version);
+                                    remoteStream.StreamId,
+                                    ChangeType.Patch,
+                                    remoteStream.Hub.Version,
+                                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated)
+                                        { OldValue = current }]);
                             }, observer.OnError);
                         }
                         catch (Exception ex)
