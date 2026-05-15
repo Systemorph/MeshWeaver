@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -271,12 +272,17 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         story1.Content.Should().BeOfType<TestStory>();
     }
 
+    // Verifies that nodes with Content can be written and read back via the
+    // persistence layer. Mirrors the Update sibling above: both bypass the
+    // per-node hub (which would force a cold Roslyn compile of type/story and
+    // flake on wallclock budgets) and exercise the InMemoryStorageAdapter
+    // directly — the actual unit under test for "persistence preserves
+    // Content shape" is the adapter, not the CreateNodeRequest pipeline.
     [Fact(Timeout = 10000)]
     public async Task Persistence_CanCreateNodeWithContent()
     {
-        // This test verifies that nodes with Content can be created via IMeshStorage
+        var ct = TestContext.Current.CancellationToken;
 
-        // Act - create new node directly via persistence
         var newStory = MeshNode.FromPath("graph/story3") with
         {
             Name = "Story 3",
@@ -289,10 +295,10 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 21
             }
         };
-        await NodeFactory.CreateNodeAsync(newStory, ct: TestContext.Current.CancellationToken);
+        await _persistence!.SaveNode(newStory, SetupJsonOptions).FirstAsync().ToTask(ct);
 
-        // Assert - verify the node with content is persisted
-        var persistedNode = await ReadNodeAsync("graph/story3");
+        var persistedNode = await _persistence!.GetNodeAsync("graph/story3", SetupJsonOptions, ct);
+
         persistedNode.Should().NotBeNull("New story should be persisted");
         persistedNode!.Name.Should().Be("Story 3");
         persistedNode.NodeType.Should().Be("type/story");
