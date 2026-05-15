@@ -116,6 +116,21 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 {
                     logger.LogError(ex, "[ACTIVATE] Grain {StreamId}: activation faulted for {Path}", streamId, addressPath);
                     _hubReady.TrySetException(ex);
+                },
+                () =>
+                {
+                    // Source completed without ever emitting a node with HubConfiguration.
+                    // Causes: catalog found no node at this address (lookup returned null),
+                    // or every emitted node failed the HubConfiguration filter (enrichment
+                    // gave up). Without this completion handler, _hubReady stays pending
+                    // and DeliverMessage's WaitAsync(30s) times out — the caller sees a
+                    // dead grain instead of an immediate "node not found" error.
+                    if (_hubReady.Task.IsCompleted) return;
+                    logger.LogWarning("[ACTIVATE] Grain {StreamId}: source completed with no usable node for {Path} — failing hub-readiness so callers see NotFound, not 30s timeout",
+                        streamId, addressPath);
+                    _hubReady.TrySetException(new InvalidOperationException(
+                        $"No MeshNode resolvable for address '{addressPath}'. Either the node does not exist or no query provider claims its partition."));
+                    DeactivateOnIdle();
                 });
 
         return Task.CompletedTask;
