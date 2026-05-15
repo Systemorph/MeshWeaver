@@ -56,9 +56,19 @@ internal sealed class NodeTypeStreamCache : INodeTypeStreamCache
         {
             logger.LogDebug("NodeTypeStreamCache: opening shared stream for {Path}", p);
             var handle = meshHub.GetWorkspace().GetMeshNodeStream(p);
-            // Replay(1).RefCount() so new readers get the current snapshot
-            // instantly and all readers share one upstream subscription.
-            return new Entry(handle, handle.Replay(1).RefCount());
+            // Replay(1).AutoConnect(1): the upstream subscription opens once
+            // on the FIRST subscriber and stays live for the entire process
+            // lifetime — no RefCount tear-down when transient
+            // <c>.Take(1)</c> consumers drop their subscription. RefCount was
+            // racing every <c>EnrichWithNodeType</c> call: a per-instance hub
+            // activates, calls <c>.Take(1)</c>, count goes 1→0 → upstream
+            // tears down, then the NEXT instance arrives → RefCount opens a
+            // fresh SubscribeRequest → no cached snapshot to replay → either
+            // races a stale Initial or piles up 60+ SubscribeRequests on the
+            // owning NodeType hub. AutoConnect(1) eliminates that churn —
+            // one subscription, durable cache for every reader.
+            var connectable = handle.Replay(1);
+            return new Entry(handle, connectable.AutoConnect(1));
         });
 
     public IObservable<MeshNode> GetStream(string path) => GetEntry(path).Shared;

@@ -112,10 +112,15 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = new CodeConfiguration { Code = CodeV1, Language = "csharp" }
         });
 
-        // 3. Explicitly trigger V1 compilation.
+        // 3. Trigger V1 compilation. The per-NodeType hub's
+        // InstallCompileWatcher kickoff also flips Pending → Compile on first
+        // activation when HasUsableBuild is false; either path is acceptable so
+        // long as a real V1 Release lands. We send CreateReleaseRequest both as
+        // the canonical explicit trigger AND to wait for the compile to settle.
+        // AlreadyUpToDate may legitimately be true here if the kickoff beat us
+        // to first compile — what we check is that V1 release is produced.
         var v1Response = await SendCreateReleaseAsync(NodeTypePath, force: false, ct);
         v1Response.Success.Should().BeTrue("CreateReleaseRequest should succeed");
-        v1Response.AlreadyUpToDate.Should().BeFalse("first compile has no CompiledSources yet");
 
         var v1Release = await WaitForNewReleaseAsync(NodeTypePath, knownReleases: [], ct);
         Output.WriteLine($"=== V1 release at {v1Release} ===");
@@ -157,6 +162,31 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         Output.WriteLine($"=== V2 release at {v2Release} ===");
 
         // 8. Create a fresh instance and verify it serves V2.
+        //
+        // 🚨 Wait for the MESH HUB's workspace to see the V2 release on the NodeType
+        // BEFORE creating the new instance. The activation path
+        // (NodeTypeEnrichmentHelpers.EnrichWithNodeType) reads the NodeType MeshNode
+        // from meshHub.GetWorkspace().GetMeshNodeStream(nodeType) — that workspace's
+        // cache is updated asynchronously by DataChangedEvent fan-out from the
+        // per-NodeType hub. A subscription on a SEPARATE client (e.g. WaitForNewReleaseAsync
+        // above) only confirms the per-NodeType hub flipped — NOT that the mesh hub's
+        // cache observed the change. Creating instance2 before the mesh hub's view
+        // catches up causes EnrichWithNodeType to read the stale V1 AssemblyLocation
+        // and bind instance2 to the V1 assembly for its entire lifetime
+        // (HubConfiguration is captured ONCE at activation).
+        //
+        // Predicate includes AssemblyLocation match because RunCompile writes
+        // LatestReleasePath AND AssemblyLocation together but they reach the mesh
+        // hub's view via separate field-level reducer updates; LatestReleasePath
+        // can land first.
+        await WaitForMeshHubViewAsync(NodeTypePath,
+            n => n?.Content is NodeTypeDefinition def
+                && def.LatestReleasePath == v2Release
+                && def.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(n.AssemblyLocation)
+                && n.AssemblyLocation != v1AssemblyLocation,
+            ct);
+
         await NodeFactory.CreateNode(new MeshNode("instance2", $"{TestPartition}/CodeEditType")
         {
             Name = "Instance 2",
@@ -235,16 +265,18 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = def! with { RequestedReleasePath = v1Release }
         });
 
-        // Wait for the pin write to propagate before creating the instance —
-        // otherwise the per-instance hub's GetCompilationPathRequest can read
-        // a stale def with no pin set. Live remote stream (path is known) —
-        // not ObserveQuery, which is index-lagged.
-        var reader = GetClient(c => c.AddData());
-        await reader.GetWorkspace().GetMeshNodeStream(pinTypePath)
-            .Where(n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == v1Release)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(ct);
+        // Wait for the pin write to land in the MESH HUB's workspace cache before
+        // creating the instance. The activation path
+        // (NodeTypeEnrichmentHelpers.EnrichWithNodeType) reads the NodeType MeshNode
+        // from meshHub.GetWorkspace().GetMeshNodeStream(nodeType) — that workspace's
+        // cache is updated asynchronously by DataChangedEvent fan-out from the
+        // per-NodeType hub. Waiting on a SEPARATE reader client's view only confirms
+        // the per-NodeType hub flipped — NOT that the mesh hub's cache observed the
+        // change. Creating instance pre-propagation causes the wrong release to be
+        // selected.
+        await WaitForMeshHubViewAsync(pinTypePath,
+            n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == v1Release,
+            ct);
 
         // 5. Fresh instance — pinned path means V1 must be served even though V2 is latest.
         await NodeFactory.CreateNode(new MeshNode("pinnedInstance", $"{TestPartition}/PinType")
@@ -268,15 +300,15 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             Content = def! with { RequestedReleasePath = null }
         });
-        // Fresh reader — the first wait's reader has a cached remote stream
-        // whose ReplaySubject(1) still holds the pin=V1 emission. A fresh
-        // SubscribeRequest gives us the post-update Initial snapshot directly.
-        var unpinReader = GetClient(c => c.AddData());
-        await unpinReader.GetWorkspace().GetMeshNodeStream(pinTypePath)
-            .Where(n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == null)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(15))
-            .ToTask(ct);
+        // Wait for the pin-clear to land in the MESH HUB's workspace cache. Same
+        // rationale as the pin-set wait above: activation reads the NodeType from
+        // the mesh hub's workspace, and the post-write state must propagate there
+        // before we create the new instance — otherwise the activation reads a
+        // pre-clear snapshot, the pinned-release branch fires with v1Release, and
+        // unpinnedInstance binds to V1 instead of V2.
+        await WaitForMeshHubViewAsync(pinTypePath,
+            n => n?.Content is NodeTypeDefinition d && d.RequestedReleasePath == null,
+            ct);
 
         await NodeFactory.CreateNode(new MeshNode("unpinnedInstance", $"{TestPartition}/PinType")
         {
@@ -383,6 +415,32 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             .Where(n => n is not null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
+            .ToTask(ct);
+    }
+
+    /// <summary>
+    /// Waits until the MESH HUB's workspace view of <paramref name="path"/>
+    /// matches <paramref name="predicate"/>. Required before creating a
+    /// per-instance hub that depends on a recent write to the NodeType MeshNode:
+    /// the activation path
+    /// (<c>NodeTypeEnrichmentHelpers.EnrichWithNodeType</c>) reads the NodeType
+    /// MeshNode from <c>meshHub.GetWorkspace().GetMeshNodeStream(nodeType)</c>,
+    /// and that cache is updated asynchronously by DataChangedEvent fan-out
+    /// from the per-NodeType hub. A separate client's view (e.g. a fresh test
+    /// reader subscribed via <c>GetClient(...)</c>) is a different
+    /// <c>ISynchronizationStream</c> on a different scheduler — seeing the
+    /// write there does NOT imply the mesh hub's cache has caught up. Per
+    /// <c>HubConfiguration</c> being captured once at activation, an instance
+    /// created before mesh hub catches up is bound to the stale snapshot for
+    /// its entire lifetime.
+    /// </summary>
+    private async Task WaitForMeshHubViewAsync(
+        string path, Func<MeshNode?, bool> predicate, CancellationToken ct)
+    {
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(predicate)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
             .ToTask(ct);
     }
 }
