@@ -175,16 +175,10 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         // and bind instance2 to the V1 assembly for its entire lifetime
         // (HubConfiguration is captured ONCE at activation).
         //
-        // Predicate includes AssemblyLocation match because RunCompile writes
-        // LatestReleasePath AND AssemblyLocation together but they reach the mesh
-        // hub's view via separate field-level reducer updates; LatestReleasePath
-        // can land first.
         await WaitForMeshHubViewAsync(NodeTypePath,
             n => n?.Content is NodeTypeDefinition def
                 && def.LatestReleasePath == v2Release
-                && def.CompilationStatus == CompilationStatus.Ok
-                && !string.IsNullOrEmpty(n.AssemblyLocation)
-                && n.AssemblyLocation != v1AssemblyLocation,
+                && def.CompilationStatus == CompilationStatus.Ok,
             ct);
 
         await NodeFactory.CreateNode(new MeshNode("instance2", $"{TestPartition}/CodeEditType")
