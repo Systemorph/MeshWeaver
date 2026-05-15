@@ -299,6 +299,109 @@ public enum NodeUpdateRejectionReason
 }
 
 /// <summary>
+/// Upsert a MeshNode at <see cref="Node"/>'s path. Single global verb that
+/// dispatches to the create path when the node is missing and to the update
+/// path when it already exists, so callers don't replay the existence dance
+/// (delete-then-create races the per-node hub's disposal — this is the
+/// designed alternative). Two payload modes:
+///
+/// <list type="number">
+/// <item><b>Full instance</b>: leave <see cref="Patch"/> null. The handler
+/// upserts the supplied <see cref="Node"/> as-is — Create on missing,
+/// Update on existing. Used by node-copy / move / import flows where the
+/// caller has the complete shape.</item>
+/// <item><b>JSON Patch</b>: set <see cref="Patch"/>. The handler applies the
+/// patch to the existing node (or to <see cref="Node"/> as the seed if the
+/// target is missing) and writes the result. Used for incremental edits
+/// where multiple writers may race on the same node — log lines, view-count
+/// bumps, status-flip patterns.</item>
+/// </list>
+///
+/// <para>Permission resolution is dynamic: missing target → <see cref="Permission.Create"/>
+/// is checked; existing target → <see cref="Permission.Update"/> is checked.
+/// Both checks run through the standard permission pipeline.</para>
+/// </summary>
+[CreateOrUpdateNodePermission]
+public record CreateOrUpdateNodeRequest(MeshNode Node) : IRequest<CreateOrUpdateNodeResponse>
+{
+    /// <summary>Optional JSON Patch payload (Json.Patch.JsonPatch) to apply to
+    /// the existing node. When null, <see cref="Node"/> is the full instance
+    /// to upsert. Typed as <c>object?</c> so the patch type is owned by the
+    /// caller's package (Json.Patch.Net) rather than pulling that dependency
+    /// into Mesh.Contract — handlers cast on receipt.</summary>
+    public object? Patch { get; init; }
+
+    /// <summary>The user or system requesting the upsert.</summary>
+    public string? RequestedBy { get; init; }
+}
+
+/// <summary>
+/// Response for <see cref="CreateOrUpdateNodeRequest"/>.
+/// </summary>
+/// <param name="Node">The upserted node, or null on failure.</param>
+public record CreateOrUpdateNodeResponse(MeshNode? Node)
+{
+    /// <summary>Activity log for the upsert.</summary>
+    public ActivityLog? Log { get; init; }
+
+    /// <summary>Error message if the upsert failed.</summary>
+    public string? Error { get; init; }
+
+    /// <summary>True when the upsert succeeded.</summary>
+    public bool Success => Error == null && Node != null;
+
+    /// <summary>True when the node was newly created; false when it already
+    /// existed and was updated. Undefined when <see cref="Success"/> is false.</summary>
+    public bool WasCreated { get; init; }
+
+    /// <summary>Rejection reason if the upsert failed.</summary>
+    public NodeUpsertRejectionReason? RejectionReason { get; init; }
+
+    public static CreateOrUpdateNodeResponse Created(MeshNode node, ActivityLog? log = null)
+        => new(node) { WasCreated = true, Log = log };
+    public static CreateOrUpdateNodeResponse Updated(MeshNode node, ActivityLog? log = null)
+        => new(node) { WasCreated = false, Log = log };
+    public static CreateOrUpdateNodeResponse Fail(string error,
+        NodeUpsertRejectionReason reason = NodeUpsertRejectionReason.Unknown,
+        ActivityLog? log = null)
+        => new((MeshNode?)null) { Error = error, RejectionReason = reason, Log = log };
+}
+
+/// <summary>Rejection reasons for <see cref="CreateOrUpdateNodeRequest"/>.</summary>
+public enum NodeUpsertRejectionReason
+{
+    Unknown,
+    InvalidPath,
+    InvalidNodeType,
+    ValidationFailed,
+    Unauthorized,
+    PatchFailed,
+}
+
+/// <summary>
+/// Permission attribute for <see cref="CreateOrUpdateNodeRequest"/>. Checks
+/// <see cref="Permission.Create"/> on missing targets and <see cref="Permission.Update"/>
+/// on existing targets — read by the handler at dispatch time, since the
+/// existence answer requires a persistence read.
+/// </summary>
+public class CreateOrUpdateNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Update)
+{
+    /// <inheritdoc />
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        // Static check at the routing layer cannot know "exists?" without a
+        // persistence read — that's the handler's job. Bound the static check
+        // to BOTH Create and Update on hubPath; the handler's actual read +
+        // dispatch routes through CreateNodeRequest / UpdateNodeRequest which
+        // run their own permission checks again. This static surface is just
+        // for the "deny if neither permission" gate at the routing layer.
+        yield return (hubPath, Permission.Create);
+        yield return (hubPath, Permission.Update);
+    }
+}
+
+/// <summary>
 /// Request to copy a MeshNode (and its subtree) to a new path.
 /// By default copies descendants but NOT satellites — explicitly set <see cref="IncludeSatellites"/>
 /// to <c>true</c> to also copy satellite subtrees (e.g. for Move which is Copy+Delete).
