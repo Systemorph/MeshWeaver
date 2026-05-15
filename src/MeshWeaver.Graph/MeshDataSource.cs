@@ -643,15 +643,15 @@ public static class MeshDataSourceExtensions
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         var force = request.Message.Force;
 
-        // Serialize against any in-progress compile on this NodeType: when a
-        // request arrives while CompilationStatus = Compiling, hold it until the
-        // pending compile settles to Ok/Error, then re-evaluate. Two concurrent
-        // CreateReleaseRequests would otherwise both start their own Roslyn
-        // compile, race the assembly cache, and one would lose its
-        // workspace.UpdateMeshNode write to the other's. Same primitive applied
-        // to NodeTypeContractHandler so any GetCompilationPathRequest arriving
-        // mid-compile waits for the post-compile state instead of returning the
-        // previous release's HubConfiguration.
+        // Wait for any in-progress compile (Compiling or Pending) to settle
+        // before deciding what to do. With AwaitCompilationSettled now gating
+        // on BOTH Compiling and Pending, an explicit CreateRelease arriving in
+        // the auto-watcher's Pending window holds for that activity rather
+        // than racing it into a second concurrent compile (each parallel
+        // activity issues two WriteToParent DataChangeRequests on the mesh
+        // hub, and the two activities then squabble over the parent's
+        // LatestReleasePath + ReleaseNotes — the explicit release's
+        // notes-carrying write gets clobbered last-write-wins).
         workspace.GetMeshNodeStream()
             .AwaitCompilationSettled()
             .Take(1)
@@ -678,18 +678,12 @@ public static class MeshDataSourceExtensions
                                     o => o.ResponseFor(request));
                                 return;
                             }
-                            // Hand the freshly-observed sources straight to the compile —
-                            // the cached SyncedQuery the compile would otherwise re-fetch
-                            // can lag the just-modified Code node and cause V2 to compile
-                            // V1 source (CodeEditRecompileTest root cause).
-                            NodeTypeCompilationHelpers.RunCompile(
-                                workspace, hub, compilationService, ownNode!, request, sources.Items);
+                            DispatchPendingFlip(workspace, hub, request);
                         });
                 }
                 else
                 {
-                    NodeTypeCompilationHelpers.RunCompile(
-                        workspace, hub, compilationService, ownNode!, request);
+                    DispatchPendingFlip(workspace, hub, request);
                 }
             });
 
@@ -697,18 +691,66 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
+    /// Acks the <see cref="CreateReleaseRequest"/> and flips the OWN MeshNode's
+    /// <see cref="NodeTypeDefinition.CompilationStatus"/> to
+    /// <see cref="CompilationStatus.Pending"/>. The per-NodeType hub's
+    /// auto-watcher (<see cref="NodeTypeCompilationHelpers.InstallCompileWatcher"/>)
+    /// sees the flip and dispatches ONE activity-based compile (the single
+    /// compile pipeline). Going through <c>RunCompile</c> inline here used to
+    /// race the kickoff-watcher's activity and produce two concurrent compiles
+    /// — each activity's two <see cref="MeshNode"/> writes leaked as mesh-hub
+    /// DataChangeRequests, and the two terminal writes trampled each other's
+    /// <see cref="NodeTypeDefinition.LatestReleasePath"/>. Delegating to the
+    /// watcher means the activity captures the LIVE NodeType state (with the
+    /// just-written <see cref="NodeTypeDefinition.ReleaseNotes"/>) and seeds
+    /// the new Release MeshNode with them.
+    /// </summary>
+    private static void DispatchPendingFlip(
+        IWorkspace workspace,
+        IMessageHub hub,
+        IMessageDelivery<CreateReleaseRequest> request)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.HandleCreateRelease");
+        // Ack first — the watcher's compile is async and the requester
+        // shouldn't be blocked on Roslyn. Subscribers waiting for the Release
+        // MeshNode use ObserveQuery / GetMeshNodeStream on the _Release
+        // namespace; that's the canonical "compile finished" signal.
+        hub.Post(new CreateReleaseResponse(true),
+            o => o.ResponseFor(request));
+        workspace.GetMeshNodeStream().Update(curr =>
+            curr.Content is NodeTypeDefinition def
+                ? curr with
+                {
+                    Content = def with { CompilationStatus = CompilationStatus.Pending }
+                }
+                : curr)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[CreateRelease] failed to flip Pending for {HubPath}", hub.Address.Path));
+    }
+
+    /// <summary>
     /// Holds a NodeType MeshNode stream until <see cref="NodeTypeDefinition.CompilationStatus"/>
-    /// is anything other than <see cref="CompilationStatus.Compiling"/> — i.e. the next
-    /// emission past a settle (Ok / Error / Unknown) is what passes through. Lets
-    /// handlers that depend on the post-compile state (compiled assembly path, sources
-    /// snapshot, latest release) wait for the in-progress compile to finish instead of
-    /// reading the pre-compile snapshot and returning the previous release's HubConfiguration.
-    /// Non-NodeType nodes pass through unchanged so this is safe to chain on any MeshNode
-    /// stream — only NodeTypeDefinition contents trigger the wait.
+    /// reaches a settled terminal state — anything other than
+    /// <see cref="CompilationStatus.Compiling"/> or <see cref="CompilationStatus.Pending"/>.
+    /// Lets handlers that depend on the post-compile state (compiled assembly path,
+    /// sources snapshot, latest release) wait for the in-progress compile to finish
+    /// instead of reading the pre-compile snapshot. Gating on Pending matters too: the
+    /// per-NodeType hub's auto-watcher (<c>InstallCompileWatcher</c>) flips Pending →
+    /// dispatches an activity compile that writes Compiling. An explicit
+    /// <c>CreateReleaseRequest</c> arriving in the Pending window must wait for that
+    /// activity to settle rather than racing it with a second inline compile (each
+    /// <c>WriteToParent</c> from the racing activity is a <c>DataChangeRequest</c> on
+    /// the mesh hub that leaks if the test times out before its response lands).
+    /// Non-NodeType nodes pass through unchanged so this is safe to chain on any
+    /// MeshNode stream.
     /// </summary>
     public static IObservable<MeshNode> AwaitCompilationSettled(this IObservable<MeshNode> source)
         => source.Where(node => node?.Content is not NodeTypeDefinition def
-            || def.CompilationStatus != CompilationStatus.Compiling);
+            || (def.CompilationStatus != CompilationStatus.Compiling
+                && def.CompilationStatus != CompilationStatus.Pending));
 
     // StartCompile relocated to NodeTypeCompilationHelpers.RunCompile so the
     // per-NodeType-hub auto-watcher and the CreateReleaseRequest handler share
