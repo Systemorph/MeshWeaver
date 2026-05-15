@@ -36,8 +36,6 @@ internal sealed class MeshCatalog(
     private readonly Lazy<IMessageHub> _persistenceHub = new(() => hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!);
     private IMessageHub PersistenceHub => _persistenceHub.Value;
     private readonly MeshQuery meshQuery = new(queryProviders, hub);
-    private readonly Lazy<INodeConfigurationResolver?> _configResolver = new(() => hub.ServiceProvider.GetService<INodeConfigurationResolver>());
-    private INodeConfigurationResolver? ConfigResolver => _configResolver.Value;
 
     /// <summary>
     /// Internal node lookup used ONLY by the routing layer (<see cref="RoutingServiceBase"/>).
@@ -51,18 +49,22 @@ internal sealed class MeshCatalog(
     /// extracted from the path's first segment and pushed down to the storage
     /// adapter as one Postgres <c>SELECT</c>, with the static-node provider
     /// participating in the same fan-out.</para>
+    ///
+    /// <para><b>Returns the RAW node — does NOT enrich.</b> Enrichment
+    /// (<see cref="IMeshNodeHubFactory.ResolveHubConfiguration"/> →
+    /// <c>NodeTypeEnrichmentHelpers.EnrichWithNodeType</c>) is local to the
+    /// hub-instantiation site (<c>MessageHubGrain.OnActivateAsync</c> in
+    /// Orleans, <c>MonolithRoutingService.CreateHub</c> in Monolith). Calling
+    /// it here would re-enter the routing layer through <c>workspace.GetMeshNodeStream</c>
+    /// → <c>SubscribeRequest</c> → routing → catalog and create a runtime
+    /// activation cycle. Enrichment belongs to ONE place: the factory.</para>
     /// </summary>
     internal IObservable<MeshNode?> GetNodeForRouting(Address address)
     {
         var addressKey = address.Path;
 
         if (Configuration.Nodes.TryGetValue(addressKey, out var node))
-        {
-            if (node.HubConfiguration == null && ConfigResolver != null)
-                return ConfigResolver.ResolveConfiguration(node)
-                    .Select(n => (MeshNode?)n);
             return Observable.Return<MeshNode?>(node);
-        }
 
         return ((IMeshQueryCore)meshQuery)
             .ObserveQuery<MeshNode>(
@@ -70,14 +72,7 @@ internal sealed class MeshCatalog(
                 hub.JsonSerializerOptions)
             .Where(c => c.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Select(c => (MeshNode?)c.Items.FirstOrDefault())
-            .SelectMany<MeshNode?, MeshNode?>(persistenceNode =>
-            {
-                if (persistenceNode == null) return Observable.Return<MeshNode?>(null);
-                if (ConfigResolver == null) return Observable.Return<MeshNode?>(persistenceNode);
-                return ConfigResolver.ResolveConfiguration(persistenceNode)
-                    .Select(n => (MeshNode?)n);
-            });
+            .Select(c => (MeshNode?)c.Items.FirstOrDefault());
     }
 
     // Internal HubNodePersistence helper — used by HandleCreateNodeRequest pipeline.
@@ -110,12 +105,13 @@ internal sealed class MeshCatalog(
             transientNode = transientNode with { MainNode = transientNode.Namespace };
         }
 
-        var resolvedObs = ConfigResolver != null
-            ? ConfigResolver.ResolveConfiguration(transientNode)
-            : Observable.Return(transientNode);
-
-        return resolvedObs
-            .SelectMany(resolved => Persistence.Write(resolved, hub.JsonSerializerOptions))
+        // Persist the RAW transient node — HubConfiguration is a non-serialisable
+        // delegate that the persistence layer drops anyway, and enrichment lives
+        // exclusively at the hub-instantiation site. Calling ConfigResolver here
+        // would re-enter the routing layer (workspace.GetMeshNodeStream →
+        // SubscribeRequest → routing → catalog) for an enrichment whose result
+        // is then thrown away by the storage adapter.
+        return Persistence.Write(transientNode, hub.JsonSerializerOptions)
             .Do(saved => logger?.LogInformation("Created transient node at path {Path}", saved.Path));
     }
 

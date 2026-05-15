@@ -357,22 +357,17 @@ public static class MeshExtensions
                                 Version = node.Version > 0 ? node.Version : 1,
                             };
 
-                            // 5. Enrich (optional service). ResolveConfiguration returns
-                            //    IObservable<MeshNode> directly — no Observable.FromAsync,
-                            //    no Task-await deadlock risk. Uses INodeConfigurationResolver
-                            //    (Mesh.Contract surface) which delegates to
-                            //    NodeTypeEnrichmentHelpers in Graph.
-                            var configResolver = hub.ServiceProvider.GetService<INodeConfigurationResolver>();
-                            logger.LogDebug("[CreateNode] step=enrich-start path={Path} resolver={HasResolver}",
-                                newNode.Path, configResolver != null);
-                            var enrichedObs = configResolver != null
-                                ? configResolver.ResolveConfiguration(newNode)
-                                    .Do(_ => logger.LogDebug("[CreateNode] step=enrich-emit path={Path}", newNode.Path))
-                                : Observable.Return(newNode);
-
-                            // 6. Persist.
-                            return enrichedObs.SelectMany(enriched =>
+                            // 5. Persist the RAW node — enrichment lives ONLY at the
+                            //    hub-instantiation site (the factory), never on the create
+                            //    path. HubConfiguration is a non-serialisable delegate that
+                            //    persistence drops anyway, and pre-persist enrichment would
+                            //    re-enter routing through workspace.GetMeshNodeStream →
+                            //    SubscribeRequest → catalog and create a runtime activation
+                            //    cycle. CreateNode emits the node as-stored; consumers that
+                            //    need an enriched node ask the factory at activation time.
+                            return Observable.Defer(() =>
                             {
+                                var enriched = newNode;
                                 logger.LogDebug("[CreateNode] step=save-start path={Path} persistence={HasPersistence}",
                                     enriched.Path, persistence != null);
                                 var saveObs = persistence != null
