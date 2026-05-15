@@ -226,14 +226,18 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// The type depends on NodeType (e.g., Organization, Project, Story).
     /// </summary>
     /// <remarks>
-    /// <see cref="PreventLoggingAttribute"/>: Content is an arbitrary, potentially
-    /// large payload (whole documents, compiled NodeType definitions, activity
-    /// logs, …). It is excluded from log serialization so a message carrying a
-    /// MeshNode logs the node's identity/shape but not its body. Turn on Debug/
-    /// Trace and inspect the node directly when you actually need the content.
+    /// We deliberately do NOT mark this with <see cref="PreventLoggingAttribute"/>.
+    /// Doing so caused validator pipelines (e.g. DeleteNode + INodeValidator) to
+    /// observe a MeshNode whose Content was stripped — root cause is the
+    /// <see cref="MeshWeaver.Messaging.Serialization.LoggingTypeInfoResolver"/>'s
+    /// mutation of the inner resolver's <c>JsonTypeInfo.Properties</c> bleeding
+    /// into the main serializer's view of MeshNode (an <c>object?</c> property
+    /// participating in polymorphic resolution). The content payload is still
+    /// large; if you turn on Debug, mind that. The catch-block in
+    /// <see cref="MessageService"/> logs deliveries via the LogText helper, which
+    /// still uses LoggingSerializerOptions for the envelope.
     /// </remarks>
     [Editable(false)]
-    [PreventLogging]
     public object? Content { get; init; }
 
     /// <summary>
