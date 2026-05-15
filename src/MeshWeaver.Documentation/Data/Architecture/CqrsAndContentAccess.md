@@ -402,6 +402,44 @@ authoritative state.
 
 For full-node updates use `DataChangeRequest.WithUpdates(fullNode)`.
 
+## Upserts (`CreateOrUpdateNodeRequest`) — single verb, no delete-then-create
+
+When the caller has the **full target shape** and wants the node to land regardless of whether it already exists (copy / move / import / agentic write-back), use the single-verb upsert:
+
+```csharp
+hub.Observe<CreateOrUpdateNodeResponse>(
+        new CreateOrUpdateNodeRequest(targetNode))
+    .FirstAsync()
+    .Select(d => d.Message)
+    .Subscribe(resp =>
+    {
+        if (!resp.Success) { /* resp.Log + resp.Error */ return; }
+        // resp.WasCreated tells you create-vs-update; resp.Log carries audit.
+    });
+```
+
+**Why a dedicated verb instead of `CreateNodeRequest` + `UpdateNodeRequest` in the caller's chain:**
+
+- The caller doesn't have to "see" existence — the handler reads persistence and dispatches to `CreateNodeRequest` (when missing) or `UpdateNodeRequest` (when existing) internally. One audit log. One response shape (`CreateOrUpdateNodeResponse` with `WasCreated`).
+- **Never delete-then-create.** That pattern races the per-node hub's disposal — a `GetNode` issued shortly after the create returns null because the new request hits the still-tearing-down hub. The upsert handler routes through `UpdateNodeRequest` instead, which writes through the live per-node hub and keeps `GetNode` consistent.
+- **Permissions stay specific.** Missing target = `Permission.Create` is checked by the inner `CreateNodeRequest`. Existing target = `Permission.Update` is checked by the inner `UpdateNodeRequest`. The upsert request itself declares both via `[CreateOrUpdateNodePermission]` so the routing-layer gate still denies callers that have neither.
+- **Patch mode is reserved** for incremental edits (log-line append, view-count bump, status flip): set `request.Patch` to a `Json.Patch.JsonPatch` payload. The handler will apply the patch to the existing node (or to `Node` as the seed when missing) and write the result. (Currently surface-only — patch mode lands when its caller does.)
+
+Bulk upserts (e.g. node-tree copy) compose the per-node observable and merge with bounded concurrency so a wide subtree doesn't open every per-node hub at once on the receiving side:
+
+```csharp
+allNodes
+    .Select(node => hub.Observe<CreateOrUpdateNodeResponse>(
+            new CreateOrUpdateNodeRequest(BuildTarget(node)))
+        .FirstAsync()
+        .Select(d => d.Message.Success ? 1 : 0))
+    .ToObservable()
+    .Merge(maxConcurrent: 16)
+    .Sum();
+```
+
+`NodeCopyHelper.CopyNodeTree` is the canonical example — `force=false` routes through `CreateNodeRequest` (skip-on-exists), `force=true` routes through `CreateOrUpdateNodeRequest` (always upsert). Same shape applies to import, mirror, and any future "write a batch of MeshNodes from an external source" flow.
+
 ## Operations — named request types per intent
 
 When you want to **do** something on a node (not read or write content), define a

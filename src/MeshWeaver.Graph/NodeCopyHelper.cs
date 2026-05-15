@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -13,10 +12,34 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class NodeCopyHelper
 {
+    /// <summary>Default per-batch concurrency for the parallel
+    /// <see cref="CreateOrUpdateNodeRequest"/> fan-out below. Bounded so a
+    /// large subtree doesn't open every per-node hub at once on the
+    /// receiving side.</summary>
+    public const int DefaultBatchSize = 16;
+
     /// <summary>
-    /// Copies a node and all its descendants to a target namespace.
-    /// The source node's Id is preserved; paths are rewritten under the target namespace.
-    /// Returns an IObservable that emits the count of copied nodes when the operation completes.
+    /// Copies a node and all its descendants to a target namespace. The
+    /// source node's Id is preserved; paths are rewritten under the target
+    /// namespace. Returns an <see cref="IObservable{T}"/> that emits the
+    /// total count of upserted nodes (each <see cref="CreateOrUpdateNodeRequest"/>
+    /// that succeeds counts as 1, regardless of create-vs-update).
+    ///
+    /// <para><b>Reactive end-to-end</b> — no <c>await</c>, no
+    /// <c>Task.FromAsync</c>, no <c>ToTask</c>. Per-node upsert observables
+    /// are merged with concurrency <paramref name="batchSize"/> so
+    /// independent writes can run in parallel without exhausting the
+    /// receiving side. Permission checks live inside the
+    /// <see cref="CreateOrUpdateNodeRequest"/> handler — the helper just
+    /// dispatches.</para>
+    ///
+    /// <para><b>force semantics</b> are encoded in the upsert request: when
+    /// the target path already exists, the upsert handler routes through
+    /// <see cref="UpdateNodeRequest"/> (requires Update permission) when
+    /// <paramref name="force"/> is <c>true</c> and skips otherwise. The
+    /// helper never deletes a target — that race against the per-node hub's
+    /// disposal was the cause of the previous "GetNode returns null after
+    /// force-overwrite" bug.</para>
     /// </summary>
     public static IObservable<int> CopyNodeTree(
         IMeshService meshQuery,
@@ -25,128 +48,108 @@ public static class NodeCopyHelper
         string sourcePath,
         string targetNamespace,
         bool force,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        int batchSize = DefaultBatchSize)
     {
         logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.NodeCopyHelper");
 
-        // Source node: authoritative one-shot read via GetDataRequest on the per-node
-        // MeshNodeReference reducer (NEVER ObserveQuery/QueryAsync for a single node's
-        // content, and NEVER GetMeshNodeStream(...).Take(1) which pays for a stream
-        // subscription it immediately unsubscribes; see Doc/Architecture/AsynchronousCalls.md).
-        // Returns null if the cold hub never activates (path doesn't exist).
-        var source = hub.GetMeshNode(sourcePath, TimeSpan.FromSeconds(15));
-
-        // Descendants is a listing — ObserveQuery returns the path set. Per-node
-        // content is then re-fetched through hub.GetMeshNode so we always copy the
-        // latest content (the query index is eventually consistent and may lag
-        // recent updates, see Doc/Architecture/CqrsAndContentAccess.md).
-        var descendantPaths = meshQuery.ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery($"path:{sourcePath} scope:descendants"))
+        // Single ObserveQuery over the source subtree — emits source + every
+        // descendant in one go. Take(1) snapshots the listing for the copy
+        // operation; subsequent edits to the source don't follow.
+        var sourceSubtree = meshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{sourcePath} scope:subtree"))
             .Take(1)
             .Select(c => c.Items
                 .Where(n => !string.IsNullOrEmpty(n.Path))
-                .Select(n => n.Path)
                 .ToArray());
 
-        var descendants = descendantPaths.SelectMany(paths =>
+        return sourceSubtree.SelectMany(allNodes =>
         {
-            if (paths.Length == 0)
-                return Observable.Return(Array.Empty<MeshNode>());
-            // Per-path live content read (per-node hub MeshNodeReference reducer).
-            // Sequential composition keeps the order deterministic.
-            IObservable<List<MeshNode>> chain = Observable.Return(new List<MeshNode>(paths.Length));
-            foreach (var p in paths)
-            {
-                var path = p;
-                chain = chain.SelectMany(acc =>
-                    hub.GetMeshNode(path, TimeSpan.FromSeconds(15))
-                        .Select(node =>
-                        {
-                            if (node != null) acc.Add(node);
-                            return acc;
-                        }));
-            }
-            return chain.Select(list => list.ToArray());
-        });
+            var sourceNode = allNodes.FirstOrDefault(n =>
+                string.Equals(n.Path, sourcePath, StringComparison.Ordinal));
+            if (sourceNode == null)
+                return Observable.Throw<int>(
+                    new InvalidOperationException($"Source node not found: {sourcePath}"));
 
-        return source
-            .SelectMany(sourceNode => descendants.Select(desc =>
-            {
-                if (sourceNode == null)
-                    throw new InvalidOperationException($"Source node not found: {sourcePath}");
-                return new { sourceNode, descendants = desc };
-            }))
-            .SelectMany(pair =>
-            {
-                var sourceNamespace = pair.sourceNode.Namespace ?? "";
-                var nodesToCopy = new[] { pair.sourceNode }.Concat(pair.descendants);
+            var sourceNamespace = sourceNode.Namespace ?? "";
 
-                var copyOps = nodesToCopy.Select(node =>
+            // Per-node copy observable factory. Two verbs by design:
+            //
+            //   force=false → CreateNodeRequest. Handler fails with
+            //                 NodeAlreadyExists when target is populated;
+            //                 helper maps that rejection to count=0 (skip).
+            //   force=true  → CreateOrUpdateNodeRequest. Handler always
+            //                 writes — Create on missing, Update on existing.
+            //
+            // CreateOrUpdateNodeRequest is the single upsert verb; "skip on
+            // exists" semantics live in the create-only path. No flag to
+            // mix the two — keeps each verb single-purpose.
+            IObservable<int> CopyOne(MeshNode node)
+            {
+                var newPath = RemapPath(node.Path, sourceNamespace, targetNamespace);
+                var copiedNode = MeshNode.FromPath(newPath) with
                 {
-                    var newPath = RemapPath(node.Path, sourceNamespace, targetNamespace);
-                    var copiedNode = MeshNode.FromPath(newPath) with
-                    {
-                        Name = node.Name,
-                        NodeType = node.NodeType,
-                        Icon = node.Icon,
-                        Category = node.Category,
-                        Content = node.Content,
-                        State = MeshNodeState.Active,
-                        PreRenderedHtml = node.PreRenderedHtml,
-                    };
-
-                    IObservable<int> create = nodeFactory.CreateNode(copiedNode)
-                        .Select(_ =>
+                    Name = node.Name,
+                    NodeType = node.NodeType,
+                    Icon = node.Icon,
+                    Category = node.Category,
+                    Content = node.Content,
+                    State = MeshNodeState.Active,
+                    PreRenderedHtml = node.PreRenderedHtml,
+                };
+                if (force)
+                {
+                    return hub
+                        .Observe<CreateOrUpdateNodeResponse>(
+                            new CreateOrUpdateNodeRequest(copiedNode))
+                        .FirstAsync()
+                        .Select(d => d.Message)
+                        .SelectMany(resp =>
                         {
-                            logger?.LogInformation("Copied node {SourcePath} -> {TargetPath}", node.Path, newPath);
-                            return 1;
-                        });
-
-                    if (force)
-                    {
-                        // Overwrite semantics: existence check, then delete-then-create when
-                        // present. Skipping the existence check would either error on a
-                        // non-existent target (delete fails NotFound) or require a broad
-                        // catch that would also swallow auth failures — both undesirable.
-                        //
-                        // 🚨 After Delete, the per-node hub at newPath enters disposal
-                        // limbo. A naïve Delete→Create chain races with the hub teardown
-                        // — the subsequent GetMeshNode then hits the disposing hub and
-                        // returns null. Poll GetMeshNode until it returns null (delete
-                        // fully propagated) before issuing the Create, with a short
-                        // timeout to prevent indefinite hangs if propagation stalls.
-                        return hub.GetMeshNode(newPath, TimeSpan.FromSeconds(5))
-                            .SelectMany(existing => existing == null
-                                ? create
-                                : nodeFactory.DeleteNode(newPath).SelectMany(_ =>
-                                    Observable.Interval(TimeSpan.FromMilliseconds(100))
-                                        .SelectMany(_ => hub.GetMeshNode(newPath, TimeSpan.FromSeconds(1)))
-                                        .Where(n => n == null)
-                                        .Take(1)
-                                        .Timeout(TimeSpan.FromSeconds(10), Observable.Return<MeshNode?>(null))
-                                        .SelectMany(_ => create)));
-                    }
-
-                    // Existence-check via one-shot GetDataRequest. Routing returns
-                    // NotFound (DeliveryFailure) when no per-node hub exists at newPath
-                    // — no ancestor fallback. hub.GetMeshNode emits null in that case.
-                    // create is wrapped in MeshService.CreateNode's Observable.Defer, so
-                    // it only posts when subscribed (i.e. only when existence == null).
-                    return hub.GetMeshNode(newPath, TimeSpan.FromSeconds(5))
-                        .SelectMany(existing =>
-                        {
-                            if (existing != null)
+                            if (resp.Success)
                             {
-                                logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
-                                return Observable.Return(0);
+                                logger?.LogInformation(
+                                    "Copied {SourcePath} -> {TargetPath} ({Mode})",
+                                    node.Path, newPath, resp.WasCreated ? "created" : "updated");
+                                return Observable.Return(1);
                             }
-                            return create;
+                            return Observable.Throw<int>(new InvalidOperationException(
+                                $"Force-upsert of '{newPath}' failed: {resp.Error}"));
                         });
-                });
+                }
+                return hub
+                    .Observe<CreateNodeResponse>(new CreateNodeRequest(copiedNode))
+                    .FirstAsync()
+                    .Select(d => d.Message)
+                    .SelectMany(resp =>
+                    {
+                        if (resp.Success)
+                        {
+                            logger?.LogInformation(
+                                "Copied node {SourcePath} -> {TargetPath}", node.Path, newPath);
+                            return Observable.Return(1);
+                        }
+                        if (resp.RejectionReason == NodeCreationRejectionReason.NodeAlreadyExists)
+                        {
+                            logger?.LogInformation(
+                                "Skipping existing node at {TargetPath}", newPath);
+                            return Observable.Return(0);
+                        }
+                        return Observable.Throw<int>(new InvalidOperationException(
+                            $"Copy of '{node.Path}' to '{newPath}' failed: {resp.Error}"));
+                    });
+            }
 
-                return Observable.Concat(copyOps).Aggregate(0, (sum, v) => sum + v);
-            });
+            // Parallel batch with bounded concurrency. allNodes -> per-node
+            // observable -> Merge(batchSize) caps in-flight count.
+            return allNodes
+                .Select(CopyOne)
+                .ToObservable()
+                .Merge(batchSize)
+                .Sum();
+        });
     }
 
     private static string RemapPath(string path, string sourceNamespace, string targetNamespace)
