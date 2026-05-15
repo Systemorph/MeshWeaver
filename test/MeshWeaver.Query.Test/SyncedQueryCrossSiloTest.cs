@@ -267,7 +267,7 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
     /// invariant that lets every silo's <c>NodeTypeService._hubConfigurations</c>
     /// cache populate without per-silo recompilation.</para>
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 240000)]
     public async Task DynamicCompile_OnSiloA_ResultIsObservableOnSiloB_ViaSync()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -344,13 +344,16 @@ public class SyncedQueryCrossSiloTest(ITestOutputHelper output)
 
         // Silo B observes the terminal state — the watcher's compile result
         // (Ok + AssemblyLocation) reaches it through the upstream ObserveQuery
-        // that the synced collection subscribes to.
+        // that the synced collection subscribes to. Generous timeout because
+        // dynamic compile cold-start (Roslyn parse + emit + MetadataLoadContext
+        // assembly resolution) can run 60–90s on a contended CI runner; this
+        // test is the cross-silo invariant, not a perf gate.
         var settled = await collB
             .Select(arr => arr.FirstOrDefault(n => n.Path == typePath))
             .Where(n => n?.Content is NodeTypeDefinition d
                 && (d.CompilationStatus == CompilationStatus.Ok
                     || d.CompilationStatus == CompilationStatus.Error))
-            .FirstAsync().Timeout(45.Seconds()).ToTask(ct);
+            .FirstAsync().Timeout(180.Seconds()).ToTask(ct);
 
         var settledDef = settled!.Content as NodeTypeDefinition;
         settledDef!.CompilationStatus.Should().Be(CompilationStatus.Ok,
