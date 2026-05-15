@@ -138,8 +138,28 @@ internal static class NodeTypeCompilationHelpers
                 pendingNode =>
                 {
                     logger?.LogInformation("Compile watcher: saw Pending for {HubPath} — dispatching compile", hubPath);
+                    // Single-flight guard: keep `triggered` set across the async
+                    // activity dispatch so any additional Pending emissions
+                    // (e.g. a follow-up UpdateNode that happens to carry the
+                    // stale captured Pending status, or a remote-stream replay
+                    // through a fresh subscriber) don't fire a SECOND activity
+                    // that would race the first into the parent's terminal
+                    // write. Resetting in `finally` (the previous behaviour)
+                    // only guards against synchronous re-entry — the dispatch
+                    // IS async (`NodeTypeCompilationActivity.Start` chains a
+                    // `meshService.CreateNode` and a `hub.Post`), so the flag
+                    // flipped right back to 0 before the activity even began
+                    // compiling. With many Pending emissions on the stream,
+                    // each fired a fresh activity, and each activity issued two
+                    // <c>WriteToParent</c> <c>DataChangeRequest</c>s on the
+                    // mesh hub (the leak fingerprint behind the
+                    // CompilationPending_CreatesReleaseMeshNode_WithNotes test
+                    // regression). The flag is now cleared by the trailing
+                    // `settleSub` on the next non-Pending emission — that's
+                    // the natural single-flight boundary.
                     if (System.Threading.Interlocked.CompareExchange(ref triggered, 1, 0) != 0)
                         return;
+
                     try
                     {
                         // Activity Control Plane: every long-running operation runs
@@ -169,22 +189,39 @@ internal static class NodeTypeCompilationHelpers
                             .Subscribe(
                                 activityPath => hub.Post(new RunCompileRequest(hubPath),
                                     o => o.WithTarget(new Address(activityPath))),
-                                ex => logger?.LogWarning(ex,
-                                    "Compile watcher: activity start faulted for {HubPath}", hubPath));
+                                ex =>
+                                {
+                                    logger?.LogWarning(ex,
+                                        "Compile watcher: activity start faulted for {HubPath}", hubPath);
+                                    // Failed to dispatch — drop the guard so a
+                                    // subsequent Pending flip can retry.
+                                    System.Threading.Interlocked.Exchange(ref triggered, 0);
+                                });
                     }
-                    finally
+                    catch
                     {
-                        // Cleared when the post-compile write-back to Ok/Error
-                        // emits (next non-Pending state). Until then, a re-Pending
-                        // arriving mid-flight is rare; this guard keeps the
-                        // subscription single-firing.
+                        // Synchronous failure — drop the guard so a subsequent
+                        // Pending flip can retry. The async failure path is
+                        // handled in the `Start` subscription above.
                         System.Threading.Interlocked.Exchange(ref triggered, 0);
+                        throw;
                     }
                 },
                 ex => logger?.LogWarning(ex,
                     "Compile watcher faulted for {HubPath}", hub.Address.Path));
 
-        return new CompositeDisposable(kickoffSub, watcherSub);
+        // Trailing watcher: clears `triggered` once the parent settles into a
+        // non-Pending state (Compiling / Ok / Error / Unknown). That's the
+        // natural single-flight boundary — Compiling means "the compile is
+        // mine," Ok/Error means "the compile is done." A FRESH Pending arriving
+        // after that transition is the legitimate "user kicked off another
+        // compile" signal and SHOULD fire the watcher.
+        var settleSub = ownStream
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && def.CompilationStatus != CompilationStatus.Pending)
+            .Subscribe(_ => System.Threading.Interlocked.Exchange(ref triggered, 0));
+
+        return new CompositeDisposable(kickoffSub, watcherSub, settleSub);
     }
 
     /// <summary>
