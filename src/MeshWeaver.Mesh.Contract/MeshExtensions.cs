@@ -1658,19 +1658,24 @@ public static class MeshExtensions
 
     /// <summary>
     /// Single-verb upsert handler for <see cref="CreateOrUpdateNodeRequest"/>.
-    /// Reads existing via persistence and dispatches to the existing
-    /// <see cref="CreateNodeRequest"/> (missing target) or <see cref="UpdateNodeRequest"/>
-    /// (existing target) handler — single boss per write path; no
-    /// delete-then-create dance, no per-node-hub disposal race. The flow is
-    /// 100% reactive (no <c>await</c>, no <c>Task.FromAsync</c>, no
-    /// <c>ToTask</c>): persistence read → dispatch via <c>hub.Post</c> +
-    /// <c>hub.Observe</c> → translate the inner response into
-    /// <see cref="CreateOrUpdateNodeResponse"/>.
+    /// Two strict paths, both honoring "the per-node hub is the sole owner of
+    /// its state — direct writes to persistence are illegal":
     ///
-    /// <para>Every step appends to a single <see cref="ActivityLog"/> that
-    /// rides on the response — successes and warnings/exceptions both end
-    /// up there, so callers (NodeCopyHelper, future Import / UserActivity
-    /// log-bumping flows) get one audit trail per upsert.</para>
+    /// <list type="number">
+    /// <item><b>Missing target</b> → forward as <see cref="CreateNodeRequest"/>.
+    /// The per-node hub spins up and persists its own initial state.</item>
+    /// <item><b>Existing target</b> → call
+    /// <c>workspace.GetMeshNodeStream(path).Update(state =&gt; UpdateAccordingToSourceNode(state, sourceNode))</c>.
+    /// The Update routes to the owning per-node hub via the data-sync
+    /// protocol; the hub applies the change to its own MeshNode through its
+    /// own workspace's <c>MeshNodeReference</c> reducer; <c>MeshNodeTypeSource</c>
+    /// debounces and persists. NEVER <see cref="UpdateNodeRequest"/>, NEVER
+    /// direct <c>persistence.Write</c> — both bypass the sole-owner rule.</item>
+    /// </list>
+    ///
+    /// <para>Reads-from-persistence are allowed (existence check is a
+    /// routing-layer discovery) — only writes go through the per-node hub.
+    /// All flow is reactive; no <c>await</c>, no <c>Task.FromAsync</c>.</para>
     /// </summary>
     private static IMessageDelivery HandleCreateOrUpdateNodeRequest(
         IMessageHub hub,
@@ -1682,7 +1687,6 @@ public static class MeshExtensions
         var inboundRequest = request.Message;
         var node = inboundRequest.Node;
 
-        // Identity resolution — same shape as CreateNodeRequest / UpdateNodeRequest.
         var requestedBy = inboundRequest.RequestedBy
             ?? request.AccessContext?.ObjectId;
         if (!string.IsNullOrEmpty(requestedBy)
@@ -1699,44 +1703,16 @@ public static class MeshExtensions
                 : null,
         };
 
-        // Sync fail-fast — invalid path is the same gate as CreateNodeRequest.
         if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
         {
-            var failLog = baseActivity with
-            {
-                Messages = ImmutableList.Create(
-                    new LogMessage("Node path and Id must not be empty",
-                        Microsoft.Extensions.Logging.LogLevel.Error)),
-                End = DateTime.UtcNow,
-                Status = ActivityStatus.Failed,
-            };
-            hub.Post(
-                CreateOrUpdateNodeResponse.Fail(
-                    "Node path and Id must not be empty",
-                    NodeUpsertRejectionReason.InvalidPath,
-                    failLog),
-                o => o.ResponseFor(request));
+            PostFail("Node path and Id must not be empty", NodeUpsertRejectionReason.InvalidPath);
             return request.Processed();
         }
 
-        // Patch mode is reserved for follow-up — surface a clear error
-        // instead of silently dropping the patch payload.
         if (inboundRequest.Patch is not null)
         {
-            var failLog = baseActivity with
-            {
-                Messages = ImmutableList.Create(
-                    new LogMessage("Patch-mode upserts are not yet supplied at the mesh-hub handler",
-                        Microsoft.Extensions.Logging.LogLevel.Error)),
-                End = DateTime.UtcNow,
-                Status = ActivityStatus.Failed,
-            };
-            hub.Post(
-                CreateOrUpdateNodeResponse.Fail(
-                    "Patch-mode upserts are not yet supported.",
-                    NodeUpsertRejectionReason.PatchFailed,
-                    failLog),
-                o => o.ResponseFor(request));
+            PostFail("Patch-mode upserts are not yet supported.",
+                NodeUpsertRejectionReason.PatchFailed);
             return request.Processed();
         }
 
@@ -1745,55 +1721,30 @@ public static class MeshExtensions
             : Observable.Return<MeshNode?>(null);
 
         var inboundCtx = request.AccessContext;
-        ImmutableList<LogMessage> existenceCheckMessages = ImmutableList<LogMessage>.Empty
-            .Add(new LogMessage(
-                $"Existence check for '{node.Path}'",
-                Microsoft.Extensions.Logging.LogLevel.Debug));
 
-        // Per-step composition — read → dispatch → translate. Single Subscribe
-        // at the end drives the side-effects (the inner Post + the response
-        // Post). No await anywhere: existing.SelectMany consumes the read,
-        // hub.Observe(forwarded).Subscribe consumes the inner response.
-        existingObs
-            .Subscribe(
-                existing =>
+        existingObs.Subscribe(
+            existing =>
+            {
+                if (existing is null)
                 {
-                    if (existing is null)
-                    {
-                        DispatchInnerCreate();
-                        return;
-                    }
-                    DispatchInnerUpdate();
-                },
-                ex =>
-                {
-                    logger.LogWarning(ex,
-                        "[CreateOrUpdate] persistence read failed for {Path}", node.Path);
-                    var failLog = baseActivity with
-                    {
-                        Messages = existenceCheckMessages.Add(
-                            new LogMessage(
-                                $"Persistence read failed: {ex.Message}",
-                                Microsoft.Extensions.Logging.LogLevel.Error)),
-                        End = DateTime.UtcNow,
-                        Status = ActivityStatus.Failed,
-                    };
-                    hub.Post(
-                        CreateOrUpdateNodeResponse.Fail(
-                            $"Persistence read failed: {ex.Message}",
-                            NodeUpsertRejectionReason.Unknown,
-                            failLog),
-                        o => o.ResponseFor(request));
-                });
+                    DispatchInnerCreate();
+                    return;
+                }
+                ApplyUpdateViaStream();
+            },
+            ex =>
+            {
+                logger.LogWarning(ex,
+                    "[CreateOrUpdate] persistence read failed for {Path}", node.Path);
+                PostFail($"Persistence read failed: {ex.Message}",
+                    NodeUpsertRejectionReason.Unknown);
+            });
 
         return request.Processed();
 
         void DispatchInnerCreate()
         {
-            var inner = new CreateNodeRequest(node)
-            {
-                CreatedBy = requestedBy,
-            };
+            var inner = new CreateNodeRequest(node) { CreatedBy = requestedBy };
             var forwarded = hub.Post(inner, o =>
             {
                 var withTarget = o.WithTarget(hub.Address);
@@ -1801,104 +1752,72 @@ public static class MeshExtensions
             })!;
             hub.Observe(forwarded)
                 .Subscribe(
-                    d => TranslateCreateResponse(d.Message),
-                    ex => PostFailFromException(ex, isCreate: true));
+                    d =>
+                    {
+                        if (d.Message is CreateNodeResponse cr && cr.Success && cr.Node is not null)
+                            PostOk(cr.Node, isCreate: true, $"Created node at '{node.Path}'");
+                        else
+                            PostFail(
+                                (d.Message as CreateNodeResponse)?.Error ?? "Inner CreateNode returned no response",
+                                MapCreateRejection((d.Message as CreateNodeResponse)?.RejectionReason));
+                    },
+                    ex =>
+                    {
+                        logger.LogWarning(ex,
+                            "[CreateOrUpdate] inner CreateNode faulted for {Path}", node.Path);
+                        PostFail($"Inner CreateNode faulted: {ex.Message}",
+                            NodeUpsertRejectionReason.Unknown);
+                    });
         }
 
-        void DispatchInnerUpdate()
+        void ApplyUpdateViaStream()
         {
-            var inner = new UpdateNodeRequest(node)
-            {
-                UpdatedBy = requestedBy,
-            };
-            var forwarded = hub.Post(inner, o =>
-            {
-                var withTarget = o.WithTarget(hub.Address);
-                return inboundCtx is not null ? withTarget.WithAccessContext(inboundCtx) : withTarget;
-            })!;
-            hub.Observe(forwarded)
+            // The owning per-node hub IS the sole writer of its MeshNode.
+            // Update through the workspace's MeshNode stream — the framework
+            // routes the patch to the per-node hub via the data-sync protocol;
+            // the hub's MeshNodeReference reducer applies it; MeshNodeTypeSource
+            // debounces + persists. NO UpdateNodeRequest, NO persistence.Write.
+            var workspace = hub.GetWorkspace();
+            workspace.GetMeshNodeStream(node.Path)
+                .Update(state => UpdateAccordingToSourceNode(state, node))
                 .Subscribe(
-                    d => TranslateUpdateResponse(d.Message),
-                    ex => PostFailFromException(ex, isCreate: false));
+                    updated => PostOk(updated, isCreate: false, $"Updated node at '{node.Path}'"),
+                    ex =>
+                    {
+                        logger.LogWarning(ex,
+                            "[CreateOrUpdate] stream Update faulted for {Path}", node.Path);
+                        PostFail($"Stream Update faulted: {ex.Message}",
+                            NodeUpsertRejectionReason.Unknown);
+                    });
         }
 
-        void TranslateCreateResponse(object? response)
+        void PostOk(MeshNode result, bool isCreate, string logLine)
         {
-            if (response is CreateNodeResponse create && create.Success && create.Node is not null)
+            var okLog = baseActivity with
             {
-                var okLog = (create.Log ?? baseActivity) with
-                {
-                    Messages = (create.Log?.Messages ?? ImmutableList<LogMessage>.Empty).Add(
-                        new LogMessage($"Created node at '{node.Path}'", Microsoft.Extensions.Logging.LogLevel.Information)),
-                    End = DateTime.UtcNow,
-                    Status = ActivityStatus.Succeeded,
-                };
-                hub.Post(
-                    CreateOrUpdateNodeResponse.Created(create.Node, okLog),
-                    o => o.ResponseFor(request));
-                return;
-            }
-            var failLog = (response as CreateNodeResponse)?.Log ?? baseActivity;
-            failLog = failLog with
-            {
+                Messages = baseActivity.Messages.Add(
+                    new LogMessage(logLine, Microsoft.Extensions.Logging.LogLevel.Information)),
                 End = DateTime.UtcNow,
-                Status = ActivityStatus.Failed,
+                Status = ActivityStatus.Succeeded,
             };
             hub.Post(
-                CreateOrUpdateNodeResponse.Fail(
-                    (response as CreateNodeResponse)?.Error ?? "Inner CreateNode returned no response",
-                    MapCreateRejection((response as CreateNodeResponse)?.RejectionReason),
-                    failLog),
+                isCreate
+                    ? CreateOrUpdateNodeResponse.Created(result, okLog)
+                    : CreateOrUpdateNodeResponse.Updated(result, okLog),
                 o => o.ResponseFor(request));
         }
 
-        void TranslateUpdateResponse(object? response)
+        void PostFail(string error, NodeUpsertRejectionReason reason)
         {
-            if (response is UpdateNodeResponse update && update.Success && update.Node is not null)
-            {
-                var okLog = (update.Log ?? baseActivity) with
-                {
-                    Messages = (update.Log?.Messages ?? ImmutableList<LogMessage>.Empty).Add(
-                        new LogMessage($"Updated node at '{node.Path}'", Microsoft.Extensions.Logging.LogLevel.Information)),
-                    End = DateTime.UtcNow,
-                    Status = ActivityStatus.Succeeded,
-                };
-                hub.Post(
-                    CreateOrUpdateNodeResponse.Updated(update.Node, okLog),
-                    o => o.ResponseFor(request));
-                return;
-            }
-            var failLog = (response as UpdateNodeResponse)?.Log ?? baseActivity;
-            failLog = failLog with
-            {
-                End = DateTime.UtcNow,
-                Status = ActivityStatus.Failed,
-            };
-            hub.Post(
-                CreateOrUpdateNodeResponse.Fail(
-                    (response as UpdateNodeResponse)?.Error ?? "Inner UpdateNode returned no response",
-                    MapUpdateRejection((response as UpdateNodeResponse)?.RejectionReason),
-                    failLog),
-                o => o.ResponseFor(request));
-        }
-
-        void PostFailFromException(Exception ex, bool isCreate)
-        {
-            logger.LogWarning(ex, "[CreateOrUpdate] inner {Verb} faulted for {Path}",
-                isCreate ? "CreateNode" : "UpdateNode", node.Path);
             var failLog = baseActivity with
             {
                 Messages = baseActivity.Messages.Add(
-                    new LogMessage($"Inner {(isCreate ? "CreateNode" : "UpdateNode")} faulted: {ex.Message}",
-                        Microsoft.Extensions.Logging.LogLevel.Error)),
+                    new LogMessage(error, Microsoft.Extensions.Logging.LogLevel.Error)),
                 End = DateTime.UtcNow,
                 Status = ActivityStatus.Failed,
             };
             hub.Post(
-                CreateOrUpdateNodeResponse.Fail(
-                    $"Inner {(isCreate ? "CreateNode" : "UpdateNode")} faulted: {ex.Message}",
-                    NodeUpsertRejectionReason.Unknown,
-                    failLog),
+                CreateOrUpdateNodeResponse.Fail(error, reason, failLog),
                 o => o.ResponseFor(request));
         }
 
@@ -1909,12 +1828,31 @@ public static class MeshExtensions
             NodeCreationRejectionReason.ValidationFailed => NodeUpsertRejectionReason.ValidationFailed,
             _ => NodeUpsertRejectionReason.Unknown,
         };
+    }
 
-        static NodeUpsertRejectionReason MapUpdateRejection(NodeUpdateRejectionReason? r) => r switch
+    /// <summary>
+    /// Merge function for <see cref="CreateOrUpdateNodeRequest"/>'s full-instance
+    /// upsert. Copies every writable field from <paramref name="sourceNode"/>
+    /// onto <paramref name="state"/>; preserves <paramref name="state"/>'s
+    /// identity (Id, Path, CreatedDate, CreatedBy, Version) and stamps a
+    /// fresh LastModified. Falls back to <paramref name="sourceNode"/> when
+    /// <paramref name="state"/> is null (defensive — the create path
+    /// dispatches CreateNodeRequest before reaching this lambda, so state
+    /// should always be non-null here).
+    /// </summary>
+    private static MeshNode UpdateAccordingToSourceNode(MeshNode state, MeshNode sourceNode)
+    {
+        if (state is null) return sourceNode;
+        return state with
         {
-            NodeUpdateRejectionReason.InvalidNodeType => NodeUpsertRejectionReason.InvalidNodeType,
-            NodeUpdateRejectionReason.ValidationFailed => NodeUpsertRejectionReason.ValidationFailed,
-            _ => NodeUpsertRejectionReason.Unknown,
+            Name = sourceNode.Name ?? state.Name,
+            NodeType = sourceNode.NodeType ?? state.NodeType,
+            Icon = sourceNode.Icon ?? state.Icon,
+            Category = sourceNode.Category ?? state.Category,
+            Content = sourceNode.Content ?? state.Content,
+            State = sourceNode.State == default ? state.State : sourceNode.State,
+            PreRenderedHtml = sourceNode.PreRenderedHtml ?? state.PreRenderedHtml,
+            LastModified = DateTimeOffset.UtcNow,
         };
     }
 
