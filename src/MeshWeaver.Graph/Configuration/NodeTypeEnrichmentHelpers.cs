@@ -102,25 +102,29 @@ internal static class NodeTypeEnrichmentHelpers
                 node, providerNode.AssemblyLocation!, hubCfg, nodeType, meshConfiguration));
         }
 
-        // Slow path: consume the ONE shared NodeType stream from
-        // INodeTypeStreamCache — a Replay(1).RefCount() subscription per
-        // NodeType path held in the cache's concurrent dictionary. Its
-        // MaybeKickCompile side-effect fires the compile exactly once on
-        // first touch of an un-built NodeType. We do NOT roll our own remote
-        // stream or Pending-flip here — that produced a second, uncoordinated
-        // compile trigger and stranded the wait when neither trigger ran.
-        var streamCache = meshHub.ServiceProvider.GetService<INodeTypeStreamCache>();
-        if (streamCache is null)
-        {
-            logger?.LogWarning(
-                "EnrichWithNodeType: INodeTypeStreamCache not registered — cannot resolve {NodeType}",
-                nodeType);
-            return Observable.Return(
-                WithCompilationErrorOverlay(node, nodeType,
-                    "NodeType stream cache unavailable", meshConfiguration));
-        }
-
-        return streamCache.GetStream(nodeType)
+        // Slow path: subscribe to the NodeType MeshNode stream directly via
+        // the mesh hub's workspace. The workspace's per-(addr, ref) cache
+        // dedupes the underlying SubscribeRequest so concurrent activations
+        // share ONE upstream subscription; each subscriber's Take(1) gets
+        // the current ISynchronizationStream.Current value (or the next
+        // emission past it). We deliberately bypass INodeTypeStreamCache's
+        // Replay(1).RefCount() — under bursty activation the RefCount drops
+        // to 0 between Take(1) consumers and reopens a fresh subscription,
+        // racing the Replay buffer with the stale snapshot returned to the
+        // next caller. The workspace's per-(addr, ref) ISynchronizationStream
+        // stays connected as long as ANY subscriber holds it, and its
+        // Current is updated by every DataChangedEvent, so a fresh read
+        // always sees the latest known state.
+        //
+        // 🚨 Freshness contract — the activation reads from the mesh hub's
+        // workspace cache, which is updated asynchronously by DataChangedEvent
+        // fan-out from the per-NodeType hub. A test that writes to the
+        // per-NodeType hub and then activates a new instance MUST wait for
+        // the mesh hub's workspace to see the post-write state before
+        // creating the instance — otherwise the activation reads a pre-write
+        // snapshot. See CodeEditRecompileTest for the canonical wait shape
+        // (Mesh.GetWorkspace().GetMeshNodeStream(path).Where(...).Take(1)).
+        return meshHub.GetWorkspace().GetMeshNodeStream(nodeType)
             // Settled compile (Ok/Error) OR an already-configured node
             // (HubConfiguration + AssemblyLocation pre-populated — static
             // provider, or a built-in that ships its assembly) OR the
@@ -139,7 +143,7 @@ internal static class NodeTypeEnrichmentHelpers
             .Take(1)
             .Timeout(SlowPathTimeout)
             .SelectMany(typeNode => ApplyStreamResult(
-                typeNode, node, nodeType, meshConfiguration, compilationService, logger))
+                typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger))
             .Catch<MeshNode, Exception>(ex =>
             {
                 // Surface at Warning. The previous Debug level hid the prod
@@ -171,9 +175,17 @@ internal static class NodeTypeEnrichmentHelpers
         string nodeType,
         MeshConfiguration meshConfiguration,
         IMeshNodeCompilationService? compilationService,
+        IMessageHub meshHub,
         ILogger? logger)
     {
         var def = typeNode.Content as NodeTypeDefinition;
+        // DIAGNOSTIC: trace what activation reads
+        logger?.LogInformation(
+            "[ENRICH-DIAG] node={InstancePath} nodeType={NodeType} typeNode.AssemblyLocation={AsmLoc} typeNode.HubConfiguration={HasHubConfig} def.Status={Status} def.AssemblyPath={DefAsm} def.RequestedRelease={Pin} def.LatestRelease={Latest}",
+            node.Path, nodeType, typeNode.AssemblyLocation ?? "(null)",
+            typeNode.HubConfiguration is not null, def?.CompilationStatus,
+            "n/a", def?.RequestedReleasePath ?? "(null)",
+            def?.LatestReleasePath ?? "(null)");
 
         // Static-provider NodeType: HubConfiguration + AssemblyLocation pre-populated,
         // no Roslyn compile to run. Use them directly — no reflection round-trip.
@@ -195,6 +207,71 @@ internal static class NodeTypeEnrichmentHelpers
             return Observable.Return(CopyIconFromNodeType(
                 ApplyDefaultConfig(node, meshConfiguration), nodeType, meshConfiguration));
 
+        // Pinned release: when NodeTypeDefinition.RequestedReleasePath is set,
+        // every per-instance hub MUST load the pinned Release's assembly, not
+        // the NodeType's latest AssemblyLocation. The Release MeshNode is a
+        // satellite owned by the NodeType's partition — read it via the mesh
+        // hub's IStorageAdapter (the routing adapter resolves the per-partition
+        // storage). Symmetric with NodeTypeContractHandler's pinned-release
+        // branch on the legacy GetCompilationPathRequest path; mirrored here so
+        // the activation hot path (which uses INodeTypeStreamCache, not the
+        // legacy request) also honors pinning. Repro:
+        // CodeEditRecompileTest.NodeType_RequestedReleasePath_PinsToHistoricalRelease.
+        if (!string.IsNullOrEmpty(def?.RequestedReleasePath) && compilationService is not null)
+        {
+            var requestedReleasePath = def!.RequestedReleasePath!;
+            var storage = meshHub.ServiceProvider.GetService<IStorageAdapter>();
+            if (storage is null)
+            {
+                logger?.LogWarning(
+                    "EnrichWithNodeType: no IStorageAdapter — cannot resolve pinned release {ReleasePath} for {NodeType}",
+                    requestedReleasePath, nodeType);
+                return Observable.Return(
+                    WithCompilationErrorOverlay(node, nodeType,
+                        $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved (no storage adapter).",
+                        meshConfiguration));
+            }
+            return storage.Read(requestedReleasePath, meshHub.JsonSerializerOptions)
+                .Take(1)
+                .SelectMany(releaseNode =>
+                {
+                    if (releaseNode?.Content is NodeTypeRelease release
+                        && !string.IsNullOrEmpty(release.AssemblyPath)
+                        && System.IO.File.Exists(release.AssemblyPath))
+                    {
+                        var pinnedTypeNode = typeNode with { AssemblyLocation = release.AssemblyPath };
+                        return compilationService.GetConfigurationsFromExistingAssembly(pinnedTypeNode)
+                            .Take(1)
+                            .Select(result =>
+                            {
+                                var matching = result?.NodeTypeConfigurations
+                                    .FirstOrDefault(c =>
+                                        string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
+                                    ?? result?.NodeTypeConfigurations.FirstOrDefault();
+                                return ApplyEntry(
+                                    node, release.AssemblyPath!, matching?.HubConfiguration,
+                                    nodeType, meshConfiguration);
+                            })
+                            .Catch<MeshNode, Exception>(ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "EnrichWithNodeType: failed to load pinned release '{ReleasePath}' for {NodeType} — instance '{InstancePath}' falls back to default config",
+                                    requestedReleasePath, nodeType, node.Path);
+                                return Observable.Return(ApplyEntry(
+                                    node, release.AssemblyPath!, hubConfig: null,
+                                    nodeType, meshConfiguration));
+                            });
+                    }
+                    logger?.LogWarning(
+                        "EnrichWithNodeType: pinned release {ReleasePath} for {NodeType} could not be resolved",
+                        requestedReleasePath, nodeType);
+                    return Observable.Return(
+                        WithCompilationErrorOverlay(node, nodeType,
+                            $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved.",
+                            meshConfiguration));
+                });
+        }
+
         if (def?.CompilationStatus == CompilationStatus.Ok
             && !string.IsNullOrEmpty(typeNode.AssemblyLocation))
         {
@@ -203,7 +280,21 @@ internal static class NodeTypeEnrichmentHelpers
                     node, typeNode.AssemblyLocation!, hubConfig: null,
                     nodeType, meshConfiguration));
 
-            return compilationService.CompileAndGetConfigurations(typeNode)
+            // Hot path for activating per-instance hubs: the NodeType already
+            // has a usable assembly (status=Ok + AssemblyLocation set). Load
+            // configurations directly from the existing DLL via reflection —
+            // do NOT call CompileAndGetConfigurations, which re-enters the
+            // SyncedQuery source-discovery pipeline (DiscoverSourceMaxLastModified
+            // → ResolveSources → GetSourceCollection → workspace.GetQuery). Under
+            // concurrent activation that path stalls and every per-instance hub
+            // overlays a compilation-error fallback — exactly the
+            // CodeEditRecompileTest "Overview never renders" symptom. The
+            // identical short-circuit already lives in
+            // MeshNodeCompilationService.GetAssemblyLocationWithLog as a
+            // cache-hit branch; using the lighter helper here makes the
+            // enrichment path symmetric with NodeTypeContractHandler's
+            // "hasPublishedRelease" short-circuit.
+            return compilationService.GetConfigurationsFromExistingAssembly(typeNode)
                 .Take(1)
                 .Select(result =>
                 {

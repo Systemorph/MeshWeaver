@@ -556,6 +556,21 @@ public static class MeshDataSourceExtensions
             if (!string.Equals(notification.Path, ownPath, StringComparison.OrdinalIgnoreCase))
                 return;
             cache.IsDeleted = true;
+
+            // Tear the hub down. The per-node hub is the sole owner of this
+            // path; once persistence has dropped it, the hub's cached
+            // workspace state is dead — any subsequent SubscribeRequest /
+            // GetDataRequest would still respond from the stale InstanceCollection
+            // (the routing layer's `streams` registry still points here) and
+            // serve "First" after a delete + re-create wrote "Second". Self-
+            // disposal de-registers the routing-layer stream entry so the next
+            // activation spins up a fresh hub that seeds from the post-create
+            // persistence state.
+            try
+            {
+                hub.Dispose();
+            }
+            catch { /* best-effort — disposal can race shutdown */ }
         });
         hub.RegisterForDisposal(delSub);
     }
